@@ -24,4 +24,10 @@ Check (run before reporting a step done):
 uv run ruff check . && uv run ruff format --check . && uv run pytest -q
 ```
 
-Server (later): `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`
+Server: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`
+
+Replay without Cursor (server must be running for R1 blocks):
+
+```bash
+uv run python fake_agent.py
+```

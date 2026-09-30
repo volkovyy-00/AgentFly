@@ -113,8 +113,12 @@ uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
 ```
 
 - `GET /health` → `{"ok": true}` (Host check only).
-- `POST /hook` → Host → token → Content-Type → JSON → `{"permission":"allow"}`.
+- `POST /hook` → Host → token → Content-Type → JSON → mark session → R1 decide →
+  allow or deny. Sessions persist in `~/.config/flightrecorder/sessions.json`.
 - Listens on `127.0.0.1` only; token file mode `600`.
+- R1 message (exact): `Blocked by rule R1: a secret was read earlier in this
+  session, and now data is being sent out.` `WATCH_ONLY` turns blocks into
+  warnings (allow + warned verdict).
 
 ---
 
@@ -154,7 +158,10 @@ for policy.
 | Hooks fire + log + allow | **Done** |
 | Hard-coded deny stops a command | **Done** — decision **continue** (`demo/NOTES.md`) |
 | Server + token gates (always allow) | **Done** |
-| Server + R0/R1 | Not done |
+| R1 secret-then-network | **Done** |
+| Replay script `fake_agent.py` | **Done** |
+| R0 protect recorder | Not done |
+| Neo4j / web page | Not done |
 
 ---
 

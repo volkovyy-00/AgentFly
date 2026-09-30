@@ -7,11 +7,15 @@ import logging
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+
+from recorder.rules import Session, decide, deny_messages, mark
+from recorder.sessions import SessionStore
 
 logger = logging.getLogger("flightrecorder")
 
@@ -21,6 +25,7 @@ TOKEN_HEADER: str = "X-Recorder-Token"
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
 config_dir: Path = Path.home() / ".config" / "flightrecorder"
 _token: str = ""
+_store: SessionStore | None = None
 
 
 def write_token(directory: Path) -> str:
@@ -44,10 +49,17 @@ def content_type_is_json(request: Request) -> bool:
     return media == "application/json"
 
 
+def get_store() -> SessionStore:
+    if _store is None:
+        raise RuntimeError("session store not initialized")
+    return _store
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    global _token
+    global _token, _store
     _token = write_token(config_dir)
+    _store = SessionStore(config_dir / "sessions.json")
     logger.info("recorder listening; token written under %s", config_dir)
     yield
 
@@ -65,6 +77,30 @@ async def host_gate(request: Request, call_next: Any) -> Response:
 @app.get("/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
+    """Mark, decide, persist step. Returns (permission JSON, verdict)."""
+    store: SessionStore = get_store()
+    session_id: str = str(payload.get("conversation_id", "") or "unknown")
+    session: Session = store.get_or_create(session_id)
+
+    session = mark(payload, session)
+    verdict, rule_id = decide(payload, session)
+    session = replace(session, next_step=session.next_step + 1)
+    store.put(session)
+
+    permission: dict[str, str]
+    if verdict == "blocked" and rule_id is not None:
+        user_msg, agent_msg = deny_messages(rule_id)
+        permission = {
+            "permission": "deny",
+            "user_message": user_msg,
+            "agent_message": agent_msg,
+        }
+    else:
+        permission = {"permission": "allow"}
+    return permission, verdict
 
 
 @app.post("/hook")
@@ -85,6 +121,7 @@ async def hook(request: Request) -> Response:
     if not isinstance(payload, dict):
         return JSONResponse({"detail": "malformed json"}, status_code=400)
 
+    permission, verdict = apply_rules(payload)
     event: str = str(payload.get("hook_event_name", ""))
-    logger.info("hook event=%s decision=allow", event or "?")
-    return JSONResponse({"permission": "allow"})
+    logger.info("hook event=%s decision=%s", event or "?", verdict)
+    return JSONResponse(permission)
