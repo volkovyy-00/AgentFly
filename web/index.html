@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flight Recorder</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1218;
+      --fg: #e8ecf2;
+      --muted: #9aa3b2;
+      --banner: #b91c1c;
+      --panel: rgba(15, 18, 24, 0.92);
+      --panel-border: #374151;
+      --btn-bg: #1f2937;
+      --btn-bg-hover: #374151;
+      --btn-border: #4b5563;
+      --swatch-border: rgba(255, 255, 255, 0.25);
+      --scroll-track: rgba(148, 163, 184, 0.18);
+      --scroll-thumb: rgba(148, 163, 184, 0.55);
+      --scroll-thumb-hover: rgba(148, 163, 184, 0.8);
+      --step: #6b7280;
+      --file: #3b82f6;
+      --sensitive: #d97706;
+      --blocked: #dc2626;
+      --warned: #7c3aed;
+      --rule-fill: #450a0a;
+      --rule-border: #ef4444;
+      --edge: #9aa3b2;
+      --node-text: #e8ecf2;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f6f9;
+        --fg: #1f2937;
+        --muted: #6b7280;
+        --banner: #dc2626;
+        --panel: rgba(255, 255, 255, 0.94);
+        --panel-border: #d1d5db;
+        --btn-bg: #ffffff;
+        --btn-bg-hover: #f3f4f6;
+        --btn-border: #9ca3af;
+        --swatch-border: rgba(0, 0, 0, 0.2);
+        --scroll-track: rgba(55, 65, 81, 0.12);
+        --scroll-thumb: rgba(55, 65, 81, 0.4);
+        --scroll-thumb-hover: rgba(55, 65, 81, 0.65);
+        --step: #6b7280;
+        --file: #2563eb;
+        --sensitive: #d97706;
+        --blocked: #dc2626;
+        --warned: #7c3aed;
+        --rule-fill: #fef2f2;
+        --rule-border: #dc2626;
+        --edge: #6b7280;
+        --node-text: #111827;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      font-size: 16px;
+      overflow: hidden;
+    }
+    #offline {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: var(--banner);
+      color: #fff;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      padding: 14px 16px;
+      letter-spacing: 0.02em;
+    }
+    #offline.visible { display: block; }
+    #toolbar {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 15;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: var(--btn-bg);
+      border: 1px solid var(--btn-border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #zoom-controls button {
+      font-size: 16px;
+      line-height: 1;
+      padding: 8px 12px;
+      cursor: pointer;
+      background: transparent;
+      color: var(--fg);
+      border: none;
+      border-right: 1px solid var(--btn-border);
+      min-width: 40px;
+    }
+    #zoom-controls button:last-child { border-right: none; }
+    #zoom-controls button:hover { background: var(--btn-bg-hover); }
+    #zoom-pct {
+      font-variant-numeric: tabular-nums;
+      min-width: 58px;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    #new-session {
+      font-size: 16px;
+      padding: 8px 14px;
+      cursor: pointer;
+      background: var(--btn-bg);
+      color: var(--fg);
+      border: 1px solid var(--btn-border);
+      border-radius: 4px;
+    }
+    #new-session:hover { background: var(--btn-bg-hover); }
+    #empty {
+      display: none;
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      color: var(--muted);
+      pointer-events: none;
+      z-index: 5;
+    }
+    #empty.visible { display: flex; }
+    #graph {
+      position: absolute;
+      inset: 0;
+      right: 14px;
+      bottom: 14px;
+    }
+    #legend {
+      position: fixed;
+      left: 12px;
+      bottom: 28px;
+      z-index: 15;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 16px;
+      line-height: 1.5;
+      backdrop-filter: blur(6px);
+    }
+    #legend .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 2px 0;
+    }
+    #legend .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      border: 1px solid var(--swatch-border);
+      flex-shrink: 0;
+      background: var(--swatch);
+    }
+    #legend .swatch.step { --swatch: var(--step); }
+    #legend .swatch.file { --swatch: var(--file); }
+    #legend .swatch.sensitive { --swatch: var(--sensitive); }
+    #legend .swatch.blocked { --swatch: var(--blocked); }
+    #legend .swatch.warned { --swatch: var(--warned); }
+    #legend .swatch.rule {
+      --swatch: var(--rule-fill);
+      border-color: var(--rule-border);
+    }
+
+    #h-scroll,
+    #v-scroll {
+      display: none;
+      position: fixed;
+      z-index: 12;
+      background: var(--scroll-track);
+      border: none;
+      padding: 0;
+      margin: 0;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    #h-scroll.visible,
+    #v-scroll.visible { display: block; }
+    #h-scroll {
+      left: 12px;
+      right: 28px;
+      bottom: 8px;
+      height: 10px;
+      border-radius: 5px;
+    }
+    #v-scroll {
+      top: 56px;
+      right: 8px;
+      bottom: 28px;
+      width: 10px;
+      border-radius: 5px;
+      writing-mode: vertical-lr;
+      direction: rtl;
+    }
+    #h-scroll::-webkit-slider-thumb,
+    #v-scroll::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 28px;
+      height: 10px;
+      border-radius: 5px;
+      background: var(--scroll-thumb);
+      cursor: pointer;
+    }
+    #v-scroll::-webkit-slider-thumb {
+      width: 10px;
+      height: 28px;
+    }
+    #h-scroll::-webkit-slider-thumb:hover,
+    #v-scroll::-webkit-slider-thumb:hover {
+      background: var(--scroll-thumb-hover);
+    }
+    #h-scroll::-moz-range-thumb,
+    #v-scroll::-moz-range-thumb {
+      width: 28px;
+      height: 10px;
+      border: none;
+      border-radius: 5px;
+      background: var(--scroll-thumb);
+      cursor: pointer;
+    }
+    #v-scroll::-moz-range-thumb {
+      width: 10px;
+      height: 28px;
+    }
+  </style>
+</head>
+<body>
+  <div id="offline">OFFLINE - recorder not reachable</div>
+  <div id="toolbar">
+    <div id="zoom-controls" title="Zoom">
+      <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+      <button type="button" id="zoom-pct" aria-label="Reset zoom to 100%">100%</button>
+      <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+    </div>
+    <button type="button" id="new-session">New session</button>
+  </div>
+  <div id="empty">Waiting for agent actions...</div>
+  <div id="graph"></div>
+  <input id="h-scroll" type="range" min="0" max="1000" value="0" step="1" aria-label="Scroll graph horizontally" />
+  <input id="v-scroll" type="range" min="0" max="1000" value="0" step="1" aria-label="Scroll graph vertically" />
+  <div id="legend">
+    <div class="row"><span class="swatch step"></span><span>Step</span></div>
+    <div class="row"><span class="swatch file"></span><span>File / host</span></div>
+    <div class="row"><span class="swatch sensitive"></span><span>Sensitive file</span></div>
+    <div class="row"><span class="swatch blocked"></span><span>Blocked step</span></div>
+    <div class="row"><span class="swatch warned"></span><span>Warned step</span></div>
+    <div class="row"><span class="swatch rule"></span><span>Rule</span></div>
+  </div>
+
+  <script src="https://unpkg.com/vis-network@10.1.2/standalone/umd/vis-network.min.js"></script>
+  <script>
+(function () {
+  "use strict";
+
+  var FONT_PX = 16;
+  var CMD_MAX = 24;
+  var STEP_GAP = 200;
+  var STEP_Y = 0;
+  var FILE_Y = -130;
+  var HOST_Y = 130;
+  var RULE_DX = 100;
+  var RULE_DY = 130;
+  var POLL_GAP_MS = 1000;
+  var POLL_TIMEOUT_MS = 1500;
+  var MOCK_INTERVAL_MS = 1500;
+  var STORAGE_KEY = "fr_ignore_session";
+  var VIEW_PAD = 80;
+  var NODE_PAD_X = 90;
+  var NODE_PAD_Y = 40;
+  var DEFAULT_SCALE = 1;
+  var MIN_SCALE = 0.25;
+  var MAX_SCALE = 3;
+  var ZOOM_STEP = 0.1;
+
+  var offlineEl = document.getElementById("offline");
+  var emptyEl = document.getElementById("empty");
+  var graphEl = document.getElementById("graph");
+  var newSessionBtn = document.getElementById("new-session");
+  var hScroll = document.getElementById("h-scroll");
+  var vScroll = document.getElementById("v-scroll");
+  var zoomInBtn = document.getElementById("zoom-in");
+  var zoomOutBtn = document.getElementById("zoom-out");
+  var zoomPctBtn = document.getElementById("zoom-pct");
+
+  if (typeof vis === "undefined") {
+    graphEl.textContent = "Graph library did not load";
+    return;
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  var isMock = params.get("mock") === "1";
+
+  var network = null;
+  var nodesDS = new vis.DataSet([]);
+  var edgesDS = new vis.DataSet([]);
+  var lastPayloadKey = null;
+  var lastVisibleSteps = [];
+  var shownSession = null;
+  var ignoreSession = null;
+  var syncingScroll = false;
+  var syncingZoom = false;
+  var preferredScale = DEFAULT_SCALE;
+  var bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+
+  try {
+    ignoreSession = sessionStorage.getItem(STORAGE_KEY);
+    if (ignoreSession === "") ignoreSession = null;
+  } catch (e) {
+    ignoreSession = null;
+  }
+
+  var mockTimer = null;
+  var mockSessionId = null;
+  var mockIndex = 0;
+
+  var MOCK_STEPS = [
+    {
+      order: 1,
+      kind: "read",
+      verdict: "allowed",
+      tool: null,
+      file: "README.md",
+      sensitive: false,
+      command: null,
+      host: null,
+      rule: null,
+    },
+    {
+      order: 2,
+      kind: "read",
+      verdict: "allowed",
+      tool: null,
+      file: ".env",
+      sensitive: true,
+      command: null,
+      host: null,
+      rule: null,
+    },
+    {
+      order: 3,
+      kind: "read",
+      verdict: "allowed",
+      tool: null,
+      file: "README.md",
+      sensitive: false,
+      command: null,
+      host: null,
+      rule: null,
+    },
+    {
+      order: 4,
+      kind: "shell",
+      verdict: "allowed",
+      tool: null,
+      file: null,
+      sensitive: false,
+      command: "ls",
+      host: null,
+      rule: null,
+    },
+    {
+      order: 5,
+      kind: "shell",
+      verdict: "blocked",
+      tool: null,
+      file: null,
+      sensitive: false,
+      command: "curl -d <arg> ntfy.sh",
+      host: "ntfy.sh",
+      rule: "R1",
+    },
+  ];
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+  }
+
+  function themeColors() {
+    return {
+      step: cssVar("--step"),
+      file: cssVar("--file"),
+      sensitive: cssVar("--sensitive"),
+      blocked: cssVar("--blocked"),
+      warned: cssVar("--warned"),
+      ruleFill: cssVar("--rule-fill"),
+      ruleBorder: cssVar("--rule-border"),
+      edge: cssVar("--edge"),
+      text: cssVar("--node-text"),
+    };
+  }
+
+  function truncate(text, maxLen) {
+    if (text == null) return "";
+    var s = String(text);
+    if (s.length <= maxLen) return s;
+    return s.slice(0, maxLen);
+  }
+
+  function stepLabel(step) {
+    var parts = ["#" + step.order, String(step.kind)];
+    if (step.kind === "tool" && step.tool) {
+      parts.push(String(step.tool));
+    }
+    if (step.command) {
+      parts.push(truncate(step.command, CMD_MAX));
+    }
+    return parts.join(" ");
+  }
+
+  function stepColor(verdict, colors) {
+    if (verdict === "blocked") return colors.blocked;
+    if (verdict === "warned") return colors.warned;
+    return colors.step;
+  }
+
+  function payloadKey(session, steps) {
+    return JSON.stringify({ session: session, steps: steps });
+  }
+
+  function setOffline(on) {
+    if (on) offlineEl.classList.add("visible");
+    else offlineEl.classList.remove("visible");
+  }
+
+  function setEmpty(on) {
+    if (on) emptyEl.classList.add("visible");
+    else emptyEl.classList.remove("visible");
+  }
+
+  function clearGraph() {
+    nodesDS.clear();
+    edgesDS.clear();
+    lastPayloadKey = null;
+    lastVisibleSteps = [];
+    bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+    setEmpty(true);
+    updateZoomLabel(preferredScale);
+    updateScrollbars();
+  }
+
+  function computeBoundsFromPositions(positions) {
+    var ids = Object.keys(positions);
+    if (ids.length === 0) {
+      return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+    }
+    var minX = Infinity;
+    var maxX = -Infinity;
+    var minY = Infinity;
+    var maxY = -Infinity;
+    var i;
+    var p;
+    for (i = 0; i < ids.length; i++) {
+      p = positions[ids[i]];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return {
+      minX: minX - NODE_PAD_X,
+      maxX: maxX + NODE_PAD_X,
+      minY: minY - NODE_PAD_Y,
+      maxY: maxY + NODE_PAD_Y,
+    };
+  }
+
+  function buildGraph(steps) {
+    var colors = themeColors();
+    var visible = steps.slice(-10);
+    var nodeList = [];
+    var edgeList = [];
+    var fileFirst = {};
+    var fileSensitive = {};
+    var hostFirst = {};
+    var ruleFirst = {};
+    var i;
+    var step;
+    var sid;
+    var x;
+
+    for (i = 0; i < visible.length; i++) {
+      step = visible[i];
+      if (step.file) {
+        if (fileFirst[step.file] === undefined) fileFirst[step.file] = i;
+        if (step.sensitive) fileSensitive[step.file] = true;
+      }
+      if (step.host) {
+        if (hostFirst[step.host] === undefined) hostFirst[step.host] = i;
+      }
+      if (step.rule) {
+        if (ruleFirst[step.rule] === undefined) ruleFirst[step.rule] = i;
+      }
+    }
+
+    for (i = 0; i < visible.length; i++) {
+      step = visible[i];
+      sid = "step:" + step.order;
+      x = i * STEP_GAP;
+      nodeList.push({
+        id: sid,
+        label: stepLabel(step),
+        x: x,
+        y: STEP_Y,
+        fixed: true,
+        shape: "box",
+        color: {
+          background: stepColor(step.verdict, colors),
+          border: stepColor(step.verdict, colors),
+          highlight: {
+            background: stepColor(step.verdict, colors),
+            border: colors.text,
+          },
+        },
+        font: { color: colors.text, size: FONT_PX, face: "IBM Plex Sans" },
+        margin: 12,
+        borderWidth: 2,
+      });
+      if (i > 0) {
+        edgeList.push({
+          id: "next:" + visible[i - 1].order + ":" + step.order,
+          from: "step:" + visible[i - 1].order,
+          to: sid,
+          arrows: "to",
+          color: { color: colors.edge },
+          width: 2,
+          smooth: false,
+        });
+      }
+    }
+
+    Object.keys(fileFirst).forEach(function (path) {
+      var idx = fileFirst[path];
+      var fid = "file:" + path;
+      var amber = !!fileSensitive[path];
+      var fill = amber ? colors.sensitive : colors.file;
+      nodeList.push({
+        id: fid,
+        label: String(path),
+        x: idx * STEP_GAP,
+        y: FILE_Y,
+        fixed: true,
+        shape: "box",
+        color: {
+          background: fill,
+          border: fill,
+          highlight: { background: fill, border: colors.text },
+        },
+        font: { color: colors.text, size: FONT_PX, face: "IBM Plex Sans" },
+        margin: 10,
+        borderWidth: 2,
+      });
+    });
+
+    Object.keys(hostFirst).forEach(function (host) {
+      var idx = hostFirst[host];
+      var hid = "host:" + host;
+      nodeList.push({
+        id: hid,
+        label: String(host),
+        x: idx * STEP_GAP,
+        y: HOST_Y,
+        fixed: true,
+        shape: "box",
+        color: {
+          background: colors.file,
+          border: colors.file,
+          highlight: { background: colors.file, border: colors.text },
+        },
+        font: { color: colors.text, size: FONT_PX, face: "IBM Plex Sans" },
+        margin: 10,
+        borderWidth: 2,
+      });
+    });
+
+    Object.keys(ruleFirst).forEach(function (ruleId) {
+      var idx = ruleFirst[ruleId];
+      var rid = "rule:" + ruleId;
+      nodeList.push({
+        id: rid,
+        label: String(ruleId),
+        x: idx * STEP_GAP + RULE_DX,
+        y: RULE_DY,
+        fixed: true,
+        shape: "box",
+        color: {
+          background: colors.ruleFill,
+          border: colors.ruleBorder,
+          highlight: {
+            background: colors.ruleFill,
+            border: colors.ruleBorder,
+          },
+        },
+        font: { color: colors.text, size: FONT_PX, face: "IBM Plex Sans" },
+        margin: 10,
+        borderWidth: 2,
+      });
+    });
+
+    for (i = 0; i < visible.length; i++) {
+      step = visible[i];
+      sid = "step:" + step.order;
+      if (step.file) {
+        edgeList.push({
+          id: "touch-file:" + step.order + ":" + step.file,
+          from: sid,
+          to: "file:" + step.file,
+          arrows: "to",
+          color: { color: colors.edge },
+          width: 2,
+          smooth: false,
+        });
+      }
+      if (step.host) {
+        edgeList.push({
+          id: "touch-host:" + step.order + ":" + step.host,
+          from: sid,
+          to: "host:" + step.host,
+          arrows: "to",
+          color: { color: colors.edge },
+          width: 2,
+          smooth: false,
+        });
+      }
+      if (step.rule) {
+        var dashColor =
+          step.verdict === "warned" ? colors.warned : colors.blocked;
+        edgeList.push({
+          id: "rule-edge:" + step.order + ":" + step.rule,
+          from: sid,
+          to: "rule:" + step.rule,
+          arrows: "to",
+          dashes: true,
+          color: { color: dashColor },
+          width: 2,
+          smooth: false,
+        });
+      }
+    }
+
+    nodesDS.clear();
+    edgesDS.clear();
+    nodesDS.add(nodeList);
+    edgesDS.add(edgeList);
+    lastVisibleSteps = visible;
+    setEmpty(visible.length === 0);
+    fitToNewest(visible);
+    updateScrollbars();
+  }
+
+  function ensureNetwork() {
+    if (network) return;
+    network = new vis.Network(
+      graphEl,
+      { nodes: nodesDS, edges: edgesDS },
+      {
+        physics: false,
+        interaction: {
+          dragNodes: false,
+          dragView: true,
+          zoomView: true,
+          selectable: false,
+          hover: false,
+        },
+        edges: {
+          smooth: false,
+        },
+        layout: {
+          hierarchical: false,
+        },
+      }
+    );
+    network.on("zoom", function () {
+      if (syncingZoom) return;
+      var scale = clampScale(network.getScale());
+      if (Math.abs(scale - network.getScale()) > 0.001) {
+        var pos = network.getViewPosition();
+        syncingZoom = true;
+        network.moveTo({ position: pos, scale: scale, animation: false });
+        syncingZoom = false;
+      }
+      preferredScale = scale;
+      updateZoomLabel(scale);
+      updateScrollbars();
+    });
+    network.on("dragEnd", function () {
+      updateScrollbars();
+    });
+    network.on("dragging", function () {
+      updateScrollbars();
+    });
+  }
+
+  function clampScale(scale) {
+    if (scale < MIN_SCALE) return MIN_SCALE;
+    if (scale > MAX_SCALE) return MAX_SCALE;
+    return scale;
+  }
+
+  function updateZoomLabel(scale) {
+    var pct = Math.round(clampScale(scale) * 100);
+    zoomPctBtn.textContent = pct + "%";
+  }
+
+  function fitScaleForBounds(boxW, boxH) {
+    var cw = Math.max(graphEl.clientWidth, 1);
+    var ch = Math.max(graphEl.clientHeight, 1);
+    return Math.min(
+      cw / (boxW + VIEW_PAD),
+      ch / (boxH + VIEW_PAD)
+    );
+  }
+
+  function centerForScale(scale, preferNewest) {
+    var boxW = bounds.maxX - bounds.minX;
+    var boxH = bounds.maxY - bounds.minY;
+    var cw = Math.max(graphEl.clientWidth, 1);
+    var ch = Math.max(graphEl.clientHeight, 1);
+    var viewW = cw / scale;
+    var viewH = ch / scale;
+    var centerX;
+    var centerY = (bounds.minY + bounds.maxY) / 2;
+
+    if (boxW <= viewW) {
+      centerX = (bounds.minX + bounds.maxX) / 2;
+    } else if (preferNewest && lastVisibleSteps.length > 0) {
+      var last = lastVisibleSteps[lastVisibleSteps.length - 1];
+      var lastId = "step:" + last.order;
+      var positions = network.getPositions();
+      var lastPos = positions[lastId] || { x: bounds.maxX };
+      centerX = lastPos.x - viewW / 2 + VIEW_PAD + NODE_PAD_X;
+      var minCenter = bounds.minX + viewW / 2;
+      var maxCenter = bounds.maxX - viewW / 2;
+      if (centerX < minCenter) centerX = minCenter;
+      if (centerX > maxCenter) centerX = maxCenter;
+    } else {
+      centerX = (bounds.minX + bounds.maxX) / 2;
+    }
+
+    if (boxH <= viewH) {
+      centerY = (bounds.minY + bounds.maxY) / 2;
+    }
+
+    return { x: centerX, y: centerY };
+  }
+
+  function applyView(scale, preferNewest) {
+    ensureNetwork();
+    if (lastVisibleSteps.length === 0) {
+      updateZoomLabel(preferredScale);
+      return;
+    }
+    scale = clampScale(scale);
+    var center = centerForScale(scale, preferNewest);
+    syncingZoom = true;
+    network.moveTo({
+      position: center,
+      scale: scale,
+      animation: false,
+    });
+    syncingZoom = false;
+    updateZoomLabel(scale);
+    updateScrollbars();
+  }
+
+  function layoutGraphView(preferNewest) {
+    ensureNetwork();
+    if (lastVisibleSteps.length === 0) return;
+    var positions = network.getPositions();
+    if (Object.keys(positions).length === 0) return;
+
+    bounds = computeBoundsFromPositions(positions);
+    var boxW = Math.max(bounds.maxX - bounds.minX, 1);
+    var boxH = Math.max(bounds.maxY - bounds.minY, 1);
+    var scaleFit = fitScaleForBounds(boxW, boxH);
+    // Prefer the user's scale (default 100%). If that would overflow the page,
+    // automatically scale down so the whole graph fits.
+    var scale = preferredScale;
+    if (scaleFit < preferredScale) {
+      scale = clampScale(scaleFit);
+    }
+    applyView(scale, !!preferNewest);
+  }
+
+  function setPreferredScale(next, preferNewest) {
+    preferredScale = clampScale(next);
+    layoutGraphView(preferNewest);
+  }
+
+  function fitToNewest(visible) {
+    lastVisibleSteps = visible || lastVisibleSteps;
+    layoutGraphView(true);
+  }
+
+  function updateScrollbars() {
+    if (!network || lastVisibleSteps.length === 0) {
+      hScroll.classList.remove("visible");
+      vScroll.classList.remove("visible");
+      return;
+    }
+
+    var positions = network.getPositions();
+    bounds = computeBoundsFromPositions(positions);
+    var scale = network.getScale();
+    var view = network.getViewPosition();
+    var cw = Math.max(graphEl.clientWidth, 1);
+    var ch = Math.max(graphEl.clientHeight, 1);
+    var viewW = cw / scale;
+    var viewH = ch / scale;
+    var boxW = bounds.maxX - bounds.minX;
+    var boxH = bounds.maxY - bounds.minY;
+
+    syncingScroll = true;
+
+    if (boxW > viewW + 1) {
+      var maxScrollX = boxW - viewW;
+      var scrollX = view.x - viewW / 2 - bounds.minX;
+      if (scrollX < 0) scrollX = 0;
+      if (scrollX > maxScrollX) scrollX = maxScrollX;
+      hScroll.max = String(Math.ceil(maxScrollX));
+      hScroll.value = String(Math.round(scrollX));
+      hScroll.classList.add("visible");
+    } else {
+      hScroll.classList.remove("visible");
+      hScroll.value = "0";
+    }
+
+    if (boxH > viewH + 1) {
+      var maxScrollY = boxH - viewH;
+      var scrollY = view.y - viewH / 2 - bounds.minY;
+      if (scrollY < 0) scrollY = 0;
+      if (scrollY > maxScrollY) scrollY = maxScrollY;
+      vScroll.max = String(Math.ceil(maxScrollY));
+      vScroll.value = String(Math.round(scrollY));
+      vScroll.classList.add("visible");
+    } else {
+      vScroll.classList.remove("visible");
+      vScroll.value = "0";
+    }
+
+    syncingScroll = false;
+  }
+
+  function applyScrollFromControls() {
+    if (!network || syncingScroll || lastVisibleSteps.length === 0) return;
+    var scale = network.getScale();
+    var cw = Math.max(graphEl.clientWidth, 1);
+    var ch = Math.max(graphEl.clientHeight, 1);
+    var viewW = cw / scale;
+    var viewH = ch / scale;
+    var boxW = bounds.maxX - bounds.minX;
+    var boxH = bounds.maxY - bounds.minY;
+
+    var centerX;
+    var centerY;
+    if (boxW > viewW + 1) {
+      centerX = bounds.minX + Number(hScroll.value) + viewW / 2;
+    } else {
+      centerX = (bounds.minX + bounds.maxX) / 2;
+    }
+    if (boxH > viewH + 1) {
+      centerY = bounds.minY + Number(vScroll.value) + viewH / 2;
+    } else {
+      centerY = (bounds.minY + bounds.maxY) / 2;
+    }
+
+    network.moveTo({
+      position: { x: centerX, y: centerY },
+      scale: scale,
+      animation: false,
+    });
+  }
+
+  function panBy(dx, dy) {
+    if (!network || lastVisibleSteps.length === 0) return;
+    var scale = network.getScale();
+    var view = network.getViewPosition();
+    var cw = Math.max(graphEl.clientWidth, 1);
+    var ch = Math.max(graphEl.clientHeight, 1);
+    var viewW = cw / scale;
+    var viewH = ch / scale;
+    var nextX = view.x + dx / scale;
+    var nextY = view.y + dy / scale;
+
+    var minCenterX = bounds.minX + viewW / 2;
+    var maxCenterX = bounds.maxX - viewW / 2;
+    var minCenterY = bounds.minY + viewH / 2;
+    var maxCenterY = bounds.maxY - viewH / 2;
+    if (bounds.maxX - bounds.minX <= viewW) {
+      nextX = (bounds.minX + bounds.maxX) / 2;
+    } else {
+      if (nextX < minCenterX) nextX = minCenterX;
+      if (nextX > maxCenterX) nextX = maxCenterX;
+    }
+    if (bounds.maxY - bounds.minY <= viewH) {
+      nextY = (bounds.minY + bounds.maxY) / 2;
+    } else {
+      if (nextY < minCenterY) nextY = minCenterY;
+      if (nextY > maxCenterY) nextY = maxCenterY;
+    }
+
+    network.moveTo({
+      position: { x: nextX, y: nextY },
+      scale: scale,
+      animation: false,
+    });
+    updateScrollbars();
+  }
+
+  hScroll.addEventListener("input", applyScrollFromControls);
+  vScroll.addEventListener("input", applyScrollFromControls);
+
+  graphEl.addEventListener(
+    "wheel",
+    function (ev) {
+      if (!network || lastVisibleSteps.length === 0) return;
+      if (ev.ctrlKey || ev.metaKey) {
+        ev.preventDefault();
+        var delta = ev.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+        setPreferredScale(network.getScale() + delta, false);
+        return;
+      }
+      ev.preventDefault();
+      var dx = ev.deltaX;
+      var dy = ev.deltaY;
+      if (ev.shiftKey && dx === 0) {
+        dx = dy;
+        dy = 0;
+      }
+      panBy(dx, dy);
+    },
+    { passive: false }
+  );
+
+  function applyPayload(session, steps) {
+    if (!Array.isArray(steps)) steps = [];
+
+    if (ignoreSession != null && session === ignoreSession) {
+      clearGraph();
+      shownSession = null;
+      return;
+    }
+
+    if (ignoreSession != null && session != null && session !== ignoreSession) {
+      ignoreSession = null;
+      try {
+        sessionStorage.removeItem(STORAGE_KEY);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    var key = payloadKey(session, steps);
+    if (key === lastPayloadKey) return;
+
+    lastPayloadKey = key;
+    shownSession = session;
+    ensureNetwork();
+
+    if (session == null || steps.length === 0) {
+      clearGraph();
+      lastPayloadKey = key;
+      shownSession = session;
+      return;
+    }
+
+    buildGraph(steps);
+  }
+
+  function onNewSession() {
+    if (isMock) {
+      restartMock();
+      return;
+    }
+
+    if (shownSession == null) return;
+
+    ignoreSession = shownSession;
+    try {
+      sessionStorage.setItem(STORAGE_KEY, ignoreSession);
+    } catch (e) {
+      /* ignore */
+    }
+    shownSession = null;
+    clearGraph();
+  }
+
+  newSessionBtn.addEventListener("click", onNewSession);
+
+  zoomInBtn.addEventListener("click", function () {
+    var base = network ? network.getScale() : preferredScale;
+    setPreferredScale(base + ZOOM_STEP, false);
+  });
+  zoomOutBtn.addEventListener("click", function () {
+    var base = network ? network.getScale() : preferredScale;
+    setPreferredScale(base - ZOOM_STEP, false);
+  });
+  zoomPctBtn.addEventListener("click", function () {
+    setPreferredScale(DEFAULT_SCALE, true);
+  });
+
+  function newMockSessionId() {
+    return (
+      "mock-" +
+      String(Date.now()) +
+      "-" +
+      String(Math.floor(Math.random() * 10000))
+    );
+  }
+
+  function emitMockSlice() {
+    var slice = MOCK_STEPS.slice(0, mockIndex);
+    applyPayload(mockSessionId, slice);
+  }
+
+  function stopMockTimer() {
+    if (mockTimer != null) {
+      clearInterval(mockTimer);
+      mockTimer = null;
+    }
+  }
+
+  function restartMock() {
+    stopMockTimer();
+    mockSessionId = newMockSessionId();
+    mockIndex = 1;
+    ignoreSession = null;
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      /* ignore */
+    }
+    lastPayloadKey = null;
+    emitMockSlice();
+    mockTimer = setInterval(function () {
+      if (mockIndex >= MOCK_STEPS.length) {
+        stopMockTimer();
+        return;
+      }
+      mockIndex += 1;
+      emitMockSlice();
+      if (mockIndex >= MOCK_STEPS.length) {
+        stopMockTimer();
+      }
+    }, MOCK_INTERVAL_MS);
+  }
+
+  function pollOnce() {
+    var controller = new AbortController();
+    var timedOut = false;
+    var timer = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, POLL_TIMEOUT_MS);
+
+    fetch("/api/steps", { signal: controller.signal, cache: "no-store" })
+      .then(function (res) {
+        clearTimeout(timer);
+        if (!res.ok) {
+          setOffline(true);
+          return null;
+        }
+        return res.json().then(
+          function (data) {
+            return data;
+          },
+          function () {
+            setOffline(true);
+            return null;
+          }
+        );
+      })
+      .then(function (data) {
+        if (data == null) return;
+        if (typeof data !== "object") {
+          setOffline(true);
+          return;
+        }
+        setOffline(false);
+        var session = Object.prototype.hasOwnProperty.call(data, "session")
+          ? data.session
+          : null;
+        var steps = Array.isArray(data.steps) ? data.steps : [];
+        applyPayload(session, steps);
+      })
+      .catch(function () {
+        clearTimeout(timer);
+        if (timedOut || true) setOffline(true);
+      })
+      .finally(function () {
+        setTimeout(pollOnce, POLL_GAP_MS);
+      });
+  }
+
+  function redrawForTheme() {
+    if (lastVisibleSteps.length === 0) return;
+    var steps = lastVisibleSteps.slice();
+    var session = shownSession;
+    lastPayloadKey = null;
+    if (session != null) {
+      applyPayload(session, steps);
+    }
+  }
+
+  if (window.matchMedia) {
+    var schemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    var onScheme = function () {
+      redrawForTheme();
+    };
+    if (schemeQuery.addEventListener) {
+      schemeQuery.addEventListener("change", onScheme);
+    } else if (schemeQuery.addListener) {
+      schemeQuery.addListener(onScheme);
+    }
+  }
+
+  window.addEventListener("resize", function () {
+    if (lastVisibleSteps.length > 0) {
+      layoutGraphView(true);
+    }
+  });
+
+  ensureNetwork();
+  setEmpty(true);
+  updateZoomLabel(preferredScale);
+
+  if (isMock) {
+    setOffline(false);
+    restartMock();
+  } else {
+    if (ignoreSession != null) {
+      clearGraph();
+    }
+    pollOnce();
+  }
+})();
+  </script>
+</body>
+</html>
