@@ -114,5 +114,8 @@ anything else. The web page loads one graph-drawing library from a CDN
   - Helper path: `hooks/hook.py` (install via `./install.sh`); log:
     `logs/events.jsonl` (under gitignored `logs/`). Compat shim:
     `recorder/hook_passthrough.py` (delegates to `hooks/hook.py`).
+  - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
+    `X-Recorder-Token` (from `~/.config/flightrecorder/token`); fail-open if
+    the server is down.
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
     notes in `demo/NOTES.md`; T0 disabled in `hooks/hook.py`.

@@ -15,21 +15,23 @@ Logic does **not** live under `.cursor/`.
 ```
 Cursor agent
     → python3 hooks/hook.py   (thin adapter)
-        → append sanitized line to logs/events.jsonl
-        → print {"permission":"allow"|"deny", ...}
+        → drop unsafe fields, POST http://127.0.0.1:8787/hook
+           (header X-Recorder-Token from ~/.config/flightrecorder/token)
+        → print server JSON, or {"permission":"allow"} if unreachable
 ```
 
-Later (SPEC §3): the same adapter will `POST` to `http://127.0.0.1:8787/hook`
-and print the server’s allow/deny answer. Do **not** use a Unix socket for this —
-hooks are one-shot; HTTP matches the local server + web UI on port 8787.
+Later: the server applies R0/R1 and still answers in-process (no Neo4j wait).
+Do **not** use a Unix socket — HTTP matches the local server + web UI on port 8787.
 
 | Piece | Path | Role |
 |---|---|---|
 | Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
-| Adapter | `hooks/hook.py` | Stdlib only; sanitize, log, allow/deny |
+| Adapter | `hooks/hook.py` | Stdlib only; sanitize, POST `/hook`, fail-open |
+| Server | `recorder/app.py` | Host + token gates; always allow for now |
 | Compat shim | `recorder/hook_passthrough.py` | Delegates to `hooks/hook.py` if an old config still points here |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
-| Log | `logs/events.jsonl` | Under gitignored `logs/` |
+| Log | `logs/events.jsonl` | Under gitignored `logs/` (local debug copy) |
+| Token | `~/.config/flightrecorder/token` | Mode 600; written on server start |
 
 The whole `.cursor/` directory is in `.gitignore`. Do not commit `hooks.json` —
 paths and Python choice are machine-local. After clone (or after pulling
@@ -91,13 +93,28 @@ style prompts **OFF** (SPEC §8).
 1. Read JSON from stdin.
 2. **Immediately drop** `content` (SPEC: `beforeReadFile` includes full file text).
 3. Replace `afterFileEdit.edits` with a count placeholder; omit `tool_input`.
-4. Append `{ "ts", "event", "decision" }` to `logs/events.jsonl`.
-5. Print **only** the permission JSON on stdout.
-6. Diagnostics go to stderr.
+4. `POST` the sanitized payload to `http://127.0.0.1:8787/hook` (0.5 s timeout,
+   header `X-Recorder-Token`).
+5. Print **only** the server permission JSON on stdout.
+6. If the server is down or any error occurs: print `{"permission":"allow"}` and
+   a warning on stderr (fail-open).
+7. Optionally append `{ "ts", "event", "decision" }` to `logs/events.jsonl`.
 
 Checkpoint A test rule T0 (`_T0_ENABLED` in `hooks/hook.py`) denied shell
 commands containing `curl`. It is **disabled** after the decision in
 `demo/NOTES.md`.
+
+---
+
+## Server (this stage)
+
+```bash
+uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
+```
+
+- `GET /health` → `{"ok": true}` (Host check only).
+- `POST /hook` → Host → token → Content-Type → JSON → `{"permission":"allow"}`.
+- Listens on `127.0.0.1` only; token file mode `600`.
 
 ---
 
@@ -136,6 +153,7 @@ for policy.
 |---|---|
 | Hooks fire + log + allow | **Done** |
 | Hard-coded deny stops a command | **Done** — decision **continue** (`demo/NOTES.md`) |
+| Server + token gates (always allow) | **Done** |
 | Server + R0/R1 | Not done |
 
 ---

@@ -1,0 +1,90 @@
+"""Flight Recorder local server: receive hook events and answer allow/deny."""
+
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("flightrecorder")
+
+ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
+TOKEN_HEADER: str = "X-Recorder-Token"
+
+# Overridable for tests (pytest sets a temp dir before lifespan runs).
+config_dir: Path = Path.home() / ".config" / "flightrecorder"
+_token: str = ""
+
+
+def write_token(directory: Path) -> str:
+    """Create config dir and write a fresh token file (mode 600). Return token."""
+    directory.mkdir(parents=True, exist_ok=True)
+    token: str = secrets.token_urlsafe(32)
+    path: Path = directory / "token"
+    path.write_text(token, encoding="utf-8")
+    path.chmod(0o600)
+    return token
+
+
+def host_allowed(request: Request) -> bool:
+    host: str = request.headers.get("host", "")
+    return host in ALLOWED_HOSTS
+
+
+def content_type_is_json(request: Request) -> bool:
+    raw: str = request.headers.get("content-type", "")
+    media: str = raw.split(";", 1)[0].strip().lower()
+    return media == "application/json"
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    global _token
+    _token = write_token(config_dir)
+    logger.info("recorder listening; token written under %s", config_dir)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def host_gate(request: Request, call_next: Any) -> Response:
+    if not host_allowed(request):
+        return JSONResponse({"detail": "forbidden host"}, status_code=403)
+    return await call_next(request)  # type: ignore[no-any-return]
+
+
+@app.get("/health")
+async def health() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.post("/hook")
+async def hook(request: Request) -> Response:
+    provided: str | None = request.headers.get(TOKEN_HEADER)
+    if provided is None or provided != _token:
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    if not content_type_is_json(request):
+        return JSONResponse({"detail": "unsupported media type"}, status_code=415)
+
+    raw: bytes = await request.body()
+    try:
+        payload: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return JSONResponse({"detail": "malformed json"}, status_code=400)
+
+    if not isinstance(payload, dict):
+        return JSONResponse({"detail": "malformed json"}, status_code=400)
+
+    event: str = str(payload.get("hook_event_name", ""))
+    logger.info("hook event=%s decision=allow", event or "?")
+    return JSONResponse({"permission": "allow"})
