@@ -222,5 +222,5 @@ def test_index_serves_graph_page(client: TestClient) -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
     text = response.text
-    assert "Flight Recorder" in text
+    assert "AgentFly" in text
     assert "vis-network" in text
