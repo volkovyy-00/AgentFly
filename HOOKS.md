@@ -25,14 +25,20 @@ hooks are one-shot; HTTP matches the local server + web UI on port 8787.
 
 | Piece | Path | Role |
 |---|---|---|
-| Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required) |
+| Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
 | Adapter | `hooks/hook.py` | Stdlib only; sanitize, log, allow/deny |
 | Compat shim | `recorder/hook_passthrough.py` | Delegates to `hooks/hook.py` if an old config still points here |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
 | Log | `logs/events.jsonl` | Under gitignored `logs/` |
 
+The whole `.cursor/` directory is in `.gitignore`. Do not commit `hooks.json` —
+paths and Python choice are machine-local. After clone (or after pulling
+install changes), run `./install.sh` so Cursor has a fresh config.
+
 **Footgun:** never delete the hook script while `hooks.json` still points at it.
 Python exit code **2** (file missing) is treated as **deny** and can lock the agent.
+Keep the compat shim so an outdated `hooks.json` that still names
+`recorder/hook_passthrough.py` does not exit 2.
 
 Project layout (uv skeleton): `hooks/`, `recorder/`, `web/`, `tests/`, `demo/`.
 
@@ -42,7 +48,7 @@ Project layout (uv skeleton): `hooks/`, `recorder/`, `web/`, `tests/`, `demo/`.
 
 ```bash
 uv sync
-./install.sh
+./install.sh   # required: writes gitignored .cursor/hooks.json
 ```
 
 Then:
@@ -52,13 +58,11 @@ Then:
 3. Check **Settings → Hooks** and the **Hooks** output channel.
 4. Trigger a file read and a shell command; inspect `logs/events.jsonl`.
 
-Hook command after install:
+Hook command after install (prefer project venv when present):
 
 ```text
 .venv/bin/python hooks/hook.py
 ```
-
-(or `python3 hooks/hook.py` if there is no project `.venv` yet)
 
 Do **not** use `uv run` in the hook path (slow cold start). `timeout` in
 `hooks.json` is `1` second.

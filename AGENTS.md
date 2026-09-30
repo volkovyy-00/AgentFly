@@ -7,7 +7,8 @@ the session as a live graph. Read @SPEC.md first. It is the source of truth.
 If code and SPEC.md disagree, stop and ask. Do not silently pick one.
 
 ## Commands
-- Install: `uv sync`
+- Install deps: `uv sync`
+- Wire Cursor hooks (writes gitignored `.cursor/hooks.json`): `./install.sh`
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`
 - Auto-fix style: `uv run ruff check --fix . && uv run ruff format .`
 - Run server: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`
@@ -95,8 +96,9 @@ anything else. The web page loads one graph-drawing library from a CDN
   `<program> <unparsed>`.
 
 ## Hook facts (fill in after the logging stage)
-- Config file: `.cursor/hooks.json` in the project (folder must be trusted;
-  restart Cursor if hooks do not load).
+- Config file: `.cursor/hooks.json` — **gitignored** (whole `.cursor/`); create
+  with `./install.sh`. Folder must be trusted; restart Cursor if hooks do not
+  load. Do not commit machine-local hook config.
 - Events used: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`,
   `afterFileEdit`, `preToolUse`.
 - Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}`
@@ -110,4 +112,7 @@ anything else. The web page loads one graph-drawing library from a CDN
     is dropped by `hooks/hook.py` before writing the log
   - Session key for the server: use `conversation_id` (confirmed)
   - Helper path: `hooks/hook.py` (install via `./install.sh`); log:
-    `logs/events.jsonl`. Compat shim: `recorder/hook_passthrough.py`.
+    `logs/events.jsonl` (under gitignored `logs/`). Compat shim:
+    `recorder/hook_passthrough.py` (delegates to `hooks/hook.py`).
+  - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
+    notes in `demo/NOTES.md`; T0 disabled in `hooks/hook.py`.

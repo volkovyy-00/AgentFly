@@ -14,6 +14,10 @@ uv sync
 ./install.sh
 ```
 
+`./install.sh` writes `.cursor/hooks.json` (the whole `.cursor/` tree is
+gitignored). Run it after every clone and whenever `install.sh` changes.
+Hook details and Checkpoint A notes: `HOOKS.md`, `demo/NOTES.md`.
+
 Check (run before reporting a step done):
 
 ```bash

@@ -8,7 +8,8 @@ Cursor version: 3.5.17
 - [x] Cursor “ask before running commands” style prompts treated as off for this test
 - Hook helper: `hooks/hook.py` (T0 was enabled for the test, then disabled)
 - Log path: `logs/events.jsonl`
-- Config: `.cursor/hooks.json` → `python3 hooks/hook.py`
+- Config: `.cursor/hooks.json` (gitignored; from `./install.sh`) →
+  `.venv/bin/python hooks/hook.py` (or `python3 hooks/hook.py`)
 
 ## Test prompt / command
 
