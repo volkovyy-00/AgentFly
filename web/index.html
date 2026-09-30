@@ -218,12 +218,13 @@
       transform: translateY(-100%);
       transition: max-height 450ms ease-out, transform 450ms ease-out;
       z-index: 5;
+      position: relative;
     }
     #block.visible {
       max-height: 220px;
       transform: translateY(0);
     }
-    #block .inner { padding: 16px 20px 18px; }
+    #block .inner { padding: 16px 48px 18px 20px; }
     #block-title {
       font-size: 44px;
       font-weight: 800;
@@ -235,6 +236,32 @@
       font-size: 21px;
       font-weight: 500;
       line-height: 1.3;
+    }
+    #block-close {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      width: 36px;
+      height: 36px;
+      margin: 0;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.2);
+      color: var(--banner-fg);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    #block-close:hover,
+    #block-close:focus-visible {
+      background: rgba(0, 0, 0, 0.35);
+      outline: 2px solid rgba(255, 255, 255, 0.7);
+      outline-offset: 2px;
+    }
+    #block:not(.visible) #block-close {
+      visibility: hidden;
+      pointer-events: none;
     }
 
     #stage {
@@ -323,6 +350,7 @@
     <div id="offline">OFFLINE — recorder not reachable</div>
   </header>
   <section id="block" aria-live="assertive">
+    <button type="button" id="block-close" aria-label="Dismiss blocked banner" title="Dismiss">×</button>
     <div class="inner">
       <div id="block-title"></div>
       <div id="block-reason"></div>
@@ -395,6 +423,7 @@
   var blockEl = document.getElementById("block");
   var blockTitleEl = document.getElementById("block-title");
   var blockReasonEl = document.getElementById("block-reason");
+  var blockCloseBtn = document.getElementById("block-close");
   var emptyEl = document.getElementById("empty");
   var graphEl = document.getElementById("graph");
   var legendWarnedEl = document.getElementById("legend-warned");
@@ -1110,6 +1139,16 @@
   }
 
   newSessionBtn.addEventListener("click", onNewSession);
+  if (blockCloseBtn) {
+    blockCloseBtn.addEventListener("click", function () {
+      hideBlockBanner();
+    });
+  }
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && blockEl.classList.contains("visible")) {
+      hideBlockBanner();
+    }
+  });
   zoomInBtn.addEventListener("click", function () {
     setZoom(network.getScale() * ZOOM_FACTOR);
   });
