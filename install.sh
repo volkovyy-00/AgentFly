@@ -49,6 +49,9 @@ cat > "$ROOT/.cursor/hooks.json" <<EOF
     ],
     "afterFileEdit": [
       { "command": "$CMD", "timeout": 1 }
+    ],
+    "preToolUse": [
+      { "command": "$CMD", "timeout": 1 }
     ]
   }
 }

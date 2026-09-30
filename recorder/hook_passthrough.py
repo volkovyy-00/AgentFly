@@ -31,9 +31,11 @@ def sanitize(payload: dict[str, Any]) -> dict[str, Any]:
         count: int = len(edits) if isinstance(edits, list) else 0
         out["edits"] = f"<{count} edits>"
 
-    # MCP / tool inputs can hold secrets; keep names only for this logging stage.
+    # MCP / preToolUse inputs can hold secrets; keep names only for this logging stage.
     if "tool_input" in out:
         out["tool_input"] = "<omitted>"
+    if "agent_message" in out:
+        out["agent_message"] = "<omitted>"
 
     return out
 

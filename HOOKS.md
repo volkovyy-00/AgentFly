@@ -70,8 +70,10 @@ Do **not** use `uv run` in the hook path (slow cold start). `timeout` in
 | `beforeReadFile` | Yes | Sensitive file reads (session marking later) |
 | `beforeMCPExecution` | Yes | External tool calls |
 | `afterFileEdit` | No (observe only) | Record that a path was edited |
+| `preToolUse` | Yes (allow/deny; can rewrite input) | Broader net: Shell, Read, Write, Task, MCP, searches, etc. |
 
-Optional later: `preToolUse` (broader; do not assume it is needed).
+`preToolUse` fires for many tools; expect overlap with the narrower hooks above.
+Log it to learn which tools Cursor reports; do not assume it replaces the others.
 
 ---
 
@@ -111,6 +113,11 @@ Confirmed by live log lines in this project:
 - `attachments` — list
 - `content` — present on the wire; **must never be logged or forwarded**
 
+**`preToolUse` (expected from docs; confirm in log):**
+
+- `tool_name`, `tool_input` (omitted in our log), `tool_use_id`, `cwd`
+- optional `agent_message` (omitted in our log)
+
 ---
 
 ## Permission responses
@@ -120,7 +127,7 @@ Confirmed by live log lines in this project:
 | Event | `permission` |
 |---|---|
 | `beforeShellExecution`, `beforeMCPExecution` | `allow` \| `deny` \| `ask` |
-| `beforeReadFile` | `allow` \| `deny` |
+| `beforeReadFile`, `preToolUse` | `allow` \| `deny` (`preToolUse` also accepts `updated_input`; `"ask"` is not enforced) |
 
 Deny shape (for later rules):
 

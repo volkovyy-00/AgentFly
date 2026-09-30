@@ -12,6 +12,9 @@
     ],
     "afterFileEdit": [
       { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+    ],
+    "preToolUse": [
+      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
     ]
   }
 }

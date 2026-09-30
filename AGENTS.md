@@ -98,7 +98,7 @@ anything else. The web page loads one graph-drawing library from a CDN
 - Config file: `.cursor/hooks.json` in the project (folder must be trusted;
   restart Cursor if hooks do not load).
 - Events used: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`,
-  `afterFileEdit`.
+  `afterFileEdit`, `preToolUse`.
 - Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}`
   on stdout, exit code 0. Exit code 2 also blocks. Invalid JSON blocks.
 - Real input fields seen on this machine (Cursor 3.5.17):
