@@ -2,10 +2,7 @@
 
 > See what your AI coding agent is doing, and stop the next step before it does something you would regret.
 
-<!-- TODO(gif): save your recording at docs/media/demo-block.gif.
-     Shot: new Cursor chat. Prompt 1 reads .env, then Prompt 2 tries to curl a summary out,
-     and Cursor shows "Blocked by rule R1 ...". Prompts are in DEMO_PROMPTS.txt. -->
-![Cursor agent reads .env, then its curl command is blocked by rule R1](docs/media/demo-block.gif)
+![Live graph: the agent reads .env, then its curl to ntfy.sh is blocked by rule R1](docs/media/same-command.gif)
 
 AgentFly is a local black box for the Cursor agent. Cursor
 [hooks](https://cursor.com/docs/hooks) send every agent action (file reads,
@@ -51,11 +48,6 @@ These files count as sensitive (decided by file name only):
 | `.env`, `.env.local`, `.env.*` | `.env.example`, `.env.sample`, `.env.template` |
 | `*.pem`, `*.key` | `id_rsa.pub` |
 | `id_rsa*`, `credentials*` | |
-
-<!-- TODO(gif): save your recording at docs/media/same-command.gif.
-     Shot: new chat. The same curl is allowed first, then the agent reads .env,
-     and the same curl is blocked (the 90-second run in DEMO_PROMPTS.txt). -->
-![The same curl command is allowed before a secret read and blocked after it](docs/media/same-command.gif)
 
 ## Requirements
 
