@@ -31,3 +31,6 @@ Replay without Cursor (server must be running for R1 blocks):
 ```bash
 uv run python fake_agent.py
 ```
+
+See `HOOKS.md` for architecture, R1, and `fake_agent` flags. Checkpoint A notes:
+`demo/NOTES.md`.

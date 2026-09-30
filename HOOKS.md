@@ -13,21 +13,25 @@ Cursor spawns a short-lived process per action (JSON on stdin → JSON on stdout
 Logic does **not** live under `.cursor/`.
 
 ```
-Cursor agent
+Cursor agent  (or fake_agent.py)
     → python3 hooks/hook.py   (thin adapter)
         → drop unsafe fields, POST http://127.0.0.1:8787/hook
            (header X-Recorder-Token from ~/.config/flightrecorder/token)
         → print server JSON, or {"permission":"allow"} if unreachable
+            → recorder/app.py: mark session, R1 decide, allow/deny
 ```
 
-Later: the server applies R0/R1 and still answers in-process (no Neo4j wait).
 Do **not** use a Unix socket — HTTP matches the local server + web UI on port 8787.
 
 | Piece | Path | Role |
 |---|---|---|
 | Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
 | Adapter | `hooks/hook.py` | Stdlib only; sanitize, POST `/hook`, fail-open |
-| Server | `recorder/app.py` | Host + token gates; always allow for now |
+| Server | `recorder/app.py` | Host + token gates; mark/decide; R1 deny |
+| Rules | `recorder/rules.py` | `Rule` list; `mark` then `decide`; `WATCH_ONLY` |
+| Sessions | `recorder/sessions.py` | Memory + `~/.config/flightrecorder/sessions.json` |
+| Names | `recorder/names.py` | Sensitive paths + local hosts (pure) |
+| Replay | `fake_agent.py` + `demo/scenario.json` | Pipe events through the helper (no Cursor) |
 | Compat shim | `recorder/hook_passthrough.py` | Delegates to `hooks/hook.py` if an old config still points here |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
 | Log | `logs/events.jsonl` | Under gitignored `logs/` (local debug copy) |
@@ -119,6 +123,39 @@ uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
 - R1 message (exact): `Blocked by rule R1: a secret was read earlier in this
   session, and now data is being sent out.` `WATCH_ONLY` turns blocks into
   warnings (allow + warned verdict).
+- Decision stays in-process (never waits on Neo4j). R0 is not implemented yet.
+
+---
+
+## Replay without Cursor (`fake_agent.py`)
+
+Pipes events from `demo/scenario.json` into `hooks/hook.py` the same way Cursor
+would. First stdout line is `SIMULATION (not a real agent)`.
+
+```bash
+uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787   # separate terminal
+uv run python fake_agent.py
+uv run python fake_agent.py --scenario demo --session my-id
+uv run python fake_agent.py --scenario clean_sample
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--scenario` | `demo` | Key in `demo/scenario.json` |
+| `--session` | new uuid | Sets `conversation_id` / `session_id` on every event |
+
+**`demo` scenario:** read README (allowed) → read `.env` with fake `content`
+(allowed; content must be dropped before log/POST) → `curl` to ntfy (blocked by R1).
+Exit 0 only if every step matches its `expect`.
+
+**Server down:** helper fail-opens to allow; last step expect is `blocked` →
+exit non-zero and stderr `WARNING: recorder unreachable` (no traceback).
+
+**`clean_sample`:** holds the cleaning fixture command
+`curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1` (expect allowed;
+used later for command-cleaning tests).
+
+Format details: module docstring of `fake_agent.py`.
 
 ---
 
@@ -160,6 +197,7 @@ for policy.
 | Server + token gates (always allow) | **Done** |
 | R1 secret-then-network | **Done** |
 | Replay script `fake_agent.py` | **Done** |
+| Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
 | R0 protect recorder | Not done |
 | Neo4j / web page | Not done |
 
@@ -169,4 +207,5 @@ for policy.
 
 - Cursor built-in web tools may bypass these events.
 - Tab completions use `beforeTabFileRead` / `afterTabFileEdit` (not wired).
-- When the future server is down, the adapter must fail open (`allow` + stderr warning).
+- When the recorder is down, the adapter fails open (`allow` + stderr warning).
+  `fake_agent.py` then exits non-zero if a step expected `blocked`.
