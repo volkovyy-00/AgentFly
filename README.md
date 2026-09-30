@@ -178,7 +178,13 @@ are kept, and everything else is replaced.
 
 For tool calls only the tool name is kept, and for edits only the path.
 
-## Neo4j commands
+## Neo4j graph
+
+Each session is stored as a chain of steps. A step points to the file,
+command or host it touched, and a blocked step points to the rule that
+blocked it.
+
+![Recorded agent steps queried as a graph in Neo4j Aura](docs/media/neo4j.gif)
 
 ```bash
 uv run python -m recorder.check_db          # test the connection
