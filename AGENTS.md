@@ -69,6 +69,13 @@ anything else. The web page loads one graph-drawing library from a CDN
   repo folder (`~/.config/flightrecorder/.env`), read only by the server.
   Names are listed in `.env.example`. Never print, export or commit them.
   Never pass them to the helper script.
+- Command cleaning (`recorder/clean.py`) is **on by default**. Set
+  `CLEAN_COMMANDS=0` (or `false` / `off`) when starting the server to store
+  raw commands instead — debugging only; secrets may then reach Neo4j.
+- Neo4j: `uv run python -m recorder.check_db` / `python -m recorder.store
+  --counts` / `--clear`. Writes are background-only; never DELETE except
+  `--clear`. If `neo4j+s://` fails TLS verify on the host, use `neo4j+ssc://`
+  (documented in `.env.example`); restart uvicorn after editing creds.
 
 ## Code style
 - Python 3.12, type hints on function signatures, `pathlib`, small functions.

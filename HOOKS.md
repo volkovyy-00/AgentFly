@@ -31,6 +31,10 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Rules | `recorder/rules.py` | `Rule` list; `mark` then `decide`; `WATCH_ONLY` |
 | Sessions | `recorder/sessions.py` | Memory + `~/.config/flightrecorder/sessions.json` |
 | Names | `recorder/names.py` | Sensitive paths + local hosts (pure) |
+| Clean | `recorder/clean.py` | SPEC §4 command cleaner; `CLEAN_COMMANDS` (default on) |
+| Neo4j | `recorder/store.py` | Background MERGE writer; `--counts` / `--clear` |
+| Creds | `recorder/config_env.py` | Hand-parse `~/.config/flightrecorder/.env` |
+| Check DB | `recorder/check_db.py` | `verify_connectivity` → `connected` |
 | Replay | `fake_agent.py` + `demo/scenario.json` | Pipe events through the helper (no Cursor) |
 | Compat shim | `recorder/hook_passthrough.py` | Delegates to `hooks/hook.py` if an old config still points here |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
@@ -188,6 +192,37 @@ for policy.
 
 ---
 
+## Command cleaning (SPEC §4)
+
+`recorder/clean.py` redacts shell commands before they are stored (options kept,
+values → `<arg>`, project-relative paths kept, hosts reduced to website names,
+env assigns → `NAME=<removed>`, hard-to-parse → `<program> <unparsed>`).
+
+- Helper for the save path: `command_for_storage(cmd, project_root)`.
+- **Default on.** Disable with `CLEAN_COMMANDS=0` (or `false` / `no` / `off`)
+  in the process environment when starting uvicorn. Off stores the **raw**
+  command — can leak secrets into Neo4j later; debugging only.
+- Listed in `.env.example`. Call `command_for_storage` when saving steps.
+
+## Neo4j background store
+
+After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
+(`recorder/store.py`). The decision path never waits on the driver.
+
+- Constraints + `MERGE` on `id` for Session/Step/File/Command/Host/Rule.
+- `DELETE` only via `uv run python -m recorder.store --clear`.
+- `uv run python -m recorder.check_db` → `connected` (failures print the
+  exception class name only, never the password).
+- Queue full → drop + warning. Write failures → warning with error class only.
+- Live tests in `tests/test_store.py` skip when Aura is unreachable.
+- Creds file: `~/.config/flightrecorder/.env`. On this machine Aura needed
+  `neo4j+ssc://` (not `neo4j+s://`) because of TLS cert verification; see
+  `.env.example`. Restart the recorder after changing the URI.
+- Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
+  land in Aura. Restart uvicorn so the running process reloads the env.
+
+---
+
 ## Checkpoint status
 
 | Checkpoint | Status |
@@ -198,8 +233,10 @@ for policy.
 | R1 secret-then-network | **Done** |
 | Replay script `fake_agent.py` | **Done** |
 | Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
+| Command cleaning (`recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
+| Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
 | R0 protect recorder | Not done |
-| Neo4j / web page | Not done |
+| Web page | Not done |
 
 ---
 

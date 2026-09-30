@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from recorder.rules import Session, decide, deny_messages, mark
 from recorder.sessions import SessionStore
+from recorder.store import StepRecord, build_step_record, graph_store
 
 logger = logging.getLogger("flightrecorder")
 
@@ -60,8 +61,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _token, _store
     _token = write_token(config_dir)
     _store = SessionStore(config_dir / "sessions.json")
+    graph_store.start()
     logger.info("recorder listening; token written under %s", config_dir)
     yield
+    graph_store.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -80,15 +83,24 @@ async def health() -> dict[str, bool]:
 
 
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """Mark, decide, persist step. Returns (permission JSON, verdict)."""
+    """Mark, decide, enqueue Neo4j save, persist session. Returns (permission JSON, verdict)."""
     store: SessionStore = get_store()
     session_id: str = str(payload.get("conversation_id", "") or "unknown")
     session: Session = store.get_or_create(session_id)
 
     session = mark(payload, session)
     verdict, rule_id = decide(payload, session)
+    order: int = session.next_step
+    record: StepRecord = build_step_record(
+        payload,
+        session,
+        verdict,
+        rule_id,
+        order=order,
+    )
     session = replace(session, next_step=session.next_step + 1)
     store.put(session)
+    graph_store.enqueue(record)
 
     permission: dict[str, str]
     if verdict == "blocked" and rule_id is not None:
