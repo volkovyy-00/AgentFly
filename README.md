@@ -119,14 +119,12 @@ Blocked by rule R1: a secret was read earlier in this session, and now data is b
 The `.env` in this repo holds only a fake demo value (bait for the rule).
 Never put a real credential in it.
 
-**4. Preview the graph page (work in progress).** The live graph in
-[`web/index.html`](web/index.html) is not served by the recorder yet. You can
-preview it with built-in sample data:
-
-```bash
-python3 -m http.server 8000 --directory web
-# open http://localhost:8000/?mock=1
-```
+**4. Watch the live graph.** With the recorder running, open
+<http://127.0.0.1:8787/>. The page polls `GET /api/steps` about once a second
+and draws the last 10 steps of the current session from the server's memory,
+so it works without Neo4j. The page needs no token; only `POST /hook` does.
+To preview the page with sample data and no server, open
+`web/index.html?mock=1`.
 
 ## Configuration
 
