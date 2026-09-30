@@ -1,4 +1,4 @@
-# Flight Recorder
+# AgentFly
 
 > See what your AI coding agent is doing, and stop the next step before it does something you would regret.
 
@@ -7,7 +7,7 @@
      and Cursor shows "Blocked by rule R1 ...". Prompts are in DEMO_PROMPTS.txt. -->
 ![Cursor agent reads .env, then its curl command is blocked by rule R1](docs/media/demo-block.gif)
 
-Flight Recorder is a local black box for the Cursor agent. Cursor
+AgentFly is a local black box for the Cursor agent. Cursor
 [hooks](https://cursor.com/docs/hooks) send every agent action (file reads,
 shell commands, tool calls, edits) to a small server on your laptop. The
 server checks each action against a few rules and answers allow or deny before
@@ -191,7 +191,7 @@ twice never creates duplicates.
 
 ## Limits
 
-Flight Recorder is a first layer of defence, not a sandbox.
+AgentFly is a first layer of defence, not a sandbox.
 
 - It stops the **next** step. When the agent reads a secret, that text has
   already gone to the AI model.
