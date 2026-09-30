@@ -2,19 +2,19 @@
   "version": 1,
   "hooks": {
     "beforeShellExecution": [
-      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+      { "command": ".venv/bin/python hooks/hook.py", "timeout": 1 }
     ],
     "beforeReadFile": [
-      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+      { "command": ".venv/bin/python hooks/hook.py", "timeout": 1 }
     ],
     "beforeMCPExecution": [
-      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+      { "command": ".venv/bin/python hooks/hook.py", "timeout": 1 }
     ],
     "afterFileEdit": [
-      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+      { "command": ".venv/bin/python hooks/hook.py", "timeout": 1 }
     ],
     "preToolUse": [
-      { "command": "python3 recorder/hook_passthrough.py", "timeout": 1 }
+      { "command": ".venv/bin/python hooks/hook.py", "timeout": 1 }
     ]
   }
 }

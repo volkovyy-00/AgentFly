@@ -107,5 +107,7 @@ anything else. The web page loads one graph-drawing library from a CDN
     `user_email`, `transcript_path`
   - `beforeShellExecution`: `command`, `cwd` (may be `""`), `sandbox` (bool)
   - `beforeReadFile`: `file_path`, `attachments` (list); `content` arrives but
-    is dropped by the passthrough logger before writing the log
+    is dropped by `hooks/hook.py` before writing the log
   - Session key for the server: use `conversation_id` (confirmed)
+  - Helper path: `hooks/hook.py` (install via `./install.sh`); log:
+    `logs/events.jsonl`. Compat shim: `recorder/hook_passthrough.py`.
