@@ -101,4 +101,11 @@ anything else. The web page loads one graph-drawing library from a CDN
   `afterFileEdit`.
 - Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}`
   on stdout, exit code 0. Exit code 2 also blocks. Invalid JSON blocks.
-- Real input fields seen on this machine: (paste here)
+- Real input fields seen on this machine (Cursor 3.5.17):
+  - Common: `conversation_id`, `session_id` (same value), `generation_id`,
+    `model`, `hook_event_name`, `cursor_version`, `workspace_roots`,
+    `user_email`, `transcript_path`
+  - `beforeShellExecution`: `command`, `cwd` (may be `""`), `sandbox` (bool)
+  - `beforeReadFile`: `file_path`, `attachments` (list); `content` arrives but
+    is dropped by the passthrough logger before writing the log
+  - Session key for the server: use `conversation_id` (confirmed)
