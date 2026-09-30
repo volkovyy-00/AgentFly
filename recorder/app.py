@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
+from recorder.memory import memory_steps
 from recorder.rules import Session, decide, deny_messages, mark
 from recorder.sessions import SessionStore
 from recorder.store import StepRecord, build_step_record, graph_store
@@ -22,6 +23,7 @@ logger = logging.getLogger("flightrecorder")
 
 ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
+_WEB_INDEX: Path = Path(__file__).resolve().parent.parent / "web" / "index.html"
 
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
 config_dir: Path = Path.home() / ".config" / "flightrecorder"
@@ -61,6 +63,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _token, _store
     _token = write_token(config_dir)
     _store = SessionStore(config_dir / "sessions.json")
+    memory_steps.clear()
     graph_store.start()
     logger.info("recorder listening; token written under %s", config_dir)
     yield
@@ -82,8 +85,20 @@ async def health() -> dict[str, bool]:
     return {"ok": True}
 
 
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(_WEB_INDEX, media_type="text/html; charset=utf-8")
+
+
+@app.get("/api/steps")
+async def api_steps(request: Request) -> dict[str, Any]:
+    all_flag: str = str(request.query_params.get("all", "") or "")
+    all_steps: bool = all_flag in {"1", "true", "yes"}
+    return memory_steps.snapshot(all_steps=all_steps)
+
+
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """Mark, decide, enqueue Neo4j save, persist session. Returns (permission JSON, verdict)."""
+    """Mark, decide, memory + Neo4j enqueue, persist session. Returns (permission, verdict)."""
     store: SessionStore = get_store()
     session_id: str = str(payload.get("conversation_id", "") or "unknown")
     session: Session = store.get_or_create(session_id)
@@ -100,6 +115,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     )
     session = replace(session, next_step=session.next_step + 1)
     store.put(session)
+    memory_steps.append_from_record(record)
     graph_store.enqueue(record)
 
     permission: dict[str, str]

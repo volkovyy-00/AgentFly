@@ -32,6 +32,7 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Sessions | `recorder/sessions.py` | Memory + `~/.config/flightrecorder/sessions.json` |
 | Names | `recorder/names.py` | Sensitive paths + local hosts (pure) |
 | Clean | `recorder/clean.py` | SPEC §4 command cleaner; `CLEAN_COMMANDS` (default on) |
+| Memory | `recorder/memory.py` | In-memory steps for `GET /api/steps` (page) |
 | Neo4j | `recorder/store.py` | Background MERGE writer; `--counts` / `--clear` |
 | Creds | `recorder/config_env.py` | Hand-parse `~/.config/flightrecorder/.env` |
 | Check DB | `recorder/check_db.py` | `verify_connectivity` → `connected` |
@@ -221,6 +222,25 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
   land in Aura. Restart uvicorn so the running process reloads the env.
 
+## Live graph (`web/index.html` + memory API)
+
+- Page: [`web/index.html`](web/index.html) (Part A). Server memory:
+  [`recorder/memory.py`](recorder/memory.py) (Part B).
+- `GET /` serves the HTML (Host check only; no token).
+- `GET /api/steps` → `{session, steps}` for the **most recent** session,
+  last 10 cleaned steps from process memory. `?all=1` returns the full list
+  for that session (checks only).
+- Step object fields: `order`, `kind` (`read|shell|edit|tool`), `verdict`
+  (`allowed|blocked|warned`), `tool`, `file`, `sensitive`, `command`, `host`,
+  `rule` (nullables as needed). Built from `StepRecord` in `apply_rules`
+  (sync append) — Neo4j enqueue stays separate and async.
+- Empty state: `{"session": null, "steps": []}`. Memory clears on server
+  restart (lifespan).
+- Wrong Host → 403. No Cypher from the page.
+- Demo: start uvicorn → `uv run python fake_agent.py` → open
+  `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
+- UI-only rehearsal without the API: `web/index.html?mock=1` (file:// OK).
+
 ---
 
 ## Checkpoint status
@@ -235,8 +255,8 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 | Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
 | Command cleaning (`recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
 | Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
+| Live graph page + `/api/steps` | **Done** (memory; Host only) |
 | R0 protect recorder | Not done |
-| Web page | Not done |
 
 ---
 

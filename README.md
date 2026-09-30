@@ -68,3 +68,46 @@ If Neo4j is missing or down, the server still answers; writes are skipped with
 a warning. Live Neo4j tests are skipped when the DB is unreachable so Check
 stays offline-green.
 
+## Live graph page
+
+Open `http://127.0.0.1:8787/` (Host gate only; **no token**). The page polls
+`GET /api/steps` every ~1s and draws the **in-memory** copy of cleaned steps
+(not Neo4j). After `fake_agent.py` or a real Cursor session, you should see
+steps left-to-right, `.env` amber, and a blocked curl with a dashed arrow to
+**R1**.
+
+```bash
+uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
+# then open http://127.0.0.1:8787/
+# offline UI check without server: open web/index.html?mock=1 from disk
+```
+
+**Auth split (SPEC §10):** `POST /hook` needs `X-Recorder-Token`. `GET /` and
+`GET /api/steps` need only Host `127.0.0.1:8787` or `localhost:8787` (wrong
+Host → 403). Restart uvicorn after pulling code that adds these routes.
+
+**`GET /api/steps` contract** (last 10 of the most recent session; `?all=1` for
+the full in-memory list):
+
+```json
+{
+  "session": "abc",
+  "steps": [
+    {
+      "order": 1,
+      "kind": "read",
+      "verdict": "allowed",
+      "tool": null,
+      "file": "README.md",
+      "sensitive": false,
+      "command": null,
+      "host": null,
+      "rule": null
+    }
+  ]
+}
+```
+
+Empty: `{"session": null, "steps": []}`. Fields are cleaned facts only — never
+file contents or raw secrets.
+

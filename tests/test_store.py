@@ -255,11 +255,28 @@ def test_live_merge_idempotent() -> None:
         file_sensitive=False,
     )
     store.write_record_sync(record)
-    before = store.counts()
+    assert store._driver is not None
+
+    def session_touch_count() -> int:
+        assert store._driver is not None
+        with store._driver.session() as neo:
+            row = neo.run(
+                """
+                MATCH (s:Session {id: $sid})-[:HAS_STEP]->(st:Step)
+                OPTIONAL MATCH (st)-[t:TOUCHED]->()
+                RETURN count(DISTINCT st) AS steps, count(t) AS touches
+                """,
+                sid=sid,
+            ).single()
+        assert row is not None
+        return int(row["steps"]) + int(row["touches"])
+
+    before = session_touch_count()
     store.write_record_sync(record)
-    after = store.counts()
+    after = session_touch_count()
     store.stop()
     assert before == after
+    assert before >= 1
 
 
 @_live

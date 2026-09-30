@@ -76,6 +76,9 @@ anything else. The web page loads one graph-drawing library from a CDN
   --counts` / `--clear`. Writes are background-only; never DELETE except
   `--clear`. If `neo4j+s://` fails TLS verify on the host, use `neo4j+ssc://`
   (documented in `.env.example`); restart uvicorn after editing creds.
+- Live graph: `GET /` and `GET /api/steps` are Host-only (no token). The page
+  never talks to Neo4j; it reads process memory. See README / HOOKS for the
+  JSON contract.
 
 ## Code style
 - Python 3.12, type hints on function signatures, `pathlib`, small functions.
@@ -83,7 +86,7 @@ anything else. The web page loads one graph-drawing library from a CDN
   out) so tests need no network, no Neo4j and no Cursor.
 - Plain `print`/`logging`. No CLI-framework or progress-bar libraries.
 
-## Testing (tests/test_rules.py and tests/test_clean.py)
+## Testing (tests/test_rules.py, tests/test_clean.py, tests/test_app.py)
 - `cat .env` marks the session; `curl https://x.com` afterwards is blocked.
 - `curl` without a prior secret read is allowed.
 - `.env.local` is sensitive; `.env.example` and `id_rsa.pub` are not.
@@ -101,7 +104,9 @@ anything else. The web page loads one graph-drawing library from a CDN
   is saved as `curl -H <arg> x.com`; `API_KEY=abc make` is saved as
   `API_KEY=<removed> make`; an unsplittable command is saved as
   `<program> <unparsed>`.
-
+- Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
+  README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
+  `?all=1` returns more than the default last 10; `GET /` serves the HTML.
 ## Hook facts (fill in after the logging stage)
 - Config file: `.cursor/hooks.json` — **gitignored** (whole `.cursor/`); create
   with `./install.sh`. Folder must be trusted; restart Cursor if hooks do not
