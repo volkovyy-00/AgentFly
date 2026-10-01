@@ -8,4 +8,3 @@ logs/
 *.egg-info/
 /dist/
 build/
-ui/node_modules/

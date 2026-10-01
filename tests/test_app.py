@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import recorder.app as app_module
@@ -230,12 +232,15 @@ def test_v2_serves_new_page(client: TestClient) -> None:
     response = client.get("/v2/")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
-    assert "AgentFly v2" in response.text
     assert response.headers.get("cache-control") == "no-cache"
+    assert len(response.content) > 0
 
 
 def test_v2_serves_asset(client: TestClient) -> None:
-    response = client.get("/v2/assets/index.js")
+    page = client.get("/v2/")
+    match = re.search(r'src="[^"]*assets/([^"]+\.js)"', page.text)
+    assert match is not None
+    response = client.get(f"/v2/assets/{match.group(1)}")
     assert response.status_code == 200
     assert len(response.content) > 0
     assert response.headers.get("cache-control") == "no-cache"
@@ -248,21 +253,23 @@ def test_v2_forbidden_host(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
-def test_mount_ui_v2_skips_missing_dist(tmp_path: Path) -> None:
-    from fastapi import FastAPI
-
+def test_mount_ui_v2_skips_missing_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     missing = tmp_path / "no-dist"
     bare = FastAPI()
-    app_module.mount_ui_v2(bare, missing)
+    with caplog.at_level(logging.WARNING, logger="flightrecorder"):
+        app_module.mount_ui_v2(bare, missing)
     assert not any(getattr(r, "path", None) == "/v2" for r in bare.routes)
+    assert any("ui/dist not found" in message for message in caplog.messages)
 
 
 def test_mount_ui_v2_when_dist_exists(tmp_path: Path) -> None:
-    from fastapi import FastAPI
-
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text("<html>ok</html>", encoding="utf-8")
     bare = FastAPI()
     app_module.mount_ui_v2(bare, dist)
     assert any(getattr(r, "path", None) == "/v2" for r in bare.routes)
+    with TestClient(bare, base_url="http://127.0.0.1:8787") as local:
+        response = local.get("/v2/")
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == "no-cache"

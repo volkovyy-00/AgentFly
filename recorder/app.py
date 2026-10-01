@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from recorder.memory import memory_steps
 from recorder.rules import Session, decide, deny_messages, mark
@@ -26,6 +28,22 @@ ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
 _WEB_INDEX: Path = Path(__file__).resolve().parent.parent / "web" / "index.html"
 _UI_DIST: Path = Path(__file__).resolve().parent.parent / "ui" / "dist"
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles that always sends Cache-Control: no-cache (fixed Vite asset names)."""
+
+    def file_response(
+        self,
+        full_path: os.PathLike[str] | str,
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
 
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
 config_dir: Path = Path.home() / ".config" / "flightrecorder"
@@ -82,14 +100,6 @@ async def host_gate(request: Request, call_next: Any) -> Response:
     return await call_next(request)  # type: ignore[no-any-return]
 
 
-@app.middleware("http")
-async def v2_no_cache(request: Request, call_next: Any) -> Response:
-    response = await call_next(request)
-    if request.url.path.startswith("/v2"):
-        response.headers["Cache-Control"] = "no-cache"
-    return response  # type: ignore[no-any-return]
-
-
 @app.get("/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
@@ -109,12 +119,14 @@ async def api_steps(request: Request) -> dict[str, Any]:
 
 def mount_ui_v2(application: FastAPI, dist: Path) -> None:
     """Serve the Vite build at /v2 when present; never fail boot if missing."""
-    if dist.is_dir():
-        application.mount(
-            "/v2",
-            StaticFiles(directory=dist, html=True),
-            name="ui_v2",
-        )
+    if not dist.is_dir():
+        logger.warning("ui/dist not found; /v2 disabled (%s)", dist)
+        return
+    application.mount(
+        "/v2",
+        NoCacheStaticFiles(directory=dist, html=True),
+        name="ui_v2",
+    )
 
 
 mount_ui_v2(app, _UI_DIST)

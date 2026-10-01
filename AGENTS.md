@@ -22,11 +22,12 @@ Python: fastapi, uvicorn, httpx, neo4j (driver), pytest, ruff. Ask before
 adding anything else.
 
 JavaScript (npm **only inside `ui/`**; commit `ui/dist`, ignore
-`ui/node_modules`): vite, react, react-dom, typescript, tailwindcss,
-`@tailwindcss/vite`, `@xyflow/react`, motion, vitest, `@vitejs/plugin-react`,
+`ui/node_modules` via `ui/.gitignore`): vite, react, react-dom, typescript,
+tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 `@testing-library/react`, jsdom, `@types/node`, `@types/react`,
-`@types/react-dom`. The old page at `/` still loads vis-network from a CDN;
-the new page at `/v2/` is the Vite build.
+`@types/react-dom`. Add `@xyflow/react` and motion when the graph is drawn.
+The old page at `/` still loads vis-network from a CDN; the new page at
+`/v2/` is the Vite build.
 
 ## Working rules
 - One step at a time. Do only the step you were asked for, then STOP and say
@@ -117,8 +118,8 @@ the new page at `/v2/` is the Vite build.
   README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
   `?all=1` returns more than the default last 10; `GET /` serves the HTML;
   `GET /v2/` serves the React page; `/v2/` assets load; wrong Host on `/v2/`
-  → 403; `/v2` responses send `Cache-Control: no-cache`; missing `ui/dist`
-  does not prevent the app from importing.
+  → 403; `/v2` file responses send `Cache-Control: no-cache`; missing `ui/dist`
+  logs a warning and does not prevent the app from importing.
 ## Hook facts (fill in after the logging stage)
 - Config file: `.cursor/hooks.json` — **gitignored** (whole `.cursor/`); create
   with `./install.sh`. Folder must be trusted; restart Cursor if hooks do not

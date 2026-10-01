@@ -2,6 +2,9 @@
 
 Vite + React + TypeScript live-graph page, served by the recorder at `/v2/`.
 
+Requires **Node >= 20.19** (see `engines` in `package.json` and `.nvmrc`,
+which pins Node 22 for reproducible `ui/dist` builds).
+
 ```bash
 npm --prefix ui ci
 npm --prefix ui run check
