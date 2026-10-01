@@ -231,12 +231,14 @@ def test_v2_serves_new_page(client: TestClient) -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
     assert "AgentFly v2" in response.text
+    assert response.headers.get("cache-control") == "no-cache"
 
 
 def test_v2_serves_asset(client: TestClient) -> None:
     response = client.get("/v2/assets/index.js")
     assert response.status_code == 200
     assert len(response.content) > 0
+    assert response.headers.get("cache-control") == "no-cache"
 
 
 def test_v2_forbidden_host(tmp_path: Path) -> None:
@@ -244,3 +246,23 @@ def test_v2_forbidden_host(tmp_path: Path) -> None:
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
         response = bad.get("/v2/")
     assert response.status_code == 403
+
+
+def test_mount_ui_v2_skips_missing_dist(tmp_path: Path) -> None:
+    from fastapi import FastAPI
+
+    missing = tmp_path / "no-dist"
+    bare = FastAPI()
+    app_module.mount_ui_v2(bare, missing)
+    assert not any(getattr(r, "path", None) == "/v2" for r in bare.routes)
+
+
+def test_mount_ui_v2_when_dist_exists(tmp_path: Path) -> None:
+    from fastapi import FastAPI
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+    bare = FastAPI()
+    app_module.mount_ui_v2(bare, dist)
+    assert any(getattr(r, "path", None) == "/v2" for r in bare.routes)

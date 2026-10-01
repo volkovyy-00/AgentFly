@@ -82,6 +82,14 @@ async def host_gate(request: Request, call_next: Any) -> Response:
     return await call_next(request)  # type: ignore[no-any-return]
 
 
+@app.middleware("http")
+async def v2_no_cache(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    if request.url.path.startswith("/v2"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response  # type: ignore[no-any-return]
+
+
 @app.get("/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
@@ -99,11 +107,17 @@ async def api_steps(request: Request) -> dict[str, Any]:
     return memory_steps.snapshot(all_steps=all_steps)
 
 
-app.mount(
-    "/v2",
-    StaticFiles(directory=_UI_DIST, html=True),
-    name="ui_v2",
-)
+def mount_ui_v2(application: FastAPI, dist: Path) -> None:
+    """Serve the Vite build at /v2 when present; never fail boot if missing."""
+    if dist.is_dir():
+        application.mount(
+            "/v2",
+            StaticFiles(directory=dist, html=True),
+            name="ui_v2",
+        )
+
+
+mount_ui_v2(app, _UI_DIST)
 
 
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
