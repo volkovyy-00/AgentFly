@@ -361,9 +361,9 @@ the recorder off. Measures:
   be JSON. Every request, including the web page's, must carry the host name
   `localhost:8787` or `127.0.0.1:8787`. The web pages themselves (`GET /`,
   `GET /v2/` and its assets, and `GET /api/steps`) need no token, because a
-  page in a browser cannot keep
-  one secret; it can only read, never change anything. This stops a web page
-  open in your browser from sending fake steps. (The token does not stop the agent, since it runs as you. That is
+  page in a browser cannot keep one secret; it can only read, never change
+  anything. This stops a web page open in your browser from sending fake
+  steps. (The token does not stop the agent, since it runs as you. That is
   why R0 blocks reading it.)
 - The web page never sends database questions. The server has a small fixed set
   of named questions (for example "last 10 steps of session X"). Values are

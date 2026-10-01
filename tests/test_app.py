@@ -12,10 +12,16 @@ from fastapi.testclient import TestClient
 
 import recorder.app as app_module
 
+_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+requires_ui_dist = pytest.mark.skipif(
+    not _UI_DIST.is_dir(),
+    reason="ui/dist not present (run npm --prefix ui run build)",
+)
+
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    app_module.config_dir = tmp_path / "flightrecorder"
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         # App tests must not race live Neo4j writes from the background worker.
         from recorder.store import graph_store
@@ -30,10 +36,11 @@ def token(client: TestClient) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def test_forbidden_host(tmp_path: Path) -> None:
-    app_module.config_dir = tmp_path / "flightrecorder"
+@pytest.mark.parametrize("path", ["/health", "/v2/"])
+def test_forbidden_host(path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
-        response = bad.get("/health")
+        response = bad.get(path)
     assert response.status_code == 403
 
 
@@ -228,6 +235,7 @@ def test_index_serves_graph_page(client: TestClient) -> None:
     assert "vis-network" in text
 
 
+@requires_ui_dist
 def test_v2_serves_new_page(client: TestClient) -> None:
     response = client.get("/v2/")
     assert response.status_code == 200
@@ -236,6 +244,7 @@ def test_v2_serves_new_page(client: TestClient) -> None:
     assert len(response.content) > 0
 
 
+@requires_ui_dist
 def test_v2_serves_asset(client: TestClient) -> None:
     page = client.get("/v2/")
     match = re.search(r'src="[^"]*assets/([^"]+\.js)"', page.text)
@@ -244,13 +253,6 @@ def test_v2_serves_asset(client: TestClient) -> None:
     assert response.status_code == 200
     assert len(response.content) > 0
     assert response.headers.get("cache-control") == "no-cache"
-
-
-def test_v2_forbidden_host(tmp_path: Path) -> None:
-    app_module.config_dir = tmp_path / "flightrecorder"
-    with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
-        response = bad.get("/v2/")
-    assert response.status_code == 403
 
 
 def test_mount_ui_v2_skips_missing_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -272,4 +274,3 @@ def test_mount_ui_v2_when_dist_exists(tmp_path: Path) -> None:
     with TestClient(bare, base_url="http://127.0.0.1:8787") as local:
         response = local.get("/v2/")
     assert response.status_code == 200
-    assert response.headers.get("cache-control") == "no-cache"

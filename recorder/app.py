@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,7 +14,6 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.types import Scope
 
 from recorder.memory import memory_steps
 from recorder.rules import Session, decide, deny_messages, mark
@@ -28,22 +26,6 @@ ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
 _WEB_INDEX: Path = Path(__file__).resolve().parent.parent / "web" / "index.html"
 _UI_DIST: Path = Path(__file__).resolve().parent.parent / "ui" / "dist"
-
-
-class NoCacheStaticFiles(StaticFiles):
-    """StaticFiles that always sends Cache-Control: no-cache (fixed Vite asset names)."""
-
-    def file_response(
-        self,
-        full_path: os.PathLike[str] | str,
-        stat_result: os.stat_result,
-        scope: Scope,
-        status_code: int = 200,
-    ) -> Response:
-        response = super().file_response(full_path, stat_result, scope, status_code)
-        response.headers["Cache-Control"] = "no-cache"
-        return response
-
 
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
 config_dir: Path = Path.home() / ".config" / "flightrecorder"
@@ -97,7 +79,13 @@ app = FastAPI(lifespan=lifespan)
 async def host_gate(request: Request, call_next: Any) -> Response:
     if not host_allowed(request):
         return JSONResponse({"detail": "forbidden host"}, status_code=403)
-    return await call_next(request)  # type: ignore[no-any-return]
+    response = await call_next(request)
+    # Fixed Vite asset names need a revalidate hint; fold into the existing gate
+    # so /hook is not wrapped by a second middleware and we avoid subclassing
+    # StaticFiles (undocumented Starlette hook).
+    if request.url.path.startswith("/v2"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response  # type: ignore[no-any-return]
 
 
 @app.get("/health")
@@ -124,7 +112,7 @@ def mount_ui_v2(application: FastAPI, dist: Path) -> None:
         return
     application.mount(
         "/v2",
-        NoCacheStaticFiles(directory=dist, html=True),
+        StaticFiles(directory=dist, html=True),
         name="ui_v2",
     )
 

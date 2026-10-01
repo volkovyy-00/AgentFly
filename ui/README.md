@@ -2,8 +2,12 @@
 
 Vite + React + TypeScript live-graph page, served by the recorder at `/v2/`.
 
-Requires **Node >= 20.19** (see `engines` in `package.json` and `.nvmrc`,
-which pins Node 22 for reproducible `ui/dist` builds).
+Requires **Node `^22.12.0 || >=24`** (see `engines` in `package.json`).
+`.nvmrc` pins Node 22 for reproducible `ui/dist` builds.
+
+`vite` `base` is `/v2/` so asset URLs stay correct under the recorder mount
+(and for future client routes under `/v2/...`). Dev server: open
+`http://127.0.0.1:5173/v2/`.
 
 ```bash
 npm --prefix ui ci
