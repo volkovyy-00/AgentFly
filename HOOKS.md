@@ -51,7 +51,8 @@ Python exit code **2** (file missing) is treated as **deny** and can lock the ag
 Keep the compat shim so an outdated `hooks.json` that still names
 `recorder/hook_passthrough.py` does not exit 2.
 
-Project layout (uv skeleton): `hooks/`, `recorder/`, `web/`, `tests/`, `demo/`.
+Project layout (uv skeleton): `hooks/`, `recorder/`, `web/`, `ui/`, `tests/`,
+`demo/`.
 
 ---
 
@@ -222,11 +223,14 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
   land in Aura. Restart uvicorn so the running process reloads the env.
 
-## Live graph (`web/index.html` + memory API)
+## Live graph (`web/index.html`, `ui/`, + memory API)
 
-- Page: [`web/index.html`](web/index.html) (Part A). Server memory:
-  [`recorder/memory.py`](recorder/memory.py) (Part B).
+- Current page: [`web/index.html`](web/index.html) at `/` (Part A). New page
+  scaffold: [`ui/`](ui/) build served at `/v2/` (Vite + React; graph not drawn
+  yet). Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
 - `GET /` serves the HTML (Host check only; no token).
+- `GET /v2/` serves the committed `ui/dist` build (same Host gate; assets under
+  `/v2/assets/...`).
 - `GET /api/steps` → `{session, steps}` for the **most recent** session,
   last 10 cleaned steps from process memory. `?all=1` returns the full list
   for that session (checks only).
@@ -240,6 +244,8 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - Demo: start uvicorn → `uv run python fake_agent.py` → open
   `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
 - UI-only rehearsal without the API: `web/index.html?mock=1` (file:// OK).
+- UI local dev: `npm --prefix ui run dev` proxies `/api` to
+  `http://127.0.0.1:8787` with `changeOrigin` so the Host gate accepts it.
 
 ---
 

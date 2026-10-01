@@ -230,8 +230,9 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
 
 ## 6. The screen
 
-- One web page served by the local server, using a ready-made graph drawing
-  library loaded from the internet (no build tools).
+- Two pages from the local server: the current demo page at `/` (vis-network
+  from a CDN), and the new React page at `/v2/` (Vite build committed under
+  `ui/dist`). The demo still uses `/` until the v2 graph is ready.
 - Steps in a row, connected in order. Files and websites sit above and below.
   A blocked step is joined by a dashed red line to a box for its rule.
 - Only the last 10 steps of the *current session* are shown. A "New session"
@@ -358,10 +359,11 @@ the recorder off. Measures:
   (`~/.config/flightrecorder/token`). The helper sends it with every hook
   request (`POST /hook`). Requests without it are rejected. Hook requests must
   be JSON. Every request, including the web page's, must carry the host name
-  `localhost:8787` or `127.0.0.1:8787`. The web page itself (`GET /` and
-  `GET /api/steps`) needs no token, because a page in a browser cannot keep
-  one secret; it can only read, never change anything. This stops a web page
-  open in your browser from sending fake steps. (The token does not stop the agent, since it runs as you. That is
+  `localhost:8787` or `127.0.0.1:8787`. The web pages themselves (`GET /`,
+  `GET /v2/` and its assets, and `GET /api/steps`) need no token, because a
+  page in a browser cannot keep one secret; it can only read, never change
+  anything. This stops a web page open in your browser from sending fake
+  steps. (The token does not stop the agent, since it runs as you. That is
   why R0 blocks reading it.)
 - The web page never sends database questions. The server has a small fixed set
   of named questions (for example "last 10 steps of session X"). Values are

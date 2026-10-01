@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import recorder.app as app_module
 
+_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+requires_ui_dist = pytest.mark.skipif(
+    not _UI_DIST.is_dir(),
+    reason="ui/dist not present (run npm --prefix ui run build)",
+)
+
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    app_module.config_dir = tmp_path / "flightrecorder"
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         # App tests must not race live Neo4j writes from the background worker.
         from recorder.store import graph_store
@@ -28,10 +36,11 @@ def token(client: TestClient) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def test_forbidden_host(tmp_path: Path) -> None:
-    app_module.config_dir = tmp_path / "flightrecorder"
+@pytest.mark.parametrize("path", ["/health", "/v2/"])
+def test_forbidden_host(path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
-        response = bad.get("/health")
+        response = bad.get(path)
     assert response.status_code == 403
 
 
@@ -224,3 +233,44 @@ def test_index_serves_graph_page(client: TestClient) -> None:
     text = response.text
     assert "AgentFly" in text
     assert "vis-network" in text
+
+
+@requires_ui_dist
+def test_v2_serves_new_page(client: TestClient) -> None:
+    response = client.get("/v2/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert response.headers.get("cache-control") == "no-cache"
+    assert len(response.content) > 0
+
+
+@requires_ui_dist
+def test_v2_serves_asset(client: TestClient) -> None:
+    page = client.get("/v2/")
+    match = re.search(r'src="[^"]*assets/([^"]+\.js)"', page.text)
+    assert match is not None
+    response = client.get(f"/v2/assets/{match.group(1)}")
+    assert response.status_code == 200
+    assert len(response.content) > 0
+    assert response.headers.get("cache-control") == "no-cache"
+
+
+def test_mount_ui_v2_skips_missing_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    missing = tmp_path / "no-dist"
+    bare = FastAPI()
+    with caplog.at_level(logging.WARNING, logger="flightrecorder"):
+        app_module.mount_ui_v2(bare, missing)
+    assert not any(getattr(r, "path", None) == "/v2" for r in bare.routes)
+    assert any("ui/dist not found" in message for message in caplog.messages)
+
+
+def test_mount_ui_v2_when_dist_exists(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+    bare = FastAPI()
+    app_module.mount_ui_v2(bare, dist)
+    assert any(getattr(r, "path", None) == "/v2" for r in bare.routes)
+    with TestClient(bare, base_url="http://127.0.0.1:8787") as local:
+        response = local.get("/v2/")
+    assert response.status_code == 200
