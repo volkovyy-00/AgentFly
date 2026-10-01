@@ -1,6 +1,6 @@
 # Demo flow 1 — secret then network (R1)
 
-Session-ready prompts for Flight Recorder. Recorder on `127.0.0.1:8787`,
+Session-ready prompts for AgentFly. Recorder on `127.0.0.1:8787`,
 graph at http://127.0.0.1:8787/, ask-before-run off, **new chat** preferred
 (this flow was also verified in an already-marked live session).
 

@@ -1,6 +1,6 @@
 # Hooks
 
-How Flight Recorder plugs into Cursor hooks, what we verified on this machine,
+How AgentFly plugs into Cursor hooks, what we verified on this machine,
 and what the thin adapter does today.
 
 Official Cursor reference: [cursor.com/docs/hooks](https://cursor.com/docs/hooks)

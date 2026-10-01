@@ -1,4 +1,4 @@
-# AGENTS.md — Flight Recorder
+# AGENTS.md — AgentFly
 
 ## What this project is
 Cursor hooks send every agent action to a local server. The server decides

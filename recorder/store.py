@@ -379,7 +379,7 @@ def _open_cli_store() -> GraphStore:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Flight Recorder Neo4j store utilities")
+    parser = argparse.ArgumentParser(description="AgentFly Neo4j store utilities")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--counts", action="store_true", help="Print node and link counts")
     group.add_argument("--clear", action="store_true", help="DELETE all nodes (dangerous)")

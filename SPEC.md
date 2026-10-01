@@ -1,4 +1,4 @@
-# Flight Recorder for AI coding agents: specification
+# AgentFly for AI coding agents: specification
 
 Written in plain language on purpose. If a sentence needs a developer to
 explain it, that sentence is a bug in this document. Words in *italics* are
@@ -12,7 +12,7 @@ An AI agent in Cursor can read your files, run commands and call tools, all by
 itself. Today you cannot easily see what it did, in what order, or stop it from
 doing something dangerous.
 
-**Flight Recorder** watches every action that Cursor reports about the agent
+**AgentFly** watches every action that Cursor reports about the agent
 and draws it live as a graph. It also has **rules**. When the agent is about to
 do something dangerous, a rule stops it, and the message says *which rule*
 stopped it and why.

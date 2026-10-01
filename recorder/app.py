@@ -1,4 +1,4 @@
-"""Flight Recorder local server: receive hook events and answer allow/deny."""
+"""AgentFly local server: receive hook events and answer allow/deny."""
 
 from __future__ import annotations
 

@@ -58,7 +58,7 @@ def append_log(record: dict[str, Any]) -> None:
 
 
 def allow_fail_open(reason: str) -> dict[str, str]:
-    print(f"flightrecorder: {reason}", file=sys.stderr)
+    print(f"agentfly: {reason}", file=sys.stderr)
     return {"permission": "allow"}
 
 
@@ -131,7 +131,7 @@ def main() -> int:
     try:
         append_log(record)
     except OSError as exc:
-        print(f"flightrecorder: failed to write log: {exc}", file=sys.stderr)
+        print(f"agentfly: failed to write log: {exc}", file=sys.stderr)
 
     print(json.dumps(decision))
     return 0
