@@ -116,7 +116,9 @@ Never put a real credential in it.
 and draws the last 10 steps of the current session from the server's memory,
 so it works without Neo4j. The page needs no token; only `POST /hook` does.
 To preview the page with sample data and no server, open
-`web/index.html?mock=1`.
+`web/index.html?mock=1`. The scaffold for the next UI is at
+<http://127.0.0.1:8787/v2/> (`ui/`, Vite + React); graph drawing there is not
+ready yet.
 
 ## Configuration
 
@@ -222,7 +224,8 @@ the database is unreachable.
 |---|---|
 | `hooks/hook.py` | Hook helper Cursor runs: drops file contents, posts to the server, fails open |
 | `recorder/` | Server (`app.py`), rules (`rules.py`), sessions, command cleaner, Neo4j store |
-| `web/index.html` | Live graph page (vis-network from a CDN, no build step) |
+| `web/index.html` | Current live graph page (vis-network from a CDN) at `/` |
+| `ui/` | New live graph app (Vite + React); committed build at `ui/dist`, served at `/v2/` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
 

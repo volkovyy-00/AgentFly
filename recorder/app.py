@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from recorder.memory import memory_steps
 from recorder.rules import Session, decide, deny_messages, mark
@@ -24,6 +25,7 @@ logger = logging.getLogger("flightrecorder")
 ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
 _WEB_INDEX: Path = Path(__file__).resolve().parent.parent / "web" / "index.html"
+_UI_DIST: Path = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
 config_dir: Path = Path.home() / ".config" / "flightrecorder"
@@ -95,6 +97,13 @@ async def api_steps(request: Request) -> dict[str, Any]:
     all_flag: str = str(request.query_params.get("all", "") or "")
     all_steps: bool = all_flag in {"1", "true", "yes"}
     return memory_steps.snapshot(all_steps=all_steps)
+
+
+app.mount(
+    "/v2",
+    StaticFiles(directory=_UI_DIST, html=True),
+    name="ui_v2",
+)
 
 
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:

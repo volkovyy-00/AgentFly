@@ -6,5 +6,6 @@ __pycache__/
 logs/
 .cursor/
 *.egg-info/
-dist/
+/dist/
 build/
+ui/node_modules/

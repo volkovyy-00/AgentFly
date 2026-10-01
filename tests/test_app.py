@@ -224,3 +224,23 @@ def test_index_serves_graph_page(client: TestClient) -> None:
     text = response.text
     assert "AgentFly" in text
     assert "vis-network" in text
+
+
+def test_v2_serves_new_page(client: TestClient) -> None:
+    response = client.get("/v2/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "AgentFly v2" in response.text
+
+
+def test_v2_serves_asset(client: TestClient) -> None:
+    response = client.get("/v2/assets/index.js")
+    assert response.status_code == 200
+    assert len(response.content) > 0
+
+
+def test_v2_forbidden_host(tmp_path: Path) -> None:
+    app_module.config_dir = tmp_path / "flightrecorder"
+    with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
+        response = bad.get("/v2/")
+    assert response.status_code == 403
