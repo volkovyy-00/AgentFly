@@ -359,3 +359,25 @@ describe('enter timing on shared boxes', () => {
     expect((quiet.data as unknown as { enter: { quiet: boolean } }).enter.quiet).toBe(true)
   })
 })
+
+describe('edge draw-in data', () => {
+  it('gives every edge the wipe type and timing from the table plus the step delay', () => {
+    const steps = place(
+      [makeStep(1), makeStep(2, { host: 'h', rule: 'R1', verdict: 'blocked', file: 'f' })],
+      0,
+      { slot: 1, of: 3 },
+    )
+    const layout = layoutPlaced(steps)
+    for (const e of layout.edges) expect(e.type, e.id).toBe('wipe')
+    const data = (id: string) => edge(layout, id).data as unknown as { shape: string; quiet: boolean; start: number; end: number }
+    expect(data('chain:1:2')).toEqual({ shape: 'straight', quiet: false, start: 80 + 150, end: 80 + 350 })
+    expect(data('file-edge:2')).toMatchObject({ shape: 'bezier', start: 80 + 250, end: 80 + 450 })
+    expect(data('host-edge:2')).toMatchObject({ start: 80 + 250, end: 80 + 550 })
+    expect(data('rule-edge:2')).toMatchObject({ start: 80 + 250, end: 80 + 550 })
+  })
+
+  it('marks edges from a quiet step quiet', () => {
+    const layout = layoutPlaced(place([makeStep(1), makeStep(2, { file: 'f' })], 0, { quiet: true }))
+    for (const e of layout.edges) expect((e.data as unknown as { quiet: boolean }).quiet).toBe(true)
+  })
+})

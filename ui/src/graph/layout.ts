@@ -1,5 +1,5 @@
 import { MarkerType, Position, type Edge, type EdgeMarker, type Node, type NodeHandle } from '@xyflow/react'
-import { enterDelay } from './choreography'
+import { TIMING, enterDelay, type Span } from './choreography'
 import type { PlacedStep, Step } from './types'
 
 // All sizes in px. Rows are 56 px apart; row i is the cell [56i, 56i + 56).
@@ -152,13 +152,27 @@ function rowCentre(row: number): number {
   return row * ROW_PITCH + ROW_PITCH / 2
 }
 
+/** Per-edge data for the first-run draw-in. `start` and `end` are ms from the poll's arrival. */
+export interface WipeData extends Record<string, unknown> {
+  shape: 'straight' | 'bezier'
+  quiet: boolean
+  start: number
+  end: number
+}
+
+function wipe(step: PlacedStep, shape: WipeData['shape'], span: Span): WipeData {
+  const delay = enterDelay(step)
+  return { shape, quiet: step.quiet, start: delay + span.start, end: delay + span.end }
+}
+
 function link(
   id: string,
   from: PlacedStep,
   to: string,
   style: Edge['style'],
   colorKey: EdgeColorKey,
-  zIndex?: number,
+  zIndex: number | undefined,
+  span: Span,
 ): Edge {
   return {
     id,
@@ -169,6 +183,8 @@ function link(
     style,
     markerEnd: arrow(EDGE_COLOR[colorKey]),
     zIndex,
+    type: 'wipe',
+    data: wipe(from, 'bezier', span),
   }
 }
 
@@ -212,7 +228,8 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
     if (previous !== undefined) {
       edges.push({
         id: chainEdgeId(previous.order, step.order),
-        type: 'straight',
+        type: 'wipe',
+        data: wipe(step, 'straight', TIMING.chain),
         source: stepId(previous.order),
         sourceHandle: 'b',
         target: stepId(step.order),
@@ -231,6 +248,8 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
           fileId(step.file),
           { stroke: secret ? 'var(--color-secret)' : 'var(--color-aux)', strokeWidth: 2 },
           secret ? 'secret' : 'aux',
+          undefined,
+          TIMING.edge,
         ),
       )
     }
@@ -247,6 +266,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
             : { stroke: 'var(--color-aux)', strokeWidth: 2 },
           blocked ? 'blocked' : 'aux',
           elevate ? 1 : undefined,
+          blocked ? TIMING.blockEdge : TIMING.edge,
         ),
       )
     }
@@ -264,6 +284,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
           },
           warned ? 'warned' : 'blocked',
           1,
+          TIMING.blockEdge,
         ),
       )
     }

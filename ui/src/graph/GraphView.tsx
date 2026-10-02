@@ -10,9 +10,12 @@ import { useMs } from './motionPolicy'
 import { FileBox, HostBox, RuleBox, StepBox } from './nodes'
 import type { PlacedStep } from './types'
 import { usePaneSize } from './usePaneSize'
+import { WipeEdge } from './WipeEdge'
 
 // Module-level so React Flow does not see a new object on every render.
 const nodeTypes = { step: StepBox, file: FileBox, host: HostBox, rule: RuleBox }
+// Module level too: a new object each render would replay every wipe.
+const edgeTypes = { wipe: WipeEdge }
 
 interface Props {
   steps: readonly PlacedStep[]
@@ -104,6 +107,7 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
           nodes={layout.nodes}
           edges={layout.edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           defaultViewport={target}
           translateExtent={extent}
           minZoom={target.zoom}
