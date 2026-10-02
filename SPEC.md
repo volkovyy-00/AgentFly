@@ -232,8 +232,8 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
 
 - Two pages from the local server: the current demo page at `/` (vis-network
   from a CDN, steps in a row), and the new React page at `/v2/` (Vite build
-  committed under `ui/dist`). The new page draws the graph; which page is the
-  demo, and when `/` switches to the new one, is decided in AG-31.
+  committed under `ui/dist`). The new page draws the lane graph. Which address
+  the demo treats as its main view can still change later.
 - The new page is a timeline. Steps run down the left, oldest at the top,
   each joined to the next in order. Files sit in a lane to their right, and
   websites and rules in a lane further right. A file, website or rule is one
@@ -241,10 +241,10 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
   joined by a dashed red line to a box for its rule (a warned step by a dashed
   purple line).
 - The new page draws the 20 most recent steps of the *current session* that it
-  has seen (each refresh brings the server's last 10; earlier ones are kept in
-  the page) and keeps the newest step in view. A "New session" button clears
-  the picture between rehearsals (it does not delete data). Open
-  `/v2/?mock=1` to replay a sample session with no server.
+  has seen (it keeps earlier steps between refreshes) and keeps the newest
+  step in view. A "New session" button clears the picture between rehearsals
+  (it does not delete data). Open `/v2/?mock=1` to replay a sample session
+  with no server.
 - A big red **OFFLINE** banner appears if the page cannot reach the server, so
   a dead server never fails silently on stage.
 - The page refreshes about once a second.
