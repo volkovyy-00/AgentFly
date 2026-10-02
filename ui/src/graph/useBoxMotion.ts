@@ -8,6 +8,11 @@ export interface BoxMotion {
   bump: number
   /** Times its count rose (tick the number). */
   tick: number
+  /**
+   * `bump` and `tick` when the box last re-anchored. A re-anchor remounts the
+   * box's inner element, so the brighten and the tick replay only above these.
+   */
+  anchoredAt: { bump: number; tick: number }
 }
 
 /**
@@ -18,7 +23,7 @@ export interface BoxMotion {
  */
 export function useBoxMotion({ anchorRow, lastTouchRow, count }: Pick<BoxMeta, 'anchorRow' | 'lastTouchRow' | 'count'>): BoxMotion {
   const previous = useRef({ anchorRow, lastTouchRow, count })
-  const [motion, setMotion] = useState<BoxMotion>({ reanchor: 0, bump: 0, tick: 0 })
+  const [motion, setMotion] = useState<BoxMotion>({ reanchor: 0, bump: 0, tick: 0, anchoredAt: { bump: 0, tick: 0 } })
 
   useEffect(() => {
     const was = previous.current
@@ -27,10 +32,12 @@ export function useBoxMotion({ anchorRow, lastTouchRow, count }: Pick<BoxMeta, '
     const moved = anchorRow !== was.anchorRow
     const risen = count > was.count
     if (!touched && !moved && !risen) return
+    const reanchored = moved && !touched
     setMotion((m) => ({
-      reanchor: m.reanchor + (moved && !touched ? 1 : 0),
+      reanchor: m.reanchor + (reanchored ? 1 : 0),
       bump: m.bump + (touched ? 1 : 0),
       tick: m.tick + (risen ? 1 : 0),
+      anchoredAt: reanchored ? { bump: m.bump, tick: m.tick } : m.anchoredAt,
     }))
   }, [anchorRow, lastTouchRow, count])
 

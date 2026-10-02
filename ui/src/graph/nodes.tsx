@@ -113,12 +113,13 @@ interface LaneFrameProps {
 /**
  * Shared frame for file, host and rule boxes. The Handle sits outside the keyed
  * motion element so a re-anchor never remounts it (a remounted handle would
- * drop its edges). Entry runs once per mount; a re-anchor fades in at once.
+ * drop its edges). Entry runs once per mount; a re-anchor fades in at once and
+ * replays neither the brighten nor the tick (only those since the re-anchor).
  */
 function LaneFrame({ id, meta, title, className, spring = false, ring = false, children }: LaneFrameProps) {
   const ms = useMs()
   const dimmed = useDimmed(id)
-  const { reanchor, bump, tick } = useBoxMotion(meta)
+  const { reanchor, bump, tick, anchoredAt } = useBoxMotion(meta)
   const { quiet, delay } = meta.enter
   const reduced = ms(1) === 0
   const firstRun = reanchor === 0
@@ -149,7 +150,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
           <motion.span
             key={`tick-${tick}`}
             className="shrink-0 font-bold tabular-nums"
-            initial={tick === 0 ? false : { y: 8, opacity: 0 }}
+            initial={tick === anchoredAt.tick ? false : { y: 8, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ duration: sec(ms(200)) }}
           >
@@ -170,7 +171,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
             }}
           />
         )}
-        {bump > 0 && (
+        {bump > anchoredAt.bump && (
           <motion.div
             key={`bump-${bump}`}
             aria-hidden

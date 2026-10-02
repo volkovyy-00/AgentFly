@@ -48,6 +48,40 @@ describe('lane boxes', () => {
   })
 })
 
+describe('re-anchor', () => {
+  const read = (order: number) => makeStep(order, { kind: 'read', file: 'f', command: null })
+  const fileBox = (container: HTMLElement) => container.querySelector('.react-flow__node-file') as HTMLElement
+  const countSpan = (container: HTMLElement) =>
+    [...fileBox(container).querySelectorAll('span')].find((s) => /^x\d+$/.test(s.textContent ?? '')) as HTMLElement
+
+  it('does not replay the brighten or the tick when the box re-anchors after a reuse', async () => {
+    const { container, rerender } = render(<GraphView steps={place([read(1), read(2)])} epoch={0} />)
+    await settle()
+    // A reuse: brightens and ticks x2 -> x3.
+    rerender(<GraphView steps={place([read(1), read(2), read(3)])} epoch={0} />)
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).not.toBeNull()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    // The first toucher leaves: the box re-anchors, the count falls and no new touch arrives.
+    rerender(<GraphView steps={place([read(2), read(3)], 1)} epoch={0} />)
+    expect(countSpan(container).textContent).toBe('x2')
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).toBeNull()
+    expect(countSpan(container).style.transform).toBe('none')
+    expect(countSpan(container).style.opacity).toBe('1')
+  })
+
+  it('a re-anchor and a new touch in the same poll still brighten and tick', async () => {
+    const { container, rerender } = render(<GraphView steps={place([read(1), read(2)])} epoch={0} />)
+    await settle()
+    // The first toucher leaves and two new ones arrive: the anchor moves, the newest row advances, the count rises.
+    rerender(<GraphView steps={place([read(2), read(3), read(4)], 1)} epoch={0} />)
+    expect(countSpan(container).textContent).toBe('x3')
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).not.toBeNull()
+    expect(countSpan(container).style.transform).toBe('translateY(8px)')
+  })
+})
+
 describe('step boxes', () => {
   it('draws a border wipe for blocked and warned steps and not for allowed ones', async () => {
     const steps = place([makeStep(1), blocked(2), makeStep(3, { verdict: 'warned', rule: 'R2', command: 'rm x' })])
