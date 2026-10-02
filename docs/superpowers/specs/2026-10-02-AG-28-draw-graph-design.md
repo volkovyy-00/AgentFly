@@ -65,7 +65,7 @@ Edges:
 - **Deliberate exception to the 16 px floor (user decision, 2026-10-02).** React Flow's own attribution link is 10 px text. It is kept (hiding it needs a React Flow Pro subscription per its docs, though the MIT licence does not require keeping it) and exempted by name in the 16 px scan. It sits bottom right and must not touch the newest row's boxes (they end about 26 px above the pane bottom; the link is about 18 px tall). The exception is stated in the PR description so it is not read as a missed requirement.
 - The "New session" button sits top left (top right would cover host and rule boxes anchored in the first rows) and the OFFLINE banner is a full-width red bar at the top, with left padding so its text clears the button. Both overlay the pane and do not change its measured size. The top padding (48 px) keeps them clear of the first row; once rows outgrow the pane they can cover the oldest row, and the newest step at the bottom stays visible.
 - Verdicts: allowed grey step, no chip. Blocked: red border, "BLOCKED". Warned: purple border, "WARN". Secret file: amber, "SECRET". Colour is never the only signal.
-- Colours are CSS variables on `:root`. Light theme only; dark mode goes to AG-31.
+- Colours are CSS variables on `:root`. Since AG-29 the page is dark only; every colour pair is in `ui/src/graph/tones.ts`.
 - All text is at least 16 px at pane widths of 932 px and above (so a 960x1080
   window holds), taken from one size token. Narrower panes scale the drawing
   down by design; below zoom 0.5 the left side may clip.

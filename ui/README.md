@@ -31,7 +31,11 @@ steps the page has seen (the API returns the last 10 per poll). The camera
 follows the newest step, one slide per poll. The viewer can pan up and down;
 a Follow button returns. Zoom is locked: at most 1, and panes narrower than
 the content scale down (floor 0.5). `/v2/?mock=1` replays a sample session without calling the
-server; "New session" restarts it.
+server; "New session" restarts it. The mock replays a 34-step session (enough
+to slide the 20-step window); `?mock=1&burst=10` emits 10 steps per tick to
+check bursts. The page is dark only. Every colour pair is a row in
+`src/graph/tones.ts`, and `tones.test.ts` checks each text pair at 7:1
+against the tokens in `src/index.css`.
 
 Layout and camera are pure functions in `src/graph/` (`layout.ts`,
 `camera.ts`); positions come from a step's stable row, never from its `order`
