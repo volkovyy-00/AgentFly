@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import type { PaneSize } from './viewport'
+import type { PaneSize } from './camera'
 
-/** Measures an element. 0x0 until measured; computeViewport falls back to 960x1080. */
+/** Measures an element. 0x0 until measured; resolvePane falls back to 960x1080. */
 export function usePaneSize(): { ref: RefObject<HTMLDivElement | null>; pane: PaneSize } {
   const ref = useRef<HTMLDivElement | null>(null)
   const [pane, setPane] = useState<PaneSize>({ width: 0, height: 0 })

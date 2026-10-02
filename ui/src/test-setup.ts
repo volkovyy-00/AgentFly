@@ -1,3 +1,5 @@
+import { afterEach } from 'vitest'
+
 // jsdom has no layout. These stubs make React Flow measure nodes the way a
 // browser does: ResizeObserver fires after observe(), nodes report an
 // offsetWidth/offsetHeight, and the handles React Flow finds in the DOM replace
@@ -78,3 +80,37 @@ Object.defineProperties(HTMLElement.prototype, {
     },
   },
 })
+
+// jsdom has no matchMedia. This stub answers `prefers-reduced-motion` from a
+// flag tests flip with setReducedMotion(), and notifies subscribers.
+let reducedMotion = false
+const mediaListeners = new Set<() => void>()
+
+declare global {
+  // eslint-disable-next-line no-var
+  var setReducedMotion: (flag: boolean) => void
+}
+
+globalThis.setReducedMotion = (flag: boolean) => {
+  reducedMotion = flag
+  for (const listener of mediaListeners) listener()
+}
+
+window.matchMedia = ((query: string): MediaQueryList => ({
+  get matches() {
+    return reducedMotion && query.includes('prefers-reduced-motion')
+  },
+  media: query,
+  onchange: null,
+  addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+    mediaListeners.add(listener as () => void)
+  },
+  removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+    mediaListeners.delete(listener as () => void)
+  },
+  addListener: () => {},
+  removeListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia
+
+afterEach(() => globalThis.setReducedMotion(false))
