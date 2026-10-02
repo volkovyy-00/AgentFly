@@ -21,8 +21,9 @@ const HOST_DY = -26
 const RULE_DY = 2
 const FILE_DY = -12
 // React Flow's default <Handle> is 6 px; the handles array mirrors that so the
-// edge ends match before and after the browser measures the DOM.
-const HANDLE = 6
+// edge ends match before and after the browser measures the DOM. Keep the
+// DOM <Handle> style size in nodes.tsx on this same constant.
+export const HANDLE = 6
 
 // Literal hex for markers (SVG markers do not resolve CSS variables). Keep in
 // sync with the --color-* theme values in ui/src/index.css.

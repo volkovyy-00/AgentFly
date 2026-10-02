@@ -5,6 +5,11 @@ Vite + React + TypeScript live-graph page, served by the recorder at `/v2/`.
 Requires **Node `^22.12.0 || >=24`** (see `engines` in `package.json`).
 `.nvmrc` pins Node 22 for reproducible `ui/dist` builds.
 
+`@xyflow/react` is pinned exactly (`12.12.0`, no caret) on purpose: layout
+pre-measures edge handles against that version's default 6 px handle size
+(`HANDLE` in `src/graph/layout.ts`, mirrored on the DOM handles in
+`nodes.tsx`). Bump only with a deliberate check that edge ends still match.
+
 `vite` `base` is `/v2/` so asset URLs stay correct under the recorder mount
 (and for future client routes under `/v2/...`). Dev server: open
 `http://127.0.0.1:5173/v2/`.

@@ -39,8 +39,22 @@ export function initialWindowState(ignored: string | null = null): WindowState {
   return { session: null, steps: [], ignored }
 }
 
+function sameStep(a: Step, b: Step): boolean {
+  return (
+    a.order === b.order &&
+    a.kind === b.kind &&
+    a.verdict === b.verdict &&
+    a.tool === b.tool &&
+    a.file === b.file &&
+    a.sensitive === b.sensitive &&
+    a.command === b.command &&
+    a.host === b.host &&
+    a.rule === b.rule
+  )
+}
+
 function sameSteps(a: readonly Step[], b: readonly Step[]): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
+  return a.length === b.length && a.every((step, i) => sameStep(step, b[i]!))
 }
 
 export function windowReducer(state: WindowState, action: WindowAction): WindowState {

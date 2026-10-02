@@ -1,8 +1,8 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { FileNode, HostNode, RuleNode, StepNode } from './layout'
+import { HANDLE, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
 import type { Step, Verdict } from './types'
 
-const HIDDEN_HANDLE = { opacity: 0 } as const
+const HIDDEN_HANDLE = { opacity: 0, width: HANDLE, height: HANDLE } as const
 
 const VERDICT_UI: Record<Verdict, { tone: string; chip: string | null; chipTone: string }> = {
   allowed: { tone: 'bg-step border-step', chip: null, chipTone: '' },
