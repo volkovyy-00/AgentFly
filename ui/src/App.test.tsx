@@ -82,6 +82,45 @@ describe('App', () => {
     expect(screen.queryAllByText('shell')).toHaveLength(0)
   })
 
+  const secret = (order: number): Step => ({
+    order, kind: 'read', verdict: 'allowed', tool: null, file: '.env', sensitive: true, command: null, host: null, rule: null,
+  })
+
+  it('shows SECRET SEEN after a secret read, keeps it, and clears it on New session', async () => {
+    let steps: Step[] = stepsFrom(40000, 2)
+    vi.stubGlobal('fetch', vi.fn(async () => respond('s', steps)))
+    render(<App />)
+    await advance(0)
+    expect(screen.queryByText('SECRET SEEN')).toBeNull()
+    steps = [...steps, secret(40002)]
+    await advance(1000)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+    steps = [...steps, ...stepsFrom(40003, 25)]
+    await advance(1000)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    await advance(0)
+    expect(screen.queryByText('SECRET SEEN')).toBeNull()
+  })
+
+  it('clears SECRET SEEN when a different session arrives', async () => {
+    let body = { session: 's', steps: [secret(40000)] }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => body }) as Response))
+    render(<App />)
+    await advance(0)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+    body = { session: 't', steps: stepsFrom(1, 2) }
+    await advance(1000)
+    expect(screen.queryByText('SECRET SEEN')).toBeNull()
+  })
+
+  it('shows SECRET SEEN at once for a secret in the very first response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond('s', [secret(40000)])))
+    render(<App />)
+    await advance(0)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+  })
+
   it('mock mode never calls /api/steps and plays the scenario', async () => {
     window.history.replaceState({}, '', '/?mock=1')
     const fetchMock = vi.fn()
