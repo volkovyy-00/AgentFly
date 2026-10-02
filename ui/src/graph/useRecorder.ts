@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { readIgnored, writeIgnored } from './ignoredSession'
 import { MOCK_STEPS } from './mock'
 import { parseSnapshot } from './snapshot'
-import type { Step } from './types'
+import type { PlacedStep, SecretSeen } from './types'
 import { initialWindowState, windowReducer } from './window'
 
 export const POLL_GAP_MS = 1000
@@ -10,7 +10,10 @@ export const POLL_TIMEOUT_MS = 1500
 export const MOCK_INTERVAL_MS = 1500
 
 export interface Recorder {
-  steps: readonly Step[]
+  steps: readonly PlacedStep[]
+  secretSeen: SecretSeen | null
+  /** Bumps when the window resets; the graph remounts and the camera jumps. */
+  epoch: number
   offline: boolean
   newSession: () => void
 }
@@ -27,6 +30,7 @@ export function useRecorder(mock: boolean): Recorder {
   )
   const [offline, setOffline] = useState(false)
   const [mockRun, setMockRun] = useState(0)
+  const firstResponse = useRef(true)
 
   useEffect(() => {
     if (!mock) writeIgnored(state.ignored)
@@ -49,7 +53,9 @@ export function useRecorder(mock: boolean): Recorder {
         if (snapshot === null) throw new Error('bad body')
         if (cancelled) return
         setOffline(false)
-        dispatch({ type: 'snapshot', session: snapshot.session, steps: snapshot.steps })
+        const first = firstResponse.current
+        firstResponse.current = false
+        dispatch({ type: 'snapshot', session: snapshot.session, steps: snapshot.steps, first })
       } catch {
         if (!cancelled) setOffline(true)
       } finally {
@@ -85,5 +91,11 @@ export function useRecorder(mock: boolean): Recorder {
     else dispatch({ type: 'newSession' })
   }, [mock])
 
-  return { steps: state.steps, offline: mock ? false : offline, newSession }
+  return {
+    steps: state.steps,
+    secretSeen: state.secretSeen,
+    epoch: state.epoch,
+    offline: mock ? false : offline,
+    newSession,
+  }
 }

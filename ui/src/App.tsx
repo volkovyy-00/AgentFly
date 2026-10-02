@@ -3,11 +3,11 @@ import { useRecorder } from './graph/useRecorder'
 
 function App() {
   const mock = new URLSearchParams(window.location.search).get('mock') === '1'
-  const { steps, offline, newSession } = useRecorder(mock)
+  const { steps, epoch, offline, newSession } = useRecorder(mock)
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-canvas text-base text-ink">
-      <GraphView steps={steps} />
+      <GraphView steps={steps} epoch={epoch} />
       {steps.length === 0 && (
         <p className="pointer-events-none absolute inset-0 grid place-items-center text-base text-muted">
           Waiting for agent actions…
