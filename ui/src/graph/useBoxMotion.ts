@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { BoxMeta } from './layout'
 
 export interface BoxMotion {
@@ -25,7 +25,8 @@ export function useBoxMotion({ anchorRow, lastTouchRow, count }: Pick<BoxMeta, '
   const previous = useRef({ anchorRow, lastTouchRow, count })
   const [motion, setMotion] = useState<BoxMotion>({ reanchor: 0, bump: 0, tick: 0, anchoredAt: { bump: 0, tick: 0 } })
 
-  useEffect(() => {
+  // A layout effect: the new count or anchor must not paint at full strength for one frame before the animation remounts.
+  useLayoutEffect(() => {
     const was = previous.current
     previous.current = { anchorRow, lastTouchRow, count }
     const touched = lastTouchRow > was.lastTouchRow

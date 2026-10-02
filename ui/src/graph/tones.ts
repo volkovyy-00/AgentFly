@@ -39,6 +39,8 @@ export const BUTTON_CLASSES = `z-30 rounded border-2 px-3 text-base leading-6 fo
 export const DECOR = {
   wipeBlocked: { token: 'blocked', classes: 'border-blocked' },
   wipeWarned: { token: 'warned', classes: 'border-warned' },
+  // The OFFLINE banner's text pair is a quiet 7:1 fill; this bright stripe along its bottom edge is what reads as red from across a room.
+  bannerStripe: { token: 'blocked', classes: 'border-blocked' },
   ring: { token: 'secret', classes: 'border-secret' },
   flash: { token: null, classes: 'bg-ink' },
 } as const

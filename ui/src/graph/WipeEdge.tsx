@@ -11,11 +11,15 @@ export type WipeEdgeType = Edge<WipeData, 'wipe'>
 
 /**
  * An edge that draws in once, on its first run, with an SVG mask: a rect in
- * user space that grows from the source along the dominant axis (all edges in
- * this layout run left to right or top to bottom). A mask works for solid and
- * dashed edges alike and also reveals the arrowhead. The mask is removed when
- * the wipe ends, so settled edges are plain paths. Whether it has played is
- * state, not an effect: StrictMode runs effects twice.
+ * user space that grows from the source end along the dominant axis. Most edges
+ * run left to right or top to bottom, but an edge to a reused box can run
+ * upward or leftward; the rect is then turned half a turn about the box centre
+ * so it still grows from the source (the tail), not from the arrowhead. A mask
+ * works for solid and dashed edges alike and also reveals the arrowhead. The
+ * mask is removed when the wipe ends, so settled edges are plain paths. Whether
+ * it has played is state, not an effect: StrictMode runs effects twice. The
+ * axis and direction are frozen at mount: a live change would swap the animated
+ * dimension under a running animation.
  */
 export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data } = props
@@ -33,7 +37,10 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const y = Math.min(sourceY, targetY) - PAD
   const width = Math.abs(targetX - sourceX) + 2 * PAD
   const height = Math.abs(targetY - sourceY) + 2 * PAD
-  const horizontal = Math.abs(targetX - sourceX) >= Math.abs(targetY - sourceY)
+  const [{ horizontal, reversed }] = useState(() => {
+    const across = Math.abs(targetX - sourceX) >= Math.abs(targetY - sourceY)
+    return { horizontal: across, reversed: across ? targetX < sourceX : targetY < sourceY }
+  })
   const maskId = `wipe-${id}`
   const start = data?.start ?? 0
   const transition = {
@@ -47,29 +54,19 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
       {wiping && (
         <defs>
           <mask id={maskId} maskUnits="userSpaceOnUse" x={x} y={y} width={width} height={height}>
-            {horizontal ? (
+            <g transform={reversed ? `rotate(180 ${x + width / 2} ${y + height / 2})` : undefined}>
               <motion.rect
                 x={x}
                 y={y}
-                height={height}
+                width={horizontal ? undefined : width}
+                height={horizontal ? height : undefined}
                 fill="white"
-                initial={{ width: 0 }}
-                animate={{ width }}
+                initial={horizontal ? { width: 0 } : { height: 0 }}
+                animate={horizontal ? { width } : { height }}
                 transition={transition}
                 onAnimationComplete={() => setWiping(false)}
               />
-            ) : (
-              <motion.rect
-                x={x}
-                y={y}
-                width={width}
-                fill="white"
-                initial={{ height: 0 }}
-                animate={{ height }}
-                transition={transition}
-                onAnimationComplete={() => setWiping(false)}
-              />
-            )}
+            </g>
           </mask>
         </defs>
       )}

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { IGNORE_KEY } from './graph/ignoredSession'
+import { DECOR } from './graph/tones'
 import { stepsFrom } from './graph/testing'
 import type { Step } from './graph/types'
 
@@ -54,6 +55,11 @@ describe('App', () => {
     up = false
     await advance(2900)
     expect(screen.getByRole('alert').textContent).toBe('OFFLINE - recorder not reachable')
+    // A bright stripe (a 3:1 decoration, checked in tones.test) keeps the quiet 7:1 text fill loud on a projector.
+    const banner = screen.getByRole('alert')
+    for (const cls of DECOR.bannerStripe.classes.split(' ')) expect(banner.classList.contains(cls)).toBe(true)
+    // Right padding keeps the text clear of the Follow pill (top right) at narrow widths.
+    expect(banner.classList.contains('pr-32')).toBe(true)
     expect(screen.getAllByText('shell')).toHaveLength(2)
 
     up = true

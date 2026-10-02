@@ -1,8 +1,10 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { Position, type EdgeProps } from '@xyflow/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GraphView } from './GraphView'
 import { MOCK_STEPS } from './mock'
 import { makeStep, place } from './testing'
+import { WipeEdge, type WipeEdgeType } from './WipeEdge'
 
 const settle = () =>
   act(async () => {
@@ -62,5 +64,49 @@ describe('WipeEdge', () => {
     const { container } = render(<GraphView steps={place(MOCK_STEPS)} epoch={0} />)
     await settle()
     expect(masks(container).length).toBe(0)
+  })
+
+  describe('axis and direction', () => {
+    type Geometry = Pick<EdgeProps<WipeEdgeType>, 'sourceX' | 'sourceY' | 'targetX' | 'targetY'>
+    const edge = (g: Geometry) =>
+      (
+        <svg>
+          <WipeEdge
+            {...({
+              ...g,
+              id: 'e',
+              sourcePosition: Position.Right,
+              targetPosition: Position.Left,
+              data: { shape: 'bezier', quiet: false, start: 0, end: 300 },
+            } as unknown as EdgeProps<WipeEdgeType>)}
+          />
+        </svg>
+      )
+    const down: Geometry = { sourceX: 100, sourceY: 0, targetX: 110, targetY: 200 }
+    const sideways: Geometry = { sourceX: 100, sourceY: 0, targetX: 400, targetY: 20 }
+    const growing = (container: HTMLElement) => container.querySelector('mask rect')
+    const attrs = (el: Element | null) => [...(el?.attributes ?? [])].map((a) => `${a.name}=${a.value}`)
+
+    it('keeps its axis and never writes NaN when the geometry changes after mount', () => {
+      const { container, rerender } = render(edge(down))
+      const rect = growing(container)
+      expect(rect).not.toBeNull()
+      expect(rect?.getAttribute('width')).toBe(String(Math.abs(down.targetX - down.sourceX) + 24))
+      rerender(edge(sideways))
+      expect(growing(container)).toBe(rect)
+      expect(attrs(growing(container)).join(' ')).not.toContain('NaN')
+      // Still the vertical branch: its width is the live box width, only its height grows.
+      expect(growing(container)?.getAttribute('width')).toBe(String(300 + 24))
+      expect(growing(container)?.hasAttribute('height')).toBe(true)
+    })
+
+    it('wipes an edge that runs upward from its source end, not from its arrowhead', () => {
+      const flipped = (c: HTMLElement) => c.querySelector('mask g[transform^="rotate(180"]') !== null
+      expect(flipped(render(edge(down)).container)).toBe(false)
+      cleanup()
+      expect(flipped(render(edge({ ...down, sourceY: 200, targetY: 0 })).container)).toBe(true)
+      cleanup()
+      expect(flipped(render(edge({ ...sideways, sourceX: 400, targetX: 100 })).container)).toBe(true)
+    })
   })
 })

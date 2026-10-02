@@ -3,7 +3,7 @@ import { TIMING, dur } from './graph/choreography'
 import { GraphView } from './graph/GraphView'
 import { parseBurst } from './graph/mock'
 import { useMs } from './graph/motionPolicy'
-import { BUTTON_CLASSES, TONES } from './graph/tones'
+import { BUTTON_CLASSES, DECOR, TONES } from './graph/tones'
 import { useRecorder } from './graph/useRecorder'
 
 function App() {
@@ -24,7 +24,7 @@ function App() {
       {offline && (
         <motion.div
           role="alert"
-          className={`absolute inset-x-0 top-0 z-20 px-4 py-2 pl-80 text-center text-base font-bold ${TONES.banner.classes}`}
+          className={`absolute inset-x-0 top-0 z-20 border-b-8 py-4 pl-80 pr-32 text-center text-base font-bold ${DECOR.bannerStripe.classes} ${TONES.banner.classes}`}
           initial={{ y: '-100%' }}
           animate={{ y: 0 }}
           transition={{ duration: ms(dur(TIMING.banner)) / 1000, ease: 'easeOut' }}
