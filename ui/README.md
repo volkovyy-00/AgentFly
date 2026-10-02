@@ -27,14 +27,15 @@ Commit `dist/` after build.
 
 A timeline: steps in a left column (oldest at the top), files in the middle
 lane, hosts and rules in the right lane. At most 20 steps are drawn, from the
-steps the page has seen (the API returns the last 10 per poll). Zoom stays at
-most 1 and follows the newest step; panes narrower than the content scale
-down (floor 0.5). `/v2/?mock=1` replays a sample session without calling the
+steps the page has seen (the API returns the last 10 per poll). The camera
+follows the newest step, one slide per poll. The viewer can pan up and down;
+a Follow button returns. Zoom is locked: at most 1, and panes narrower than
+the content scale down (floor 0.5). `/v2/?mock=1` replays a sample session without calling the
 server; "New session" restarts it.
 
 Layout and camera are pure functions in `src/graph/` (`layout.ts`,
-`viewport.ts`); positions come from a step's place in the list, never from its
-`order`. Text is at least 16 px at full width; the one exception is React
+`camera.ts`); positions come from a step's stable row, never from its `order`
+or its place in the list. Text is at least 16 px at full width; the one exception is React
 Flow's own attribution link, kept on purpose. Tests use a jsdom setup that
 measures nodes like a browser (`src/test-setup.ts`); it cannot check layout,
 so after a UI change also open `/v2/?mock=1` and a real `fake_agent.py` run in

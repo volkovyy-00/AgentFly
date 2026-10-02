@@ -70,7 +70,9 @@ Edges:
   window holds), taken from one size token. Narrower panes scale the drawing
   down by design; below zoom 0.5 the left side may clip.
 
-## 5. Viewport (`computeViewport`, pure)
+## 5. Viewport
+
+> Since AG-29 the camera is `camera.ts`: rows are stable (`window.ts`), the viewport is uncontrolled (`defaultViewport` plus `setViewport`), vertical pan is on and zoom is locked. See `docs/superpowers/specs/2026-10-02-AG-29-motion-and-polish-design.md` § 4. The text below describes AG-28 as shipped.
 
 `computeViewport(rowCount, pane) -> { x, y, zoom }` with `zoom` in `[MIN_ZOOM, 1]`
 (`MIN_ZOOM = 0.5`):
@@ -78,21 +80,14 @@ Edges:
   (identical to the previous behaviour). Narrower panes fit the content by
   scaling down instead of shifting left and clipping the step column. Below
   zoom 0.5 the drawing may clip on the left.
-- `y = min(TOP_PAD, pane.h - BOTTOM_PAD - rowCount * 56 * zoom)` with the top
-  padding 48 (clears the button and banner) and the bottom padding 24, both in
-  screen pixels. It does not move until the rows outgrow the pane. In steady
-  state (20 rows) every new step shifts the whole drawing up one pitch: a jump,
-  to be eased by AG-29. Node ids are stable (`step:<order>`), so AG-29 can ease
-  positions without touching layout.
-- `x = min(0, pane.w - 932 * zoom)`. With fit-to-width, x is 0 whenever zoom is
-  above the floor; at the floor a very narrow pane may still shift left.
+- `y` and `x` are now `followTarget` in `camera.ts` (AG-29 § 4). Both pads
+  (top 48, bottom 24) stay in screen pixels. Rows are stable, so a new step no
+  longer shifts the drawing: the camera slides instead.
 - A pane with width or height `<= 0` or not yet measured falls back to 960x1080.
   Output must never contain NaN.
-- React Flow is fully controlled: `viewport` set and `onViewportChange` a no-op;
-  `panOnDrag`, `zoomOnScroll`, `zoomOnPinch`, `zoomOnDoubleClick`,
-  `nodesDraggable`, `nodesConnectable` and `elementsSelectable` all `false`;
-  `deleteKeyCode={null}`; `minZoom={MIN_ZOOM}` `maxZoom={1}`; no `fitView`, no
-  `onInit` positioning. The container has a definite height (React Flow draws
+- React Flow is now uncontrolled: vertical pan is on and zoom is locked
+  (AG-29 § 4). `nodesDraggable`, `nodesConnectable` and `elementsSelectable`
+  stay `false`; `deleteKeyCode={null}`; no `fitView`, no `onInit` positioning. The container has a definite height (React Flow draws
   nothing in a zero-height parent). Pane size is measured by a thin hook; the
   pure function takes explicit numbers.
 
@@ -157,5 +152,5 @@ Everything in AG-28's "Not included" (eased camera, follow pause, animation: AG-
 ## 10. Risks
 
 - Positions must stay list-based. The layout and real-mode merge tests (orders from 40,000) guard this.
-- The window jump must stay easy to replace. It lives only in `computeViewport` and the index-based positions.
+- The window jump must stay easy to replace. It lives only in `followTarget` (`camera.ts`) and the stable-row positions (AG-29 § 4).
 - Edges to an off-screen anchor and edges passing behind a file box are known costs (sections 3 and 5), checked on the manual run.
