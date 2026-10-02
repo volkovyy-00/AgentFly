@@ -32,8 +32,8 @@ export const EDGE_COLOR = {
   chain: '#6b7280',
   aux: '#9aa3b2',
   secret: '#d97706',
-  blocked: '#dc2626',
-  warned: '#7c3aed',
+  blocked: '#ef4444',
+  warned: '#a78bfa',
 } as const
 
 export type EdgeColorKey = keyof typeof EDGE_COLOR

@@ -5,29 +5,17 @@ import { TIMING, dur, enterDelay } from './choreography'
 import { useDimmed } from './dim'
 import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
 import { useMs } from './motionPolicy'
+import { DECOR, TONES } from './tones'
 import type { Step, Verdict } from './types'
 import { useBoxMotion } from './useBoxMotion'
 
 const HIDDEN_HANDLE = { opacity: 0, width: HANDLE, height: HANDLE } as const
 const sec = (n: number): number => n / 1000
 
-// Every colour class lives here; Phase 3 replaces this block with tones.ts.
-const STYLE = {
-  step: { allowed: 'bg-step border-step text-white', blocked: 'bg-blocked border-step text-white', warned: 'bg-warned border-step text-white' },
-  chip: { blocked: 'bg-white text-blocked', warned: 'bg-white text-warned' },
-  wipe: { blocked: 'border-rule-edge', warned: 'border-warned' },
-  file: 'bg-link text-white',
-  fileSecret: 'bg-secret text-ink',
-  host: 'bg-link text-white',
-  rule: 'border-2 border-rule-edge bg-rule text-white',
-  ring: 'border-secret',
-  flash: 'bg-white',
-}
-
 const VERDICT_UI: Record<Verdict, { tone: string; wipe: string; chip: string | null; chipTone: string }> = {
-  allowed: { tone: STYLE.step.allowed, wipe: '', chip: null, chipTone: '' },
-  blocked: { tone: STYLE.step.blocked, wipe: STYLE.wipe.blocked, chip: 'BLOCKED', chipTone: STYLE.chip.blocked },
-  warned: { tone: STYLE.step.warned, wipe: STYLE.wipe.warned, chip: 'WARN', chipTone: STYLE.chip.warned },
+  allowed: { tone: TONES.step.classes, wipe: '', chip: null, chipTone: '' },
+  blocked: { tone: TONES.stepBlocked.classes, wipe: DECOR.wipeBlocked.classes, chip: 'BLOCKED', chipTone: TONES.chipBlocked.classes },
+  warned: { tone: TONES.stepWarned.classes, wipe: DECOR.wipeWarned.classes, chip: 'WARN', chipTone: TONES.chipWarned.classes },
 }
 
 function stepDetail(step: Step): string {
@@ -161,7 +149,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
           <motion.div
             aria-hidden
             data-testid="ring"
-            className={`pointer-events-none absolute inset-0 rounded border-2 ${STYLE.ring}`}
+            className={`pointer-events-none absolute inset-0 rounded border-2 ${DECOR.ring.classes}`}
             initial={{ opacity: 0.9, scale: 1 }}
             animate={{ opacity: 0, scale: 1.25 }}
             transition={{
@@ -176,7 +164,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
             key={`bump-${bump}`}
             aria-hidden
             data-testid="bump"
-            className={`pointer-events-none absolute inset-0 rounded ${STYLE.flash}`}
+            className={`pointer-events-none absolute inset-0 rounded ${DECOR.flash.classes}`}
             initial={{ opacity: 0.5 }}
             animate={{ opacity: 0 }}
             transition={{ duration: sec(ms(TIMING.brighten.end)) }}
@@ -188,14 +176,14 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
 }
 
 export function FileBox({ id, data }: NodeProps<FileNode>) {
-  const tone = data.sensitive ? STYLE.fileSecret : STYLE.file
+  const tone = data.sensitive ? TONES.fileSecret.classes : TONES.file.classes
   return (
     <LaneFrame
       id={id}
       meta={data}
       title={data.path}
       ring={data.sensitive}
-      className={`gap-2 rounded px-2 text-base leading-6 ${tone}`}
+      className={`gap-2 rounded px-2 text-base leading-6 ${data.sensitive ? '' : 'border-2'} ${tone}`}
     >
       <TruncatedPath path={data.path} />
       {data.sensitive && <span className="shrink-0 font-bold">SECRET</span>}
@@ -205,7 +193,7 @@ export function FileBox({ id, data }: NodeProps<FileNode>) {
 
 export function HostBox({ id, data }: NodeProps<HostNode>) {
   return (
-    <LaneFrame id={id} meta={data} title={data.host} className={`gap-2 rounded px-2 text-base leading-6 ${STYLE.host}`}>
+    <LaneFrame id={id} meta={data} title={data.host} className={`gap-2 rounded border-2 px-2 text-base leading-6 ${TONES.host.classes}`}>
       <span className="min-w-0 flex-1 truncate font-mono">{data.host}</span>
     </LaneFrame>
   )
@@ -218,7 +206,7 @@ export function RuleBox({ id, data }: NodeProps<RuleNode>) {
       meta={data}
       title={`Rule ${data.rule}`}
       spring
-      className={`justify-center gap-2 rounded-full px-2 text-base font-bold leading-5 ${STYLE.rule}`}
+      className={`justify-center gap-2 rounded-full px-2 text-base font-bold leading-5 border-2 ${TONES.rule.classes}`}
     >
       <span className="truncate">{data.rule}</span>
     </LaneFrame>

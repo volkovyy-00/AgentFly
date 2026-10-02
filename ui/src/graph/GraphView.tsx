@@ -8,6 +8,7 @@ import { DimContext, useBlockDim } from './dim'
 import { layoutGraph } from './layout'
 import { useMs } from './motionPolicy'
 import { FileBox, HostBox, RuleBox, StepBox } from './nodes'
+import { BUTTON_CLASSES } from './tones'
 import type { PlacedStep } from './types'
 import { usePaneSize } from './usePaneSize'
 import { WipeEdge } from './WipeEdge'
@@ -150,7 +151,7 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
             send({ type: 'resume' })
             slideTo(target)
           }}
-          className="absolute right-4 top-2 z-30 rounded border-2 border-ink bg-white px-3 text-base leading-6 font-semibold text-ink"
+          className={`absolute right-4 top-2 ${BUTTON_CLASSES}`}
         >
           Follow
         </button>
