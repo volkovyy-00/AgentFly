@@ -121,6 +121,17 @@ describe('App', () => {
     expect(screen.getByText('SECRET SEEN')).toBeTruthy()
   })
 
+  it('/?burst=5 without mock=1 is real mode: it still polls /api/steps and draws the response', async () => {
+    window.history.replaceState({}, '', '/?burst=5')
+    const fetchMock = vi.fn(async () => respond('s', stepsFrom(40000, 2)))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await advance(0)
+    expect(fetchMock).toHaveBeenCalledWith('/api/steps', expect.objectContaining({ cache: 'no-store' }))
+    expect(screen.getAllByText('shell')).toHaveLength(2)
+    expect(screen.queryByText('BLOCKED')).toBeNull()
+  })
+
   it('mock mode never calls /api/steps and plays the scenario', async () => {
     window.history.replaceState({}, '', '/?mock=1')
     const fetchMock = vi.fn()

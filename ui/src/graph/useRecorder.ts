@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { readIgnored, writeIgnored } from './ignoredSession'
-import { MOCK_STEPS } from './mock'
+import { MOCK_SESSION } from './mock'
 import { parseSnapshot } from './snapshot'
 import type { PlacedStep, SecretSeen } from './types'
 import { initialWindowState, windowReducer } from './window'
@@ -21,10 +21,10 @@ export interface Recorder {
 /**
  * The page's data source. Real mode polls GET /api/steps: one request, then a
  * 1 s gap, aborting after 1.5 s; one failure sets `offline` (worst case 2.5 s
- * after the server stops) and the last steps stay. Mock mode replays MOCK_STEPS
- * and never calls the server.
+ * after the server stops) and the last steps stay. Mock mode replays MOCK_SESSION,
+ * `burst` steps per tick, and never calls the server (`burst` is ignored in real mode).
  */
-export function useRecorder(mock: boolean): Recorder {
+export function useRecorder(mock: boolean, burst = 1): Recorder {
   const [state, dispatch] = useReducer(windowReducer, undefined, () =>
     initialWindowState(mock ? null : readIgnored()),
   )
@@ -77,14 +77,14 @@ export function useRecorder(mock: boolean): Recorder {
     const session = `mock-${mockRun}`
     let shown = 0
     function tick(): void {
-      shown += 1
-      dispatch({ type: 'snapshot', session, steps: MOCK_STEPS.slice(0, shown) })
-      if (shown >= MOCK_STEPS.length) clearInterval(timer)
+      shown = Math.min(shown + burst, MOCK_SESSION.length)
+      dispatch({ type: 'snapshot', session, steps: MOCK_SESSION.slice(0, shown) })
+      if (shown >= MOCK_SESSION.length) clearInterval(timer)
     }
     const timer = setInterval(tick, MOCK_INTERVAL_MS)
     tick()
     return () => clearInterval(timer)
-  }, [mock, mockRun])
+  }, [mock, mockRun, burst])
 
   const newSession = useCallback(() => {
     if (mock) setMockRun((n) => n + 1)

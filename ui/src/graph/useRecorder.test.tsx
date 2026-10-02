@@ -2,10 +2,11 @@ import { act, renderHook } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IGNORE_KEY } from './ignoredSession'
-import { MOCK_STEPS } from './mock'
+import { MOCK_SESSION } from './mock'
 import { stepsFrom } from './testing'
 import type { Step } from './types'
 import { MOCK_INTERVAL_MS, POLL_GAP_MS, POLL_TIMEOUT_MS, useRecorder } from './useRecorder'
+import { WINDOW_SIZE } from './window'
 
 type Body = { session: string | null; steps: Step[] }
 
@@ -264,15 +265,31 @@ describe('useRecorder (mock mode)', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { result } = renderHook(() => useRecorder(true))
     expect(result.current.steps).toHaveLength(1)
-    for (let n = 2; n <= MOCK_STEPS.length; n++) {
+    for (let n = 2; n <= MOCK_SESSION.length; n++) {
       await advance(MOCK_INTERVAL_MS)
-      expect(result.current.steps).toHaveLength(n)
+      expect(result.current.steps).toHaveLength(Math.min(n, WINDOW_SIZE))
     }
     await advance(MOCK_INTERVAL_MS * 3)
-    expect(result.current.steps).toHaveLength(MOCK_STEPS.length)
-    expect(result.current.steps[0].order).toBe(40000)
+    expect(result.current.steps).toHaveLength(WINDOW_SIZE)
+    expect(result.current.steps[0].order).toBe(40014)
+    expect(result.current.steps.at(-1)?.order).toBe(40033)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.current.offline).toBe(false)
+  })
+
+  it('emits `burst` steps per tick', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10))
+    expect(result.current.steps).toHaveLength(10)
+    await advance(MOCK_INTERVAL_MS)
+    expect(result.current.steps).toHaveLength(20)
+  })
+
+  it('ignores burst in real mode', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond({ session: 's', steps: stepsFrom(40000, 3) })))
+    const { result } = renderHook(() => useRecorder(false, 10))
+    await advance(0)
+    expect(result.current.steps).toHaveLength(3)
   })
 
   it('New session restarts the scenario', async () => {

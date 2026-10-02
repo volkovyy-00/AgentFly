@@ -1,12 +1,15 @@
 import { motion } from 'motion/react'
 import { TIMING, dur } from './graph/choreography'
 import { GraphView } from './graph/GraphView'
+import { parseBurst } from './graph/mock'
 import { useMs } from './graph/motionPolicy'
 import { useRecorder } from './graph/useRecorder'
 
 function App() {
-  const mock = new URLSearchParams(window.location.search).get('mock') === '1'
-  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock)
+  const params = new URLSearchParams(window.location.search)
+  const mock = params.get('mock') === '1'
+  const burst = mock ? parseBurst(params.get('burst')) : 1
+  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst)
   const ms = useMs()
 
   return (
