@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BOTTOM_PAD, CONTENT_W, HOST_W, HOST_X, ROW_PITCH, TOP_PAD, layoutGraph, type GraphNode } from './layout'
 import { makeStep } from './testing'
-import { FALLBACK_PANE, computeViewport, resolvePane, type PaneSize } from './viewport'
+import { FALLBACK_PANE, MIN_ZOOM, computeViewport, resolvePane, type PaneSize } from './viewport'
 
 const POINT = { width: 960, height: 1080 }
 
@@ -41,10 +41,34 @@ describe('computeViewport', () => {
     for (const n of mine) expect(inside(n, vp, POINT), n.id).toBe(true)
   })
 
-  it('keeps the rules lane visible in a pane narrower than the content', () => {
-    const vp = computeViewport(3, { width: 720, height: 1080 })
-    expect(vp.x).toBe(720 - CONTENT_W)
-    expect(HOST_X + HOST_W + vp.x).toBeLessThanOrEqual(720)
+  it('fits a 720-wide pane by scaling so the newest step and its boxes stay inside', () => {
+    const pane = { width: 720, height: 1080 }
+    const layout = layoutGraph(session(5))
+    const vp = computeViewport(layout.rowCount, pane)
+    expect(vp.zoom).toBe(720 / CONTENT_W)
+    expect(vp.x).toBe(0)
+    const newest = 40000 + 4
+    const mine = layout.nodes.filter(
+      (n) =>
+        n.id.endsWith(`${newest}`) ||
+        n.id === 'file:f4' ||
+        n.id === 'host:h4' ||
+        n.id === 'rule:R4',
+    )
+    expect(mine.length).toBe(4)
+    for (const n of mine) expect(inside(n, vp, pane), n.id).toBe(true)
+  })
+
+  it('clamps zoom at MIN_ZOOM and keeps the rules lane inside a 300-wide pane', () => {
+    const pane = { width: 300, height: 1080 }
+    const vp = computeViewport(3, pane)
+    expect(vp.zoom).toBe(MIN_ZOOM)
+    expect(MIN_ZOOM).toBe(0.5)
+    expect((HOST_X + HOST_W) * vp.zoom + vp.x).toBeLessThanOrEqual(pane.width)
+  })
+
+  it.each([932, 960, 3000])('keeps zoom 1 when the pane is at least as wide as the content (%i)', (width) => {
+    expect(computeViewport(3, { width, height: 1080 }).zoom).toBe(1)
   })
 
   it('recomputes when the pane changes after mount', () => {

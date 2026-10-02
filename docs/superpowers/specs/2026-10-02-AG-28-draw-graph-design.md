@@ -64,15 +64,35 @@ Edges:
 - The "New session" button sits top left (top right would cover host and rule boxes anchored in the first rows) and the OFFLINE banner is a full-width red bar at the top, with left padding so its text clears the button. Both overlay the pane and do not change its measured size. The top padding (48 px) keeps them clear of the first row; once rows outgrow the pane they can cover the oldest row, and the newest step at the bottom stays visible.
 - Verdicts: allowed grey step, no chip. Blocked: red border, "BLOCKED". Warned: purple border, "WARN". Secret file: amber, "SECRET". Colour is never the only signal.
 - Colours are CSS variables on `:root`. Light theme only; dark mode goes to AG-31.
-- All text is at least 16 px in a 960x1080 window, taken from one size token.
+- All text is at least 16 px at pane widths of 932 px and above (so a 960x1080
+  window holds), taken from one size token. Narrower panes scale the drawing
+  down by design; below zoom 0.5 the left side may clip.
 
 ## 5. Viewport (`computeViewport`, pure)
 
-`computeViewport(layout, pane) -> { x, y, zoom: 1 }`:
-- `y = min(TOP_PAD, pane.h - BOTTOM_PAD - rowCount * 56)` with the top padding 48 (clears the button and banner) and the bottom padding 24. It does not move until the rows outgrow the pane. In steady state (20 rows) every new step shifts the whole drawing up one pitch: a jump, to be eased by AG-29. Node ids are stable (`step:<order>`), so AG-29 can ease positions without touching layout.
-- `x = min(0, pane.w - 932)`. A pane narrower than the content shifts left so the rules lane stays visible; the step column clips. Zoom never drops below 1, because shrinking would break the 16 px rule.
-- A pane with width or height `<= 0` or not yet measured falls back to 960x1080. Output must never contain NaN.
-- React Flow is fully controlled: `viewport` set and `onViewportChange` a no-op; `panOnDrag`, `zoomOnScroll`, `zoomOnPinch`, `zoomOnDoubleClick`, `nodesDraggable`, `nodesConnectable` and `elementsSelectable` all `false`; `deleteKeyCode={null}`; no `fitView`, no `onInit` positioning. The container has a definite height (React Flow draws nothing in a zero-height parent). Pane size is measured by a thin hook; the pure function takes explicit numbers.
+`computeViewport(rowCount, pane) -> { x, y, zoom }` with `zoom` in `[MIN_ZOOM, 1]`
+(`MIN_ZOOM = 0.5`):
+- `zoom = clamp(pane.w / 932, 0.5, 1)`. At widths of 932 and above, zoom is 1
+  (identical to the previous behaviour). Narrower panes fit the content by
+  scaling down instead of shifting left and clipping the step column. Below
+  zoom 0.5 the drawing may clip on the left.
+- `y = min(TOP_PAD, pane.h - BOTTOM_PAD - rowCount * 56 * zoom)` with the top
+  padding 48 (clears the button and banner) and the bottom padding 24, both in
+  screen pixels. It does not move until the rows outgrow the pane. In steady
+  state (20 rows) every new step shifts the whole drawing up one pitch: a jump,
+  to be eased by AG-29. Node ids are stable (`step:<order>`), so AG-29 can ease
+  positions without touching layout.
+- `x = min(0, pane.w - 932 * zoom)`. With fit-to-width, x is 0 whenever zoom is
+  above the floor; at the floor a very narrow pane may still shift left.
+- A pane with width or height `<= 0` or not yet measured falls back to 960x1080.
+  Output must never contain NaN.
+- React Flow is fully controlled: `viewport` set and `onViewportChange` a no-op;
+  `panOnDrag`, `zoomOnScroll`, `zoomOnPinch`, `zoomOnDoubleClick`,
+  `nodesDraggable`, `nodesConnectable` and `elementsSelectable` all `false`;
+  `deleteKeyCode={null}`; `minZoom={MIN_ZOOM}` `maxZoom={1}`; no `fitView`, no
+  `onInit` positioning. The container has a definite height (React Flow draws
+  nothing in a zero-height parent). Pane size is measured by a thin hook; the
+  pure function takes explicit numbers.
 
 Guarantee (replaces the literal AC 3 wording): the newest step and the lane boxes **anchored at it** are fully inside the pane on first paint with no pan or zoom, and after 30 more steps. A shared box anchored at an old row may be off-screen; its edge then runs off the top of the pane. This is accepted.
 
@@ -110,14 +130,14 @@ State `{ session, steps, ignored }`. Actions: `snapshot(session, steps)` and `ne
 `vite.config.ts` has no `setupFiles`; the plan adds one. It must reproduce what a browser does, not skip it: a `ResizeObserver` stub that **fires** its callback, mocked `offsetWidth` and `offsetHeight` from the node's explicit size, and a `DOMMatrixReadOnly` whose `m22` is 1. A no-op stub hides the vanished-edge failure in section 3. Layout and viewport tests never depend on DOM measurement; component tests use the firing stub.
 
 - **layout:** orders from 40,000 give small positions; same input gives same output; no two boxes in a lane overlap; a pure append moves nothing; the slide test from intent criterion 3; N steps give N-1 chain edges; README read twice is one box with two edges; blocked and warned edges (dashed, colour, `zIndex`); `warned` step draws "WARN" and a dashed purple rule edge; SECRET on sensitive files; boxes dropped when untouched; a re-anchored box.
-- **viewport:** 1, 20 and 50 steps from 40,000 keep the newest step and its anchored boxes inside 960x1080; a narrow pane keeps the rules lane visible; a 0x0 pane gives no NaN; a pane size change after mount recomputes.
+- **viewport:** 1, 20 and 50 steps from 40,000 keep the newest step and its anchored boxes inside 960x1080; a narrow pane (720, 644) fits by scaling so the newest step stays inside; a 300-wide pane clamps at zoom 0.5 with the rules lane inside; a 0x0 pane gives no NaN; a pane size change after mount recomputes.
 - **window and reducer:** merge by order; trim to 20; backwards `order` replaces; session change resets; ignored id behaviour; `{session: null, steps: []}`; the in-flight-poll race.
 - **real-mode sequence:** stubbed `fetch` returns orders 40,000-40,009, then 40,005-40,014, then 30 more steps; the newest stays in view after each.
 - **App:** literal `<arg>` text; OFFLINE within 3 s with fake timers, drawing kept, banner cleared on return; New session survives a remount and clears on a different id; `?mock=1` makes no `/api/steps` call; empty state; one timer loop under StrictMode.
 - **Edges survive measurement:** with the firing stub, the number of `.react-flow__edge` elements equals the layout's edge count, and the same holds after a poll rebuilds the node objects. This is a permanent test, not the throwaway reproduction. It cannot catch a misplaced edge end: test handles are 1 px and browser handles are 6 px, so edge ends can differ by a few pixels. Only the manual run checks that.
 - **Tooltips:** nodes carry `pointer-events: all` and a `title` with the full text.
-- **16 px floor:** a scan of `ui/src` (`.ts`, `.tsx` and `.css`) that rejects `text-xs`, `text-sm`, arbitrary sizes such as `text-[12px]`, `rem` and `em` sizes that resolve below 16 px, and inline `fontSize` below 16. React Flow's attribution link is exempt by name (see section 4).
-- **Manual (required, not optional):** in Chrome, open `/v2/?mock=1` and then a real `uv run python fake_agent.py` replay against a running recorder. Check that the `.react-flow__edge` count matches the layout, edge ends meet their boxes, the blocked red edge is inside the pane, `curl -d <arg> ntfy.sh` fits the 400 px box, the New-session button does not cover a step box, and the attribution link does not touch the newest row. Then one real session after a hard refresh. jsdom has no layout, so this covers: the pane having a real height, text fitting boxes, and the red edge being visible.
+- **16 px floor:** a scan of `ui/src` (`.ts`, `.tsx` and `.css`) that rejects `text-xs`, `text-sm`, arbitrary sizes such as `text-[12px]`, `rem` and `em` sizes that resolve below 16 px, and inline `fontSize` below 16. React Flow's attribution link is exempt by name (see section 4). Applies at pane widths >= 932 px; narrower panes scale by design.
+- **Manual (required, not optional):** in Chrome, open `/v2/?mock=1` and then a real `uv run python fake_agent.py` replay against a running recorder. Check that the `.react-flow__edge` count matches the layout, edge ends meet their boxes, the blocked red edge is inside the pane, `curl -d <arg> ntfy.sh` fits the 400 px box, the New-session button does not cover a step box, and the attribution link does not touch the newest row. Also check a **644 px wide** window: the step column (including command text) is fully visible, scaled, with no left clipping of the BLOCKED step. Then one real session after a hard refresh. jsdom has no layout, so this covers: the pane having a real height, text fitting boxes, and the red edge being visible.
 
 ## 8. Build, docs, tickets
 

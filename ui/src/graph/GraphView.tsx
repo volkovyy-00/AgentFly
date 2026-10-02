@@ -4,7 +4,7 @@ import { layoutGraph } from './layout'
 import { FileBox, HostBox, RuleBox, StepBox } from './nodes'
 import type { Step } from './types'
 import { usePaneSize } from './usePaneSize'
-import { computeViewport } from './viewport'
+import { MIN_ZOOM, computeViewport } from './viewport'
 
 // Module-level so React Flow does not see a new object on every render.
 const nodeTypes = { step: StepBox, file: FileBox, host: HostBox, rule: RuleBox }
@@ -25,7 +25,7 @@ export function GraphView({ steps }: { steps: readonly Step[] }) {
         nodeTypes={nodeTypes}
         viewport={viewport}
         onViewportChange={ignoreViewportChange}
-        minZoom={1}
+        minZoom={MIN_ZOOM}
         maxZoom={1}
         nodesDraggable={false}
         nodesConnectable={false}

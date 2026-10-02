@@ -7,7 +7,7 @@ function App() {
   const { steps, offline, newSession } = useRecorder(mock)
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-canvas text-base text-ink">
+    <main className="relative h-dvh w-full overflow-hidden bg-canvas text-base text-ink">
       <GraphView steps={steps} />
       {steps.length === 0 && (
         <p className="pointer-events-none absolute inset-0 grid place-items-center text-base text-muted">

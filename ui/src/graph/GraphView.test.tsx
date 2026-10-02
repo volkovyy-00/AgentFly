@@ -103,4 +103,17 @@ describe('GraphView', () => {
     await settle()
     expect(viewportTransform(container)).toBe('translate(0px,-444px) scale(1)')
   })
+
+  it('scales the drawing to fit a 644-wide pane', async () => {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === 'graph-pane') {
+        return { width: 644, height: 1080, x: 0, y: 0, top: 0, left: 0, right: 644, bottom: 1080, toJSON() {} }
+      }
+      return real.call(this)
+    })
+    const { container } = render(<GraphView steps={stepsFrom(40000, 5)} />)
+    await settle()
+    expect(viewportTransform(container)).toContain('scale(0.69')
+  })
 })
