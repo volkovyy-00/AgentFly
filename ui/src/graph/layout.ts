@@ -87,6 +87,9 @@ function boxHandles(w: number): NodeHandle[] {
   return [handle('l', 'target', Position.Left, w, LANE_H)]
 }
 
+const FILE_HANDLES = boxHandles(FILE_W)
+const HOST_HANDLES = boxHandles(HOST_W)
+
 const BASE = { draggable: false, selectable: false, focusable: false, style: { pointerEvents: 'all' as const } }
 
 function rowCentre(row: number): number {
@@ -220,7 +223,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       width: FILE_W,
       height: LANE_H,
       data: { path, sensitive: secretFiles.has(path) },
-      handles: boxHandles(FILE_W),
+      handles: FILE_HANDLES,
       ...BASE,
     })
   }
@@ -232,7 +235,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       width: HOST_W,
       height: LANE_H,
       data: { host },
-      handles: boxHandles(HOST_W),
+      handles: HOST_HANDLES,
       ...BASE,
     })
   }
@@ -244,7 +247,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       width: HOST_W,
       height: LANE_H,
       data: { rule },
-      handles: boxHandles(HOST_W),
+      handles: HOST_HANDLES,
       ...BASE,
     })
   }

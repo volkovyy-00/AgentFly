@@ -1,26 +1,34 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { FileNode, HostNode, RuleNode, StepNode } from './layout'
-import type { Step } from './types'
+import type { Step, Verdict } from './types'
 
 const HIDDEN_HANDLE = { opacity: 0 } as const
+
+const VERDICT_UI: Record<Verdict, { tone: string; chip: string | null; chipTone: string }> = {
+  allowed: { tone: 'bg-step border-step', chip: null, chipTone: '' },
+  blocked: { tone: 'bg-blocked border-rule-edge', chip: 'BLOCKED', chipTone: 'text-blocked' },
+  warned: { tone: 'bg-warned border-warned', chip: 'WARN', chipTone: 'text-warned' },
+}
 
 function stepDetail(step: Step): string {
   if (step.kind === 'read' || step.kind === 'edit') return step.file ?? ''
   return step.command ?? step.tool ?? ''
 }
 
+/** RTL + bdi so a long path truncates on the left and keeps the basename visible. */
+function TruncatedPath({ path }: { path: string }) {
+  return (
+    <span dir="rtl" className="min-w-0 flex-1 truncate text-left font-mono">
+      <bdi>{path}</bdi>
+    </span>
+  )
+}
+
 export function StepBox({ data }: NodeProps<StepNode>) {
   const { step } = data
   const detail = stepDetail(step)
-  const pathDetail = step.kind === 'read' || step.kind === 'edit'
-  const tone =
-    step.verdict === 'blocked'
-      ? 'bg-blocked border-rule-edge'
-      : step.verdict === 'warned'
-        ? 'bg-warned border-warned'
-        : 'bg-step border-step'
-  const chip = step.verdict === 'blocked' ? 'BLOCKED' : step.verdict === 'warned' ? 'WARN' : null
-  const chipTone = step.verdict === 'blocked' ? 'text-blocked' : 'text-warned'
+  const pathKind = step.kind === 'read' || step.kind === 'edit'
+  const { tone, chip, chipTone } = VERDICT_UI[step.verdict]
   return (
     <div
       className={`flex h-full w-full items-center gap-2 rounded-lg border-2 px-3 text-base leading-6 text-white ${tone}`}
@@ -28,10 +36,8 @@ export function StepBox({ data }: NodeProps<StepNode>) {
     >
       <Handle id="t" type="target" position={Position.Top} style={HIDDEN_HANDLE} />
       <span className="shrink-0 font-semibold">{step.kind}</span>
-      {pathDetail ? (
-        <span dir="rtl" className="min-w-0 flex-1 truncate text-left font-mono">
-          <bdi>{detail}</bdi>
-        </span>
+      {pathKind ? (
+        <TruncatedPath path={detail} />
       ) : (
         <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
       )}
@@ -49,9 +55,7 @@ export function FileBox({ data }: NodeProps<FileNode>) {
   return (
     <div className={`flex h-full w-full items-center gap-2 rounded px-2 text-base leading-6 ${tone}`} title={data.path}>
       <Handle id="l" type="target" position={Position.Left} style={HIDDEN_HANDLE} />
-      <span dir="rtl" className="min-w-0 flex-1 truncate text-left font-mono">
-        <bdi>{data.path}</bdi>
-      </span>
+      <TruncatedPath path={data.path} />
       {data.sensitive && <span className="shrink-0 font-bold">SECRET</span>}
     </div>
   )

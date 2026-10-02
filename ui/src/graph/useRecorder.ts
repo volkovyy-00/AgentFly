@@ -72,7 +72,7 @@ export function useRecorder(mock: boolean): Recorder {
     let shown = 0
     function tick(): void {
       shown += 1
-      dispatch({ type: 'snapshot', session, steps: MOCK_STEPS.slice(0, shown) as Step[] })
+      dispatch({ type: 'snapshot', session, steps: MOCK_STEPS.slice(0, shown) })
       if (shown >= MOCK_STEPS.length) clearInterval(timer)
     }
     const timer = setInterval(tick, MOCK_INTERVAL_MS)

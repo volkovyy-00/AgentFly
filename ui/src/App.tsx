@@ -1,9 +1,8 @@
-import { useMemo } from 'react'
 import { GraphView } from './graph/GraphView'
 import { useRecorder } from './graph/useRecorder'
 
 function App() {
-  const mock = useMemo(() => new URLSearchParams(window.location.search).get('mock') === '1', [])
+  const mock = new URLSearchParams(window.location.search).get('mock') === '1'
   const { steps, offline, newSession } = useRecorder(mock)
 
   return (
