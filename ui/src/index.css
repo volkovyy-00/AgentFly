@@ -1,5 +1,22 @@
 @import 'tailwindcss';
+@source not '../dist';
+
+@theme static {
+  --color-canvas: #f5f7fa;
+  --color-ink: #111827;
+  --color-muted: #4b5563;
+  --color-step: #6b7280;
+  --color-link: #2563eb;
+  --color-secret: #d97706;
+  --color-blocked: #dc2626;
+  --color-warned: #7c3aed;
+  --color-rule: #b91c1c;
+  --color-rule-edge: #7f1d1d;
+  --color-chain: #6b7280;
+  --color-aux: #9aa3b2;
+}
 
 body {
   margin: 0;
+  background: var(--color-canvas);
 }

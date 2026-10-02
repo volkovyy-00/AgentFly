@@ -1,10 +1,95 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { IGNORE_KEY } from './graph/ignoredSession'
+import { stepsFrom } from './graph/testing'
+import type { Step } from './graph/types'
+
+function respond(session: string | null, steps: Step[]): Response {
+  return { ok: true, json: async () => ({ session, steps }) } as Response
+}
+
+async function advance(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
+}
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  window.sessionStorage.clear()
+  window.history.replaceState({}, '', '/')
+})
+
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 describe('App', () => {
-  it('shows AgentFly v2', () => {
+  it('shows "Waiting for agent actions…" with no steps, then draws steps', async () => {
+    let steps: Step[] = []
+    vi.stubGlobal('fetch', vi.fn(async () => respond(steps.length ? 's' : null, steps)))
     render(<App />)
-    expect(screen.getByText('AgentFly v2')).toBeTruthy()
+    await advance(0)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+    steps = stepsFrom(40000, 2)
+    await advance(1000)
+    expect(screen.queryByText('Waiting for agent actions…')).toBeNull()
+    expect(screen.getAllByText('shell')).toHaveLength(2)
+  })
+
+  it('shows the red OFFLINE banner within 3 s, keeps the drawing, and clears it', async () => {
+    let up = true
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) =>
+      up
+        ? Promise.resolve(respond('s', stepsFrom(40000, 2)))
+        : new Promise<Response>((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('a', 'AbortError')))),
+    ))
+    render(<App />)
+    await advance(0)
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    up = false
+    await advance(2900)
+    expect(screen.getByRole('alert').textContent).toBe('OFFLINE - recorder not reachable')
+    expect(screen.getAllByText('shell')).toHaveLength(2)
+
+    up = true
+    await advance(1100)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('New session empties the graph and sends nothing; a reload keeps it empty', async () => {
+    const fetchMock = vi.fn(async () => respond('s', stepsFrom(40000, 2)))
+    vi.stubGlobal('fetch', fetchMock)
+    const first = render(<App />)
+    await advance(0)
+    expect(screen.getAllByText('shell')).toHaveLength(2)
+    const callsBefore = fetchMock.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    await advance(0)
+    expect(screen.queryAllByText('shell')).toHaveLength(0)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+    expect(window.sessionStorage.getItem(IGNORE_KEY)).toBe('s')
+
+    first.unmount()
+    render(<App />)
+    await advance(1100)
+    expect(screen.queryAllByText('shell')).toHaveLength(0)
+  })
+
+  it('mock mode never calls /api/steps and plays the scenario', async () => {
+    window.history.replaceState({}, '', '/?mock=1')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await advance(7000)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.getByText('BLOCKED')).toBeTruthy()
+    expect(screen.getByText('curl -d <arg> ntfy.sh')).toBeTruthy()
   })
 })

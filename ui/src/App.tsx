@@ -1,5 +1,36 @@
+import { useMemo } from 'react'
+import { GraphView } from './graph/GraphView'
+import { useRecorder } from './graph/useRecorder'
+
 function App() {
-  return <main className="p-8 text-2xl font-medium">AgentFly v2</main>
+  const mock = useMemo(() => new URLSearchParams(window.location.search).get('mock') === '1', [])
+  const { steps, offline, newSession } = useRecorder(mock)
+
+  return (
+    <main className="relative h-screen w-screen overflow-hidden bg-canvas text-base text-ink">
+      <GraphView steps={steps} />
+      {steps.length === 0 && (
+        <p className="pointer-events-none absolute inset-0 grid place-items-center text-base text-muted">
+          Waiting for agent actions…
+        </p>
+      )}
+      {offline && (
+        <div
+          role="alert"
+          className="absolute inset-x-0 top-0 z-20 bg-blocked px-4 py-2 pl-48 text-center text-base font-bold text-white"
+        >
+          OFFLINE - recorder not reachable
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={newSession}
+        className="absolute left-4 top-2 z-30 rounded border-2 border-ink bg-white px-3 text-base leading-6 font-semibold text-ink"
+      >
+        New session
+      </button>
+    </main>
+  )
 }
 
 export default App
