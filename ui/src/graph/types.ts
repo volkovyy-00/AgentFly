@@ -14,6 +14,23 @@ export interface Step {
   rule: string | null
 }
 
+/** A step plus where and how it first appeared on this page (window.ts sets these once). */
+export interface PlacedStep extends Step {
+  /** Canvas row, fixed when the step is first seen. */
+  row: number
+  /** From the page's first response: drawn without motion. */
+  quiet: boolean
+  /** Index within the poll that appended it. */
+  slot: number
+  /** How many steps that poll appended. */
+  of: number
+}
+
+/** Set once a sensitive step is seen; `quiet` if it came in the first response. */
+export interface SecretSeen {
+  quiet: boolean
+}
+
 export interface Snapshot {
   session: string | null
   steps: Step[]

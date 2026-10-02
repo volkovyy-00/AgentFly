@@ -1,4 +1,4 @@
-import type { Step } from './types'
+import type { PlacedStep, Step } from './types'
 
 /** A plain allowed shell step; override fields as needed. */
 export function makeStep(order: number, over: Partial<Step> = {}): Step {
@@ -19,4 +19,9 @@ export function makeStep(order: number, over: Partial<Step> = {}): Step {
 /** `count` plain steps with consecutive orders from `first`. */
 export function stepsFrom(first: number, count: number, over: Partial<Step> = {}): Step[] {
   return Array.from({ length: count }, (_, i) => makeStep(first + i, over))
+}
+
+/** Steps as the window would place them: consecutive rows from `firstRow`. */
+export function place(steps: readonly Step[], firstRow = 0, over: Partial<PlacedStep> = {}): PlacedStep[] {
+  return steps.map((s, i) => ({ ...s, row: firstRow + i, quiet: false, slot: 0, of: 1, ...over }))
 }
