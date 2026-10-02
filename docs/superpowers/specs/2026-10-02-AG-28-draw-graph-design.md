@@ -81,7 +81,7 @@ Edges:
   scaling down instead of shifting left and clipping the step column. Below
   zoom 0.5 the drawing may clip on the left.
 - `y` and `x` are now `followTarget` in `camera.ts` (AG-29 § 4). Both pads
-  (top 48, bottom 24) stay in screen pixels. Rows are stable, so a new step no
+  (top 96, bottom 24) stay in screen pixels. Rows are stable, so a new step no
   longer shifts the drawing: the camera slides instead.
 - A pane with width or height `<= 0` or not yet measured falls back to 960x1080.
   Output must never contain NaN.
