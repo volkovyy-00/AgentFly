@@ -116,9 +116,10 @@ Never put a real credential in it.
 and draws the last 10 steps of the current session from the server's memory,
 so it works without Neo4j. The page needs no token; only `POST /hook` does.
 To preview the page with sample data and no server, open
-`web/index.html?mock=1`. The scaffold for the next UI is at
-<http://127.0.0.1:8787/v2/> (`ui/`, Vite + React); graph drawing there is not
-ready yet.
+`web/index.html?mock=1`. The new UI (`ui/`, Vite + React) is at
+<http://127.0.0.1:8787/v2/>: a timeline with steps on the left, files in the
+middle and hosts and rules on the right, drawing the last 20 steps it has
+seen. `/v2/?mock=1` replays a sample session with no server.
 
 ## Configuration
 

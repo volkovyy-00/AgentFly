@@ -231,12 +231,20 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
 ## 6. The screen
 
 - Two pages from the local server: the current demo page at `/` (vis-network
-  from a CDN), and the new React page at `/v2/` (Vite build committed under
-  `ui/dist`). The demo still uses `/` until the v2 graph is ready.
-- Steps in a row, connected in order. Files and websites sit above and below.
-  A blocked step is joined by a dashed red line to a box for its rule.
-- Only the last 10 steps of the *current session* are shown. A "New session"
-  button clears the picture between rehearsals (it does not delete data).
+  from a CDN, steps in a row), and the new React page at `/v2/` (Vite build
+  committed under `ui/dist`). The new page draws the graph; which page is the
+  demo, and when `/` switches to the new one, is decided in AG-31.
+- The new page is a timeline. Steps run down the left, oldest at the top,
+  each joined to the next in order. Files sit in a lane to their right, and
+  websites and rules in a lane further right. A file, website or rule is one
+  box, level with the first drawn step that touches it. A blocked step is
+  joined by a dashed red line to a box for its rule (a warned step by a dashed
+  purple line).
+- The new page draws the 20 most recent steps of the *current session* that it
+  has seen (each refresh brings the server's last 10; earlier ones are kept in
+  the page) and keeps the newest step in view. A "New session" button clears
+  the picture between rehearsals (it does not delete data). Open
+  `/v2/?mock=1` to replay a sample session with no server.
 - A big red **OFFLINE** banner appears if the page cannot reach the server, so
   a dead server never fails silently on stage.
 - The page refreshes about once a second.

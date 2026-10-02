@@ -225,9 +225,10 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 
 ## Live graph (`web/index.html`, `ui/`, + memory API)
 
-- Current page: [`web/index.html`](web/index.html) at `/` (Part A). New page
-  scaffold: [`ui/`](ui/) build served at `/v2/` (Vite + React; graph not drawn
-  yet). Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
+- Current page: [`web/index.html`](web/index.html) at `/` (Part A). New page:
+  [`ui/`](ui/) build served at `/v2/` (Vite + React; a timeline of the last 20
+  steps it has seen; `/v2/?mock=1` replays a sample session with no server).
+  Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
 - `GET /` serves the HTML (Host check only; no token).
 - `GET /v2/` serves the committed `ui/dist` build (same Host gate; assets under
   `/v2/assets/...`).

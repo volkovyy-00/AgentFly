@@ -183,6 +183,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
     }
     if (step.host !== null) {
       const blocked = step.verdict === 'blocked'
+      const elevate = blocked || step.verdict === 'warned'
       edges.push(
         link(
           `host-edge:${step.order}`,
@@ -192,7 +193,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
             ? { stroke: 'var(--color-blocked)', strokeWidth: 2.5, strokeDasharray: '8 6' }
             : { stroke: 'var(--color-aux)', strokeWidth: 2 },
           blocked ? 'blocked' : 'aux',
-          blocked ? 1 : undefined,
+          elevate ? 1 : undefined,
         ),
       )
     }

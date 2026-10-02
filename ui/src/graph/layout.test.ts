@@ -139,6 +139,7 @@ describe('edges', () => {
     expect(rule.style).toMatchObject({ stroke: 'var(--color-warned)', strokeDasharray: '8 6' })
     expect(rule.zIndex).toBe(1)
     expect(edge(layout, 'host-edge:1').style?.strokeDasharray).toBeUndefined()
+    expect(edge(layout, 'host-edge:1').zIndex).toBe(1)
   })
 
   it('names a handle on both ends of every edge, and every handle exists', () => {
