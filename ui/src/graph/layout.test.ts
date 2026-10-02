@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   CONTENT_W, EDGE_COLOR, FILE_X, HOST_X, LANE_H, ROW_PITCH, STEP_H, STEP_X,
-  layoutGraph, type GraphNode, type Layout,
+  layoutGraph as layoutPlaced, TOP_PAD, hotIds, stepId, fileId, hostId, ruleId, hostEdgeId, ruleEdgeId, chainEdgeId, fileEdgeId, type GraphNode, type Layout,
 } from './layout'
 import { MOCK_STEPS } from './mock'
-import { makeStep } from './testing'
+import { makeStep, place } from './testing'
 import type { Step } from './types'
+
+/** Rows 0.. in list order: the old behaviour, for tests that do not care about rows. */
+const layoutGraph = (steps: readonly Step[]) => layoutPlaced(place(steps))
 
 const node = (layout: Layout, id: string): GraphNode => {
   const found = layout.nodes.find((n) => n.id === id)
@@ -38,7 +41,7 @@ describe('positions come from list place, never from order', () => {
   })
 
   it('lays out nothing for no steps', () => {
-    expect(layoutGraph([])).toEqual({ nodes: [], edges: [], rowCount: 0 })
+    expect(layoutGraph([])).toEqual({ nodes: [], edges: [] })
   })
 
   it('uses three lanes left to right', () => {
@@ -67,8 +70,8 @@ describe('shared boxes', () => {
 
   it('marks a file secret when a drawn step touching it is sensitive', () => {
     const layout = layoutGraph(MOCK_STEPS)
-    expect(node(layout, 'file:.env').data).toEqual({ path: '.env', sensitive: true })
-    expect(node(layout, 'file:README.md').data).toEqual({ path: 'README.md', sensitive: false })
+    expect(node(layout, 'file:.env').data).toMatchObject({ path: '.env', sensitive: true })
+    expect(node(layout, 'file:README.md').data).toMatchObject({ path: 'README.md', sensitive: false })
     expect(edge(layout, 'file-edge:40001').style?.stroke).toBe('var(--color-secret)')
   })
 
@@ -104,10 +107,12 @@ describe('shared boxes', () => {
     expect(has(layout, 'host:ntfy.sh')).toBe(true)
   })
 
-  it('moves a box to the next drawn step that touches it', () => {
+  it('re-anchors a box to the next drawn step that touches it, keeping rows', () => {
     const steps = [makeStep(1, { file: 'f' }), makeStep(2), makeStep(3, { file: 'f' })]
     expect(node(layoutGraph(steps), 'file:f').position.y).toBe(centre(0) - 12)
-    expect(node(layoutGraph(steps.slice(1)), 'file:f').position.y).toBe(centre(1) - 12)
+    const slid = layoutPlaced(place(steps.slice(1), 1))
+    expect(node(slid, 'file:f').position.y).toBe(centre(2) - 12)
+    expect(node(slid, 'step:3').position.y).toBe(centre(2) - STEP_H / 2)
   })
 })
 
@@ -251,25 +256,96 @@ describe('stability', () => {
     for (const [id, p] of before) expect(after.get(id), id).toEqual(p)
   })
 
-  it('a window slide shifts every row; only a box whose anchor left moves on its own', () => {
+  it('a window slide moves nothing except a box whose anchor left', () => {
     const base: Step[] = busy(20).map((s): Step => ({ ...s, file: null, host: null, rule: null }))
     base[0] = { ...base[0], file: 'shared.txt' }
     base[19] = { ...base[19], file: 'shared.txt' }
     base[5] = { ...base[5], host: 'h.com' }
-    const slid = [...base.slice(1), makeStep(40020)]
-
-    const before = layoutGraph(base)
-    const after = layoutGraph(slid)
+    const before = layoutPlaced(place(base))
+    const after = layoutPlaced([...place(base.slice(1), 1), ...place([makeStep(40020)], 20)])
 
     expect(has(after, 'step:40000')).toBe(false)
     expect(after.edges.some((e) => e.id === 'file-edge:40000' || e.id === 'chain:40000:40001')).toBe(false)
-
-    // The shared file is now level with the later step that touches it.
-    expect(node(after, 'file:shared.txt').position.y).toBe(centre(18) - 12)
+    expect(node(after, 'file:shared.txt').position.y).toBe(centre(19) - 12)
     expect(edge(after, 'file-edge:40019').target).toBe('file:shared.txt')
 
-    // Everything else keeps its offset to its neighbours: one pitch up.
-    expect(node(after, 'step:40005').position.y).toBe(node(before, 'step:40005').position.y - ROW_PITCH)
-    expect(node(after, 'host:h.com').position.y).toBe(node(before, 'host:h.com').position.y - ROW_PITCH)
+    for (const id of ['step:40005', 'host:h.com', 'step:40019']) {
+      expect(node(after, id).position, id).toEqual(node(before, id).position)
+    }
+    const changed = after.nodes.filter((n) => {
+      const was = before.nodes.find((b) => b.id === n.id)
+      return was !== undefined && (was.position.x !== n.position.x || was.position.y !== n.position.y)
+    })
+    expect(changed.map((n) => n.id)).toEqual(['file:shared.txt'])
+  })
+})
+
+describe('absolute rows', () => {
+  it('positions come from step.row, not from list index or order', () => {
+    const layout = layoutPlaced(place([makeStep(40000), makeStep(40001)], 1000))
+    expect(node(layout, 'step:40000').position.y).toBe(centre(1000) - STEP_H / 2)
+    expect(node(layout, 'step:40001').position.y).toBe(centre(1001) - STEP_H / 2)
+  })
+
+  it('keeps the top padding equal to the 96 px fade mask', () => {
+    expect(TOP_PAD).toBe(96)
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../index.css'), 'utf8')
+    expect(css).toMatch(/\.fade-top[^}]*96px/s)
+  })
+})
+
+describe('box metadata', () => {
+  it('counts drawn touchers and tracks the first and newest toucher rows', () => {
+    const steps = [makeStep(1, { file: 'f' }), makeStep(2), makeStep(3, { file: 'f' }), makeStep(4, { file: 'f' })]
+    const f = node(layoutPlaced(place(steps, 10)), 'file:f')
+    expect(f.data).toMatchObject({ count: 3, anchorRow: 10, lastTouchRow: 13 })
+  })
+
+  it('counts hosts and rules too', () => {
+    const steps = [
+      makeStep(1, { host: 'h', rule: 'R1', verdict: 'blocked' }),
+      makeStep(2, { host: 'h', rule: 'R1', verdict: 'blocked' }),
+    ]
+    const layout = layoutPlaced(place(steps))
+    expect(node(layout, 'host:h').data).toMatchObject({ count: 2, anchorRow: 0, lastTouchRow: 1 })
+    expect(node(layout, 'rule:R1').data).toMatchObject({ count: 2, anchorRow: 0, lastTouchRow: 1 })
+  })
+
+  it('keeps count level when a toucher leaves and a new one arrives', () => {
+    const full = [makeStep(1, { file: 'f' }), makeStep(2, { file: 'f' }), makeStep(3)]
+    const slid = [makeStep(2, { file: 'f' }), makeStep(3), makeStep(4, { file: 'f' })]
+    const a = node(layoutPlaced(place(full)), 'file:f').data as { count: number; lastTouchRow: number }
+    const b = node(layoutPlaced(place(slid, 1)), 'file:f').data as { count: number; lastTouchRow: number }
+    expect(a.count).toBe(2)
+    expect(b.count).toBe(2)
+    expect(b.lastTouchRow).toBeGreaterThan(a.lastTouchRow)
+  })
+})
+
+describe('hotIds', () => {
+  it('names the blocked step, its host and rule boxes and their edges, with the same ids layout uses', () => {
+    const step = makeStep(7, { verdict: 'blocked', host: 'ntfy.sh', rule: 'R1' })
+    const layout = layoutPlaced(place([step]))
+    const hot = hotIds(step)
+    expect([...hot].sort()).toEqual(
+      [stepId(7), hostId('ntfy.sh'), ruleId('R1'), hostEdgeId(7), ruleEdgeId(7)].sort(),
+    )
+    for (const id of hot) {
+      expect(has(layout, id) || layout.edges.some((e) => e.id === id), id).toBe(true)
+    }
+  })
+
+  it('tolerates a block with a rule and no host (an R0 block)', () => {
+    const step = makeStep(8, { verdict: 'blocked', host: null, rule: 'R0' })
+    const layout = layoutPlaced(place([step]))
+    const hot = hotIds(step)
+    expect([...hot].sort()).toEqual([ruleId('R0'), ruleEdgeId(8), stepId(8)].sort())
+    for (const id of hot) {
+      expect(has(layout, id) || layout.edges.some((e) => e.id === id), id).toBe(true)
+    }
+  })
+
+  it('exposes the other id helpers in the same format as before', () => {
+    expect([fileId('a'), chainEdgeId(1, 2), fileEdgeId(3)]).toEqual(['file:a', 'chain:1:2', 'file-edge:3'])
   })
 })

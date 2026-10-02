@@ -23,3 +23,8 @@ body {
   height: 100%;
   background: var(--color-canvas);
 }
+
+.fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+}
