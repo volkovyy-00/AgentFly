@@ -1,4 +1,5 @@
 import { MarkerType, Position, type Edge, type EdgeMarker, type Node, type NodeHandle } from '@xyflow/react'
+import { enterDelay } from './choreography'
 import type { PlacedStep, Step } from './types'
 
 // All sizes in px. Rows are 56 px apart; row i is the cell [56i, 56i + 56).
@@ -57,6 +58,14 @@ export const fileEdgeId = (order: number): string => `file-edge:${order}`
 export const hostEdgeId = (order: number): string => `host-edge:${order}`
 export const ruleEdgeId = (order: number): string => `rule-edge:${order}`
 
+/** How a box or edge enters: nothing for a first-paint step, else after the step's stagger delay. */
+export interface Enter {
+  quiet: boolean
+  delay: number
+}
+
+export const enterOf = (step: PlacedStep): Enter => ({ quiet: step.quiet, delay: enterDelay(step) })
+
 /** What a shared box knows about the drawn steps that touch it. */
 // A `type`, not an `interface`: React Flow requires node data to be a
 // Record<string, unknown>, and an interface has no implicit index signature (TS2344).
@@ -67,6 +76,8 @@ export type BoxMeta = {
   lastTouchRow: number
   /** Row of the first drawn toucher, where the box sits. */
   anchorRow: number
+  /** Entry timing, taken from the step the box first appeared with. */
+  enter: Enter
 }
 
 export type StepNode = Node<{ step: PlacedStep }, 'step'>
@@ -94,12 +105,13 @@ export function hotIds(step: Step): Set<string> {
   return ids
 }
 
-function touch(boxes: Map<string, BoxMeta>, key: string, row: number): void {
+function touch(boxes: Map<string, BoxMeta>, key: string, step: PlacedStep): void {
   const box = boxes.get(key)
-  if (box === undefined) boxes.set(key, { count: 1, lastTouchRow: row, anchorRow: row })
-  else {
+  if (box === undefined) {
+    boxes.set(key, { count: 1, lastTouchRow: step.row, anchorRow: step.row, enter: enterOf(step) })
+  } else {
     box.count += 1
-    box.lastTouchRow = row
+    box.lastTouchRow = step.row
   }
 }
 
@@ -173,11 +185,11 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
 
   for (const step of steps) {
     if (step.file !== null) {
-      touch(files, step.file, step.row)
+      touch(files, step.file, step)
       if (step.sensitive) secretFiles.add(step.file)
     }
-    if (step.host !== null) touch(hosts, step.host, step.row)
-    if (step.rule !== null) touch(rules, step.rule, step.row)
+    if (step.host !== null) touch(hosts, step.host, step)
+    if (step.rule !== null) touch(rules, step.rule, step)
   }
 
   const nodes: GraphNode[] = []

@@ -4,6 +4,7 @@ import {
   INITIAL_GESTURE, clampViewport, decideMove, followTarget, gestureStep, hasAlarm, panExtent, rowsOf,
   slideOptions, type Gesture, type GestureEvent,
 } from './camera'
+import { DimContext, useBlockDim } from './dim'
 import { layoutGraph } from './layout'
 import { useMs } from './motionPolicy'
 import { FileBox, HostBox, RuleBox, StepBox } from './nodes'
@@ -21,10 +22,14 @@ interface Props {
 
 /** The drawing. The camera is uncontrolled: only `setViewport` moves it. */
 export function GraphView({ steps, epoch }: Props) {
+  const ms = useMs()
+  const dim = useBlockDim(steps, epoch, ms)
   return (
-    <ReactFlowProvider key={epoch}>
-      <Drawing steps={steps} />
-    </ReactFlowProvider>
+    <DimContext.Provider value={dim}>
+      <ReactFlowProvider key={epoch}>
+        <Drawing steps={steps} />
+      </ReactFlowProvider>
+    </DimContext.Provider>
   )
 }
 

@@ -28,3 +28,17 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
 }
+
+.dimmable {
+  transition: opacity 300ms ease;
+}
+.dimmable[data-dim='true'] {
+  opacity: 0.4;
+  transition-duration: 150ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dimmable,
+  .dimmable[data-dim='true'] {
+    transition: none;
+  }
+}

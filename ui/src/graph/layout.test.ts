@@ -349,3 +349,13 @@ describe('hotIds', () => {
     expect([fileId('a'), chainEdgeId(1, 2), fileEdgeId(3)]).toEqual(['file:a', 'chain:1:2', 'file-edge:3'])
   })
 })
+
+describe('enter timing on shared boxes', () => {
+  it('takes the quiet flag and delay from the anchor step', () => {
+    const steps = place([makeStep(1, { file: 'f' }), makeStep(2, { file: 'f' })], 0, { quiet: false, slot: 1, of: 3 })
+    const data = node(layoutPlaced(steps), 'file:f').data as unknown as { enter: { quiet: boolean; delay: number } }
+    expect(data.enter).toEqual({ quiet: false, delay: 80 })
+    const quiet = node(layoutPlaced(place([makeStep(1, { file: 'f' })], 0, { quiet: true })), 'file:f')
+    expect((quiet.data as unknown as { enter: { quiet: boolean } }).enter.quiet).toBe(true)
+  })
+})

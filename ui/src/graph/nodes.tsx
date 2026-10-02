@@ -1,13 +1,33 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { HANDLE, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
+import { motion } from 'motion/react'
+import type { ReactNode } from 'react'
+import { TIMING, dur, enterDelay } from './choreography'
+import { useDimmed } from './dim'
+import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
+import { useMs } from './motionPolicy'
 import type { Step, Verdict } from './types'
+import { useBoxMotion } from './useBoxMotion'
 
 const HIDDEN_HANDLE = { opacity: 0, width: HANDLE, height: HANDLE } as const
+const sec = (n: number): number => n / 1000
 
-const VERDICT_UI: Record<Verdict, { tone: string; chip: string | null; chipTone: string }> = {
-  allowed: { tone: 'bg-step border-step', chip: null, chipTone: '' },
-  blocked: { tone: 'bg-blocked border-rule-edge', chip: 'BLOCKED', chipTone: 'text-blocked' },
-  warned: { tone: 'bg-warned border-warned', chip: 'WARN', chipTone: 'text-warned' },
+// Every colour class lives here; Phase 3 replaces this block with tones.ts.
+const STYLE = {
+  step: { allowed: 'bg-step border-step text-white', blocked: 'bg-blocked border-step text-white', warned: 'bg-warned border-step text-white' },
+  chip: { blocked: 'bg-white text-blocked', warned: 'bg-white text-warned' },
+  wipe: { blocked: 'border-rule-edge', warned: 'border-warned' },
+  file: 'bg-link text-white',
+  fileSecret: 'bg-secret text-ink',
+  host: 'bg-link text-white',
+  rule: 'border-2 border-rule-edge bg-rule text-white',
+  ring: 'border-secret',
+  flash: 'bg-white',
+}
+
+const VERDICT_UI: Record<Verdict, { tone: string; wipe: string; chip: string | null; chipTone: string }> = {
+  allowed: { tone: STYLE.step.allowed, wipe: '', chip: null, chipTone: '' },
+  blocked: { tone: STYLE.step.blocked, wipe: STYLE.wipe.blocked, chip: 'BLOCKED', chipTone: STYLE.chip.blocked },
+  warned: { tone: STYLE.step.warned, wipe: STYLE.wipe.warned, chip: 'WARN', chipTone: STYLE.chip.warned },
 }
 
 function stepDetail(step: Step): string {
@@ -24,60 +44,182 @@ function TruncatedPath({ path }: { path: string }) {
   )
 }
 
-export function StepBox({ data }: NodeProps<StepNode>) {
+export function StepBox({ id, data }: NodeProps<StepNode>) {
   const { step } = data
+  const ms = useMs()
+  const dimmed = useDimmed(id)
+  const delay = enterDelay(step)
   const detail = stepDetail(step)
   const pathKind = step.kind === 'read' || step.kind === 'edit'
-  const { tone, chip, chipTone } = VERDICT_UI[step.verdict]
+  const { tone, wipe, chip, chipTone } = VERDICT_UI[step.verdict]
+  const alarm = step.verdict !== 'allowed'
+  // Under reduced motion the border is static and always visible: no wipe at all.
+  const staticBorder = step.quiet || ms(1) === 0
   return (
     <div
-      className={`flex h-full w-full items-center gap-2 rounded-lg border-2 px-3 text-base leading-6 text-white ${tone}`}
+      className="dimmable relative h-full w-full"
+      data-dim={dimmed}
       title={`${step.order}: ${step.kind}${detail ? ` ${detail}` : ''}`}
     >
       <Handle id="t" type="target" position={Position.Top} style={HIDDEN_HANDLE} />
-      <span className="shrink-0 font-semibold">{step.kind}</span>
-      {pathKind ? (
-        <TruncatedPath path={detail} />
-      ) : (
-        <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
-      )}
-      {chip !== null && (
-        <span className={`shrink-0 rounded bg-white px-2 font-bold leading-5 ${chipTone}`}>{chip}</span>
-      )}
+      <motion.div
+        className={`relative flex h-full w-full items-center gap-2 rounded-lg border-2 px-3 text-base leading-6 ${tone}`}
+        initial={step.quiet ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: sec(ms(delay)), duration: sec(ms(dur(TIMING.step))), ease: 'easeOut' }}
+      >
+        <span className="shrink-0 font-semibold">{step.kind}</span>
+        {pathKind ? (
+          <TruncatedPath path={detail} />
+        ) : (
+          <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
+        )}
+        {chip !== null && (
+          <span className={`shrink-0 rounded px-2 font-bold leading-5 ${chipTone}`}>{chip}</span>
+        )}
+        {alarm && (
+          <motion.div
+            aria-hidden
+            data-testid="border-wipe"
+            className={`pointer-events-none absolute -inset-0.5 rounded-lg border-2 ${wipe}`}
+            initial={staticBorder ? false : { clipPath: 'inset(0 100% 0 0)' }}
+            animate={{ clipPath: 'inset(0 0% 0 0)' }}
+            transition={{
+              delay: sec(ms(delay + TIMING.borderWipe.start)),
+              duration: sec(ms(dur(TIMING.borderWipe))),
+              ease: 'easeOut',
+            }}
+          />
+        )}
+      </motion.div>
       <Handle id="b" type="source" position={Position.Bottom} style={HIDDEN_HANDLE} />
       <Handle id="r" type="source" position={Position.Right} style={HIDDEN_HANDLE} />
     </div>
   )
 }
 
-export function FileBox({ data }: NodeProps<FileNode>) {
-  const tone = data.sensitive ? 'bg-secret text-ink' : 'bg-link text-white'
+interface LaneFrameProps {
+  id: string
+  meta: BoxMeta
+  title: string
+  className: string
+  /** Rule boxes spring in; file and host boxes fade in. */
+  spring?: boolean
+  /** A live secret read pulses one ring. */
+  ring?: boolean
+  children: ReactNode
+}
+
+/**
+ * Shared frame for file, host and rule boxes. The Handle sits outside the keyed
+ * motion element so a re-anchor never remounts it (a remounted handle would
+ * drop its edges). Entry runs once per mount; a re-anchor fades in at once.
+ */
+function LaneFrame({ id, meta, title, className, spring = false, ring = false, children }: LaneFrameProps) {
+  const ms = useMs()
+  const dimmed = useDimmed(id)
+  const { reanchor, bump, tick } = useBoxMotion(meta)
+  const { quiet, delay } = meta.enter
+  const reduced = ms(1) === 0
+  const firstRun = reanchor === 0
+  const span = spring ? TIMING.ruleSpring : TIMING.laneBox
+  const hidden = spring ? { opacity: 0, scale: 0.6 } : { opacity: 0 }
+  const initial = firstRun ? (quiet ? false : hidden) : { opacity: 0 }
+  const start = firstRun ? delay + span.start : 0
+  const transition =
+    spring && firstRun && !reduced
+      ? { type: 'spring' as const, duration: sec(dur(span)), bounce: 0.3, delay: sec(start) }
+      : {
+          duration: sec(ms(firstRun ? dur(span) : dur(TIMING.reanchor))),
+          delay: sec(ms(start)),
+          ease: 'easeOut' as const,
+        }
   return (
-    <div className={`flex h-full w-full items-center gap-2 rounded px-2 text-base leading-6 ${tone}`} title={data.path}>
+    <div className="dimmable relative h-full w-full" data-dim={dimmed} title={title}>
       <Handle id="l" type="target" position={Position.Left} style={HIDDEN_HANDLE} />
+      <motion.div
+        key={`anchor-${reanchor}`}
+        className={`relative flex h-full w-full items-center ${className}`}
+        initial={initial}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={transition}
+      >
+        {children}
+        {meta.count >= 2 && (
+          <motion.span
+            key={`tick-${tick}`}
+            className="shrink-0 font-bold tabular-nums"
+            initial={tick === 0 ? false : { y: 8, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ duration: sec(ms(200)) }}
+          >
+            x{meta.count}
+          </motion.span>
+        )}
+        {ring && firstRun && !quiet && (
+          <motion.div
+            aria-hidden
+            data-testid="ring"
+            className={`pointer-events-none absolute inset-0 rounded border-2 ${STYLE.ring}`}
+            initial={{ opacity: 0.9, scale: 1 }}
+            animate={{ opacity: 0, scale: 1.25 }}
+            transition={{
+              delay: sec(ms(delay + TIMING.secretRing.start)),
+              duration: sec(ms(dur(TIMING.secretRing))),
+              ease: 'easeOut',
+            }}
+          />
+        )}
+        {bump > 0 && (
+          <motion.div
+            key={`bump-${bump}`}
+            aria-hidden
+            data-testid="bump"
+            className={`pointer-events-none absolute inset-0 rounded ${STYLE.flash}`}
+            initial={{ opacity: 0.5 }}
+            animate={{ opacity: 0 }}
+            transition={{ duration: sec(ms(TIMING.brighten.end)) }}
+          />
+        )}
+      </motion.div>
+    </div>
+  )
+}
+
+export function FileBox({ id, data }: NodeProps<FileNode>) {
+  const tone = data.sensitive ? STYLE.fileSecret : STYLE.file
+  return (
+    <LaneFrame
+      id={id}
+      meta={data}
+      title={data.path}
+      ring={data.sensitive}
+      className={`gap-2 rounded px-2 text-base leading-6 ${tone}`}
+    >
       <TruncatedPath path={data.path} />
       {data.sensitive && <span className="shrink-0 font-bold">SECRET</span>}
-    </div>
+    </LaneFrame>
   )
 }
 
-export function HostBox({ data }: NodeProps<HostNode>) {
+export function HostBox({ id, data }: NodeProps<HostNode>) {
   return (
-    <div className="flex h-full w-full items-center rounded bg-link px-2 text-base leading-6 text-white" title={data.host}>
-      <Handle id="l" type="target" position={Position.Left} style={HIDDEN_HANDLE} />
+    <LaneFrame id={id} meta={data} title={data.host} className={`gap-2 rounded px-2 text-base leading-6 ${STYLE.host}`}>
       <span className="min-w-0 flex-1 truncate font-mono">{data.host}</span>
-    </div>
+    </LaneFrame>
   )
 }
 
-export function RuleBox({ data }: NodeProps<RuleNode>) {
+export function RuleBox({ id, data }: NodeProps<RuleNode>) {
   return (
-    <div
-      className="flex h-full w-full items-center justify-center rounded-full border-2 border-rule-edge bg-rule px-2 text-base font-bold leading-5 text-white"
+    <LaneFrame
+      id={id}
+      meta={data}
       title={`Rule ${data.rule}`}
+      spring
+      className={`justify-center gap-2 rounded-full px-2 text-base font-bold leading-5 ${STYLE.rule}`}
     >
-      <Handle id="l" type="target" position={Position.Left} style={HIDDEN_HANDLE} />
       <span className="truncate">{data.rule}</span>
-    </div>
+    </LaneFrame>
   )
 }
