@@ -1,4 +1,4 @@
-import { Position, type Edge, type Node, type NodeHandle } from '@xyflow/react'
+import { MarkerType, Position, type Edge, type EdgeMarker, type Node, type NodeHandle } from '@xyflow/react'
 import type { Step } from './types'
 
 // All sizes in px. Rows are 56 px apart; row i is the cell [56i, 56i + 56).
@@ -23,6 +23,29 @@ const FILE_DY = -12
 // React Flow's default <Handle> is 6 px; the handles array mirrors that so the
 // edge ends match before and after the browser measures the DOM.
 const HANDLE = 6
+
+// Literal hex for markers (SVG markers do not resolve CSS variables). Keep in
+// sync with the --color-* theme values in ui/src/index.css.
+export const EDGE_COLOR = {
+  chain: '#6b7280',
+  aux: '#9aa3b2',
+  secret: '#d97706',
+  blocked: '#dc2626',
+  warned: '#7c3aed',
+} as const
+
+export type EdgeColorKey = keyof typeof EDGE_COLOR
+
+/** Arrow at the target; userSpaceOnUse so strokeWidth 3 does not blow it up. */
+function arrow(color: string): EdgeMarker {
+  return {
+    type: MarkerType.ArrowClosed,
+    color,
+    markerUnits: 'userSpaceOnUse',
+    width: 8,
+    height: 8,
+  }
+}
 
 export type StepNode = Node<{ step: Step }, 'step'>
 export type FileNode = Node<{ path: string; sensitive: boolean }, 'file'>
@@ -75,9 +98,19 @@ function link(
   from: Step,
   to: string,
   style: Edge['style'],
+  colorKey: EdgeColorKey,
   zIndex?: number,
 ): Edge {
-  return { id, source: `step:${from.order}`, sourceHandle: 'r', target: to, targetHandle: 'l', style, zIndex }
+  return {
+    id,
+    source: `step:${from.order}`,
+    sourceHandle: 'r',
+    target: to,
+    targetHandle: 'l',
+    style,
+    markerEnd: arrow(EDGE_COLOR[colorKey]),
+    zIndex,
+  }
 }
 
 /**
@@ -126,15 +159,23 @@ export function layoutGraph(steps: readonly Step[]): Layout {
         target: `step:${step.order}`,
         targetHandle: 't',
         style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
+        markerEnd: arrow(EDGE_COLOR.chain),
       })
     }
 
     if (step.file !== null) {
+      const secret = step.sensitive
       edges.push(
-        link(`file-edge:${step.order}`, step, `file:${step.file}`, {
-          stroke: step.sensitive ? 'var(--color-secret)' : 'var(--color-aux)',
-          strokeWidth: 2,
-        }),
+        link(
+          `file-edge:${step.order}`,
+          step,
+          `file:${step.file}`,
+          {
+            stroke: secret ? 'var(--color-secret)' : 'var(--color-aux)',
+            strokeWidth: 2,
+          },
+          secret ? 'secret' : 'aux',
+        ),
       )
     }
     if (step.host !== null) {
@@ -147,6 +188,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
           blocked
             ? { stroke: 'var(--color-blocked)', strokeWidth: 2.5, strokeDasharray: '8 6' }
             : { stroke: 'var(--color-aux)', strokeWidth: 2 },
+          blocked ? 'blocked' : 'aux',
           blocked ? 1 : undefined,
         ),
       )
@@ -163,6 +205,7 @@ export function layoutGraph(steps: readonly Step[]): Layout {
             strokeWidth: 2.5,
             strokeDasharray: '8 6',
           },
+          warned ? 'warned' : 'blocked',
           1,
         ),
       )

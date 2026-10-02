@@ -1,16 +1,18 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { FileNode, HostNode, RuleNode, StepNode } from './layout'
+import type { Step } from './types'
 
 const HIDDEN_HANDLE = { opacity: 0 } as const
 
-function stepDetail(command: string | null, tool: string | null, kind: string): string {
-  if (kind === 'read' || kind === 'edit') return ''
-  return command ?? tool ?? ''
+function stepDetail(step: Step): string {
+  if (step.kind === 'read' || step.kind === 'edit') return step.file ?? ''
+  return step.command ?? step.tool ?? ''
 }
 
 export function StepBox({ data }: NodeProps<StepNode>) {
   const { step } = data
-  const detail = stepDetail(step.command, step.tool, step.kind)
+  const detail = stepDetail(step)
+  const pathDetail = step.kind === 'read' || step.kind === 'edit'
   const tone =
     step.verdict === 'blocked'
       ? 'bg-blocked border-rule-edge'
@@ -26,7 +28,13 @@ export function StepBox({ data }: NodeProps<StepNode>) {
     >
       <Handle id="t" type="target" position={Position.Top} style={HIDDEN_HANDLE} />
       <span className="shrink-0 font-semibold">{step.kind}</span>
-      <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
+      {pathDetail ? (
+        <span dir="rtl" className="min-w-0 flex-1 truncate text-left font-mono">
+          <bdi>{detail}</bdi>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
+      )}
       {chip !== null && (
         <span className={`shrink-0 rounded bg-white px-2 font-bold leading-5 ${chipTone}`}>{chip}</span>
       )}

@@ -1,6 +1,11 @@
+import { MarkerType } from '@xyflow/react'
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  CONTENT_W, FILE_X, HOST_X, LANE_H, ROW_PITCH, STEP_H, STEP_X,
+  CONTENT_W, EDGE_COLOR, FILE_X, HOST_X, LANE_H, ROW_PITCH, STEP_H, STEP_X,
   layoutGraph, type GraphNode, type Layout,
 } from './layout'
 import { MOCK_STEPS } from './mock'
@@ -152,6 +157,51 @@ describe('edges', () => {
     for (const n of layoutGraph(MOCK_STEPS).nodes) {
       expect(n.width).toBeGreaterThan(0)
       expect(n.height).toBeGreaterThan(0)
+    }
+  })
+
+  it('puts a closed arrowhead at the target of every edge, coloured to match the stroke family', () => {
+    const strokeToColor: Record<string, string> = {
+      'var(--color-chain)': EDGE_COLOR.chain,
+      'var(--color-aux)': EDGE_COLOR.aux,
+      'var(--color-secret)': EDGE_COLOR.secret,
+      'var(--color-blocked)': EDGE_COLOR.blocked,
+      'var(--color-warned)': EDGE_COLOR.warned,
+    }
+    const steps = [
+      ...MOCK_STEPS,
+      makeStep(40005, { verdict: 'warned', rule: 'R2', host: 'ok.example', command: 'curl ok.example' }),
+    ]
+    const layout = layoutGraph(steps)
+    expect(layout.edges.length).toBeGreaterThan(0)
+    for (const e of layout.edges) {
+      const stroke = String(e.style?.stroke)
+      const color = strokeToColor[stroke]
+      expect(color, `${e.id} stroke ${stroke}`).toBeTruthy()
+      expect(e.markerEnd).toEqual(
+        expect.objectContaining({
+          type: MarkerType.ArrowClosed,
+          color,
+        }),
+      )
+    }
+  })
+
+  it('keeps EDGE_COLOR in sync with the theme hex values in index.css', () => {
+    // Discover via the same glob as textSize.test.ts; read bytes from disk because
+    // Vite's Tailwind plugin yields an empty string for `index.css?raw`.
+    const sources = import.meta.glob(
+      ['/src/**/*.{ts,tsx,css}', '!/src/**/*.test.{ts,tsx}', '!/src/test-setup.ts'],
+      {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      },
+    ) as Record<string, string>
+    expect(Object.keys(sources).some((path) => path.endsWith('index.css'))).toBe(true)
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../index.css'), 'utf8')
+    for (const [name, hex] of Object.entries(EDGE_COLOR)) {
+      expect(css).toMatch(new RegExp(`--color-${name}:\\s*${hex}`))
     }
   })
 })

@@ -27,8 +27,57 @@ describe('GraphView', () => {
     expect(screen.getByText('SECRET')).toBeTruthy()
     expect(screen.getByText('R1')).toBeTruthy()
     expect(screen.getByText('ntfy.sh')).toBeTruthy()
-    expect(screen.getAllByText('README.md')).toHaveLength(1)
+    const readmeInFile = [...container.querySelectorAll('.react-flow__node-file')].filter((n) =>
+      n.textContent?.includes('README.md'),
+    )
+    const readmeInStep = [...container.querySelectorAll('.react-flow__node-step')].filter((n) =>
+      n.textContent?.includes('README.md'),
+    )
+    expect(readmeInFile).toHaveLength(1)
+    expect(readmeInStep).toHaveLength(2)
+    const envInFile = [...container.querySelectorAll('.react-flow__node-file')].filter((n) =>
+      n.textContent?.includes('.env'),
+    )
+    const envInStep = [...container.querySelectorAll('.react-flow__node-step')].filter((n) =>
+      n.textContent?.includes('.env'),
+    )
+    expect(envInFile).toHaveLength(1)
+    expect(envInStep).toHaveLength(1)
+    expect(screen.getAllByText('SECRET')).toHaveLength(1)
     expect(container.querySelectorAll('.react-flow__node')).toHaveLength(layoutGraph(MOCK_STEPS).nodes.length)
+    expect(container.querySelectorAll('.react-flow__edge')).toHaveLength(layoutGraph(MOCK_STEPS).edges.length)
+  })
+
+  it('shows a read step file path cut at the left end, with the full path in title', async () => {
+    const path = 'src/very/long/directory/path/to/a-file-name.ts'
+    const { container } = render(
+      <GraphView steps={[makeStep(1, { kind: 'read', file: path, command: null })]} />,
+    )
+    await settle()
+    expect(container.querySelector(`[title="1: read ${path}"]`)).not.toBeNull()
+    const bdi = container.querySelector('.react-flow__node-step bdi')
+    expect(bdi?.textContent).toBe(path)
+    expect(bdi?.closest('[dir="rtl"]')).not.toBeNull()
+  })
+
+  it('shows a hostile file path as literal text on a read step', async () => {
+    const hostile = '<img src=x onerror="alert(1)">'
+    const { container } = render(
+      <GraphView steps={[makeStep(1, { kind: 'read', file: hostile, command: null })]} />,
+    )
+    await settle()
+    expect(screen.getAllByText(hostile).length).toBeGreaterThanOrEqual(1)
+    expect(container.querySelector('.react-flow__node-step')?.textContent).toContain(hostile)
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('a read step with no file renders without stray text or throwing', async () => {
+    const { container } = render(
+      <GraphView steps={[makeStep(1, { kind: 'read', file: null, command: null })]} />,
+    )
+    await settle()
+    expect(screen.getByText('read')).toBeTruthy()
+    expect(container.querySelector('.react-flow__node-step')?.textContent).toBe('read')
   })
 
   it('labels a warned step WARN', async () => {
