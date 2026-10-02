@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Viewport } from '@xyflow/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SLIDE_MS, easeOutCubic, followTarget, panExtent, rowsOf } from './camera'
+import { SLIDE_MS, clampViewport, easeOutCubic, followTarget, panExtent, rowsOf } from './camera'
 import { GraphView } from './GraphView'
 import { layoutGraph } from './layout'
 import { MOCK_STEPS } from './mock'
@@ -353,7 +353,7 @@ describe('pan, zoom and Follow', () => {
 
   it('clamps a paused viewer in place, with no easing, when the window slides', async () => {
     const first = place(stepsFrom(40000, 20), 100)
-    const { rerender } = render(view(first))
+    const { container, rerender } = render(view(first))
     await settle()
     userMove()
     await act(async () => {
@@ -364,7 +364,46 @@ describe('pan, zoom and Follow', () => {
     await settle()
     const last = spy.calls.at(-1)
     expect(last?.options).toBeUndefined()
-    const extent = panExtent({ first: 110, last: 129 }, { width: 0, height: 0 })
-    expect(-last!.vp.y).toBeGreaterThanOrEqual(extent[0][1])
+    const rows = { first: 110, last: 129 }
+    const extent = panExtent(rows, { width: 0, height: 0 })
+    const target = followTarget(rows, { width: 0, height: 0 })
+    // The viewer was above the new top, so it lands exactly on the top edge of
+    // the extent (y = -6064), not on the follow target (y = -6224).
+    expect(last!.vp).toEqual({ x: target.x, y: -extent[0][1] * target.zoom, zoom: target.zoom })
+    expect(last!.vp.y).toBe(-6064)
+    expect(last!.vp).not.toEqual(target)
+    expect(viewportTransform(container)).toBe('translate(0px,-6064px) scale(1)')
+  })
+
+  it('keeps a paused viewer in place, at the same zoom, when the pane is resized', async () => {
+    let paneHeight = 1080
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === 'graph-pane') {
+        return { width: 960, height: paneHeight, x: 0, y: 0, top: 0, left: 0, right: 960, bottom: paneHeight, toJSON() {} }
+      }
+      return real.call(this)
+    })
+    const steps = place(stepsFrom(40000, 20))
+    const { container } = render(view(steps))
+    await settle()
+    userMove()
+    await act(async () => {
+      await spy.rf.setViewport({ x: 0, y: -30, zoom: 1 })
+    })
+    spy.calls.length = 0
+    paneHeight = 700
+    await act(async () => {
+      globalThis.fireResizeObservers()
+    })
+    await settle()
+    const pane = { width: 960, height: 700 }
+    const kept = { x: 0, y: -30, zoom: 1 }
+    // Inside the new extent, so the clamped viewport is the viewport itself.
+    expect(clampViewport(kept, panExtent(rowsOf(steps), pane), pane)).toBe(kept)
+    expect(followTarget(rowsOf(steps), pane)).not.toEqual(kept)
+    expect(spy.calls).toHaveLength(0)
+    expect(viewportTransform(container)).toBe('translate(0px,-30px) scale(1)')
+    expect(screen.getByRole('button', { name: 'Follow' })).toBeTruthy()
   })
 })
