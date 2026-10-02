@@ -1,5 +1,13 @@
 # AG-28 Draw the Live Graph on `/v2/` Implementation Plan
 
+> **Historical.** This plan was used to implement AG-28. The shipped code on
+> `ag-28-draw-graph` is the source of truth for behaviour; this file may
+> disagree with later review fixes (for example `sameSteps`). Do not re-apply
+> snippets from here against current `ui/src` without checking the design
+> spec and the code. Prefer
+> `docs/superpowers/specs/2026-10-02-AG-28-draw-graph-design.md` and
+> `SPEC.md` (AGENTS.md) when they diverge from this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `/v2/` draws the live session as a timeline (steps left, files middle, hosts and rules right) of at most 20 steps, with the newest step always in view, plus `/v2/?mock=1`.

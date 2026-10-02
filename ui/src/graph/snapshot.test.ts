@@ -28,8 +28,15 @@ describe('parseSnapshot', () => {
     expect(parseSnapshot(42)).toBeNull()
   })
 
-  it('treats a missing steps array as empty, like the old page', () => {
-    expect(parseSnapshot({ session: 's1' })).toEqual({ session: 's1', steps: [] })
+  it('rejects arrays and objects without a steps array (failed poll, keep drawing)', () => {
+    expect(parseSnapshot([])).toBeNull()
+    expect(parseSnapshot({})).toBeNull()
+    expect(parseSnapshot({ session: 's1' })).toBeNull()
+    expect(parseSnapshot({ session: 's1', steps: 'nope' })).toBeNull()
+  })
+
+  it('accepts an explicit empty steps list', () => {
+    expect(parseSnapshot({ session: null, steps: [] })).toEqual({ session: null, steps: [] })
   })
 
   it('fills missing optional fields with null and sensitive with false', () => {

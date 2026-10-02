@@ -29,16 +29,15 @@ function parseStep(raw: unknown): Step | null {
 
 /**
  * Turn a parsed `/api/steps` body into a Snapshot. Returns null when the body
- * is not an object (the caller treats that as a failed poll). Steps without a
- * numeric `order`, a `kind` or a `verdict` are dropped; a missing `steps` array
- * is an empty list (as on the old page).
+ * is not a plain object with a `steps` array (the caller treats that as a
+ * failed poll / OFFLINE). Steps without a numeric `order`, a `kind` or a
+ * `verdict` are dropped; an explicit empty `steps` list is valid.
  */
 export function parseSnapshot(raw: unknown): Snapshot | null {
-  if (typeof raw !== 'object' || raw === null) return null
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
+  if (!Array.isArray(r.steps)) return null
   const session = typeof r.session === 'string' ? r.session : null
-  const steps = Array.isArray(r.steps)
-    ? r.steps.map(parseStep).filter((s): s is Step => s !== null)
-    : []
+  const steps = r.steps.map(parseStep).filter((s): s is Step => s !== null)
   return { session, steps }
 }
