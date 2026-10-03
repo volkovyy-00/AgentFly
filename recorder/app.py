@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from recorder.memory import memory_steps, parse_limit
@@ -24,7 +24,6 @@ logger = logging.getLogger("flightrecorder")
 
 ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
-_WEB_INDEX: Path = Path(__file__).resolve().parent.parent / "web" / "index.html"
 _UI_DIST: Path = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 # Overridable for tests (pytest sets a temp dir before lifespan runs).
@@ -54,6 +53,11 @@ def content_type_is_json(request: Request) -> bool:
     return media == "application/json"
 
 
+def is_ui_path(path: str) -> bool:
+    """True for the page and its assets; the API and redirects are not UI paths."""
+    return path == "/" or path.startswith("/assets/")
+
+
 def get_store() -> SessionStore:
     if _store is None:
         raise RuntimeError("session store not initialized")
@@ -80,10 +84,10 @@ async def host_gate(request: Request, call_next: Any) -> Response:
     if not host_allowed(request):
         return JSONResponse({"detail": "forbidden host"}, status_code=403)
     response = await call_next(request)
-    # Fixed Vite asset names need a revalidate hint; fold into the existing gate
-    # so /hook is not wrapped by a second middleware and we avoid subclassing
-    # StaticFiles (undocumented Starlette hook).
-    if request.url.path.startswith("/v2"):
+    # Fixed Vite asset names (assets/index.js) need a revalidate hint; fold into the
+    # existing gate so /hook is not wrapped by a second middleware and we avoid
+    # subclassing StaticFiles (undocumented Starlette hook).
+    if is_ui_path(request.url.path):
         response.headers["Cache-Control"] = "no-cache"
     return response  # type: ignore[no-any-return]
 
@@ -91,11 +95,6 @@ async def host_gate(request: Request, call_next: Any) -> Response:
 @app.get("/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
-
-
-@app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(_WEB_INDEX, media_type="text/html; charset=utf-8")
 
 
 @app.get("/api/steps")
@@ -109,19 +108,42 @@ async def api_steps(request: Request) -> JSONResponse:
     return JSONResponse(memory_steps.snapshot(all_steps=all_steps, limit=limit))
 
 
-def mount_ui_v2(application: FastAPI, dist: Path) -> None:
-    """Serve the Vite build at /v2 when present; never fail boot if missing."""
-    if not dist.is_dir():
-        logger.warning("ui/dist not found; /v2 disabled (%s)", dist)
+def mount_ui(application: FastAPI, dist: Path) -> None:
+    """Serve the Vite build at / and /assets; never fail boot if it is missing.
+
+    No catch-all mount: an explicit GET / plus /assets cannot shadow POST /hook,
+    whatever the registration order.
+    """
+    index: Path = dist / "index.html"
+    assets: Path = dist / "assets"
+    if not (index.is_file() and assets.is_dir()):
+        logger.warning(
+            "ui/dist incomplete or missing; / has no page. Build it: "
+            "npm --prefix ui run build (%s)",
+            dist,
+        )
         return
-    application.mount(
-        "/v2",
-        StaticFiles(directory=dist, html=True),
-        name="ui_v2",
-    )
+
+    async def page() -> FileResponse:
+        return FileResponse(index, media_type="text/html; charset=utf-8")
+
+    application.add_api_route("/", page, methods=["GET"], include_in_schema=False)
+    application.mount("/assets", StaticFiles(directory=assets), name="ui_assets")
 
 
-mount_ui_v2(app, _UI_DIST)
+def v2_redirect(request: Request) -> RedirectResponse:
+    """Old address: 307 to /, query string kept. Relative, so Host never matters."""
+    query: str = request.url.query
+    return RedirectResponse("/" + (f"?{query}" if query else ""), status_code=307)
+
+
+def mount_v2_redirects(application: FastAPI) -> None:
+    for path in ("/v2", "/v2/", "/v2/index.html"):
+        application.add_api_route(path, v2_redirect, methods=["GET"], include_in_schema=False)
+
+
+mount_ui(app, _UI_DIST)
+mount_v2_redirects(app)
 
 
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
