@@ -23,14 +23,17 @@ export interface Recorder {
  * 1 s gap, aborting after 1.5 s; one failure sets `offline` (worst case 2.5 s
  * after the server stops) and the last steps stay. Mock mode replays MOCK_SESSION,
  * `burst` steps per tick, and never calls the server (`burst` is ignored in real mode).
+ * `mockFirst` makes the mock's first tick of a page load count as the first
+ * response, so its steps paint still (quiet), as on a reload of the real page.
  */
-export function useRecorder(mock: boolean, burst = 1): Recorder {
+export function useRecorder(mock: boolean, burst = 1, mockFirst = false): Recorder {
   const [state, dispatch] = useReducer(windowReducer, undefined, () =>
     initialWindowState(mock ? null : readIgnored()),
   )
   const [offline, setOffline] = useState(false)
   const [mockRun, setMockRun] = useState(0)
   const firstResponse = useRef(true)
+  const firstMockTick = useRef(mockFirst)
 
   useEffect(() => {
     if (!mock) writeIgnored(state.ignored)
@@ -78,7 +81,9 @@ export function useRecorder(mock: boolean, burst = 1): Recorder {
     let shown = 0
     function tick(): void {
       shown = Math.min(shown + burst, MOCK_SESSION.length)
-      dispatch({ type: 'snapshot', session, steps: MOCK_SESSION.slice(0, shown) })
+      const first = firstMockTick.current
+      firstMockTick.current = false
+      dispatch({ type: 'snapshot', session, steps: MOCK_SESSION.slice(0, shown), first })
       if (shown >= MOCK_SESSION.length) clearInterval(timer)
     }
     const timer = setInterval(tick, MOCK_INTERVAL_MS)

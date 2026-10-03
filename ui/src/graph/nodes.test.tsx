@@ -80,6 +80,19 @@ describe('re-anchor', () => {
     expect(countSpan(container).style.opacity).toBe('1')
   })
 
+  it('removes the brighten overlay once it has played, and brings it back for the next reuse', async () => {
+    const { container, rerender } = render(<GraphView steps={place([read(1), read(2)])} epoch={0} />)
+    await settle()
+    rerender(<GraphView steps={place([read(1), read(2), read(3)])} epoch={0} />)
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).not.toBeNull()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).toBeNull()
+    rerender(<GraphView steps={place([read(1), read(2), read(3), read(4)])} epoch={0} />)
+    expect(fileBox(container).querySelector('[data-testid="bump"]')).not.toBeNull()
+  })
+
   it('a re-anchor and a new touch in the same poll still brighten and tick', async () => {
     const { container, rerender } = render(<GraphView steps={place([read(1), read(2)])} epoch={0} />)
     await settle()

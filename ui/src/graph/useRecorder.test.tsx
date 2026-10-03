@@ -302,10 +302,21 @@ describe('useRecorder (mock mode)', () => {
     expect(window.sessionStorage.getItem(IGNORE_KEY)).toBeNull()
   })
 
-  it('mock steps are never quiet', async () => {
+  it('mock steps are never quiet by default', async () => {
     vi.stubGlobal('fetch', vi.fn())
     const { result } = renderHook(() => useRecorder(true))
     await advance(0)
     expect(result.current.steps[0].quiet).toBe(false)
+  })
+
+  it('with mockFirst, only the first tick of a page load paints still, even after New session', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10, true))
+    expect(result.current.steps).toHaveLength(10)
+    expect(result.current.steps.every((s) => s.quiet)).toBe(true)
+    await advance(MOCK_INTERVAL_MS)
+    expect(result.current.steps.slice(10).every((s) => !s.quiet)).toBe(true)
+    act(() => result.current.newSession())
+    expect(result.current.steps.every((s) => !s.quiet)).toBe(true)
   })
 })

@@ -58,6 +58,26 @@ describe('useBlockDim', () => {
     expect(result.current.active).toBe(false)
   })
 
+  it('keeps a second block bright from the moment it arrives, even before its own start', () => {
+    const first = blocked(0)
+    const { result, rerender } = setup({ steps: [first], epoch: 0, ms: same })
+    tick(500)
+    // The second block is the last of a burst: its own start is later, but it must not mount dimmed.
+    rerender({ steps: [first, blocked(1, { slot: 4, of: 5 })], epoch: 0, ms: same })
+    expect(result.current.active).toBe(true)
+    expect(result.current.hot.has(stepId(101))).toBe(true)
+    expect(result.current.hot.has(stepId(100))).toBe(false)
+  })
+
+  it('dims a block in the reset poll even when the old session reached far higher rows', () => {
+    const { result, rerender } = setup({ steps: [blocked(25)], epoch: 0, ms: same })
+    tick(2000)
+    rerender({ steps: [blocked(0)], epoch: 1, ms: same })
+    tick(0)
+    expect(result.current.active).toBe(true)
+    expect(result.current.hot.has(stepId(100))).toBe(true)
+  })
+
   it('ignores a blocked step it has already handled', () => {
     const steps = [blocked(0)]
     const { result, rerender } = setup({ steps, epoch: 0, ms: same })

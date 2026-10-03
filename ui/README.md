@@ -33,7 +33,8 @@ a Follow button returns. Zoom is locked: at most 1, and panes narrower than
 the content scale down (floor 0.5). `/v2/?mock=1` replays a sample session without calling the
 server; "New session" restarts it. The mock replays a 34-step session (enough
 to slide the 20-step window); `?mock=1&burst=10` emits 10 steps per tick to
-check bursts. The page is dark only. Every colour pair is a row in
+check bursts, and `&first=1` makes the first tick paint still, as after a
+reload of the real page. The page is dark only. Every colour pair is a row in
 `src/graph/tones.ts`, and `tones.test.ts` checks each text pair at 7:1
 against the tokens in `src/index.css`.
 

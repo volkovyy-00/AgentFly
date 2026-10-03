@@ -10,7 +10,8 @@ function App() {
   const params = new URLSearchParams(window.location.search)
   const mock = params.get('mock') === '1'
   const burst = mock ? parseBurst(params.get('burst')) : 1
-  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst)
+  const mockFirst = mock && params.get('first') === '1'
+  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst, mockFirst)
   const ms = useMs()
 
   return (

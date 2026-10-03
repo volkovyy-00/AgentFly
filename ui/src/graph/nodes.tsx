@@ -110,6 +110,8 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
   // Fixed at mount: `meta.enter` follows the current first toucher, which can change
   // (a quiet anchor leaving as a live read arrives) and would replay the ring.
   const [{ quiet, delay }] = useState(meta.enter)
+  // The last brighten that finished: the overlay is mounted only while one plays.
+  const [brightened, setBrightened] = useState(0)
   const firstRun = reanchor === 0
   const span = spring ? TIMING.ruleSpring : TIMING.laneBox
   const hidden = spring ? { opacity: 0, scale: 0.6 } : { opacity: 0 }
@@ -159,7 +161,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
             }}
           />
         )}
-        {bump > anchoredAt.bump && (
+        {bump > Math.max(anchoredAt.bump, brightened) && (
           <motion.div
             key={`bump-${bump}`}
             aria-hidden
@@ -168,6 +170,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
             initial={{ opacity: 0.5 }}
             animate={{ opacity: 0 }}
             transition={{ duration: sec(ms(TIMING.brighten.end)) }}
+            onAnimationComplete={() => setBrightened(bump)}
           />
         )}
       </motion.div>

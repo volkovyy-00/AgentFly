@@ -148,4 +148,20 @@ describe('App', () => {
     expect(screen.getByText('BLOCKED')).toBeTruthy()
     expect(screen.getByText('curl -d <arg> ntfy.sh')).toBeTruthy()
   })
+
+  it('/?mock=1&first=1 paints the first tick still: its block does not dim, unlike plain mock', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const dims = () => document.querySelectorAll('[data-dim="true"]').length
+    window.history.replaceState({}, '', '/?mock=1&burst=10')
+    const live = render(<App />)
+    await advance(300)
+    expect(screen.getByText('BLOCKED')).toBeTruthy()
+    expect(dims()).toBeGreaterThan(0)
+    live.unmount()
+    window.history.replaceState({}, '', '/?mock=1&burst=10&first=1')
+    render(<App />)
+    await advance(300)
+    expect(screen.getByText('BLOCKED')).toBeTruthy()
+    expect(dims()).toBe(0)
+  })
 })

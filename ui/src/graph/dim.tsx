@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { TIMING, dur, enterDelay } from './choreography'
 import { hotIds } from './layout'
 import type { PlacedStep } from './types'
@@ -27,7 +27,9 @@ export function useDimmed(id: string): boolean {
  */
 export function useBlockDim(steps: readonly PlacedStep[], epoch: number, ms: (n: number) => number): DimState {
   const [state, setState] = useState<DimState>(OFF)
-  const handled = useRef(-1)
+  // The newest row seen, per epoch: a reset restarts rows at 0, so a row only
+  // means something within its epoch.
+  const handled = useRef({ epoch, row: -1 })
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
 
   const clear = useCallback(() => {
@@ -35,26 +37,30 @@ export function useBlockDim(steps: readonly PlacedStep[], epoch: number, ms: (n:
     timers.current = []
   }, [])
 
-  // Must stay above the steps effect: on a reset both run in one commit.
-  useEffect(() => {
-    clear()
-    setState(OFF)
-    handled.current = -1
-  }, [epoch, clear])
-
-  useEffect(() => {
-    const was = handled.current
-    handled.current = steps.at(-1)?.row ?? -1
+  // A layout effect: a new block must not paint dimmed for a frame under the
+  // previous block's hot set.
+  useLayoutEffect(() => {
+    if (handled.current.epoch !== epoch) {
+      clear()
+      setState(OFF)
+      handled.current = { epoch, row: -1 }
+    }
+    const was = handled.current.row
+    handled.current = { epoch, row: steps.at(-1)?.row ?? -1 }
     const block = steps.filter((s) => s.row > was && !s.quiet && s.verdict === 'blocked').at(-1)
     if (block === undefined) return
     clear()
+    const hot = hotIds(block)
+    // During a running dim the new block takes over the bright set at once; only
+    // the first dim waits for the block's own start.
+    setState((s) => (s.active ? { active: true, hot } : s))
     const start = ms(enterDelay(block))
     timers.current.push(
-      setTimeout(() => setState({ active: true, hot: hotIds(block) }), start),
+      setTimeout(() => setState({ active: true, hot }), start),
       // The hold is a state, not movement: it keeps its 1.5 s under reduced motion.
       setTimeout(() => setState(OFF), start + ms(TIMING.dimIn.end) + dur(TIMING.dimHold)),
     )
-  }, [steps]) // Deliberately only `steps`: a reduced-motion toggle (a new `ms`) must not re-run it.
+  }, [steps, epoch]) // Not `ms`: a reduced-motion toggle (a new `ms`) must not re-run it.
 
   useEffect(() => clear, [clear])
 

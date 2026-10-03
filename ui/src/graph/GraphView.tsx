@@ -53,6 +53,9 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
   const target = useMemo(() => followTarget(rows, pane), [rows, pane])
   const extent = useMemo(() => panExtent(rows, pane), [rows, pane])
 
+  // `gesture` is what the React Flow callbacks and the effects read, synchronously
+  // and mid-gesture, where state would be stale; `following` state only draws the
+  // Follow pill. `send` is the one writer of both, so they cannot drift.
   const gesture = useRef<Gesture>(INITIAL_GESTURE)
   // Where the camera last rested: updated by every move we made ourselves and
   // at the end of each gesture, never mid-gesture by the user.
