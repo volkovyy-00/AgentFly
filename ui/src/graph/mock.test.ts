@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MOCK_SESSION, MOCK_STEPS, parseBurst } from './mock'
+import { LONG_MARKED_ORDER, MOCK_MARKED_ORDER, MOCK_SESSION, MOCK_STEPS, longSession, parseBurst, parseLen } from './mock'
 
 describe('MOCK_SESSION', () => {
   it('is about 34 steps from order 40,000, starting with the demo story', () => {
@@ -30,5 +30,40 @@ describe('parseBurst', () => {
     ['-3', 1],
   ])('%s gives %i', (raw, expected) => {
     expect(parseBurst(raw)).toBe(expected)
+  })
+})
+
+describe('MOCK_MARKED_ORDER', () => {
+  it('names the demo story\'s .env read', () => {
+    expect(MOCK_SESSION.find((s) => s.order === MOCK_MARKED_ORDER)).toMatchObject({ file: '.env', sensitive: true })
+  })
+})
+
+describe('longSession', () => {
+  it('is n steps from order 40,000 with a marking read at index 1 and a block about every 13', () => {
+    const steps = longSession(500)
+    expect(steps).toHaveLength(500)
+    expect(steps.map((s) => s.order)).toEqual(Array.from({ length: 500 }, (_, i) => 40000 + i))
+    expect(steps.find((s) => s.order === LONG_MARKED_ORDER)).toMatchObject({ file: '.env', sensitive: true })
+    expect(steps.filter((s) => s.verdict === 'blocked').length).toBeGreaterThanOrEqual(30)
+    expect(steps.filter((s) => s.verdict === 'warned').length).toBeGreaterThanOrEqual(10)
+    expect(longSession(3)).toHaveLength(3)
+  })
+})
+
+describe('parseLen', () => {
+  it.each([
+    ['500', 500],
+    ['1', 1],
+    ['2000', 2000],
+    [null, null],
+    ['0', null],
+    ['2001', null],
+    ['x', null],
+    ['2.5', null],
+    ['-3', null],
+    ['', null],
+  ])('%s gives %s', (raw, expected) => {
+    expect(parseLen(raw)).toBe(expected)
   })
 })

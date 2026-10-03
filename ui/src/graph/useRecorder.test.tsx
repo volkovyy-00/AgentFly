@@ -330,4 +330,14 @@ describe('useRecorder (mock mode)', () => {
     act(() => result.current.newSession())
     expect(result.current.steps.every((s) => !s.quiet)).toBe(true)
   })
+
+  it('replays a long session through the server-shaped window and reaches a group', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10, false, 100))
+    await advance(MOCK_INTERVAL_MS * 4)
+    expect(result.current.steps).toHaveLength(WINDOW_SIZE)
+    expect(result.current.group?.hidden.total).toBe(result.current.steps[0].order - 40000)
+    expect(result.current.markedOrder).toBe(40001)
+    expect(result.current.secretSeen).not.toBeNull()
+  })
 })

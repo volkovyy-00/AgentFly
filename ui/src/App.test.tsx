@@ -176,4 +176,13 @@ describe('App', () => {
     expect(screen.getByText('BLOCKED')).toBeTruthy()
     expect(dims()).toBe(0)
   })
+
+  it('/?mock=1&len=60&burst=10 replays a generated long session and shows its group', async () => {
+    window.history.replaceState({}, '', '/?mock=1&len=60&burst=10')
+    vi.stubGlobal('fetch', vi.fn())
+    render(<App />)
+    await advance(1500 * 6)
+    expect(screen.getByText(/^\d+ earlier steps/)).toBeTruthy()
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+  })
 })
