@@ -1,7 +1,7 @@
 import { PanOnScrollMode, ReactFlow, ReactFlowProvider, useReactFlow, type Viewport } from '@xyflow/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  INITIAL_GESTURE, clampViewport, decideMove, followTarget, gestureStep, hasAlarm, panExtent, rowsOf,
+  INITIAL_GESTURE, clampViewport, decideMove, followTarget, gestureStep, hasAlarm, movedFrom, panExtent, rowsOf,
   slideOptions, type Gesture, type GestureEvent,
 } from './camera'
 import { DimContext, useBlockDim } from './dim'
@@ -48,6 +48,9 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
   const extent = useMemo(() => panExtent(rows, pane), [rows, pane])
 
   const gesture = useRef<Gesture>(INITIAL_GESTURE)
+  // Where the camera last rested: updated by every move we made ourselves and
+  // at the end of each gesture, never mid-gesture by the user.
+  const rest = useRef<Viewport | null>(null)
   const [following, setFollowing] = useState(true)
   const previous = useRef<{ lastRow: number } | null>(null)
   const previousPane = useRef(pane)
@@ -72,15 +75,12 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
   useEffect(() => {
     const was = previous.current
     const alarm = was !== null && hasAlarm(steps, was.lastRow)
-    const decision = decideMove(was, { lastRow: last, alarm }, gesture.current.following)
+    const move = decideMove(was, { lastRow: last, alarm }, gesture.current.following)
     previous.current = { lastRow: last }
-    if (decision.move === 'jump') {
-      send({ type: 'resume' })
-      jumpTo(target)
-    } else if (decision.move === 'slide') {
-      if (decision.following) send({ type: 'resume' })
-      slideTo(target)
-    }
+    if (move === 'none') return
+    send({ type: 'resume' })
+    if (move === 'jump') jumpTo(target)
+    else slideTo(target)
   }, [last])
 
   // A pane resize while following jumps to the follow target. Keyed on the pane
@@ -113,17 +113,22 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
           translateExtent={extent}
           minZoom={target.zoom}
           maxZoom={target.zoom}
-          onMoveStart={(event) => {
-            if (event === null) return
+          onMoveStart={(event, vp) => {
+            if (event === null) {
+              rest.current = vp
+              return
+            }
             send({ type: 'start', user: true })
             // React Flow reports the first wheel event as a start and a move only
             // from the second, so a single notch would read as a click.
-            if (event.type === 'wheel') send({ type: 'move', user: true })
+            if (event.type === 'wheel' && movedFrom(rest.current, vp)) send({ type: 'move', user: true })
           }}
-          onMove={(event) => {
-            if (event !== null) send({ type: 'move', user: true })
+          onMove={(event, vp) => {
+            if (event === null) rest.current = vp
+            else if (movedFrom(rest.current, vp)) send({ type: 'move', user: true })
           }}
-          onMoveEnd={(event) => {
+          onMoveEnd={(event, vp) => {
+            rest.current = vp
             const again = send({ type: 'end', user: event !== null })
             if (!again) return
             const now = rf.getViewport()

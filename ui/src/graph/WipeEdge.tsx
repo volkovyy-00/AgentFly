@@ -1,9 +1,10 @@
 import { BaseEdge, getBezierPath, getStraightPath, type Edge, type EdgeProps } from '@xyflow/react'
 import { motion } from 'motion/react'
 import { useState } from 'react'
+import { sec } from './choreography'
 import { useDimmed } from './dim'
 import type { WipeData } from './layout'
-import { useMs } from './motionPolicy'
+import { useMs, useReducedMotion } from './motionPolicy'
 
 const PAD = 12
 
@@ -24,9 +25,10 @@ export type WipeEdgeType = Edge<WipeData, 'wipe'>
 export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data } = props
   const ms = useMs()
+  const reduced = useReducedMotion()
   const dimmed = useDimmed(id)
   const quiet = data?.quiet ?? true
-  const [wiping, setWiping] = useState(() => !quiet && ms(1) > 0)
+  const [wiping, setWiping] = useState(() => !quiet && !reduced)
 
   const [path] =
     data?.shape === 'straight'
@@ -44,8 +46,8 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const maskId = `wipe-${id}`
   const start = data?.start ?? 0
   const transition = {
-    delay: ms(start) / 1000,
-    duration: ms((data?.end ?? 0) - start) / 1000,
+    delay: sec(ms(start)),
+    duration: sec(ms((data?.end ?? 0) - start)),
     ease: 'easeOut' as const,
   }
 

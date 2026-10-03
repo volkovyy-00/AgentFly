@@ -53,7 +53,7 @@ export function useBlockDim(steps: readonly PlacedStep[], epoch: number, ms: (n:
       setTimeout(() => setState({ active: true, hot: hotIds(block) }), start),
       setTimeout(() => setState(OFF), start + ms(TIMING.dimIn.end) + DIM_HOLD_MS),
     )
-  }, [steps]) // Deliberately only `steps`: `ms` changes identity each render and must not restart a running dim.
+  }, [steps]) // Deliberately only `steps`: a reduced-motion toggle (a new `ms`) must not re-run it.
 
   useEffect(() => clear, [clear])
 

@@ -100,16 +100,20 @@ export function hasAlarm(steps: readonly PlacedStep[], afterRow: number): boolea
 
 export type Move = 'none' | 'jump' | 'slide'
 
-/** What the camera does after a render. `prev` is null on the first call. */
+/**
+ * What the camera does after a render. `prev` is null on the first call. Any
+ * move (a jump, or a slide, including an alarm's slide from a paused viewer)
+ * leaves the viewer following.
+ */
 export function decideMove(
   prev: { lastRow: number } | null,
   next: { lastRow: number; alarm: boolean },
   following: boolean,
-): { move: Move; following: boolean } {
-  if (prev === null) return { move: 'jump', following: true }
-  if (next.lastRow === prev.lastRow) return { move: 'none', following }
-  if (next.alarm) return { move: 'slide', following: true }
-  return { move: following ? 'slide' : 'none', following }
+): Move {
+  if (prev === null) return 'jump'
+  if (next.lastRow === prev.lastRow) return 'none'
+  if (next.alarm) return 'slide'
+  return following ? 'slide' : 'none'
 }
 
 /** Options for every slide. `linear` keeps the zoom locked; the default interpolation dips it mid-flight. */
@@ -128,6 +132,21 @@ export interface Gesture {
 }
 
 export const INITIAL_GESTURE: Gesture = { following: true, moved: false }
+
+/** Screen pixels a click may drift without counting as a pan. */
+export const CLICK_SLOP = 3
+
+/**
+ * Whether a user event really moved the camera away from where it last rested.
+ * React Flow reports a wheel or drag even when the extent clamps it to nothing
+ * (a wheel down at the newest row, a sideways swipe, a short session), and a
+ * click may drift a pixel; none of these is the viewer scrolling away. With no
+ * rest known yet, any user event counts.
+ */
+export function movedFrom(rest: Viewport | null, now: Viewport): boolean {
+  if (rest === null) return true
+  return Math.abs(now.x - rest.x) > CLICK_SLOP || Math.abs(now.y - rest.y) > CLICK_SLOP || now.zoom !== rest.zoom
+}
 
 export type GestureEvent =
   | { type: 'resume' }

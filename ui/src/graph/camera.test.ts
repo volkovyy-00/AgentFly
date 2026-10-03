@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  FALLBACK_PANE, INITIAL_GESTURE, MIN_ZOOM, SLIDE_MS, clampViewport, decideMove, easeOutCubic, followTarget,
-  gestureStep, hasAlarm, panExtent, resolvePane, rowsOf, slideOptions, zoomFor, type Gesture,
+  CLICK_SLOP, FALLBACK_PANE, INITIAL_GESTURE, MIN_ZOOM, SLIDE_MS, clampViewport, decideMove, easeOutCubic,
+  followTarget, gestureStep, hasAlarm, movedFrom, panExtent, resolvePane, rowsOf, slideOptions, zoomFor, type Gesture,
 } from './camera'
 import { BOTTOM_PAD, CONTENT_W, ROW_PITCH, TOP_PAD, layoutGraph, stepId } from './layout'
 import { makeStep, place, stepsFrom } from './testing'
@@ -119,21 +119,37 @@ describe('hasAlarm and decideMove', () => {
   })
 
   it('jumps on the first call', () => {
-    expect(decideMove(null, { lastRow: 3, alarm: false }, true)).toEqual({ move: 'jump', following: true })
+    expect(decideMove(null, { lastRow: 3, alarm: false }, true)).toBe('jump')
   })
 
   it('does nothing for an unchanged poll', () => {
-    expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, true).move).toBe('none')
-    expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, false).move).toBe('none')
+    expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, true)).toBe('none')
+    expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, false)).toBe('none')
   })
 
   it('slides once when the newest row advances and the viewer is following', () => {
-    expect(decideMove({ lastRow: 3 }, { lastRow: 13, alarm: false }, true)).toEqual({ move: 'slide', following: true })
+    expect(decideMove({ lastRow: 3 }, { lastRow: 13, alarm: false }, true)).toBe('slide')
   })
 
   it('does not move a paused viewer, but a blocked or warned step resumes following', () => {
-    expect(decideMove({ lastRow: 3 }, { lastRow: 4, alarm: false }, false)).toEqual({ move: 'none', following: false })
-    expect(decideMove({ lastRow: 3 }, { lastRow: 4, alarm: true }, false)).toEqual({ move: 'slide', following: true })
+    expect(decideMove({ lastRow: 3 }, { lastRow: 4, alarm: false }, false)).toBe('none')
+    expect(decideMove({ lastRow: 3 }, { lastRow: 4, alarm: true }, false)).toBe('slide')
+  })
+})
+
+describe('movedFrom', () => {
+  const rest = { x: 0, y: -500, zoom: 1 }
+  it('counts any user event when no rest is known', () => {
+    expect(movedFrom(null, rest)).toBe(true)
+  })
+  it('ignores no movement and a drift within the click slop', () => {
+    expect(movedFrom(rest, rest)).toBe(false)
+    expect(movedFrom(rest, { ...rest, y: rest.y + CLICK_SLOP })).toBe(false)
+  })
+  it('counts a move past the slop on either axis, or a zoom change', () => {
+    expect(movedFrom(rest, { ...rest, y: rest.y - CLICK_SLOP - 1 })).toBe(true)
+    expect(movedFrom(rest, { ...rest, x: CLICK_SLOP + 1 })).toBe(true)
+    expect(movedFrom(rest, { ...rest, zoom: 0.9 })).toBe(true)
   })
 })
 

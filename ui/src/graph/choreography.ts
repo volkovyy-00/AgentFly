@@ -32,6 +32,9 @@ export const EXEMPT = ['dimHold', 'dimOut'] as const
 
 export const dur = (span: Span): number => span.end - span.start
 
+/** ms to seconds, the unit motion's transitions take. */
+export const sec = (n: number): number => n / 1000
+
 /** Start offset of the `slot`-th of `of` steps that arrived in one poll. */
 export function stagger(slot: number, of: number): number {
   if (of <= 1) return 0

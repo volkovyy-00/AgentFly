@@ -1,16 +1,15 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'motion/react'
 import type { ReactNode } from 'react'
-import { TIMING, dur, enterDelay } from './choreography'
+import { TIMING, dur, enterDelay, sec } from './choreography'
 import { useDimmed } from './dim'
 import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
-import { useMs } from './motionPolicy'
+import { useMs, useReducedMotion } from './motionPolicy'
 import { DECOR, TONES } from './tones'
 import type { Step, Verdict } from './types'
 import { useBoxMotion } from './useBoxMotion'
 
 const HIDDEN_HANDLE = { opacity: 0, width: HANDLE, height: HANDLE } as const
-const sec = (n: number): number => n / 1000
 
 const VERDICT_UI: Record<Verdict, { tone: string; wipe: string; chip: string | null; chipTone: string }> = {
   allowed: { tone: TONES.step.classes, wipe: '', chip: null, chipTone: '' },
@@ -35,6 +34,7 @@ function TruncatedPath({ path }: { path: string }) {
 export function StepBox({ id, data }: NodeProps<StepNode>) {
   const { step } = data
   const ms = useMs()
+  const reduced = useReducedMotion()
   const dimmed = useDimmed(id)
   const delay = enterDelay(step)
   const detail = stepDetail(step)
@@ -42,7 +42,7 @@ export function StepBox({ id, data }: NodeProps<StepNode>) {
   const { tone, wipe, chip, chipTone } = VERDICT_UI[step.verdict]
   const alarm = step.verdict !== 'allowed'
   // Under reduced motion the border is static and always visible: no wipe at all.
-  const staticBorder = step.quiet || ms(1) === 0
+  const staticBorder = step.quiet || reduced
   return (
     <div
       className="dimmable relative h-full w-full"
@@ -106,10 +106,10 @@ interface LaneFrameProps {
  */
 function LaneFrame({ id, meta, title, className, spring = false, ring = false, children }: LaneFrameProps) {
   const ms = useMs()
+  const reduced = useReducedMotion()
   const dimmed = useDimmed(id)
   const { reanchor, bump, tick, anchoredAt } = useBoxMotion(meta)
   const { quiet, delay } = meta.enter
-  const reduced = ms(1) === 0
   const firstRun = reanchor === 0
   const span = spring ? TIMING.ruleSpring : TIMING.laneBox
   const hidden = spring ? { opacity: 0, scale: 0.6 } : { opacity: 0 }

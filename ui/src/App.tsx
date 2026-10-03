@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { TIMING, dur } from './graph/choreography'
+import { TIMING, dur, sec } from './graph/choreography'
 import { GraphView } from './graph/GraphView'
 import { parseBurst } from './graph/mock'
 import { useMs } from './graph/motionPolicy'
@@ -27,7 +27,7 @@ function App() {
           className={`absolute inset-x-0 top-0 z-20 border-b-8 py-4 pl-80 pr-32 text-center text-base font-bold ${DECOR.bannerStripe.classes} ${TONES.banner.classes}`}
           initial={{ y: '-100%' }}
           animate={{ y: 0 }}
-          transition={{ duration: ms(dur(TIMING.banner)) / 1000, ease: 'easeOut' }}
+          transition={{ duration: sec(ms(dur(TIMING.banner))), ease: 'easeOut' }}
         >
           OFFLINE - recorder not reachable
         </motion.div>
@@ -46,8 +46,8 @@ function App() {
           initial={secretSeen.quiet ? false : { opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{
-            delay: ms(TIMING.chip.start) / 1000,
-            duration: ms(dur(TIMING.chip)) / 1000,
+            delay: sec(ms(TIMING.chip.start)),
+            duration: sec(ms(dur(TIMING.chip))),
           }}
         >
           SECRET SEEN

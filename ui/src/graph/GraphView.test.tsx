@@ -247,9 +247,10 @@ describe('camera', () => {
 })
 
 describe('pan, zoom and Follow', () => {
+  // A real pan: well away from wherever the camera rests.
   const userMove = () =>
     act(() => {
-      spy.props.onMove(new MouseEvent('mousemove'), { x: 0, y: 0, zoom: 1 })
+      spy.props.onMove(new MouseEvent('mousemove'), { x: 0, y: 4321, zoom: 1 })
     })
 
   it('locks zoom, allows only vertical pan, and does not cull offscreen elements', async () => {
@@ -339,7 +340,23 @@ describe('pan, zoom and Follow', () => {
   it('a single wheel notch pauses following, since React Flow reports only a start for it', async () => {
     render(view(place(stepsFrom(40000, 20))))
     await settle()
-    act(() => spy.props.onMoveStart(new WheelEvent('wheel'), { x: 0, y: 0, zoom: 1 }))
+    const at = spy.rf.getViewport()
+    act(() => spy.props.onMoveStart(new WheelEvent('wheel'), { ...at, y: at.y + 100 }))
+    expect(screen.getByRole('button', { name: 'Follow' })).toBeTruthy()
+  })
+
+  it('a wheel or drag that the extent clamps to nothing, or a small drift, does not pause following', async () => {
+    render(view(place(stepsFrom(40000, 20))))
+    await settle()
+    const at = spy.rf.getViewport()
+    act(() => spy.props.onMoveStart(new WheelEvent('wheel'), at))
+    act(() => spy.props.onMove(new WheelEvent('wheel'), at))
+    act(() => spy.props.onMoveEnd(new WheelEvent('wheel'), at))
+    expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull()
+    act(() => spy.props.onMoveStart(new MouseEvent('mousedown'), at))
+    act(() => spy.props.onMove(new MouseEvent('mousemove'), { ...at, y: at.y + 2 }))
+    expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull()
+    act(() => spy.props.onMove(new MouseEvent('mousemove'), { ...at, y: at.y + 40 }))
     expect(screen.getByRole('button', { name: 'Follow' })).toBeTruthy()
   })
 
