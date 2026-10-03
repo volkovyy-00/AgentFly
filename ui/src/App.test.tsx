@@ -6,8 +6,8 @@ import { DECOR } from './graph/tones'
 import { stepsFrom } from './graph/testing'
 import type { Step } from './graph/types'
 
-function respond(session: string | null, steps: Step[]): Response {
-  return { ok: true, json: async () => ({ session, steps }) } as Response
+function respond(session: string | null, steps: Step[], extra: Record<string, unknown> = {}): Response {
+  return { ok: true, json: async () => ({ session, steps, ...extra }) } as Response
 }
 
 async function advance(ms: number): Promise<void> {
@@ -39,6 +39,18 @@ describe('App', () => {
     await advance(1000)
     expect(screen.queryByText('Waiting for agent actions…')).toBeNull()
     expect(screen.getAllByText('shell')).toHaveLength(2)
+  })
+
+  it('shows SECRET SEEN and the SECRET chip after a reload, from the marking step alone', async () => {
+    const steps = [
+      { ...stepsFrom(40000, 1)[0], command: 'cat README.md .env' },
+      ...stepsFrom(40001, 3),
+    ]
+    vi.stubGlobal('fetch', vi.fn(async () => respond('s', steps, { marked_order: 40000 })))
+    render(<App />)
+    await advance(0)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+    expect(screen.getByText('SECRET')).toBeTruthy()
   })
 
   it('shows the red OFFLINE banner within 3 s, keeps the drawing, and clears it', async () => {
@@ -133,7 +145,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     await advance(0)
-    expect(fetchMock).toHaveBeenCalledWith('/api/steps', expect.objectContaining({ cache: 'no-store' }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/steps?limit=20', expect.objectContaining({ cache: 'no-store' }))
     expect(screen.getAllByText('shell')).toHaveLength(2)
     expect(screen.queryByText('BLOCKED')).toBeNull()
   })
@@ -163,5 +175,14 @@ describe('App', () => {
     await advance(300)
     expect(screen.getByText('BLOCKED')).toBeTruthy()
     expect(dims()).toBe(0)
+  })
+
+  it('/?mock=1&len=60&burst=10 replays a generated long session and shows its group', async () => {
+    window.history.replaceState({}, '', '/?mock=1&len=60&burst=10')
+    vi.stubGlobal('fetch', vi.fn())
+    render(<App />)
+    await advance(1500 * 6)
+    expect(screen.getByText(/^\d+ earlier steps/)).toBeTruthy()
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
   })
 })

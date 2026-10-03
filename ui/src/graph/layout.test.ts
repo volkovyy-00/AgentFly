@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest'
 import {
   CONTENT_W, EDGE_COLOR, FILE_X, HOST_X, LANE_H, ROW_PITCH, STEP_H, STEP_X,
   layoutGraph as layoutPlaced, TOP_PAD, hotIds, stepId, fileId, hostId, ruleId, hostEdgeId, ruleEdgeId, chainEdgeId, fileEdgeId, type GraphNode, type Layout,
+  MAX_LANE_BOXES, MAX_RULE_BOXES, SUMMARY_ID, drawnFlagged, groupEdgeId, groupRows,
 } from './layout'
 import { MOCK_STEPS } from './mock'
-import { makeStep, place } from './testing'
+import { makeHidden, makeStep, place, stepsFrom } from './testing'
 import type { Step } from './types'
 
 /** Rows 0.. in list order: the old behaviour, for tests that do not care about rows. */
@@ -247,7 +248,7 @@ describe('no overlap', () => {
   })
 })
 
-describe('stability', () => {
+describe('stability: window boxes never move; the group moves with the window (see "the group above the window")', () => {
   const positions = (layout: Layout) => new Map(layout.nodes.map((n) => [n.id, { ...n.position }]))
 
   it('a pure append moves nothing that was already drawn', () => {
@@ -379,5 +380,206 @@ describe('edge draw-in data', () => {
   it('marks edges from a quiet step quiet', () => {
     const layout = layoutPlaced(place([makeStep(1), makeStep(2, { file: 'f' })], 0, { quiet: true }))
     for (const e of layout.edges) expect((e.data as unknown as { quiet: boolean }).quiet).toBe(true)
+  })
+})
+
+describe('the group above the window', () => {
+  const win = (first = 40100, firstRow = 100) => place(stepsFrom(first, 20), firstRow)
+  const blockedAt = (order: number) =>
+    makeStep(order, { verdict: 'blocked', rule: 'R1', host: 'ntfy.sh', command: 'curl -d <arg> ntfy.sh' })
+  const group = (flagged = [blockedAt(40003), makeStep(40050, { verdict: 'warned', rule: 'R2' })]) => ({
+    hidden: makeHidden({ total: 97, shell: 97, blocked: 1, warned: 1 }),
+    flagged,
+  })
+
+  it('stacks the summary, the flagged steps and then the window, from rows that may be negative', () => {
+    const layout = layoutPlaced(win(), group())
+    expect(node(layout, SUMMARY_ID).position.y).toBe(centre(97) - STEP_H / 2)
+    expect(node(layout, 'step:40003').position.y).toBe(centre(98) - STEP_H / 2)
+    expect(node(layout, 'step:40050').position.y).toBe(centre(99) - STEP_H / 2)
+    expect(node(layout, 'step:40100').position.y).toBe(centre(100) - STEP_H / 2)
+    const early = layoutPlaced(win(40010, 3), group())
+    expect(node(early, SUMMARY_ID).position.y).toBe(centre(0) - STEP_H / 2)
+    const negative = layoutPlaced(win(40010, 1), group())
+    expect(node(negative, SUMMARY_ID).position.y).toBe(centre(-2) - STEP_H / 2)
+  })
+
+  it('joins the group in a chain with quiet edges keyed on the target, and not to the window', () => {
+    const layout = layoutPlaced(win(), group())
+    expect(edge(layout, groupEdgeId(40003))).toMatchObject({ source: SUMMARY_ID, target: 'step:40003', sourceHandle: 'b', targetHandle: 't' })
+    expect(edge(layout, groupEdgeId(40050))).toMatchObject({ source: 'step:40003', target: 'step:40050' })
+    for (const id of [groupEdgeId(40003), groupEdgeId(40050)]) expect(edge(layout, id).data).toMatchObject({ quiet: true })
+    expect(layout.edges.some((e) => e.target === 'step:40100' && e.source !== 'step:40100' && e.id.startsWith('group'))).toBe(false)
+    expect(layout.edges.some((e) => e.source === 'step:40050' && e.target === 'step:40100')).toBe(false)
+  })
+
+  it('draws a summary alone when nothing is flagged', () => {
+    const layout = layoutPlaced(win(), group([]))
+    expect(node(layout, SUMMARY_ID).position.y).toBe(centre(99) - STEP_H / 2)
+    expect(layout.edges.filter((e) => e.id.startsWith('group-edge'))).toEqual([])
+    expect(groupRows(win(), group([]))).toBe(1)
+  })
+
+  it('draws no group for none, or for no window', () => {
+    expect(has(layoutPlaced(win(), null), SUMMARY_ID)).toBe(false)
+    expect(layoutPlaced([], group())).toEqual({ nodes: [], edges: [] })
+    expect(groupRows(win(), null)).toBe(0)
+  })
+
+  it('gives flagged steps no lane boxes of their own, and they never touch a shared box', () => {
+    const flagged = [makeStep(40003, { kind: 'read', file: 'shared.txt', command: null, verdict: 'blocked', rule: 'R1', host: 'x.com' })]
+    const steps = win()
+    steps[10] = { ...steps[10], kind: 'read', file: 'shared.txt', command: null }
+    const layout = layoutPlaced(steps, group(flagged))
+    const box = node(layout, 'file:shared.txt')
+    expect(box.data).toMatchObject({ count: 1, anchorRow: 110, lastTouchRow: 110 })
+    expect(layout.nodes.some((n) => n.id === 'host:x.com' || n.id === 'rule:R1')).toBe(false)
+    expect(layout.edges.some((e) => e.id === 'file-edge:40003' || e.id === 'host-edge:40003' || e.id === 'rule-edge:40003')).toBe(false)
+  })
+
+  it('never draws a node id twice: the window wins over a flagged step, and a repeated flagged step counts once', () => {
+    const inWindow = makeStep(40105, { verdict: 'blocked', rule: 'R1' })
+    const layout = layoutPlaced(win(), group([blockedAt(40003), inWindow, blockedAt(40003)]))
+    const ids = layout.nodes.map((n) => n.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(drawnFlagged(win(), group([blockedAt(40003), inWindow, blockedAt(40003)])).map((s) => s.order)).toEqual([40003])
+    expect(node(layout, 'step:40105').position.y).toBe(centre(105) - STEP_H / 2)
+  })
+
+  it('marks the marking step wherever it is drawn', () => {
+    const layout = layoutPlaced(win(), group(), 40003)
+    expect(node(layout, 'step:40003').data).toMatchObject({ flagged: true, marked: true })
+    expect(node(layout, 'step:40050').data).toMatchObject({ flagged: true, marked: false })
+    const inWindow = layoutPlaced(win(), group(), 40105)
+    expect(node(inWindow, 'step:40105').data).toMatchObject({ flagged: false, marked: true })
+    expect(node(inWindow, 'step:40100').data).toMatchObject({ flagged: false, marked: false })
+  })
+
+  it('takes no coordinate from order: orders near 1 and near 100,000 lay out the same', () => {
+    const shape = (first: number) =>
+      layoutPlaced(place(stepsFrom(first, 20), 100), {
+        hidden: makeHidden({ total: 5, shell: 5, blocked: 1 }),
+        flagged: [makeStep(first - 50, { verdict: 'blocked', rule: 'R1' })],
+      }).nodes.map((n) => n.position)
+    expect(shape(100_000)).toEqual(shape(60))
+  })
+
+  it('moves the whole group down one row when the window slides, with the same ids', () => {
+    const before = layoutPlaced(win(40100, 100), group())
+    const slid = [...place(stepsFrom(40101, 19), 101), ...place([makeStep(40120)], 120)]
+    const after = layoutPlaced(slid, group())
+    for (const id of [SUMMARY_ID, 'step:40003', 'step:40050']) {
+      expect(node(after, id).position.y - node(before, id).position.y, id).toBe(ROW_PITCH)
+      expect(node(after, id).position.x).toBe(node(before, id).position.x)
+    }
+    for (const id of ['step:40105', 'step:40119']) expect(node(after, id).position).toEqual(node(before, id).position)
+  })
+
+  it('moves nothing in the group when the departing step becomes flagged, and the step keeps its node id and place', () => {
+    const departing = blockedAt(40100)
+    const before = layoutPlaced(win(40100, 100), group())
+    const slid = [...place(stepsFrom(40101, 19), 101), ...place([makeStep(40120)], 120)]
+    const after = layoutPlaced(slid, group([blockedAt(40003), makeStep(40050, { verdict: 'warned', rule: 'R2' }), departing]))
+    for (const id of [SUMMARY_ID, 'step:40003', 'step:40050']) expect(node(after, id).position, id).toEqual(node(before, id).position)
+    expect(node(after, 'step:40100').position).toEqual(node(before, 'step:40100').position)
+    expect(edge(after, groupEdgeId(40100)).source).toBe('step:40050')
+  })
+})
+
+describe('lane box caps', () => {
+  const count = (layout: Layout, type: string) => layout.nodes.filter((n) => n.type === type).length
+
+  it('draws at most 15 file and host boxes, dropping the least recently touched, and their edges with them', () => {
+    const steps = place(Array.from({ length: 20 }, (_, i) => makeStep(i + 1, { kind: 'read', file: `f${i}`, command: null })))
+    const layout = layoutPlaced(steps)
+    expect(count(layout, 'file')).toBe(MAX_LANE_BOXES)
+    for (let i = 0; i < 5; i++) {
+      expect(has(layout, `file:f${i}`), `f${i}`).toBe(false)
+      expect(layout.edges.some((e) => e.id === `file-edge:${i + 1}`)).toBe(false)
+      expect(has(layout, `step:${i + 1}`)).toBe(true)
+    }
+    for (let i = 5; i < 20; i++) expect(has(layout, `file:f${i}`)).toBe(true)
+  })
+
+  it('counts files and hosts together, and drops a file before a host on a tie', () => {
+    const steps = [
+      makeStep(1, { kind: 'read', file: 'a', host: 'h', command: null }),
+      ...Array.from({ length: 14 }, (_, i) => makeStep(i + 2, { kind: 'read', file: `f${i}`, command: null })),
+    ]
+    const layout = layoutPlaced(place(steps))
+    expect(count(layout, 'file') + count(layout, 'host')).toBe(MAX_LANE_BOXES)
+    expect(has(layout, 'file:a')).toBe(false)
+    expect(has(layout, 'host:h')).toBe(true)
+  })
+
+  it('draws at most 5 rule boxes', () => {
+    const steps = place(Array.from({ length: 8 }, (_, i) => makeStep(i + 1, { verdict: 'blocked', rule: `R${i}`, host: 'x.com' })))
+    const layout = layoutPlaced(steps)
+    expect(count(layout, 'rule')).toBe(MAX_RULE_BOXES)
+    expect(has(layout, 'rule:R0')).toBe(false)
+    expect(has(layout, 'rule:R7')).toBe(true)
+  })
+
+  it('never brings a box back without a touch as the window slides', () => {
+    const stream = Array.from({ length: 70 }, (_, i) =>
+      makeStep(i + 1, {
+        kind: 'read',
+        file: `f${(i * 7 + 3) % 25}`,
+        host: i % 3 === 0 ? `h${i % 8}` : null,
+        command: null,
+      }),
+    )
+    const lane = (layout: Layout) => new Set(layout.nodes.filter((n) => n.type === 'file' || n.type === 'host').map((n) => n.id))
+    let before = lane(layoutPlaced(place(stream.slice(0, 20), 0)))
+    for (let start = 1; start <= 50; start++) {
+      const newest = stream[start + 19]
+      const after = lane(layoutPlaced(place(stream.slice(start, start + 20), start)))
+      const touched = new Set([`file:${newest.file}`, ...(newest.host === null ? [] : [`host:${newest.host}`])])
+      for (const id of after) expect(before.has(id) || touched.has(id), `${id} returned at ${start}`).toBe(true)
+      before = after
+    }
+  })
+
+  // Guards the tie-break: swapping it for `anchorRow` (which changes when a toucher leaves) fails this
+  // test (43 violations over the 300 seeds when tried) while the fixed (kind, id) tie-break passes.
+  it('never brings a box back without a touch, over 300 seeded random streams', () => {
+    const rng = (seed: number) => {
+      let a = seed
+      return () => {
+        a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+    }
+    const boxes = (layout: Layout) =>
+      new Set(layout.nodes.filter((n) => n.type === 'file' || n.type === 'host' || n.type === 'rule').map((n) => n.id))
+    const returned: string[] = []
+    for (let seed = 1; seed <= 300; seed++) {
+      const next = rng(seed)
+      const pick = (n: number) => Math.floor(next() * n)
+      const stream = Array.from({ length: 80 }, (_, i) =>
+        makeStep(i + 1, {
+          kind: 'read',
+          file: next() < 0.8 ? `f${pick(25)}` : null,
+          host: next() < 0.5 ? `h${pick(10)}` : null,
+          rule: next() < 0.3 ? `R${pick(8)}` : null,
+          command: null,
+        }),
+      )
+      let before = boxes(layoutPlaced(place(stream.slice(0, 20), 0)))
+      for (let start = 1; start <= 60; start++) {
+        const newest = stream[start + 19]
+        const after = boxes(layoutPlaced(place(stream.slice(start, start + 20), start)))
+        const touched = new Set([
+          ...(newest.file === null ? [] : [`file:${newest.file}`]),
+          ...(newest.host === null ? [] : [`host:${newest.host}`]),
+          ...(newest.rule === null ? [] : [`rule:${newest.rule}`]),
+        ])
+        for (const id of after) if (!before.has(id) && !touched.has(id)) returned.push(`seed ${seed} start ${start}: ${id}`)
+        before = after
+      }
+    }
+    expect(returned).toEqual([])
   })
 })

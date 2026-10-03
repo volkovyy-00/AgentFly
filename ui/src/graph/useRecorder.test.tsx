@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IGNORE_KEY } from './ignoredSession'
 import { MOCK_SESSION } from './mock'
 import { stepsFrom } from './testing'
-import type { Step } from './types'
+import type { Hidden, Step } from './types'
 import { MOCK_INTERVAL_MS, POLL_GAP_MS, POLL_TIMEOUT_MS, useRecorder } from './useRecorder'
 import { WINDOW_SIZE } from './window'
 
-type Body = { session: string | null; steps: Step[] }
+type Body = { session: string | null; steps: Step[]; hidden?: Hidden; flagged?: Step[]; marked_order?: number | null }
 
 function respond(body: Body): Response {
   return { ok: true, json: async () => body } as Response
@@ -39,12 +39,23 @@ afterEach(() => {
 })
 
 describe('useRecorder (real mode)', () => {
+  it('passes the group and the marked order through', async () => {
+    const hidden = { total: 9, read: 0, shell: 9, edit: 0, tool: 0, blocked: 1, warned: 0 }
+    const flagged = stepsFrom(3, 1, { verdict: 'blocked' })
+    vi.stubGlobal('fetch', vi.fn(async () => respond({ session: 's', steps: stepsFrom(40000, 3), hidden, flagged, marked_order: 2 })))
+    const { result } = renderHook(() => useRecorder(false))
+    await advance(0)
+    expect(result.current.group).toEqual({ hidden, flagged })
+    expect(result.current.markedOrder).toBe(2)
+    expect(result.current.secretSeen).toEqual({ quiet: true, delay: 0 })
+  })
+
   it('polls /api/steps right away and draws what comes back', async () => {
     const fetchMock = vi.fn(async () => respond({ session: 's', steps: stepsFrom(40000, 10) }))
     vi.stubGlobal('fetch', fetchMock)
     const { result } = renderHook(() => useRecorder(false))
     await advance(0)
-    expect(fetchMock).toHaveBeenCalledWith('/api/steps', expect.objectContaining({ cache: 'no-store' }))
+    expect(fetchMock).toHaveBeenCalledWith(`/api/steps?limit=${WINDOW_SIZE}`, expect.objectContaining({ cache: 'no-store' }))
     expect(result.current.steps).toHaveLength(10)
     expect(result.current.offline).toBe(false)
   })
@@ -318,5 +329,15 @@ describe('useRecorder (mock mode)', () => {
     expect(result.current.steps.slice(10).every((s) => !s.quiet)).toBe(true)
     act(() => result.current.newSession())
     expect(result.current.steps.every((s) => !s.quiet)).toBe(true)
+  })
+
+  it('replays a long session through the server-shaped window and reaches a group', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10, false, 100))
+    await advance(MOCK_INTERVAL_MS * 4)
+    expect(result.current.steps).toHaveLength(WINDOW_SIZE)
+    expect(result.current.group?.hidden.total).toBe(result.current.steps[0].order - 40000)
+    expect(result.current.markedOrder).toBe(40001)
+    expect(result.current.secretSeen).not.toBeNull()
   })
 })

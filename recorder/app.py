@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from recorder.memory import memory_steps
+from recorder.memory import memory_steps, parse_limit
 from recorder.rules import Session, decide, deny_messages, mark
 from recorder.sessions import SessionStore
 from recorder.store import StepRecord, build_step_record, graph_store
@@ -99,10 +99,14 @@ async def index() -> FileResponse:
 
 
 @app.get("/api/steps")
-async def api_steps(request: Request) -> dict[str, Any]:
+async def api_steps(request: Request) -> JSONResponse:
+    try:
+        limit: int | None = parse_limit(request.query_params.get("limit"))
+    except ValueError:
+        return JSONResponse({"detail": "bad limit"}, status_code=400)
     all_flag: str = str(request.query_params.get("all", "") or "")
     all_steps: bool = all_flag in {"1", "true", "yes"}
-    return memory_steps.snapshot(all_steps=all_steps)
+    return JSONResponse(memory_steps.snapshot(all_steps=all_steps, limit=limit))
 
 
 def mount_ui_v2(application: FastAPI, dist: Path) -> None:
@@ -126,7 +130,9 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     session_id: str = str(payload.get("conversation_id", "") or "unknown")
     session: Session = store.get_or_create(session_id)
 
+    was_marked: bool = session.marked
     session = mark(payload, session)
+    marks: bool = session.marked and not was_marked
     verdict, rule_id = decide(payload, session)
     order: int = session.next_step
     record: StepRecord = build_step_record(
@@ -138,7 +144,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     )
     session = replace(session, next_step=session.next_step + 1)
     store.put(session)
-    memory_steps.append_from_record(record)
+    memory_steps.append_from_record(record, marks=marks)
     graph_store.enqueue(record)
 
     permission: dict[str, str]

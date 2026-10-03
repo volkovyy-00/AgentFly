@@ -118,8 +118,11 @@ so it works without Neo4j. The page needs no token; only `POST /hook` does.
 To preview the page with sample data and no server, open
 `web/index.html?mock=1`. The new UI (`ui/`, Vite + React) is at
 <http://127.0.0.1:8787/v2/>: a timeline with steps on the left, files in the
-middle and hosts and rules on the right, drawing the last 20 steps it has
-seen. `/v2/?mock=1` replays a sample session with no server.
+middle and hosts and rules on the right, drawing the 20 most recent steps. In
+a long session a summary box above them counts the earlier steps, with up to 5
+flagged ones (the step that made R1 mark the session, and the newest blocks and
+warnings) one pan upward. `/v2/?mock=1` replays a sample session with no server
+(`&len=500&burst=10` replays a long one).
 
 ## Configuration
 

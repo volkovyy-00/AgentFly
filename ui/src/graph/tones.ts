@@ -17,6 +17,7 @@ export const TONES = {
   app: tone('canvas', 'ink', null, 'bg-canvas text-ink'),
   empty: tone('canvas', 'muted', null, 'bg-canvas text-muted'),
   step: tone('fill-step', 'ink', 'aux', 'bg-fill-step text-ink border-aux'),
+  summary: tone('surface', 'ink', 'aux', 'bg-surface text-ink border-aux'),
   // The bright alarm border is drawn by the wipe overlay (DECOR), over this neutral one.
   stepBlocked: tone('fill-blocked', 'ink', 'aux', 'bg-fill-blocked text-ink border-aux'),
   stepWarned: tone('fill-warned', 'ink', 'aux', 'bg-fill-warned text-ink border-aux'),

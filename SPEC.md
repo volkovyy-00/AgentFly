@@ -237,12 +237,18 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
 - The new page is a timeline. Steps run down the left, oldest at the top,
   each joined to the next in order. Files sit in a lane to their right, and
   websites and rules in a lane further right. A file, website or rule is one
-  box, level with the first drawn step that touches it. A blocked step is
-  joined by a dashed red line to a box for its rule (a warned step by a dashed
-  purple line).
-- The new page draws the 20 most recent steps of the *current session* that it
-  has seen (it keeps earlier steps between refreshes) and keeps the newest
-  step in view unless the viewer has scrolled away; a Follow button returns.
+  box, level with the first drawn step that touches it; at most 15 file and
+  website boxes and 5 rule boxes are drawn, and the one touched longest ago
+  goes first. A blocked step is joined by a dashed red line to a box for its
+  rule (a warned step by a dashed purple line); an older flagged step names its
+  rule in its chip instead of a box.
+- The new page draws the 20 most recent steps of the *current session*, as the
+  server returns them, and above them one summary box that counts the earlier
+  steps ("38 earlier steps (2 blocked): 20 read, 16 shell, 2 tool"). Up to 5
+  older flagged steps (the step that made R1 mark the session, and the newest
+  blocked or warned ones) hang below the summary box, joined to it in a column.
+  The page keeps the newest step in view unless the viewer has scrolled away; a
+  Follow button returns.
   A "New session" button clears the picture between rehearsals
   (it does not delete data). Open `/v2/?mock=1` to replay a sample session
   with no server.
