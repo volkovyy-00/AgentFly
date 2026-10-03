@@ -79,3 +79,8 @@ blocking). The `/v2` coupling beyond `base`. The file:// mock goes away. A missi
 - (spec) What `/v2` (no slash), `/v2/index.html` and `/v2/assets/*` do after the swap.
   Recommendation: the first two redirect to `/`, and `/v2/assets/*` is a plain 404,
   since nothing links to it.
+- (done) Criterion 3 amended 2026-10-03 (approved by the author): the sentences from "A `/`
+  mount registered before `POST /hook`" to the end replace with "The mount has no catch-all
+  (an explicit `GET /` plus `/assets`), so route order cannot shadow `/hook`. Tests pin
+  `GET /hook` 405, `GET /index.html` 404 and `GET /nope` 404." The outcome is unchanged:
+  the existing `/hook` tests pass against the real app with `ui/dist` present.
