@@ -6,8 +6,8 @@ import { DECOR } from './graph/tones'
 import { stepsFrom } from './graph/testing'
 import type { Step } from './graph/types'
 
-function respond(session: string | null, steps: Step[]): Response {
-  return { ok: true, json: async () => ({ session, steps }) } as Response
+function respond(session: string | null, steps: Step[], extra: Record<string, unknown> = {}): Response {
+  return { ok: true, json: async () => ({ session, steps, ...extra }) } as Response
 }
 
 async function advance(ms: number): Promise<void> {
@@ -133,7 +133,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     await advance(0)
-    expect(fetchMock).toHaveBeenCalledWith('/api/steps', expect.objectContaining({ cache: 'no-store' }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/steps?limit=20', expect.objectContaining({ cache: 'no-store' }))
     expect(screen.getAllByText('shell')).toHaveLength(2)
     expect(screen.queryByText('BLOCKED')).toBeNull()
   })

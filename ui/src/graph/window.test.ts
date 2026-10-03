@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { enterDelay } from './choreography'
-import { makeStep, stepsFrom } from './testing'
-import { WINDOW_SIZE, initialWindowState, windowReducer, type WindowState } from './window'
+import { makeHidden, makeStep, stepsFrom } from './testing'
+import type { Hidden, Step } from './types'
+import { WINDOW_SIZE, initialWindowState, windowReducer, type WindowAction, type WindowState } from './window'
 
 const orders = (steps: { order: number }[]) => steps.map((s) => s.order)
 const snap = (session: string | null, steps = stepsFrom(40000, 3), first = false) =>
@@ -193,5 +194,98 @@ describe('windowReducer sessions', () => {
   it('starts hidden when the ignored id was stored by an earlier load', () => {
     const s = windowReducer(initialWindowState('a'), snap('a'))
     expect(s.steps).toEqual([])
+  })
+})
+
+describe('group and marked order', () => {
+  const hidden = makeHidden({ total: 5, shell: 5, blocked: 1 })
+  const flagged = [makeStep(40002, { verdict: 'blocked', rule: 'R1' })]
+  type Over = Partial<{ steps: Step[]; hidden: Hidden | null; flagged: Step[]; markedOrder: number | null; first: boolean }>
+  const withGroup = (over: Over = {}): WindowAction => ({
+    type: 'snapshot',
+    session: 'a',
+    steps: stepsFrom(40010, 3),
+    hidden,
+    flagged,
+    markedOrder: 40001,
+    ...over,
+  })
+
+  it('holds the group only while something is hidden', () => {
+    const s = windowReducer(initialWindowState(), withGroup())
+    expect(s.group).toEqual({ hidden, flagged })
+    expect(s.markedOrder).toBe(40001)
+    const none = windowReducer(initialWindowState(), withGroup({ hidden: makeHidden() }))
+    expect(none.group).toBeNull()
+    expect(windowReducer(initialWindowState(), snap('a')).group).toBeNull()
+  })
+
+  it('replaces the group and the marked order on every poll', () => {
+    let s = windowReducer(initialWindowState(), withGroup())
+    const next = makeHidden({ total: 6, shell: 6, blocked: 1 })
+    s = windowReducer(s, withGroup({ steps: stepsFrom(40010, 4), hidden: next, flagged: [], markedOrder: null }))
+    expect(s.group).toEqual({ hidden: next, flagged: [] })
+    expect(s.markedOrder).toBeNull()
+  })
+
+  it('returns the same state object for an unchanged poll, group included', () => {
+    const s = windowReducer(initialWindowState(), withGroup())
+    const again = windowReducer(s, withGroup({ hidden: { ...hidden }, flagged: flagged.map((f) => ({ ...f })) }))
+    expect(again).toBe(s)
+  })
+
+  it('returns a new state when only the group changes', () => {
+    const s = windowReducer(initialWindowState(), withGroup())
+    const next = windowReducer(s, withGroup({ hidden: makeHidden({ total: 6, shell: 6 }) }))
+    expect(next).not.toBe(s)
+    expect(next.steps).toBe(s.steps)
+  })
+
+  it('clears the group and the marked order on a different session and on New session', () => {
+    const s = windowReducer(initialWindowState(), withGroup())
+    const other = windowReducer(s, snap('b', stepsFrom(1, 2)))
+    expect(other.group).toBeNull()
+    expect(other.markedOrder).toBeNull()
+    const fresh = windowReducer(s, { type: 'newSession' })
+    expect(fresh.group).toBeNull()
+    expect(fresh.markedOrder).toBeNull()
+  })
+
+  it('after a server restart the marked order goes away but the header chip stays', () => {
+    let s = windowReducer(initialWindowState(), withGroup())
+    expect(s.secretSeen).not.toBeNull()
+    s = windowReducer(s, withGroup({ steps: stepsFrom(40013, 2), markedOrder: null, hidden: makeHidden() }))
+    expect(s.markedOrder).toBeNull()
+    expect(s.secretSeen).not.toBeNull()
+  })
+
+  describe('secretSeen from the marked order', () => {
+    it('is quiet on the first response (a reload mid-session)', () => {
+      const s = windowReducer(initialWindowState(), withGroup({ first: true }))
+      expect(s.secretSeen).toEqual({ quiet: true, delay: 0 })
+    })
+
+    it('appears at once for a later poll when the marking step was not appended in it', () => {
+      const s = windowReducer(initialWindowState(), withGroup({ markedOrder: null }))
+      expect(s.secretSeen).toBeNull()
+      const later = windowReducer(s, withGroup({ markedOrder: 40001 }))
+      expect(later.secretSeen).toEqual({ quiet: false, delay: 0 })
+    })
+
+    it('follows the marking step\'s own stagger when it arrives in the poll', () => {
+      const burst = stepsFrom(40000, 10)
+      const s = windowReducer(initialWindowState(), withGroup({ steps: burst, markedOrder: 40009 }))
+      const marker = s.steps.find((x) => x.order === 40009)!
+      expect(s.secretSeen).toEqual({ quiet: false, delay: enterDelay(marker) })
+      expect(s.secretSeen!.delay).toBeGreaterThan(0)
+    })
+
+    it('keeps the old sensitive-step rule as a fallback when the server sends no marked order', () => {
+      const secret = makeStep(40001, { kind: 'read', file: '.env', sensitive: true, command: null })
+      const s = windowReducer(initialWindowState(), snap('a', [makeStep(40000), secret]))
+      // The secret step is slot 1 of 2 in its poll, so the chip follows its 80 ms stagger.
+      expect(s.secretSeen).toEqual({ quiet: false, delay: enterDelay(s.steps[1]) })
+      expect(s.secretSeen!.delay).toBe(80)
+    })
   })
 })

@@ -33,7 +33,29 @@ export interface SecretSeen {
   delay: number
 }
 
+/** Counts of the steps outside the window (recorder/memory.py `hidden`). */
+export interface Hidden {
+  total: number
+  read: number
+  shell: number
+  edit: number
+  tool: number
+  blocked: number
+  warned: number
+}
+
+/** What sits above the window: the counts and the older landmark steps. */
+export interface Group {
+  hidden: Hidden
+  flagged: readonly Step[]
+}
+
 export interface Snapshot {
   session: string | null
   steps: Step[]
+  /** null when the server sent no `hidden` (mock, older server): no group. */
+  hidden: Hidden | null
+  flagged: Step[]
+  /** Order of the step that made R1 mark the session; null when unknown. */
+  markedOrder: number | null
 }
