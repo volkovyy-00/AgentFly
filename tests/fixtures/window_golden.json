@@ -1,0 +1,85 @@
+{
+  "scenarios": [
+    {
+      "name": "plain: marking and one block fall out of 8 retained",
+      "cap": 8,
+      "steps": [
+        {"kind": "read", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed", "marks": true},
+        {"kind": "edit", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "tool", "verdict": "allowed"},
+        {"kind": "read", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "warned"},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "read", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "edit", "verdict": "allowed"},
+        {"kind": "tool", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "blocked"}
+      ],
+      "cases": [
+        {"limit": 3, "expect": {"window": [12, 13, 14], "hidden": {"total": 11, "read": 3, "shell": 5, "edit": 2, "tool": 1, "blocked": 2, "warned": 1}, "flagged": [2, 4, 7, 10], "marked_order": 2}},
+        {"limit": 10, "expect": {"window": [7, 8, 9, 10, 11, 12, 13, 14], "hidden": {"total": 6, "read": 2, "shell": 2, "edit": 1, "tool": 1, "blocked": 1, "warned": 0}, "flagged": [2, 4], "marked_order": 2}},
+        {"limit": 1, "expect": {"window": [14], "hidden": {"total": 13, "read": 3, "shell": 6, "edit": 2, "tool": 2, "blocked": 2, "warned": 1}, "flagged": [2, 4, 7, 10], "marked_order": 2}}
+      ]
+    },
+    {
+      "name": "marking step is evicted and was blocked: it appears once",
+      "cap": 4,
+      "steps": [
+        {"kind": "read", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "blocked", "marks": true},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "warned"}
+      ],
+      "cases": [
+        {"limit": 2, "expect": {"window": [5, 6], "hidden": {"total": 4, "read": 1, "shell": 3, "edit": 0, "tool": 0, "blocked": 1, "warned": 0}, "flagged": [2], "marked_order": 2}},
+        {"limit": 10, "expect": {"window": [3, 4, 5, 6], "hidden": {"total": 2, "read": 1, "shell": 1, "edit": 0, "tool": 0, "blocked": 1, "warned": 0}, "flagged": [2], "marked_order": 2}}
+      ]
+    },
+    {
+      "name": "seven evictions of blocked steps keep the newest five; the cap-5 cut keeps marking plus four",
+      "cap": 3,
+      "steps": [
+        {"kind": "shell", "verdict": "allowed", "marks": true},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "read", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"}
+      ],
+      "cases": [
+        {"limit": 1, "expect": {"window": [11], "hidden": {"total": 10, "read": 1, "shell": 9, "edit": 0, "tool": 0, "blocked": 7, "warned": 0}, "flagged": [1, 5, 6, 7, 8], "marked_order": 1}},
+        {"limit": 3, "expect": {"window": [9, 10, 11], "hidden": {"total": 8, "read": 0, "shell": 8, "edit": 0, "tool": 0, "blocked": 7, "warned": 0}, "flagged": [1, 5, 6, 7, 8], "marked_order": 1}}
+      ]
+    },
+    {
+      "name": "marking step in the window takes no slot; once outside it does and the oldest block drops",
+      "cap": 20,
+      "steps": [
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "blocked"},
+        {"kind": "shell", "verdict": "allowed", "marks": true},
+        {"kind": "shell", "verdict": "allowed"},
+        {"kind": "shell", "verdict": "allowed"}
+      ],
+      "cases": [
+        {"limit": 3, "expect": {"window": [7, 8, 9], "hidden": {"total": 6, "read": 0, "shell": 6, "edit": 0, "tool": 0, "blocked": 6, "warned": 0}, "flagged": [2, 3, 4, 5, 6], "marked_order": 7}},
+        {"limit": 2, "expect": {"window": [8, 9], "hidden": {"total": 7, "read": 0, "shell": 7, "edit": 0, "tool": 0, "blocked": 6, "warned": 0}, "flagged": [3, 4, 5, 6, 7], "marked_order": 7}}
+      ]
+    }
+  ]
+}
