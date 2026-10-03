@@ -1,5 +1,6 @@
 import { MarkerType, Position, type Edge, type EdgeMarker, type Node, type NodeHandle } from '@xyflow/react'
-import type { Step } from './types'
+import { TIMING, enterDelay, type Span } from './choreography'
+import type { PlacedStep, Step } from './types'
 
 // All sizes in px. Rows are 56 px apart; row i is the cell [56i, 56i + 56).
 export const ROW_PITCH = 56
@@ -14,7 +15,7 @@ export const STEP_X = SIDE_PAD
 export const FILE_X = STEP_X + STEP_W + GUTTER
 export const HOST_X = FILE_X + FILE_W + GUTTER
 export const CONTENT_W = HOST_X + HOST_W + SIDE_PAD
-export const TOP_PAD = 48
+export const TOP_PAD = 96
 export const BOTTOM_PAD = 24
 // Hosts take the upper sub-slot of their anchor row, rules the lower one.
 const HOST_DY = -26
@@ -31,8 +32,8 @@ export const EDGE_COLOR = {
   chain: '#6b7280',
   aux: '#9aa3b2',
   secret: '#d97706',
-  blocked: '#dc2626',
-  warned: '#7c3aed',
+  blocked: '#ef4444',
+  warned: '#a78bfa',
 } as const
 
 export type EdgeColorKey = keyof typeof EDGE_COLOR
@@ -48,16 +49,70 @@ function arrow(color: string): EdgeMarker {
   }
 }
 
-export type StepNode = Node<{ step: Step }, 'step'>
-export type FileNode = Node<{ path: string; sensitive: boolean }, 'file'>
-export type HostNode = Node<{ host: string }, 'host'>
-export type RuleNode = Node<{ rule: string }, 'rule'>
+export const stepId = (order: number): string => `step:${order}`
+export const fileId = (path: string): string => `file:${path}`
+export const hostId = (host: string): string => `host:${host}`
+export const ruleId = (rule: string): string => `rule:${rule}`
+export const chainEdgeId = (from: number, to: number): string => `chain:${from}:${to}`
+export const fileEdgeId = (order: number): string => `file-edge:${order}`
+export const hostEdgeId = (order: number): string => `host-edge:${order}`
+export const ruleEdgeId = (order: number): string => `rule-edge:${order}`
+
+/** How a box or edge enters: nothing for a first-paint step, else after the step's stagger delay. */
+export interface Enter {
+  quiet: boolean
+  delay: number
+}
+
+export const enterOf = (step: PlacedStep): Enter => ({ quiet: step.quiet, delay: enterDelay(step) })
+
+/** What a shared box knows about the drawn steps that touch it. */
+// A `type`, not an `interface`: React Flow requires node data to be a
+// Record<string, unknown>, and an interface has no implicit index signature (TS2344).
+export type BoxMeta = {
+  /** Drawn steps touching the box. */
+  count: number
+  /** Row of the newest drawn toucher; advances when the box is reused. */
+  lastTouchRow: number
+  /** Row of the first drawn toucher, where the box sits. */
+  anchorRow: number
+  /** Entry timing, taken from the step the box first appeared with. */
+  enter: Enter
+}
+
+export type StepNode = Node<{ step: PlacedStep }, 'step'>
+export type FileNode = Node<{ path: string; sensitive: boolean } & BoxMeta, 'file'>
+export type HostNode = Node<{ host: string } & BoxMeta, 'host'>
+export type RuleNode = Node<{ rule: string } & BoxMeta, 'rule'>
 export type GraphNode = StepNode | FileNode | HostNode | RuleNode
 
 export interface Layout {
   nodes: GraphNode[]
   edges: Edge[]
-  rowCount: number
+}
+
+/** Ids of what stays bright while a blocked step dims everything else. */
+export function hotIds(step: Step): Set<string> {
+  const ids = new Set([stepId(step.order)])
+  if (step.host !== null) {
+    ids.add(hostId(step.host))
+    ids.add(hostEdgeId(step.order))
+  }
+  if (step.rule !== null) {
+    ids.add(ruleId(step.rule))
+    ids.add(ruleEdgeId(step.order))
+  }
+  return ids
+}
+
+function touch(boxes: Map<string, BoxMeta>, key: string, step: PlacedStep): void {
+  const box = boxes.get(key)
+  if (box === undefined) {
+    boxes.set(key, { count: 1, lastTouchRow: step.row, anchorRow: step.row, enter: enterOf(step) })
+  } else {
+    box.count += 1
+    box.lastTouchRow = step.row
+  }
 }
 
 function handle(
@@ -97,53 +152,69 @@ function rowCentre(row: number): number {
   return row * ROW_PITCH + ROW_PITCH / 2
 }
 
+/** Per-edge data for the first-run draw-in. `start` and `end` are ms from the poll's arrival. */
+export interface WipeData extends Record<string, unknown> {
+  shape: 'straight' | 'bezier'
+  quiet: boolean
+  start: number
+  end: number
+}
+
+function wipe(step: PlacedStep, shape: WipeData['shape'], span: Span): WipeData {
+  const delay = enterDelay(step)
+  return { shape, quiet: step.quiet, start: delay + span.start, end: delay + span.end }
+}
+
 function link(
   id: string,
-  from: Step,
+  from: PlacedStep,
   to: string,
   style: Edge['style'],
   colorKey: EdgeColorKey,
-  zIndex?: number,
+  zIndex: number | undefined,
+  span: Span,
 ): Edge {
   return {
     id,
-    source: `step:${from.order}`,
+    source: stepId(from.order),
     sourceHandle: 'r',
     target: to,
     targetHandle: 'l',
     style,
     markerEnd: arrow(EDGE_COLOR[colorKey]),
     zIndex,
+    type: 'wipe',
+    data: wipe(from, 'bezier', span),
   }
 }
 
 /**
- * Pure layout. Positions come only from a step's index in `steps`, never from
- * `step.order` (orders reach tens of thousands). A file, host or rule is one
- * box, level with the first step in the list that touches it.
+ * Pure layout. Positions come only from a step's `row` (fixed when first seen),
+ * never from its place in the list or from `step.order`. A file, host or rule is
+ * one box, level with the first step in the list that touches it.
  */
-export function layoutGraph(steps: readonly Step[]): Layout {
-  const fileRow = new Map<string, number>()
-  const hostRow = new Map<string, number>()
-  const ruleRow = new Map<string, number>()
+export function layoutGraph(steps: readonly PlacedStep[]): Layout {
+  const files = new Map<string, BoxMeta>()
+  const hosts = new Map<string, BoxMeta>()
+  const rules = new Map<string, BoxMeta>()
   const secretFiles = new Set<string>()
 
-  steps.forEach((step, row) => {
+  for (const step of steps) {
     if (step.file !== null) {
-      if (!fileRow.has(step.file)) fileRow.set(step.file, row)
+      touch(files, step.file, step)
       if (step.sensitive) secretFiles.add(step.file)
     }
-    if (step.host !== null && !hostRow.has(step.host)) hostRow.set(step.host, row)
-    if (step.rule !== null && !ruleRow.has(step.rule)) ruleRow.set(step.rule, row)
-  })
+    if (step.host !== null) touch(hosts, step.host, step)
+    if (step.rule !== null) touch(rules, step.rule, step)
+  }
 
   const nodes: GraphNode[] = []
   const edges: Edge[] = []
 
-  steps.forEach((step, row) => {
-    const cy = rowCentre(row)
+  steps.forEach((step, index) => {
+    const cy = rowCentre(step.row)
     nodes.push({
-      id: `step:${step.order}`,
+      id: stepId(step.order),
       type: 'step',
       position: { x: STEP_X, y: cy - STEP_H / 2 },
       width: STEP_W,
@@ -153,14 +224,15 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       ...BASE,
     })
 
-    const previous = steps[row - 1]
+    const previous = steps[index - 1]
     if (previous !== undefined) {
       edges.push({
-        id: `chain:${previous.order}:${step.order}`,
-        type: 'straight',
-        source: `step:${previous.order}`,
+        id: chainEdgeId(previous.order, step.order),
+        type: 'wipe',
+        data: wipe(step, 'straight', TIMING.chain),
+        source: stepId(previous.order),
         sourceHandle: 'b',
-        target: `step:${step.order}`,
+        target: stepId(step.order),
         targetHandle: 't',
         style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
         markerEnd: arrow(EDGE_COLOR.chain),
@@ -171,14 +243,13 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       const secret = step.sensitive
       edges.push(
         link(
-          `file-edge:${step.order}`,
+          fileEdgeId(step.order),
           step,
-          `file:${step.file}`,
-          {
-            stroke: secret ? 'var(--color-secret)' : 'var(--color-aux)',
-            strokeWidth: 2,
-          },
+          fileId(step.file),
+          { stroke: secret ? 'var(--color-secret)' : 'var(--color-aux)', strokeWidth: 2 },
           secret ? 'secret' : 'aux',
+          undefined,
+          TIMING.edge,
         ),
       )
     }
@@ -187,14 +258,15 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       const elevate = blocked || step.verdict === 'warned'
       edges.push(
         link(
-          `host-edge:${step.order}`,
+          hostEdgeId(step.order),
           step,
-          `host:${step.host}`,
+          hostId(step.host),
           blocked
             ? { stroke: 'var(--color-blocked)', strokeWidth: 2.5, strokeDasharray: '8 6' }
             : { stroke: 'var(--color-aux)', strokeWidth: 2 },
           blocked ? 'blocked' : 'aux',
           elevate ? 1 : undefined,
+          blocked ? TIMING.blockEdge : TIMING.edge,
         ),
       )
     }
@@ -202,9 +274,9 @@ export function layoutGraph(steps: readonly Step[]): Layout {
       const warned = step.verdict === 'warned'
       edges.push(
         link(
-          `rule-edge:${step.order}`,
+          ruleEdgeId(step.order),
           step,
-          `rule:${step.rule}`,
+          ruleId(step.rule),
           {
             stroke: warned ? 'var(--color-warned)' : 'var(--color-blocked)',
             strokeWidth: 2.5,
@@ -212,47 +284,48 @@ export function layoutGraph(steps: readonly Step[]): Layout {
           },
           warned ? 'warned' : 'blocked',
           1,
+          TIMING.blockEdge,
         ),
       )
     }
   })
 
-  for (const [path, row] of fileRow) {
+  for (const [path, meta] of files) {
     nodes.push({
-      id: `file:${path}`,
+      id: fileId(path),
       type: 'file',
-      position: { x: FILE_X, y: rowCentre(row) + FILE_DY },
+      position: { x: FILE_X, y: rowCentre(meta.anchorRow) + FILE_DY },
       width: FILE_W,
       height: LANE_H,
-      data: { path, sensitive: secretFiles.has(path) },
+      data: { path, sensitive: secretFiles.has(path), ...meta },
       handles: FILE_HANDLES,
       ...BASE,
     })
   }
-  for (const [host, row] of hostRow) {
+  for (const [host, meta] of hosts) {
     nodes.push({
-      id: `host:${host}`,
+      id: hostId(host),
       type: 'host',
-      position: { x: HOST_X, y: rowCentre(row) + HOST_DY },
+      position: { x: HOST_X, y: rowCentre(meta.anchorRow) + HOST_DY },
       width: HOST_W,
       height: LANE_H,
-      data: { host },
+      data: { host, ...meta },
       handles: HOST_HANDLES,
       ...BASE,
     })
   }
-  for (const [rule, row] of ruleRow) {
+  for (const [rule, meta] of rules) {
     nodes.push({
-      id: `rule:${rule}`,
+      id: ruleId(rule),
       type: 'rule',
-      position: { x: HOST_X, y: rowCentre(row) + RULE_DY },
+      position: { x: HOST_X, y: rowCentre(meta.anchorRow) + RULE_DY },
       width: HOST_W,
       height: LANE_H,
-      data: { rule },
+      data: { rule, ...meta },
       handles: HOST_HANDLES,
       ...BASE,
     })
   }
 
-  return { nodes, edges, rowCount: steps.length }
+  return { nodes, edges }
 }

@@ -2,10 +2,11 @@ import { act, renderHook } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IGNORE_KEY } from './ignoredSession'
-import { MOCK_STEPS } from './mock'
+import { MOCK_SESSION } from './mock'
 import { stepsFrom } from './testing'
 import type { Step } from './types'
 import { MOCK_INTERVAL_MS, POLL_GAP_MS, POLL_TIMEOUT_MS, useRecorder } from './useRecorder'
+import { WINDOW_SIZE } from './window'
 
 type Body = { session: string | null; steps: Step[] }
 
@@ -195,6 +196,67 @@ describe('useRecorder (real mode)', () => {
     await advance(3000)
     expect(fetchMock.mock.calls.length - before).toBe(3)
   })
+  it('marks only the first successful response as quiet', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(respond({ session: 's', steps: stepsFrom(40000, 3) }))
+      .mockResolvedValue(respond({ session: 's', steps: stepsFrom(40000, 5) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useRecorder(false))
+    await advance(0)
+    expect(result.current.steps.map((s) => s.quiet)).toEqual([true, true, true])
+    await advance(POLL_GAP_MS)
+    expect(result.current.steps.map((s) => s.quiet)).toEqual([true, true, true, false, false])
+  })
+
+  it('an empty first response still uses up "first", so later steps animate', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(respond({ session: null, steps: [] }))
+      .mockResolvedValue(respond({ session: 's', steps: stepsFrom(40000, 2) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useRecorder(false))
+    await advance(0)
+    expect(result.current.steps).toHaveLength(0)
+    await advance(POLL_GAP_MS)
+    expect(result.current.steps.map((s) => s.quiet)).toEqual([false, false])
+  })
+
+  it('a failed first poll does not use up "first"', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('refused'))
+      .mockResolvedValue(respond({ session: 's', steps: stepsFrom(40000, 2) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useRecorder(false))
+    await advance(0)
+    await advance(POLL_GAP_MS)
+    expect(result.current.steps.map((s) => s.quiet)).toEqual([true, true])
+  })
+
+  it('bumps epoch when the server restarts and numbering goes backwards', async () => {
+    const bodies: Body[] = [
+      { session: 's', steps: stepsFrom(40000, 10) },
+      { session: 's', steps: stepsFrom(0, 3) },
+    ]
+    let call = 0
+    vi.stubGlobal('fetch', vi.fn(async () => respond(bodies[Math.min(call++, 1)])))
+    const { result } = renderHook(() => useRecorder(false))
+    await advance(0)
+    const epoch = result.current.epoch
+    await advance(POLL_GAP_MS)
+    expect(result.current.epoch).toBe(epoch + 1)
+    expect(result.current.steps.map((s) => s.row)).toEqual([0, 1, 2])
+  })
+
+  it('exposes secretSeen once a sensitive step arrives', async () => {
+    const secret = { ...stepsFrom(40000, 1)[0], kind: 'read' as const, file: '.env', sensitive: true, command: null }
+    vi.stubGlobal('fetch', vi.fn(async () => respond({ session: 's', steps: [secret] })))
+    const { result } = renderHook(() => useRecorder(false))
+    expect(result.current.secretSeen).toBeNull()
+    await advance(0)
+    expect(result.current.secretSeen).toEqual({ quiet: true, delay: 0 })
+  })
 })
 
 describe('useRecorder (mock mode)', () => {
@@ -203,15 +265,31 @@ describe('useRecorder (mock mode)', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { result } = renderHook(() => useRecorder(true))
     expect(result.current.steps).toHaveLength(1)
-    for (let n = 2; n <= MOCK_STEPS.length; n++) {
+    for (let n = 2; n <= MOCK_SESSION.length; n++) {
       await advance(MOCK_INTERVAL_MS)
-      expect(result.current.steps).toHaveLength(n)
+      expect(result.current.steps).toHaveLength(Math.min(n, WINDOW_SIZE))
     }
     await advance(MOCK_INTERVAL_MS * 3)
-    expect(result.current.steps).toHaveLength(MOCK_STEPS.length)
-    expect(result.current.steps[0].order).toBe(40000)
+    expect(result.current.steps).toHaveLength(WINDOW_SIZE)
+    expect(result.current.steps[0].order).toBe(40014)
+    expect(result.current.steps.at(-1)?.order).toBe(40033)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.current.offline).toBe(false)
+  })
+
+  it('emits `burst` steps per tick', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10))
+    expect(result.current.steps).toHaveLength(10)
+    await advance(MOCK_INTERVAL_MS)
+    expect(result.current.steps).toHaveLength(20)
+  })
+
+  it('ignores burst in real mode', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond({ session: 's', steps: stepsFrom(40000, 3) })))
+    const { result } = renderHook(() => useRecorder(false, 10))
+    await advance(0)
+    expect(result.current.steps).toHaveLength(3)
   })
 
   it('New session restarts the scenario', async () => {
@@ -222,5 +300,23 @@ describe('useRecorder (mock mode)', () => {
     act(() => result.current.newSession())
     expect(result.current.steps).toHaveLength(1)
     expect(window.sessionStorage.getItem(IGNORE_KEY)).toBeNull()
+  })
+
+  it('mock steps are never quiet by default', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true))
+    await advance(0)
+    expect(result.current.steps[0].quiet).toBe(false)
+  })
+
+  it('with mockFirst, only the first tick of a page load paints still, even after New session', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { result } = renderHook(() => useRecorder(true, 10, true))
+    expect(result.current.steps).toHaveLength(10)
+    expect(result.current.steps.every((s) => s.quiet)).toBe(true)
+    await advance(MOCK_INTERVAL_MS)
+    expect(result.current.steps.slice(10).every((s) => !s.quiet)).toBe(true)
+    act(() => result.current.newSession())
+    expect(result.current.steps.every((s) => !s.quiet)).toBe(true)
   })
 })

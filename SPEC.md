@@ -242,7 +242,8 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
   purple line).
 - The new page draws the 20 most recent steps of the *current session* that it
   has seen (it keeps earlier steps between refreshes) and keeps the newest
-  step in view. A "New session" button clears the picture between rehearsals
+  step in view unless the viewer has scrolled away; a Follow button returns.
+  A "New session" button clears the picture between rehearsals
   (it does not delete data). Open `/v2/?mock=1` to replay a sample session
   with no server.
 - A big red **OFFLINE** banner appears if the page cannot reach the server, so

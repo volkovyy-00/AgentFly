@@ -2,18 +2,28 @@
 @source not '../dist';
 
 @theme static {
-  --color-canvas: #f5f7fa;
-  --color-ink: #111827;
-  --color-muted: #4b5563;
-  --color-step: #6b7280;
-  --color-link: #2563eb;
-  --color-secret: #d97706;
-  --color-blocked: #dc2626;
-  --color-warned: #7c3aed;
-  --color-rule: #b91c1c;
-  --color-rule-edge: #7f1d1d;
+  --color-canvas: #0e1116;
+  --color-surface: #161b22;
+  --color-ink: #e6edf3;
+  /* Muted text is for canvas and surface only; it fails 7:1 on the tinted fills. */
+  --color-muted: #a8b3c5;
+
+  /* Dark-tinted fills (Look B). */
+  --color-fill-step: #374151;
+  --color-fill-link: #1e3a8a;
+  --color-fill-blocked: #7f1d1d;
+  --color-fill-warned: #4c1d95;
+  --color-fill-secret: #f59e0b;
+  --color-chip-blocked: #fecaca;
+  --color-chip-warned: #ddd6fe;
+
+  /* Bright strokes: edges, borders, markers. chain/aux/secret/blocked/warned mirror EDGE_COLOR in layout.ts. */
   --color-chain: #6b7280;
   --color-aux: #9aa3b2;
+  --color-secret: #d97706;
+  --color-blocked: #ef4444;
+  --color-warned: #a78bfa;
+  --color-link: #60a5fa;
 }
 
 html,
@@ -22,4 +32,33 @@ body {
   overflow: hidden;
   height: 100%;
   background: var(--color-canvas);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+}
+
+/* Durations come from TIMING.dimIn / dimOut, set on the graph pane (GraphView). */
+.dimmable {
+  transition: opacity var(--dim-out) ease;
+}
+.dimmable[data-dim='true'] {
+  opacity: 0.4;
+  transition-duration: var(--dim-in);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dimmable,
+  .dimmable[data-dim='true'] {
+    transition: none;
+  }
+}
+
+/* React Flow's attribution link: recoloured to pass 7:1 on the canvas. */
+.react-flow__attribution {
+  background: transparent;
+}
+.react-flow__attribution a {
+  color: var(--color-muted);
 }

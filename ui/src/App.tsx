@@ -1,33 +1,59 @@
+import { motion } from 'motion/react'
+import { TIMING, dur, sec } from './graph/choreography'
 import { GraphView } from './graph/GraphView'
+import { parseBurst } from './graph/mock'
+import { useMs } from './graph/motionPolicy'
+import { BUTTON_CLASSES, DECOR, TONES } from './graph/tones'
 import { useRecorder } from './graph/useRecorder'
 
 function App() {
-  const mock = new URLSearchParams(window.location.search).get('mock') === '1'
-  const { steps, offline, newSession } = useRecorder(mock)
+  const params = new URLSearchParams(window.location.search)
+  const mock = params.get('mock') === '1'
+  const burst = mock ? parseBurst(params.get('burst')) : 1
+  const mockFirst = mock && params.get('first') === '1'
+  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst, mockFirst)
+  const ms = useMs()
 
   return (
-    <main className="relative h-dvh w-full overflow-hidden bg-canvas text-base text-ink">
-      <GraphView steps={steps} />
+    <main className={`relative h-dvh w-full overflow-hidden text-base ${TONES.app.classes}`}>
+      <GraphView steps={steps} epoch={epoch} />
       {steps.length === 0 && (
-        <p className="pointer-events-none absolute inset-0 grid place-items-center text-base text-muted">
+        <p className={`pointer-events-none absolute inset-0 grid place-items-center text-base ${TONES.empty.classes}`}>
           Waiting for agent actions…
         </p>
       )}
       {offline && (
-        <div
+        <motion.div
           role="alert"
-          className="absolute inset-x-0 top-0 z-20 bg-blocked px-4 py-2 pl-48 text-center text-base font-bold text-white"
+          className={`absolute inset-x-0 top-0 z-20 border-b-8 py-4 pl-80 pr-32 text-center text-base font-bold ${DECOR.bannerStripe.classes} ${TONES.banner.classes}`}
+          initial={{ y: '-100%' }}
+          animate={{ y: 0 }}
+          transition={{ duration: sec(ms(dur(TIMING.banner))), ease: 'easeOut' }}
         >
           OFFLINE - recorder not reachable
-        </div>
+        </motion.div>
       )}
       <button
         type="button"
         onClick={newSession}
-        className="absolute left-4 top-2 z-30 rounded border-2 border-ink bg-white px-3 text-base leading-6 font-semibold text-ink"
+        className={`absolute left-4 top-2 ${BUTTON_CLASSES}`}
       >
         New session
       </button>
+      {secretSeen !== null && (
+        <motion.span
+          role="status"
+          className={`absolute left-48 top-2 z-30 rounded px-3 py-0.5 text-base leading-6 font-bold ${TONES.chipSecret.classes}`}
+          initial={secretSeen.quiet ? false : { opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{
+            delay: sec(ms(secretSeen.delay + TIMING.chip.start)),
+            duration: sec(ms(dur(TIMING.chip))),
+          }}
+        >
+          SECRET SEEN
+        </motion.span>
+      )}
     </main>
   )
 }

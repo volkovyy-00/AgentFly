@@ -14,7 +14,7 @@ Files: `ui/src/App.tsx` plus a new `ui/src/graph/` folder. Add `@xyflow/react` (
 
 **Stacking of a blocked step's host and rule boxes.** Rule below host. Each row owns two fixed sub-slots in the hosts-and-rules lane: a host always takes the upper one, a rule always takes the lower one. A box's position then depends only on its anchor row, so boxes never collide and removing one never moves another (greedy "push down" would break intent criterion 3). A step has at most one `file` and one `host` (`recorder/memory.py`), so each row anchors at most one box per sub-slot.
 
-**Row pitch.** Fixed at 56 px, zoom held at 1, viewport follows the newest step (section 5). About 18 of the 20 rows fit a 960x1080 pane, so only anchors in the oldest two rows can be off-screen. This is a small cost, not the common case.
+**Row pitch.** Fixed at 56 px, zoom held at one fit-to-width value since AG-29 (`zoomFor` in `camera.ts`), viewport follows the newest step (section 5). About 18 of the 20 rows fit a 960x1080 pane, so only anchors in the oldest two rows can be off-screen. This is a small cost, not the common case.
 
 ## 3. Layout (`layout.ts`, pure)
 
@@ -63,14 +63,16 @@ Edges:
 - Long text is cut by CSS ellipsis with the full text in `title`. This replaces the old page's 20-character cut on purpose. Commands and hosts are cut at the right end. File paths (in the file lane and on read/edit step boxes) are cut at the **left** end (`…/config/app.json`), so the file name stays visible. The mock's `curl -d <arg> ntfy.sh` must show in full in the 400 px box (measured: it needs about 202 px of text space, so 360 px truncated it).
 - With selecting and dragging off, React Flow sets `pointer-events: none` on nodes, so `title` tooltips would never show. Every node sets `style.pointerEvents = 'all'`.
 - **Deliberate exception to the 16 px floor (user decision, 2026-10-02).** React Flow's own attribution link is 10 px text. It is kept (hiding it needs a React Flow Pro subscription per its docs, though the MIT licence does not require keeping it) and exempted by name in the 16 px scan. It sits bottom right and must not touch the newest row's boxes (they end about 26 px above the pane bottom; the link is about 18 px tall). The exception is stated in the PR description so it is not read as a missed requirement.
-- The "New session" button sits top left (top right would cover host and rule boxes anchored in the first rows) and the OFFLINE banner is a full-width red bar at the top, with left padding so its text clears the button. Both overlay the pane and do not change its measured size. The top padding (48 px) keeps them clear of the first row; once rows outgrow the pane they can cover the oldest row, and the newest step at the bottom stays visible.
+- The "New session" button sits top left (top right would cover host and rule boxes anchored in the first rows) and the OFFLINE banner is a full-width red bar at the top, with left padding so its text clears the button. Both overlay the pane and do not change its measured size. The top padding (96 px since AG-29, `TOP_PAD` in `layout.ts`) keeps them clear of the first row; once rows outgrow the pane they can cover the oldest row, and the newest step at the bottom stays visible.
 - Verdicts: allowed grey step, no chip. Blocked: red border, "BLOCKED". Warned: purple border, "WARN". Secret file: amber, "SECRET". Colour is never the only signal.
-- Colours are CSS variables on `:root`. Light theme only; dark mode goes to AG-31.
+- Colours are CSS variables on `:root`. Since AG-29 the page is dark only; every colour pair is in `ui/src/graph/tones.ts`.
 - All text is at least 16 px at pane widths of 932 px and above (so a 960x1080
   window holds), taken from one size token. Narrower panes scale the drawing
   down by design; below zoom 0.5 the left side may clip.
 
-## 5. Viewport (`computeViewport`, pure)
+## 5. Viewport
+
+> Since AG-29 the camera is `camera.ts`: rows are stable (`window.ts`), the viewport is uncontrolled (`defaultViewport` plus `setViewport`), vertical pan is on and zoom is locked. See `docs/superpowers/specs/2026-10-02-AG-29-motion-and-polish-design.md` § 4. The text below describes AG-28 as shipped.
 
 `computeViewport(rowCount, pane) -> { x, y, zoom }` with `zoom` in `[MIN_ZOOM, 1]`
 (`MIN_ZOOM = 0.5`):
@@ -78,21 +80,14 @@ Edges:
   (identical to the previous behaviour). Narrower panes fit the content by
   scaling down instead of shifting left and clipping the step column. Below
   zoom 0.5 the drawing may clip on the left.
-- `y = min(TOP_PAD, pane.h - BOTTOM_PAD - rowCount * 56 * zoom)` with the top
-  padding 48 (clears the button and banner) and the bottom padding 24, both in
-  screen pixels. It does not move until the rows outgrow the pane. In steady
-  state (20 rows) every new step shifts the whole drawing up one pitch: a jump,
-  to be eased by AG-29. Node ids are stable (`step:<order>`), so AG-29 can ease
-  positions without touching layout.
-- `x = min(0, pane.w - 932 * zoom)`. With fit-to-width, x is 0 whenever zoom is
-  above the floor; at the floor a very narrow pane may still shift left.
+- `y` and `x` are now `followTarget` in `camera.ts` (AG-29 § 4). Both pads
+  (top 96, bottom 24) stay in screen pixels. Rows are stable, so a new step no
+  longer shifts the drawing: the camera slides instead.
 - A pane with width or height `<= 0` or not yet measured falls back to 960x1080.
   Output must never contain NaN.
-- React Flow is fully controlled: `viewport` set and `onViewportChange` a no-op;
-  `panOnDrag`, `zoomOnScroll`, `zoomOnPinch`, `zoomOnDoubleClick`,
-  `nodesDraggable`, `nodesConnectable` and `elementsSelectable` all `false`;
-  `deleteKeyCode={null}`; `minZoom={MIN_ZOOM}` `maxZoom={1}`; no `fitView`, no
-  `onInit` positioning. The container has a definite height (React Flow draws
+- React Flow is now uncontrolled: vertical pan is on and zoom is locked
+  (AG-29 § 4). `nodesDraggable`, `nodesConnectable` and `elementsSelectable`
+  stay `false`; `deleteKeyCode={null}`; no `fitView`, no `onInit` positioning. The container has a definite height (React Flow draws
   nothing in a zero-height parent). Pane size is measured by a thin hook; the
   pure function takes explicit numbers.
 
@@ -156,6 +151,6 @@ Everything in AG-28's "Not included" (eased camera, follow pause, animation: AG-
 
 ## 10. Risks
 
-- Positions must stay list-based. The layout and real-mode merge tests (orders from 40,000) guard this.
-- The window jump must stay easy to replace. It lives only in `computeViewport` and the index-based positions.
+- Positions must stay list-based. The layout and real-mode merge tests (orders from 40,000) guard this. (Superseded by AG-29: rows are stable, see its spec section 3.)
+- The window jump must stay easy to replace. It lives only in `followTarget` (`camera.ts`) and the stable-row positions (AG-29 § 4).
 - Edges to an off-screen anchor and edges passing behind a file box are known costs (sections 3 and 5), checked on the manual run.
