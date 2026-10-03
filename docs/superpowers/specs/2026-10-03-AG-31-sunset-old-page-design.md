@@ -39,32 +39,39 @@ unchanged and not repeated here.
 | `ui/dist/` | Rebuilt and committed. The build references `/assets/index.js` and `/assets/index.css`. |
 | `web/` | `git rm -r web` (includes `.gitkeep`). |
 | `tests/test_app.py` | See Tests. |
-| AGENTS.md | The dependency paragraph (drop the CDN sentence; `@xyflow/react` and `motion` are in `ui/package.json`, so "Add ... when the graph is drawn" becomes a plain statement), the "Live graph" paragraph, the `/v2/` lines in Testing rewritten to describe `/`, including "`/` returns 404 without `ui/dist`". Nothing else in the file. |
-| SPEC.md | § 6: the "Two pages" bullet, the "main view can still change later" sentence, the `/v2/?mock=1` line (becomes `/?mock=1`), "new" in "The new page is a timeline" and "The new page draws the 20 most recent steps". § 10: `GET /v2/` leaves the token-free list. Nothing else. |
-| README.md | Step 4 (one page at `/`, mock is `/?mock=1`, drop "last 10 steps"), the `web/index.html` and `ui/` rows of the file table. |
-| HOOKS.md | Line 54 layout (drop `web/`), the "Live graph" section (226-236), the UI-only rehearsal line (269). |
+| AGENTS.md | The dependency paragraph (drop the CDN sentence; `@xyflow/react` and `motion` are in `ui/package.json`, so "Add ... when the graph is drawn" becomes a plain statement), the "Live graph" paragraph, the `/v2/` lines in Testing rewritten to describe `/`. Nothing else in the file. The note "`/` is 404 without `ui/dist`" is not added here: it is new content outside the authorised list. It goes in HOOKS.md. |
+| SPEC.md | § 6: the "Two pages" bullet, the "main view can still change later" sentence, the `/v2/?mock=1` line (becomes `/?mock=1`, and "with no server" is dropped because the mock now needs the recorder or `npm run dev`; it still needs no session data), "new" in "The new page is a timeline" and "The new page draws the 20 most recent steps". § 10: "`GET /v2/` and its assets" becomes "`GET /` and its assets (under `/assets/`)", so the page's assets stay listed. Nothing else. |
+| README.md | Step 4 (one page at `/`, mock is `/?mock=1`, drop "last 10 steps" and "with no server"), the `web/index.html` and `ui/` rows of the file table. |
+| HOOKS.md | Line 54 layout (drop `web/`), the "Live graph" section (226-236, add "`/` is a plain 404 when `ui/dist` is missing; build it"), the UI-only rehearsal line (269, drop "file:// OK"). |
 | `ui/README.md` | Title and intro, the `base` paragraph (dev server is `http://127.0.0.1:5173/`), the `/v2/?mock=1` mentions. |
 
-Left alone: the localStorage key `agentfly_v2_ignore_session` (renaming drops a stored
-ignore for no gain), `DEMO_PROMPTS.txt`, `demo_flows/`, `/api/steps`, HOOKS.md's
+Left alone: the `sessionStorage` key `agentfly_v2_ignore_session` (the name is internal
+and the rename gains nothing), `DEMO_PROMPTS.txt`, `demo_flows/`, `/api/steps`, HOOKS.md's
 "last 10 cleaned steps" (that is the API's default and stays true).
 
 ## Tests (`tests/test_app.py`)
 
 Existing `/hook` tests are untouched and must pass with `ui/dist` present.
 
-- Wrong Host gives 403 on `/health`, `/` and `/assets/index.js`.
-- `GET /`: 200, `text/html`, `Cache-Control: no-cache`, contains `id="root"`, contains
-  `/assets/`, contains no `/v2/`, contains no `vis-network`. (The `/v2/` check makes a
-  reverted `base` fail a test, not only the stale-build check.)
-- The script named in `/`'s HTML loads from `/assets/` with 200 and `no-cache`.
+- Wrong Host gives 403 on `/health`, `/`, `/assets/index.js` and `/v2`.
+- `GET /` (`requires_ui_dist`): 200, `text/html`, `Cache-Control: no-cache`, contains
+  `id="root"` and `/assets/`, contains no `/v2/`, and `"https://" not in text` (the
+  no-CDN check; it does not put `vis-network` into the test file, which would trip
+  criterion 5's grep). The `/v2/` check makes a reverted `base` fail a test, not only the
+  stale-build check.
+- The script named in `/`'s HTML loads from `/assets/` with 200 and `no-cache`
+  (`requires_ui_dist`).
 - The three `/v2` paths answer 307 with the right `Location`, plus the query-preserving
   case. These tests use `follow_redirects=False` (the client follows by default).
-- Pins for the design: `GET /hook` is 405, `GET /index.html` is 404, `GET /nope` is 404,
-  `GET /v2/assets/index.js` is 404.
-- `mount_ui` on a bare app: a missing or incomplete `dist` logs the warning and adds no
-  `/` route; a complete one serves `/`.
-- Delete `test_index_serves_graph_page`. Page tests keep the `requires_ui_dist` skip.
+  A separate test shows the redirects exist when `dist` is missing.
+- Pins for the design. `GET /hook` is 405 (no `dist` needed: a trailing catch-all turns it
+  into 404). `GET /index.html` is 404, `GET /nope` is 404 and `GET /v2/assets/index.js` is
+  404; these three are `requires_ui_dist`, since without a mount they pass vacuously.
+- `mount_ui` on a bare app: a missing or incomplete `dist` (no `index.html`, or no
+  `assets/`) logs the warning and adds no `/` route; a complete one serves `/`. The
+  complete-`dist` test creates both `index.html` and `assets/` (the old test wrote only
+  `index.html`, which the completeness check would reject).
+- Delete `test_index_serves_graph_page` and `test_mount_ui_v2_*`.
 
 ## Order of work
 
@@ -77,9 +84,15 @@ and stops if there is none.
    `/v2/?mock=1&len=500` on the unchanged build, with date and Cursor version, naming the
    dropped features. Nothing is edited before it exists.
 3. **Commit 1, the swap, with its tests.** `web/` is still on disk.
-4. **Smoke check (manual, before `web/` goes).** `/` renders; `/?mock=1&len=500` renders;
-   one real `fake_agent.py` run draws and blocks; `/v2/?mock=1` lands on `/?mock=1`. This
-   covers the rebuild with `base: '/'` that the gate never saw.
+4. **Smoke check (manual, before `web/` goes).** First prove the browser is not showing
+   the old page: `curl -s http://127.0.0.1:8787/` must contain `/assets/index.js`, and the
+   browser does a hard reload. (The old `/` was a `FileResponse` with no `Cache-Control`,
+   so a browser that opened it earlier can reuse it without asking.) Then: `/?mock=1&len=500`
+   renders; one real `fake_agent.py` run draws and blocks; `/v2/?mock=1` lands on
+   `/?mock=1`. This covers the new `index.html` (the built JS and CSS come out
+   byte-identical with `base` removed; only the HTML changes) and the stale-cache risk.
+   SPEC § 8's stage checklist is not in the authorised edit list, so the hard-reload line
+   goes in the PR text, not there.
 5. **Commit 2, `git rm -r web`.**
 6. **Commit 3, the docs** (table above).
 7. **Greps, each must print nothing** (tracked files only):
@@ -87,8 +100,13 @@ and stops if there is none.
    - `git grep -nI 'web/' -- . ':(exclude)docs/superpowers' ':(exclude)ui/dist'`
 
    And one with an expected list: `git grep -nI '/v2' -- . ':(exclude)docs/superpowers' ':(exclude)ui/dist'`
-   may list only the three redirect routes in `app.py`, the redirect and pin tests, and
-   the doc lines that explain the redirect.
+   may list only these files, and every line must be a redirect statement or code:
+   `recorder/app.py` (the three routes and their docstring), `tests/test_app.py` (the
+   redirect, 403 and 404 tests), and one short mention each in `AGENTS.md`, `README.md`,
+   `HOOKS.md` and `ui/README.md` saying `/v2/` redirects to `/`. `ui/vite.config.ts`,
+   `SPEC.md` and `ui/src/` must have none. (Before the swap this prints 32 lines: 4 in
+   `AGENTS.md`, 4 in `HOOKS.md`, 3 in `README.md`, 4 in `app.py`, 3 in `SPEC.md`, 7 in the
+   tests, 6 in `ui/README.md`, 1 in `vite.config.ts`.)
 8. **Checks.** Check command, web check, stale-build check.
 
 Three commits so a failed smoke check can revert the swap alone.
