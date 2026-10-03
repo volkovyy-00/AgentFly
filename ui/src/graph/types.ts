@@ -29,6 +29,8 @@ export interface PlacedStep extends Step {
 /** Set once a sensitive step is seen; `quiet` if it came in the first response. */
 export interface SecretSeen {
   quiet: boolean
+  /** The secret step's own start (its stagger, ms after the poll), so the chip follows its box. */
+  delay: number
 }
 
 export interface Snapshot {

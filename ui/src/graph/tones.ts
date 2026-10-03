@@ -44,6 +44,3 @@ export const DECOR = {
   ring: { token: 'secret', classes: 'border-secret' },
   flash: { token: null, classes: 'bg-ink' },
 } as const
-
-/** Pairs set in CSS, not by a class. */
-export const CSS_ONLY_PAIRS = [{ name: 'attribution', bg: 'canvas', text: 'muted' }] as const

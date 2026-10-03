@@ -40,12 +40,13 @@ body {
   mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
 }
 
+/* Durations come from TIMING.dimIn / dimOut, set on the graph pane (GraphView). */
 .dimmable {
-  transition: opacity 300ms ease;
+  transition: opacity var(--dim-out) ease;
 }
 .dimmable[data-dim='true'] {
   opacity: 0.4;
-  transition-duration: 150ms;
+  transition-duration: var(--dim-in);
 }
 @media (prefers-reduced-motion: reduce) {
   .dimmable,

@@ -255,7 +255,7 @@ describe('useRecorder (real mode)', () => {
     const { result } = renderHook(() => useRecorder(false))
     expect(result.current.secretSeen).toBeNull()
     await advance(0)
-    expect(result.current.secretSeen).toEqual({ quiet: true })
+    expect(result.current.secretSeen).toEqual({ quiet: true, delay: 0 })
   })
 })
 

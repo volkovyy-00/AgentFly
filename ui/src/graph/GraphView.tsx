@@ -1,9 +1,10 @@
 import { PanOnScrollMode, ReactFlow, ReactFlowProvider, useReactFlow, type Viewport } from '@xyflow/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   INITIAL_GESTURE, clampViewport, decideMove, followTarget, gestureStep, hasAlarm, movedFrom, panExtent, rowsOf,
   slideOptions, type Gesture, type GestureEvent,
 } from './camera'
+import { TIMING, dur } from './choreography'
 import { DimContext, useBlockDim } from './dim'
 import { layoutGraph } from './layout'
 import { useMs } from './motionPolicy'
@@ -17,6 +18,11 @@ import { WipeEdge } from './WipeEdge'
 const nodeTypes = { step: StepBox, file: FileBox, host: HostBox, rule: RuleBox }
 // Module level too: a new object each render would replay every wipe.
 const edgeTypes = { wipe: WipeEdge }
+// The dim's CSS transitions (index.css), from the timing table.
+const DIM_DURATIONS = {
+  '--dim-in': `${dur(TIMING.dimIn)}ms`,
+  '--dim-out': `${dur(TIMING.dimOut)}ms`,
+} as CSSProperties
 
 interface Props {
   steps: readonly PlacedStep[]
@@ -102,7 +108,7 @@ function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
   }, [extent, target])
 
   return (
-    <div ref={ref} data-testid="graph-pane" className="relative h-full w-full">
+    <div ref={ref} data-testid="graph-pane" className="relative h-full w-full" style={DIM_DURATIONS}>
       <div className="fade-top h-full w-full">
         <ReactFlow
           nodes={layout.nodes}

@@ -46,6 +46,15 @@ describe('lane boxes', () => {
     await settle()
     expect(quiet.container.querySelector('[data-testid="ring"]')).toBeNull()
   })
+
+  it('does not ring a settled box when its quiet anchor leaves in the same poll as a live read', async () => {
+    const { container, rerender } = render(<GraphView steps={place([secretRead(1)], 0, { quiet: true })} epoch={0} />)
+    await settle()
+    // The quiet first toucher scrolls out and a live read of the same file arrives: moved and touched.
+    rerender(<GraphView steps={place([secretRead(2)], 1)} epoch={0} />)
+    await settle()
+    expect(container.querySelector('[data-testid="ring"]')).toBeNull()
+  })
 })
 
 describe('re-anchor', () => {

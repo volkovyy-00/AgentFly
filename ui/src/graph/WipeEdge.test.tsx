@@ -27,7 +27,8 @@ describe('WipeEdge', () => {
     }
   })
 
-  it('removes every mask when the wipe ends, and never brings one back on a later poll', async () => {
+  // Its own wait for the wipes allows 4 s, so the test needs more than the 5 s default.
+  it('removes every mask when the wipe ends, and never brings one back on a later poll', { timeout: 10_000 }, async () => {
     const steps = place(MOCK_STEPS)
     const { container, rerender } = render(<GraphView steps={steps} epoch={0} />)
     await waitFor(() => expect(masks(container).length).toBe(0), { timeout: 4000 })
@@ -87,17 +88,30 @@ describe('WipeEdge', () => {
     const growing = (container: HTMLElement) => container.querySelector('mask rect')
     const attrs = (el: Element | null) => [...(el?.attributes ?? [])].map((a) => `${a.name}=${a.value}`)
 
-    it('keeps its axis and never writes NaN when the geometry changes after mount', () => {
+    it('keeps wiping, with no NaN, when the geometry changes but the axis does not', () => {
       const { container, rerender } = render(edge(down))
       const rect = growing(container)
       expect(rect).not.toBeNull()
       expect(rect?.getAttribute('width')).toBe(String(Math.abs(down.targetX - down.sourceX) + 24))
-      rerender(edge(sideways))
+      rerender(edge({ ...down, targetX: 140, targetY: 260 }))
       expect(growing(container)).toBe(rect)
       expect(attrs(growing(container)).join(' ')).not.toContain('NaN')
-      // Still the vertical branch: its width is the live box width, only its height grows.
-      expect(growing(container)?.getAttribute('width')).toBe(String(300 + 24))
-      expect(growing(container)?.hasAttribute('height')).toBe(true)
+      expect(growing(container)?.getAttribute('width')).toBe(String(40 + 24))
+    })
+
+    it('ends the wipe and shows the whole edge when a re-anchor turns it mid-wipe', () => {
+      const { container, rerender } = render(edge(down))
+      expect(growing(container)).not.toBeNull()
+      rerender(edge(sideways))
+      expect(container.querySelector('mask')).toBeNull()
+      expect(container.querySelector('g[mask]')).toBeNull()
+      expect(container.querySelector('path')).not.toBeNull()
+    })
+
+    it('ends the wipe when a re-anchor flips its direction on the same axis', () => {
+      const { container, rerender } = render(edge(down))
+      rerender(edge({ ...down, sourceY: 200, targetY: 0 }))
+      expect(container.querySelector('mask')).toBeNull()
     })
 
     it('wipes an edge that runs upward from its source end, not from its arrowhead', () => {

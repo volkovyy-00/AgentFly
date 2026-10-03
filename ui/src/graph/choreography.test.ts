@@ -1,22 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import {
-  DIM_HOLD_MS, EXEMPT, LAST_START_MS, MAX_MS, STAGGER_MAX_MS, TIMING, dur, enterDelay, stagger,
-} from './choreography'
+import { LAST_START_MS, STAGGER_MAX_MS, TIMING, enterDelay, stagger } from './choreography'
+
+/** Every animation ends by this; only the dim hold and its restore run longer. */
+const MAX_MS = 800
+const EXEMPT: readonly string[] = ['dimHold', 'dimOut']
 
 describe('timing table', () => {
   it('ends every animation by 800 ms, except the dim hold and its restore', () => {
     for (const [name, span] of Object.entries(TIMING)) {
-      if ((EXEMPT as readonly string[]).includes(name)) continue
+      if (EXEMPT.includes(name)) continue
       expect(span.start, name).toBeGreaterThanOrEqual(0)
       expect(span.end, name).toBeGreaterThan(span.start)
       expect(span.end, name).toBeLessThanOrEqual(MAX_MS)
     }
   })
 
-  it('keeps the dim hold at 1.5 s and exempts only the hold and restore', () => {
-    expect(dur(TIMING.dimHold)).toBe(DIM_HOLD_MS)
-    expect(DIM_HOLD_MS).toBe(1500)
-    expect([...EXEMPT].sort()).toEqual(['dimHold', 'dimOut'])
+  it('holds the dim for 1.5 s after it fades in, then restores over the dimOut span', () => {
+    expect(TIMING.dimHold).toEqual({ start: TIMING.dimIn.end, end: TIMING.dimIn.end + 1500 })
+    expect(TIMING.dimOut.start).toBe(TIMING.dimHold.end)
   })
 
   it('matches the spec table for the block sequence', () => {

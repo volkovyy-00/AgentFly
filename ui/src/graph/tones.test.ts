@@ -4,7 +4,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { EDGE_COLOR } from './layout'
-import { CSS_ONLY_PAIRS, DECOR, TONES } from './tones'
+import { DECOR, TONES } from './tones'
+
+/** Pairs set in index.css, not by a class: React Flow's attribution link. */
+const CSS_ONLY_PAIRS = [{ name: 'attribution', bg: 'canvas', text: 'muted' }] as const
 
 const here = dirname(fileURLToPath(import.meta.url))
 const css = readFileSync(join(here, '../index.css'), 'utf8')

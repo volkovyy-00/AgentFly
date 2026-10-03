@@ -1,7 +1,12 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Viewport } from '@xyflow/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SLIDE_MS, clampViewport, easeOutCubic, followTarget, panExtent, rowsOf } from './camera'
+import { TIMING, dur } from './choreography'
 import { GraphView } from './GraphView'
 import { layoutGraph } from './layout'
 import { MOCK_STEPS } from './mock'
@@ -57,6 +62,18 @@ afterEach(() => {
 })
 
 describe('drawing', () => {
+  it('gives the dim CSS transitions their durations from the timing table', () => {
+    render(view(place(stepsFrom(40000, 2))))
+    const pane = screen.getByTestId('graph-pane')
+    expect(pane.style.getPropertyValue('--dim-in')).toBe(`${dur(TIMING.dimIn)}ms`)
+    expect(pane.style.getPropertyValue('--dim-out')).toBe(`${dur(TIMING.dimOut)}ms`)
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../index.css'), 'utf8')
+    const rules = css.slice(css.indexOf('.dimmable {'), css.indexOf('@media (prefers-reduced-motion'))
+    expect(rules).toContain('var(--dim-in)')
+    expect(rules).toContain('var(--dim-out)')
+    expect(rules).not.toMatch(/\d+ms/)
+  })
+
   it('draws the demo story with labels that do not depend on colour', async () => {
     const steps = place(MOCK_STEPS)
     const { container } = render(view(steps))

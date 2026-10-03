@@ -1,10 +1,10 @@
 import { BaseEdge, getBezierPath, getStraightPath, type Edge, type EdgeProps } from '@xyflow/react'
 import { motion } from 'motion/react'
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { sec } from './choreography'
 import { useDimmed } from './dim'
 import type { WipeData } from './layout'
-import { useMs, useReducedMotion } from './motionPolicy'
+import { useMotionPolicy } from './motionPolicy'
 
 const PAD = 12
 
@@ -19,13 +19,13 @@ export type WipeEdgeType = Edge<WipeData, 'wipe'>
  * works for solid and dashed edges alike and also reveals the arrowhead. The
  * mask is removed when the wipe ends, so settled edges are plain paths. Whether
  * it has played is state, not an effect: StrictMode runs effects twice. The
- * axis and direction are frozen at mount: a live change would swap the animated
- * dimension under a running animation.
+ * axis and direction are frozen at mount, since a live change would swap the
+ * animated dimension under a running animation. If a re-anchor turns the edge
+ * mid-wipe, the wipe ends and the edge shows whole.
  */
 export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data } = props
-  const ms = useMs()
-  const reduced = useReducedMotion()
+  const { ms, reduced } = useMotionPolicy()
   const dimmed = useDimmed(id)
   const quiet = data?.quiet ?? true
   const [wiping, setWiping] = useState(() => !quiet && !reduced)
@@ -39,10 +39,15 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
   const y = Math.min(sourceY, targetY) - PAD
   const width = Math.abs(targetX - sourceX) + 2 * PAD
   const height = Math.abs(targetY - sourceY) + 2 * PAD
-  const [{ horizontal, reversed }] = useState(() => {
-    const across = Math.abs(targetX - sourceX) >= Math.abs(targetY - sourceY)
-    return { horizontal: across, reversed: across ? targetX < sourceX : targetY < sourceY }
-  })
+  const across = Math.abs(targetX - sourceX) >= Math.abs(targetY - sourceY)
+  const backwards = across ? targetX < sourceX : targetY < sourceY
+  const [{ horizontal, reversed }] = useState({ horizontal: across, reversed: backwards })
+  const turned = across !== horizontal || backwards !== reversed
+  const masking = wiping && !turned
+  // A layout effect, so a turned mask never paints before the wipe ends.
+  useLayoutEffect(() => {
+    if (wiping && turned) setWiping(false)
+  }, [wiping, turned])
   const maskId = `wipe-${id}`
   const start = data?.start ?? 0
   const transition = {
@@ -53,7 +58,7 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
 
   return (
     <g className="dimmable" data-dim={dimmed}>
-      {wiping && (
+      {masking && (
         <defs>
           <mask id={maskId} maskUnits="userSpaceOnUse" x={x} y={y} width={width} height={height}>
             <g transform={reversed ? `rotate(180 ${x + width / 2} ${y + height / 2})` : undefined}>
@@ -72,7 +77,7 @@ export function WipeEdge(props: EdgeProps<WipeEdgeType>) {
           </mask>
         </defs>
       )}
-      <g mask={wiping ? `url(#${maskId})` : undefined}>
+      <g mask={masking ? `url(#${maskId})` : undefined}>
         <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />
       </g>
     </g>

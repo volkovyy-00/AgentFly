@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { DIM_HOLD_MS, TIMING, enterDelay } from './choreography'
+import { TIMING, dur, enterDelay } from './choreography'
 import { hotIds } from './layout'
 import type { PlacedStep } from './types'
 
@@ -51,7 +51,8 @@ export function useBlockDim(steps: readonly PlacedStep[], epoch: number, ms: (n:
     const start = ms(enterDelay(block))
     timers.current.push(
       setTimeout(() => setState({ active: true, hot: hotIds(block) }), start),
-      setTimeout(() => setState(OFF), start + ms(TIMING.dimIn.end) + DIM_HOLD_MS),
+      // The hold is a state, not movement: it keeps its 1.5 s under reduced motion.
+      setTimeout(() => setState(OFF), start + ms(TIMING.dimIn.end) + dur(TIMING.dimHold)),
     )
   }, [steps]) // Deliberately only `steps`: a reduced-motion toggle (a new `ms`) must not re-run it.
 

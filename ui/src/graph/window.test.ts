@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { enterDelay } from './choreography'
 import { makeStep, stepsFrom } from './testing'
 import { WINDOW_SIZE, initialWindowState, windowReducer, type WindowState } from './window'
 
@@ -87,11 +88,26 @@ describe('secretSeen', () => {
 
   it('is set by a sensitive step, stays, and records whether it was quiet', () => {
     let s = windowReducer(initialWindowState(), snap('a', [makeStep(40000), secret], true))
-    expect(s.secretSeen).toEqual({ quiet: true })
+    expect(s.secretSeen).toEqual({ quiet: true, delay: 0 })
     s = windowReducer(s, snap('a', stepsFrom(40002, 30)))
-    expect(s.secretSeen).toEqual({ quiet: true })
+    expect(s.secretSeen).toEqual({ quiet: true, delay: 0 })
     const live = windowReducer(initialWindowState(), snap('a', [secret]))
-    expect(live.secretSeen).toEqual({ quiet: false })
+    expect(live.secretSeen).toEqual({ quiet: false, delay: 0 })
+  })
+
+  it("carries the secret step's own stagger, so the chip follows its box", () => {
+    const burst = [...stepsFrom(39992, 9), { ...secret, order: 40001 }]
+    const s = windowReducer(initialWindowState(), snap('a', burst))
+    const placed = s.steps.find((x) => x.sensitive)!
+    expect(placed.slot).toBe(9)
+    expect(s.secretSeen).toEqual({ quiet: false, delay: enterDelay(placed) })
+    expect(s.secretSeen!.delay).toBeGreaterThan(0)
+  })
+
+  it('starts the chip at once when an already drawn step turns sensitive', () => {
+    let s = windowReducer(initialWindowState(), snap('a', [makeStep(40000), makeStep(40001)]))
+    s = windowReducer(s, snap('a', [makeStep(40000), secret]))
+    expect(s.secretSeen).toEqual({ quiet: false, delay: 0 })
   })
 
   it('is null until a sensitive step is seen', () => {
@@ -115,6 +131,16 @@ describe('windowReducer sessions', () => {
     expect(orders(s.steps)).toEqual([1, 2])
     expect(s.steps.map((x) => x.row)).toEqual([0, 1])
     expect(s.epoch).toBe(epoch + 1)
+  })
+
+  it('starts the first session without a reset: epoch stays put on page load and after New session', () => {
+    const initial = initialWindowState()
+    const shown = windowReducer(initial, snap('a'))
+    expect(shown.epoch).toBe(initial.epoch)
+    const cleared = windowReducer(shown, { type: 'newSession' })
+    const next = windowReducer(cleared, snap('b', stepsFrom(1, 2)))
+    expect(next.session).toBe('b')
+    expect(next.epoch).toBe(cleared.epoch)
   })
 
   it('returns the same state object when a poll changes nothing', () => {

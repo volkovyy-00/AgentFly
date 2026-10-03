@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { useMs, useReducedMotion } from './motionPolicy'
+import { describe, expect, it, vi } from 'vitest'
+import { useMotionPolicy, useMs, useReducedMotion } from './motionPolicy'
 
 describe('motion policy', () => {
   it('passes durations through by default', () => {
@@ -16,5 +16,18 @@ describe('motion policy', () => {
     expect(result.current(1)).toBe(0)
     act(() => globalThis.setReducedMotion(false))
     expect(result.current(400)).toBe(400)
+  })
+
+  it('shares one media query across every reader, and each still sees a change', () => {
+    const spy = vi.spyOn(window, 'matchMedia')
+    const hooks = Array.from({ length: 5 }, () => renderHook(() => useMotionPolicy()))
+    for (const h of hooks) h.rerender()
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(1)
+    act(() => globalThis.setReducedMotion(true))
+    for (const h of hooks) {
+      expect(h.result.current.reduced).toBe(true)
+      expect(h.result.current.ms(400)).toBe(0)
+    }
+    spy.mockRestore()
   })
 })

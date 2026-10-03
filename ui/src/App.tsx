@@ -46,7 +46,7 @@ function App() {
           initial={secretSeen.quiet ? false : { opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{
-            delay: sec(ms(TIMING.chip.start)),
+            delay: sec(ms(secretSeen.delay + TIMING.chip.start)),
             duration: sec(ms(dur(TIMING.chip))),
           }}
         >

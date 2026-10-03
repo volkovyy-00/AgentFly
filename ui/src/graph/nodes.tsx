@@ -1,10 +1,10 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'motion/react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { TIMING, dur, enterDelay, sec } from './choreography'
 import { useDimmed } from './dim'
 import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
-import { useMs, useReducedMotion } from './motionPolicy'
+import { useMotionPolicy } from './motionPolicy'
 import { DECOR, TONES } from './tones'
 import type { Step, Verdict } from './types'
 import { useBoxMotion } from './useBoxMotion'
@@ -33,8 +33,7 @@ function TruncatedPath({ path }: { path: string }) {
 
 export function StepBox({ id, data }: NodeProps<StepNode>) {
   const { step } = data
-  const ms = useMs()
-  const reduced = useReducedMotion()
+  const { ms, reduced } = useMotionPolicy()
   const dimmed = useDimmed(id)
   const delay = enterDelay(step)
   const detail = stepDetail(step)
@@ -105,11 +104,12 @@ interface LaneFrameProps {
  * replays neither the brighten nor the tick (only those since the re-anchor).
  */
 function LaneFrame({ id, meta, title, className, spring = false, ring = false, children }: LaneFrameProps) {
-  const ms = useMs()
-  const reduced = useReducedMotion()
+  const { ms, reduced } = useMotionPolicy()
   const dimmed = useDimmed(id)
   const { reanchor, bump, tick, anchoredAt } = useBoxMotion(meta)
-  const { quiet, delay } = meta.enter
+  // Fixed at mount: `meta.enter` follows the current first toucher, which can change
+  // (a quiet anchor leaving as a live read arrives) and would replay the ring.
+  const [{ quiet, delay }] = useState(meta.enter)
   const firstRun = reanchor === 0
   const span = spring ? TIMING.ruleSpring : TIMING.laneBox
   const hidden = spring ? { opacity: 0, scale: 0.6 } : { opacity: 0 }
@@ -140,7 +140,7 @@ function LaneFrame({ id, meta, title, className, spring = false, ring = false, c
             className="shrink-0 font-bold tabular-nums"
             initial={tick === anchoredAt.tick ? false : { y: 8, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: sec(ms(200)) }}
+            transition={{ duration: sec(ms(dur(TIMING.tick))) }}
           >
             x{meta.count}
           </motion.span>

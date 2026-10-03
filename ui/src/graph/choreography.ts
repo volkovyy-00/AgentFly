@@ -4,10 +4,8 @@ export interface Span {
   end: number
 }
 
-export const MAX_MS = 800
 export const STAGGER_MAX_MS = 80
 export const LAST_START_MS = 350
-export const DIM_HOLD_MS = 1500
 
 export const TIMING = {
   step: { start: 0, end: 200 },
@@ -24,11 +22,9 @@ export const TIMING = {
   dimOut: { start: 1650, end: 1950 },
   brighten: { start: 0, end: 300 },
   reanchor: { start: 0, end: 200 },
+  tick: { start: 0, end: 200 },
   banner: { start: 0, end: 300 },
 } as const satisfies Record<string, Span>
-
-/** The only entries allowed past 800 ms. */
-export const EXEMPT = ['dimHold', 'dimOut'] as const
 
 export const dur = (span: Span): number => span.end - span.start
 

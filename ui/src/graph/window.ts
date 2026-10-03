@@ -1,3 +1,4 @@
+import { enterDelay } from './choreography'
 import type { PlacedStep, SecretSeen, Step } from './types'
 
 export const WINDOW_SIZE = 20
@@ -85,7 +86,10 @@ function merge(base: WindowState, incoming: readonly Step[], first: boolean): Me
   let secretSeen = base.secretSeen
   const fresh = new Set(placed)
   for (const s of [...updates.values(), ...placed]) {
-    if (s.sensitive && secretSeen === null) secretSeen = { quiet: fresh.has(s) && s.quiet }
+    if (s.sensitive && secretSeen === null) {
+      // A step already drawn (an update in place) has no entry of its own: the chip starts at once.
+      secretSeen = fresh.has(s) ? { quiet: s.quiet, delay: enterDelay(s) } : { quiet: false, delay: 0 }
+    }
   }
   if (secretSeen !== base.secretSeen) changed = true
 
@@ -109,8 +113,10 @@ export function windowReducer(state: WindowState, action: WindowAction): WindowS
   }
 
   // A new session, or numbering that went backwards (sessions.json deleted),
-  // starts a fresh window.
-  const restart = state.session !== session || newestOrder(steps) < newestOrder(state.steps)
+  // starts a fresh window. From an empty window (page load, or after a reset)
+  // the first session is a plain start: the window is already fresh.
+  const switched = state.session !== null && state.session !== session
+  const restart = switched || newestOrder(steps) < newestOrder(state.steps)
   const base = restart ? resetFrom(state, ignored) : state
   const merged = merge(base, steps, first)
 
