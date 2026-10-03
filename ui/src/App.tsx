@@ -11,12 +11,12 @@ function App() {
   const mock = params.get('mock') === '1'
   const burst = mock ? parseBurst(params.get('burst')) : 1
   const mockFirst = mock && params.get('first') === '1'
-  const { steps, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst, mockFirst)
+  const { steps, group, markedOrder, epoch, secretSeen, offline, newSession } = useRecorder(mock, burst, mockFirst)
   const ms = useMs()
 
   return (
     <main className={`relative h-dvh w-full overflow-hidden text-base ${TONES.app.classes}`}>
-      <GraphView steps={steps} epoch={epoch} />
+      <GraphView steps={steps} epoch={epoch} group={group} markedOrder={markedOrder} />
       {steps.length === 0 && (
         <p className={`pointer-events-none absolute inset-0 grid place-items-center text-base ${TONES.empty.classes}`}>
           Waiting for agent actions…

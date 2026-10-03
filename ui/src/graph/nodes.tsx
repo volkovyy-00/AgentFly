@@ -3,8 +3,9 @@ import { motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
 import { TIMING, dur, enterDelay, sec } from './choreography'
 import { useDimmed } from './dim'
-import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode } from './layout'
+import { HANDLE, type BoxMeta, type FileNode, type HostNode, type RuleNode, type StepNode, type SummaryNode } from './layout'
 import { useMotionPolicy } from './motionPolicy'
+import { summaryText } from './summary'
 import { DECOR, TONES } from './tones'
 import type { Step, Verdict } from './types'
 import { useBoxMotion } from './useBoxMotion'
@@ -32,13 +33,15 @@ function TruncatedPath({ path }: { path: string }) {
 }
 
 export function StepBox({ id, data }: NodeProps<StepNode>) {
-  const { step } = data
+  const { step, flagged, marked } = data
   const { ms, reduced } = useMotionPolicy()
   const dimmed = useDimmed(id)
   const delay = enterDelay(step)
   const detail = stepDetail(step)
   const pathKind = step.kind === 'read' || step.kind === 'edit'
   const { tone, wipe, chip, chipTone } = VERDICT_UI[step.verdict]
+  // An older flagged step names its rule in its chip instead of a rule box.
+  const verdictChip = chip !== null && flagged && step.rule !== null ? `${chip} ${step.rule}` : chip
   const alarm = step.verdict !== 'allowed'
   // Under reduced motion the border is static and always visible: no wipe at all.
   const staticBorder = step.quiet || reduced
@@ -61,8 +64,11 @@ export function StepBox({ id, data }: NodeProps<StepNode>) {
         ) : (
           <span className="min-w-0 flex-1 truncate font-mono">{detail}</span>
         )}
-        {chip !== null && (
-          <span className={`shrink-0 rounded px-2 font-bold leading-5 ${chipTone}`}>{chip}</span>
+        {verdictChip !== null && (
+          <span className={`shrink-0 rounded px-2 font-bold leading-5 ${chipTone}`}>{verdictChip}</span>
+        )}
+        {marked && (
+          <span className={`shrink-0 rounded px-2 font-bold leading-5 ${TONES.chipSecret.classes}`}>SECRET</span>
         )}
         {alarm && (
           <motion.div
@@ -81,6 +87,19 @@ export function StepBox({ id, data }: NodeProps<StepNode>) {
       </motion.div>
       <Handle id="b" type="source" position={Position.Bottom} style={HIDDEN_HANDLE} />
       <Handle id="r" type="source" position={Position.Right} style={HIDDEN_HANDLE} />
+    </div>
+  )
+}
+
+/** The group's header: counts of the steps outside the window. Always quiet, never dimmed. */
+export function SummaryBox({ data }: NodeProps<SummaryNode>) {
+  const text = summaryText(data.hidden)
+  return (
+    <div className="relative h-full w-full" title={text}>
+      <div className={`flex h-full w-full items-center rounded-lg border-2 px-3 text-base leading-6 ${TONES.summary.classes}`}>
+        <span className="min-w-0 flex-1 truncate">{text}</span>
+      </div>
+      <Handle id="b" type="source" position={Position.Bottom} style={HIDDEN_HANDLE} />
     </div>
   )
 }

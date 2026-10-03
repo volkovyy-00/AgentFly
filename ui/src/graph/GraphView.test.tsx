@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SLIDE_MS, clampViewport, easeOutCubic, followTarget, panExtent, rowsOf } from './camera'
 import { TIMING, dur } from './choreography'
 import { GraphView } from './GraphView'
-import { layoutGraph } from './layout'
+import { SUMMARY_ID, groupRows, layoutGraph } from './layout'
 import { MOCK_STEPS } from './mock'
-import { makeStep, place, stepsFrom } from './testing'
+import { makeHidden, makeStep, place, stepsFrom } from './testing'
 
 const spy = vi.hoisted(() => ({
   calls: [] as { vp: Viewport; options: Record<string, unknown> | undefined }[],
@@ -453,5 +453,38 @@ describe('pan, zoom and Follow', () => {
     expect(spy.calls).toHaveLength(0)
     expect(viewportTransform(container)).toBe('translate(0px,-30px) scale(1)')
     expect(screen.getByRole('button', { name: 'Follow' })).toBeTruthy()
+  })
+})
+
+describe('with a group', () => {
+  const win = place(stepsFrom(40100, 20), 100)
+  const group = {
+    hidden: makeHidden({ total: 97, shell: 97, blocked: 1 }),
+    flagged: [makeStep(40003, { verdict: 'blocked', rule: 'R1' })],
+  }
+  const withGroup = (steps: ReturnType<typeof place>, g = group) => (
+    <GraphView steps={steps} epoch={0} group={g} markedOrder={null} />
+  )
+
+  it('lets the pan range reach the summary box, with orders in the tens of thousands', async () => {
+    render(withGroup(win))
+    await settle()
+    const summary = layoutGraph(win, group).nodes.find((n) => n.id === SUMMARY_ID)!
+    const [[, top]] = spy.props.translateExtent
+    expect(top).toBeLessThanOrEqual(summary.position.y)
+    expect(rowsOf(win, groupRows(win, group)).first).toBe(98)
+  })
+
+  it('moves the camera once for a slide and not at all for an unchanged poll', async () => {
+    const { rerender } = render(withGroup(win))
+    await settle()
+    const calls = spy.calls.length
+    rerender(withGroup([...win]))
+    await settle()
+    expect(spy.calls.length).toBe(calls)
+    const slid = [...place(stepsFrom(40101, 19), 101), ...place([makeStep(40120)], 120)]
+    rerender(withGroup(slid))
+    await settle()
+    expect(spy.calls.length).toBe(calls + 1)
   })
 })

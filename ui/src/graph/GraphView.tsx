@@ -6,16 +6,16 @@ import {
 } from './camera'
 import { TIMING, dur } from './choreography'
 import { DimContext, useBlockDim } from './dim'
-import { layoutGraph } from './layout'
+import { groupRows, layoutGraph } from './layout'
 import { useMs } from './motionPolicy'
-import { FileBox, HostBox, RuleBox, StepBox } from './nodes'
+import { FileBox, HostBox, RuleBox, StepBox, SummaryBox } from './nodes'
 import { BUTTON_CLASSES } from './tones'
-import type { PlacedStep } from './types'
+import type { Group, PlacedStep } from './types'
 import { usePaneSize } from './usePaneSize'
 import { WipeEdge } from './WipeEdge'
 
 // Module-level so React Flow does not see a new object on every render.
-const nodeTypes = { step: StepBox, file: FileBox, host: HostBox, rule: RuleBox }
+const nodeTypes = { step: StepBox, summary: SummaryBox, file: FileBox, host: HostBox, rule: RuleBox }
 // Module level too: a new object each render would replay every wipe.
 const edgeTypes = { wipe: WipeEdge }
 // The dim's CSS transitions (index.css), from the timing table.
@@ -28,27 +28,32 @@ interface Props {
   steps: readonly PlacedStep[]
   /** Bumps when the window resets. The drawing remounts, so the camera jumps and every box enters afresh. */
   epoch: number
+  /** The summary counts and flagged older steps; null for none. */
+  group?: Group | null
+  /** The step that made R1 mark the session; its box shows SECRET. */
+  markedOrder?: number | null
 }
 
 /** The drawing. The camera is uncontrolled: only `setViewport` moves it. */
-export function GraphView({ steps, epoch }: Props) {
+export function GraphView({ steps, epoch, group = null, markedOrder = null }: Props) {
   const ms = useMs()
   const dim = useBlockDim(steps, epoch, ms)
   return (
     <DimContext.Provider value={dim}>
       <ReactFlowProvider key={epoch}>
-        <Drawing steps={steps} />
+        <Drawing steps={steps} group={group} markedOrder={markedOrder} />
       </ReactFlowProvider>
     </DimContext.Provider>
   )
 }
 
-function Drawing({ steps }: { steps: readonly PlacedStep[] }) {
+function Drawing({ steps, group, markedOrder }: { steps: readonly PlacedStep[]; group: Group | null; markedOrder: number | null }) {
   const { ref, pane } = usePaneSize()
   const rf = useReactFlow()
   const ms = useMs()
-  const layout = useMemo(() => layoutGraph(steps), [steps])
-  const { first, last } = rowsOf(steps)
+  const layout = useMemo(() => layoutGraph(steps, group, markedOrder), [steps, group, markedOrder])
+  const above = useMemo(() => groupRows(steps, group), [steps, group])
+  const { first, last } = rowsOf(steps, above)
   const rows = useMemo(() => ({ first, last }), [first, last])
   const target = useMemo(() => followTarget(rows, pane), [rows, pane])
   const extent = useMemo(() => panExtent(rows, pane), [rows, pane])

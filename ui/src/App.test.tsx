@@ -41,6 +41,18 @@ describe('App', () => {
     expect(screen.getAllByText('shell')).toHaveLength(2)
   })
 
+  it('shows SECRET SEEN and the SECRET chip after a reload, from the marking step alone', async () => {
+    const steps = [
+      { ...stepsFrom(40000, 1)[0], command: 'cat README.md .env' },
+      ...stepsFrom(40001, 3),
+    ]
+    vi.stubGlobal('fetch', vi.fn(async () => respond('s', steps, { marked_order: 40000 })))
+    render(<App />)
+    await advance(0)
+    expect(screen.getByText('SECRET SEEN')).toBeTruthy()
+    expect(screen.getByText('SECRET')).toBeTruthy()
+  })
+
   it('shows the red OFFLINE banner within 3 s, keeps the drawing, and clears it', async () => {
     let up = true
     vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) =>
