@@ -230,11 +230,9 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
 
 ## 6. The screen
 
-- Two pages from the local server: the current demo page at `/` (vis-network
-  from a CDN, steps in a row), and the new React page at `/v2/` (Vite build
-  committed under `ui/dist`). The new page draws the lane graph. Which address
-  the demo treats as its main view can still change later.
-- The new page is a timeline. Steps run down the left, oldest at the top,
+- One page from the local server, at `/`: the React page (Vite build committed
+  under `ui/dist`), which draws the lane graph.
+- The page is a timeline. Steps run down the left, oldest at the top,
   each joined to the next in order. Files sit in a lane to their right, and
   websites and rules in a lane further right. A file, website or rule is one
   box, level with the first drawn step that touches it; at most 15 file and
@@ -242,7 +240,7 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
   goes first. A blocked step is joined by a dashed red line to a box for its
   rule (a warned step by a dashed purple line); an older flagged step names its
   rule in its chip instead of a box.
-- The new page draws the 20 most recent steps of the *current session*, as the
+- The page draws the 20 most recent steps of the *current session*, as the
   server returns them, and above them one summary box that counts the earlier
   steps ("38 earlier steps (2 blocked): 20 read, 16 shell, 2 tool"). Up to 5
   older flagged steps (the step that made R1 mark the session, and the newest
@@ -250,8 +248,8 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
   The page keeps the newest step in view unless the viewer has scrolled away; a
   Follow button returns.
   A "New session" button clears the picture between rehearsals
-  (it does not delete data). Open `/v2/?mock=1` to replay a sample session
-  with no server.
+  (it does not delete data). Open `/?mock=1` to replay a sample session
+  without an agent running.
 - A big red **OFFLINE** banner appears if the page cannot reach the server, so
   a dead server never fails silently on stage.
 - The page refreshes about once a second.
@@ -374,8 +372,8 @@ the recorder off. Measures:
   (`~/.config/flightrecorder/token`). The helper sends it with every hook
   request (`POST /hook`). Requests without it are rejected. Hook requests must
   be JSON. Every request, including the web page's, must carry the host name
-  `localhost:8787` or `127.0.0.1:8787`. The web pages themselves (`GET /`,
-  `GET /v2/` and its assets, and `GET /api/steps`) need no token, because a
+  `localhost:8787` or `127.0.0.1:8787`. The web pages themselves (`GET /` and its
+  assets under `/assets/`, and `GET /api/steps`) need no token, because a
   page in a browser cannot keep one secret; it can only read, never change
   anything. This stops a web page open in your browser from sending fake
   steps. (The token does not stop the agent, since it runs as you. That is

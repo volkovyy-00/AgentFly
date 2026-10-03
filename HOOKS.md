@@ -51,7 +51,7 @@ Python exit code **2** (file missing) is treated as **deny** and can lock the ag
 Keep the compat shim so an outdated `hooks.json` that still names
 `recorder/hook_passthrough.py` does not exit 2.
 
-Project layout (uv skeleton): `hooks/`, `recorder/`, `web/`, `ui/`, `tests/`,
+Project layout (uv skeleton): `hooks/`, `recorder/`, `ui/`, `tests/`,
 `demo/`.
 
 ---
@@ -223,16 +223,18 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
   land in Aura. Restart uvicorn so the running process reloads the env.
 
-## Live graph (`web/index.html`, `ui/`, + memory API)
+## Live graph (`ui/` + memory API)
 
-- Current page: [`web/index.html`](web/index.html) at `/` (Part A). New page:
-  [`ui/`](ui/) build served at `/v2/` (Vite + React; a timeline of the 20 most
+- Page: the [`ui/`](ui/) build at `/` (Vite + React; a timeline of the 20 most
   recent steps with, above them, a summary box and up to 5 flagged older steps;
-  `/v2/?mock=1` replays a sample session with no server).
+  `/?mock=1` replays a sample session without an agent).
   Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
-- `GET /` serves the HTML (Host check only; no token).
-- `GET /v2/` serves the committed `ui/dist` build (same Host gate; assets under
-  `/v2/assets/...`).
+- `GET /` serves the committed `ui/dist` build (Host check only; no token); its
+  assets are under `/assets/`. Both send `Cache-Control: no-cache`. If `ui/dist`
+  is missing the server logs a warning and `/` is a plain 404: run
+  `npm --prefix ui run build`.
+- `/v2/` (also `/v2` and `/v2/index.html`) answers 307 to `/`, query string
+  kept; any other `/v2/...` path is a 404.
 - `GET /api/steps` → `{session, steps}` for the **most recent** session,
   last 10 cleaned steps from process memory. `?all=1` returns every retained
   step for that session (checks only). Memory keeps at most 500 steps per
@@ -266,7 +268,7 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - Wrong Host → 403. No Cypher from the page.
 - Demo: start uvicorn → `uv run python fake_agent.py` → open
   `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
-- UI-only rehearsal without the API: `web/index.html?mock=1` (file:// OK).
+- UI-only rehearsal without an agent: `/?mock=1` (needs the recorder or `npm --prefix ui run dev`).
 - UI local dev: `npm --prefix ui run dev` proxies `/api` to
   `http://127.0.0.1:8787` with `changeOrigin` so the Host gate accepts it.
 

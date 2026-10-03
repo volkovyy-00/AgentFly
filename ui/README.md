@@ -1,6 +1,6 @@
-# AgentFly UI (v2)
+# AgentFly UI
 
-Vite + React + TypeScript live-graph page, served by the recorder at `/v2/`.
+Vite + React + TypeScript live-graph page, served by the recorder at `/`.
 
 Requires **Node `^22.12.0 || >=24`** (see `engines` in `package.json`).
 `.nvmrc` pins Node 22 for reproducible `ui/dist` builds.
@@ -10,9 +10,9 @@ pre-measures edge handles against that version's default 6 px handle size
 (`HANDLE` in `src/graph/layout.ts`, mirrored on the DOM handles in
 `nodes.tsx`). Bump only with a deliberate check that edge ends still match.
 
-`vite` `base` is `/v2/` so asset URLs stay correct under the recorder mount
-(and for future client routes under `/v2/...`). Dev server: open
-`http://127.0.0.1:5173/v2/`.
+`vite` `base` is the default `/`, so the build references `/assets/index.js`
+and `/assets/index.css`, which the recorder serves. Dev server: open
+`http://127.0.0.1:5173/`. The old `/v2/` address redirects to `/`.
 
 ```bash
 npm --prefix ui ci
@@ -34,7 +34,7 @@ host boxes and 5 rule boxes are drawn. The group moves with the window and
 never animates. The server keeps at most 500 steps per session (see `HOOKS.md`).
 The camera follows the newest step, one slide per poll. The viewer can pan up
 and down; a Follow button returns. Zoom is locked: at most 1, and panes
-narrower than the content scale down (floor 0.5). `/v2/?mock=1` replays a
+narrower than the content scale down (floor 0.5). `/?mock=1` replays a
 sample session without calling the server; "New session" restarts it. The mock
 replays a 34-step session (enough to slide the 20-step window and show a
 group) through the same window shape the server returns (`hidden`, `flagged`,
@@ -50,5 +50,5 @@ Layout and camera are pure functions in `src/graph/` (`layout.ts`,
 or its place in the list. Text is at least 16 px at full width; the one exception is React
 Flow's own attribution link, kept on purpose. Tests use a jsdom setup that
 measures nodes like a browser (`src/test-setup.ts`); it cannot check layout,
-so after a UI change also open `/v2/?mock=1` and a real `fake_agent.py` run in
+so after a UI change also open `/?mock=1` and a real `fake_agent.py` run in
 a browser.
