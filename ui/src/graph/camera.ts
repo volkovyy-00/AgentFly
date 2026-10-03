@@ -101,16 +101,18 @@ export function hasAlarm(steps: readonly PlacedStep[], afterRow: number): boolea
 export type Move = 'none' | 'jump' | 'slide'
 
 /**
- * What the camera does after a render. `prev` is null on the first call. Any
- * move (a jump, or a slide, including an alarm's slide from a paused viewer)
- * leaves the viewer following.
+ * What the camera does after a render. `prev` is null on the first call. The
+ * first steps after an empty drawing (`lastRow` -1: the page's empty mount, or
+ * the remount after New session) are a first paint too, so they jump. Any move
+ * (a jump, or a slide, including an alarm's slide from a paused viewer) leaves
+ * the viewer following.
  */
 export function decideMove(
   prev: { lastRow: number } | null,
   next: { lastRow: number; alarm: boolean },
   following: boolean,
 ): Move {
-  if (prev === null) return 'jump'
+  if (prev === null || prev.lastRow < 0) return 'jump'
   if (next.lastRow === prev.lastRow) return 'none'
   if (next.alarm) return 'slide'
   return following ? 'slide' : 'none'

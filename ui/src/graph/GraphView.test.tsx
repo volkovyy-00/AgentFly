@@ -263,6 +263,20 @@ describe('camera', () => {
   })
 })
 
+describe('first steps after an empty drawing', () => {
+  it('jumps (no duration) when the first steps arrive after an empty mount', async () => {
+    const { rerender } = render(view([]))
+    await settle()
+    spy.calls.length = 0
+    const steps = place(stepsFrom(40000, 10))
+    rerender(view(steps))
+    await settle()
+    expect(spy.calls.length).toBeGreaterThan(0)
+    expect(spy.calls.every((c) => c.options === undefined)).toBe(true)
+    expect(spy.calls.at(-1)?.vp).toEqual(followTarget(rowsOf(steps), { width: 0, height: 0 }))
+  })
+})
+
 describe('pan, zoom and Follow', () => {
   // A real pan: well away from wherever the camera rests.
   const userMove = () =>

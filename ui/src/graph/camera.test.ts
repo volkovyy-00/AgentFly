@@ -122,6 +122,11 @@ describe('hasAlarm and decideMove', () => {
     expect(decideMove(null, { lastRow: 3, alarm: false }, true)).toBe('jump')
   })
 
+  it('jumps, not slides, for the first steps after an empty drawing (page load, New session)', () => {
+    expect(decideMove({ lastRow: -1 }, { lastRow: 9, alarm: false }, true)).toBe('jump')
+    expect(decideMove({ lastRow: -1 }, { lastRow: 9, alarm: true }, false)).toBe('jump')
+  })
+
   it('does nothing for an unchanged poll', () => {
     expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, true)).toBe('none')
     expect(decideMove({ lastRow: 3 }, { lastRow: 3, alarm: false }, false)).toBe('none')
