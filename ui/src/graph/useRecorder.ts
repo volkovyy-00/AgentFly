@@ -27,14 +27,14 @@ export interface Recorder {
  * The page's data source. Real mode polls GET /api/steps: one request, then a
  * 1 s gap, aborting after 1.5 s; one failure sets `offline` (worst case 2.5 s
  * after the server stops) and the last steps stay.
- * The request is `/api/steps?limit=20` (`WINDOW_SIZE`): the server decides the window.
- * Mock mode replays MOCK_SESSION,
- * `burst` steps per tick, and never calls the server (`burst` is ignored in real mode).
- * `mockFirst` makes the mock's first tick of a page load count as the first
- * response, so its steps paint still (quiet), as on a reload of the real page.
- * `mockLen` replays a generated session of that many steps instead of MOCK_SESSION.
- * Mock polls go through `windowOfMock`, so they have the server's shape: the last
- * 20 steps, `hidden`, `flagged`, the marking step.
+ * The request is `/api/steps?limit=20` (`WINDOW_SIZE`): the server decides the
+ * window. Mock mode replays MOCK_SESSION, `burst` steps per tick, and never
+ * calls the server (`burst` is ignored in real mode). `mockFirst` makes the
+ * mock's first tick of a page load count as the first response, so its steps
+ * paint still (quiet), as on a reload of the real page. `mockLen` replays a
+ * generated session of that many steps instead of MOCK_SESSION. Mock polls go
+ * through `windowOfMock`, so they have the server's shape: the last 20 steps,
+ * `hidden`, `flagged`, the marking step.
  */
 export function useRecorder(mock: boolean, burst = 1, mockFirst = false, mockLen: number | null = null): Recorder {
   const [state, dispatch] = useReducer(windowReducer, undefined, () =>

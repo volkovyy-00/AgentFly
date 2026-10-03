@@ -244,11 +244,11 @@ One rule done well beats three done badly. R1 (with R0) first, fully.
   rule in its chip instead of a box.
 - The new page draws the 20 most recent steps of the *current session*, as the
   server returns them, and above them one summary box that counts the earlier
-  steps ("38 earlier steps (2 blocked): 20 read, 16 shell"). Up to 5 older
-  flagged steps (the step that made R1 mark the session, and the newest blocked
-  or warned ones) hang below the summary box, joined to it in a column. The page
-  keeps the newest step in view unless the viewer has scrolled away; a Follow
-  button returns.
+  steps ("38 earlier steps (2 blocked): 20 read, 16 shell, 2 tool"). Up to 5
+  older flagged steps (the step that made R1 mark the session, and the newest
+  blocked or warned ones) hang below the summary box, joined to it in a column.
+  The page keeps the newest step in view unless the viewer has scrolled away; a
+  Follow button returns.
   A "New session" button clears the picture between rehearsals
   (it does not delete data). Open `/v2/?mock=1` to replay a sample session
   with no server.
