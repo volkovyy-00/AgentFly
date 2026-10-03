@@ -1,4 +1,4 @@
-import type { Hidden, Step, Verdict } from './types'
+import { HIDDEN_KEYS, STEP_KINDS, emptyHidden, type Hidden, type Step, type Verdict } from './types'
 
 export const FLAG_CAP = 5
 export const MOCK_CAP = 500
@@ -14,10 +14,11 @@ export interface MockWindow {
 }
 
 function tally(steps: readonly Step[]): Hidden {
-  const h: Hidden = { total: 0, read: 0, shell: 0, edit: 0, tool: 0, blocked: 0, warned: 0 }
+  const h = emptyHidden()
   for (const s of steps) {
     h.total += 1
-    if (s.kind === 'read' || s.kind === 'shell' || s.kind === 'edit' || s.kind === 'tool') h[s.kind] += 1
+    // A kind the page does not know (a newer server) counts in `total` only, as on the server.
+    if (STEP_KINDS.includes(s.kind)) h[s.kind] += 1
     if (s.verdict === 'blocked' || s.verdict === 'warned') h[s.verdict] += 1
   }
   return h
@@ -47,9 +48,8 @@ export function windowOfMock(all: readonly Step[], limit: number, cap: number, m
   const floor = steps[0].order
   const everything = tally(all)
   const inWindow = tally(steps)
-  const hidden = Object.fromEntries(
-    (Object.keys(everything) as (keyof Hidden)[]).map((k) => [k, everything[k] - inWindow[k]]),
-  ) as unknown as Hidden
+  const hidden = emptyHidden()
+  for (const k of HIDDEN_KEYS) hidden[k] = everything[k] - inWindow[k]
 
   const marking = markedOrder === null ? null : (all.find((s) => s.order === markedOrder) ?? null)
   // The server keeps the newest 5 alarms among the steps the cap pushed out.

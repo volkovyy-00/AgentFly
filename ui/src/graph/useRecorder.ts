@@ -68,15 +68,7 @@ export function useRecorder(mock: boolean, burst = 1, mockFirst = false, mockLen
         setOffline(false)
         const first = firstResponse.current
         firstResponse.current = false
-        dispatch({
-          type: 'snapshot',
-          session: snapshot.session,
-          steps: snapshot.steps,
-          first,
-          hidden: snapshot.hidden,
-          flagged: snapshot.flagged,
-          markedOrder: snapshot.markedOrder,
-        })
+        dispatch({ type: 'snapshot', ...snapshot, first })
       } catch {
         if (!cancelled) setOffline(true)
       } finally {
@@ -104,15 +96,7 @@ export function useRecorder(mock: boolean, burst = 1, mockFirst = false, mockLen
       const first = firstMockTick.current
       firstMockTick.current = false
       const win = windowOfMock(source.slice(0, shown), WINDOW_SIZE, MOCK_CAP, marked)
-      dispatch({
-        type: 'snapshot',
-        session,
-        steps: win.steps,
-        hidden: win.hidden,
-        flagged: win.flagged,
-        markedOrder: win.markedOrder,
-        first,
-      })
+      dispatch({ type: 'snapshot', session, ...win, first })
       if (shown >= source.length) clearInterval(timer)
     }
     const timer = setInterval(tick, MOCK_INTERVAL_MS)

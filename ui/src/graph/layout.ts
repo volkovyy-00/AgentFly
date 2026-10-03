@@ -227,13 +227,42 @@ interface Candidate {
 function overCap(candidates: Candidate[], max: number): string[] {
   if (candidates.length <= max) return []
   const byId = (a: Candidate, b: Candidate): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  return [...candidates]
+  return candidates
     .sort((a, b) => a.meta.lastTouchRow - b.meta.lastTouchRow || a.rank - b.rank || byId(a, b))
     .slice(0, candidates.length - max)
     .map((c) => c.id)
 }
 
 const QUIET_WIPE: WipeData = { shape: 'straight', quiet: true, start: 0, end: 0 }
+
+/** A step box at the step's own row; window steps and flagged steps differ only in `flagged`. */
+function stepNode(step: PlacedStep, flagged: boolean, markedOrder: number | null): StepNode {
+  return {
+    id: stepId(step.order),
+    type: 'step',
+    position: { x: STEP_X, y: rowCentre(step.row) - STEP_H / 2 },
+    width: STEP_W,
+    height: STEP_H,
+    data: { step, flagged, marked: step.order === markedOrder },
+    handles: STEP_HANDLES,
+    ...BASE,
+  }
+}
+
+/** A straight chain edge from one box's bottom to the next box's top. */
+function chainEdge(id: string, source: string, target: string, data: WipeData): Edge {
+  return {
+    id,
+    type: 'wipe',
+    data,
+    source,
+    sourceHandle: 'b',
+    target,
+    targetHandle: 't',
+    style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
+    markerEnd: arrow(EDGE_COLOR.chain),
+  }
+}
 
 /**
  * Pure layout. Positions come only from a step's `row` (fixed when first seen),
@@ -280,34 +309,21 @@ export function layoutGraph(
   const edges: Edge[] = []
 
   steps.forEach((step, index) => {
-    const cy = rowCentre(step.row)
-    nodes.push({
-      id: stepId(step.order),
-      type: 'step',
-      position: { x: STEP_X, y: cy - STEP_H / 2 },
-      width: STEP_W,
-      height: STEP_H,
-      data: { step, flagged: false, marked: step.order === markedOrder },
-      handles: STEP_HANDLES,
-      ...BASE,
-    })
+    nodes.push(stepNode(step, false, markedOrder))
 
     const previous = steps[index - 1]
     if (previous !== undefined) {
-      edges.push({
-        id: chainEdgeId(previous.order, step.order),
-        type: 'wipe',
-        data: wipe(step, 'straight', TIMING.chain),
-        source: stepId(previous.order),
-        sourceHandle: 'b',
-        target: stepId(step.order),
-        targetHandle: 't',
-        style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
-        markerEnd: arrow(EDGE_COLOR.chain),
-      })
+      edges.push(
+        chainEdge(
+          chainEdgeId(previous.order, step.order),
+          stepId(previous.order),
+          stepId(step.order),
+          wipe(step, 'straight', TIMING.chain),
+        ),
+      )
     }
 
-    if (step.file !== null && !dropped.has(fileId(step.file))) {
+    if (step.file !== null) {
       const secret = step.sensitive
       edges.push(
         link(
@@ -321,7 +337,7 @@ export function layoutGraph(
         ),
       )
     }
-    if (step.host !== null && !dropped.has(hostId(step.host))) {
+    if (step.host !== null) {
       const blocked = step.verdict === 'blocked'
       const elevate = blocked || step.verdict === 'warned'
       edges.push(
@@ -338,7 +354,7 @@ export function layoutGraph(
         ),
       )
     }
-    if (step.rule !== null && !dropped.has(ruleId(step.rule))) {
+    if (step.rule !== null) {
       const warned = step.verdict === 'warned'
       edges.push(
         link(
@@ -373,35 +389,14 @@ export function layoutGraph(
     })
     let upstream = SUMMARY_ID
     flagged.forEach((step, i) => {
-      const row = summaryRow + 1 + i
-      const placed: PlacedStep = { ...step, row, quiet: true, slot: 0, of: 1 }
-      nodes.push({
-        id: stepId(step.order),
-        type: 'step',
-        position: { x: STEP_X, y: rowCentre(row) - STEP_H / 2 },
-        width: STEP_W,
-        height: STEP_H,
-        data: { step: placed, flagged: true, marked: step.order === markedOrder },
-        handles: STEP_HANDLES,
-        ...BASE,
-      })
-      edges.push({
-        id: groupEdgeId(step.order),
-        type: 'wipe',
-        data: QUIET_WIPE,
-        source: upstream,
-        sourceHandle: 'b',
-        target: stepId(step.order),
-        targetHandle: 't',
-        style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
-        markerEnd: arrow(EDGE_COLOR.chain),
-      })
+      const placed: PlacedStep = { ...step, row: summaryRow + 1 + i, quiet: true, slot: 0, of: 1 }
+      nodes.push(stepNode(placed, true, markedOrder))
+      edges.push(chainEdge(groupEdgeId(step.order), upstream, stepId(step.order), QUIET_WIPE))
       upstream = stepId(step.order)
     })
   }
 
   for (const [path, meta] of files) {
-    if (dropped.has(fileId(path))) continue
     nodes.push({
       id: fileId(path),
       type: 'file',
@@ -414,7 +409,6 @@ export function layoutGraph(
     })
   }
   for (const [host, meta] of hosts) {
-    if (dropped.has(hostId(host))) continue
     nodes.push({
       id: hostId(host),
       type: 'host',
@@ -427,7 +421,6 @@ export function layoutGraph(
     })
   }
   for (const [rule, meta] of rules) {
-    if (dropped.has(ruleId(rule))) continue
     nodes.push({
       id: ruleId(rule),
       type: 'rule',
@@ -440,5 +433,6 @@ export function layoutGraph(
     })
   }
 
-  return { nodes, edges }
+  // A box over the cap goes, and every edge into it goes with it.
+  return { nodes: nodes.filter((n) => !dropped.has(n.id)), edges: edges.filter((e) => !dropped.has(e.target)) }
 }

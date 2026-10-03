@@ -117,17 +117,19 @@ function merge(base: WindowState, incoming: readonly Step[], first: boolean, mar
   }
   if (secretSeen === null) {
     // Fallback (no marked order, e.g. after a server restart): the first sensitive step seen.
-    const fresh = new Set(placed)
-    for (const s of [...updates.values(), ...placed]) {
-      if (s.sensitive && secretSeen === null) {
-        // A step already drawn (an update in place) has no entry of its own: the chip starts at once.
-        secretSeen = fresh.has(s) ? { quiet: s.quiet, delay: enterDelay(s) } : { quiet: false, delay: 0 }
-      }
+    const s = [...updates.values(), ...placed].find((x) => x.sensitive)
+    if (s !== undefined) {
+      // A step already drawn (an update in place) has no entry of its own: the chip starts at once.
+      secretSeen = placed.includes(s) ? { quiet: s.quiet, delay: enterDelay(s) } : { quiet: false, delay: 0 }
     }
   }
   if (secretSeen !== base.secretSeen) changed = true
 
-  const steps = [...base.steps.map((s) => updates.get(s.order) ?? s), ...placed].slice(-WINDOW_SIZE)
+  // Keep the held array when no step changed, so a memo or an effect keyed on `steps` does not rerun.
+  const steps =
+    updates.size === 0 && placed.length === 0
+      ? base.steps
+      : [...base.steps.map((s) => updates.get(s.order) ?? s), ...placed].slice(-WINDOW_SIZE)
   return { steps, nextRow: base.nextRow + placed.length, secretSeen, changed }
 }
 
@@ -170,9 +172,7 @@ export function windowReducer(state: WindowState, action: WindowAction): WindowS
   }
   return {
     session,
-    // Keep the array when only the group or the marked order changed, so a memo or an
-    // effect keyed on `steps` does not run for nothing.
-    steps: merged.changed ? merged.steps : base.steps,
+    steps: merged.steps,
     nextRow: merged.nextRow,
     secretSeen: merged.secretSeen,
     group,

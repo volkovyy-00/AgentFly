@@ -44,6 +44,14 @@ export interface Hidden {
   warned: number
 }
 
+export const STEP_KINDS: readonly StepKind[] = ['read', 'shell', 'edit', 'tool']
+export const HIDDEN_KEYS = ['total', 'read', 'shell', 'edit', 'tool', 'blocked', 'warned'] as const satisfies readonly (keyof Hidden)[]
+
+/** A `hidden` count object with every key at zero. */
+export function emptyHidden(): Hidden {
+  return { total: 0, read: 0, shell: 0, edit: 0, tool: 0, blocked: 0, warned: 0 }
+}
+
 /** What sits above the window: the counts and the older landmark steps. */
 export interface Group {
   hidden: Hidden

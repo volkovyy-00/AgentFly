@@ -1,6 +1,4 @@
-import type { Hidden, Snapshot, Step, StepKind, Verdict } from './types'
-
-const HIDDEN_KEYS = ['total', 'read', 'shell', 'edit', 'tool', 'blocked', 'warned'] as const
+import { HIDDEN_KEYS, type Hidden, type Snapshot, type Step, type StepKind, type Verdict } from './types'
 
 const VERDICTS: readonly string[] = ['allowed', 'blocked', 'warned']
 
@@ -72,7 +70,7 @@ export function parseSnapshot(raw: unknown): Snapshot | null {
   }
 
   const marked = r.marked_order
-  if (marked !== undefined && marked !== null && !(typeof marked === 'number' && Number.isInteger(marked))) return null
+  if (marked !== undefined && marked !== null && !Number.isInteger(marked)) return null
 
   return { session, steps, hidden, flagged, markedOrder: typeof marked === 'number' ? marked : null }
 }

@@ -159,7 +159,7 @@ class MemorySteps:
             sid: str | None = self.current_session_id
             if sid is None:
                 body: dict[str, Any] = {"session": None, "steps": []}
-                return body if limit is None else {**body, "steps": [], **_empty_view()}
+                return body if limit is None else {**body, **_empty_view()}
             memory: _Session = self._sessions[sid]
             if limit is None:
                 steps: list[Step] = list(memory.steps)
