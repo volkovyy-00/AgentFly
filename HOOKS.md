@@ -226,21 +226,43 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 ## Live graph (`web/index.html`, `ui/`, + memory API)
 
 - Current page: [`web/index.html`](web/index.html) at `/` (Part A). New page:
-  [`ui/`](ui/) build served at `/v2/` (Vite + React; a timeline of the last 20
-  steps it has seen; `/v2/?mock=1` replays a sample session with no server).
+  [`ui/`](ui/) build served at `/v2/` (Vite + React; a timeline of the 20 most
+  recent steps with, above them, a summary box and up to 5 flagged older steps;
+  `/v2/?mock=1` replays a sample session with no server).
   Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
 - `GET /` serves the HTML (Host check only; no token).
 - `GET /v2/` serves the committed `ui/dist` build (same Host gate; assets under
   `/v2/assets/...`).
 - `GET /api/steps` → `{session, steps}` for the **most recent** session,
-  last 10 cleaned steps from process memory. `?all=1` returns the full list
-  for that session (checks only).
+  last 10 cleaned steps from process memory. `?all=1` returns every retained
+  step for that session (checks only). Memory keeps at most 500 steps per
+  session (oldest dropped; order numbers keep counting).
+- `GET /api/steps?limit=N` (1 to 50; a larger count is 50) returns the last N
+  steps plus three more fields:
+  - `hidden`: counts of the session's steps outside that window, including steps
+    dropped by the 500 cap: `total`, `read`, `shell`, `edit`, `tool`,
+    `blocked`, `warned`. `blocked` and `warned` overlay the kind counts; they are
+    not a partition.
+  - `flagged`: up to 5 older landmark steps in total, ascending by order, same
+    step shape: the step that made R1 mark the session once it is outside the
+    window, then the newest blocked or warned steps outside it (a step that is
+    both appears once). `hidden.blocked` can exceed the blocked steps in
+    `flagged`; the counts are truthful and the cap is for drawing.
+  - `marked_order`: the order of the step that made R1 mark the session (not the
+    first step with `sensitive`, which misses `cat README.md .env`), or `null`.
+    After a server restart the session is still marked but memory is empty, so
+    it is `null` and the counts start from zero.
+  - `limit` must be ASCII digits and at least 1; anything else (`limit=`, `0`,
+    `-1`, `abc`, `+5`) is 400 `{"detail": "bad limit"}`. A repeated key takes the
+    last value. With `all=1`, `limit` wins. Without `limit` the body has only
+    `session` and `steps`.
 - Step object fields: `order`, `kind` (`read|shell|edit|tool`), `verdict`
   (`allowed|blocked|warned`), `tool`, `file`, `sensitive`, `command`, `host`,
   `rule` (nullables as needed). Built from `StepRecord` in `apply_rules`
   (sync append) — Neo4j enqueue stays separate and async.
-- Empty state: `{"session": null, "steps": []}`. Memory clears on server
-  restart (lifespan).
+- Empty state: `{"session": null, "steps": []}`; with `limit`, also
+  `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
+  on server restart (lifespan).
 - Wrong Host → 403. No Cypher from the page.
 - Demo: start uvicorn → `uv run python fake_agent.py` → open
   `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
