@@ -65,7 +65,7 @@ GET /api/steps?limit=20
 - The summary node: id `summary`, type `summary`, x and width of a step box, one `b` source handle. Flagged nodes keep id `step:{order}` (so a step leaving the window keeps its mounted node), data `{step, flagged: true, marked}` where `step` is quiet (`quiet: true, slot: 0, of: 1`) with its group row. Window steps get `marked` from `markedOrder`. A flagged order that is also in the window is skipped (the window wins); a layout test asserts no node id appears twice.
 - Group boxes and edges mount quiet (no fade, no draw-in); a group move is a position change of mounted nodes.
 - Caps: after the touch pass, drop file/host boxes over 15 and rule boxes over 5 as in section 2, and omit their edges. `count` for a kept box is unchanged.
-- `rowsOf(steps, k = 0)` returns `first` = the summary row when a group exists; `k` is the number of flagged steps actually drawn (after the "window wins" skip), so a skipped step leaves no row gap. A flagged step that has just left the window takes the row it already had, so when the departing step becomes flagged nothing moves; when it does not, the whole group moves down one row. `followTarget` and `panExtent` are linear in `rows.first`, so they need no change and `TOP_PAD` lands above the summary. `hasAlarm` reads window steps only, so a step that slides out cannot raise a new alarm. The camera effect stays keyed on the newest row: an unchanged poll never moves it.
+- `rowsOf(steps, groupRowCount = 0)` returns `first` = the summary row when a group exists; `groupRowCount` is `1 + k` (the summary plus the k flagged steps actually drawn, after the "window wins" skip), so a skipped step leaves no row gap and a summary with nothing flagged still counts. A flagged step that has just left the window takes the row it already had, so when the departing step becomes flagged nothing moves; when it does not, the whole group moves down one row. `followTarget` and `panExtent` are linear in `rows.first`, so they need no change and `TOP_PAD` lands above the summary. `hasAlarm` reads window steps only, so a step that slides out cannot raise a new alarm. The camera effect stays keyed on the newest row: an unchanged poll never moves it.
 - Known and accepted: when the window slides, the group hops one row at once while the camera glides, so on a pane taller than about 1,300 px, or for a viewer scrolled to the group, the hop shows. It is not fixed here (a pinned summary is out of scope).
 
 ## 7. Nodes, chips, tones
@@ -73,10 +73,11 @@ GET /api/steps?limit=20
 - `StepBox`: window steps keep `BLOCKED` / `WARN`; flagged steps show `BLOCKED R1` / `WARN R1`; a `marked` step adds `SECRET` (both chips if also blocked). All use existing tone rows (`chipBlocked`, `chipWarned`, `chipSecret`).
 - `SummaryBox`: new `summary` row in `tones.ts` (checked at 7:1 by `tones.test.ts`). Text: `N earlier steps`, then `(2 blocked, 1 warned)` if any, then `: 20 read, 16 shell, …` with zero counts dropped. It truncates; the tooltip carries the full text. 16 px floor.
 - The header chip in `App.tsx` reads the reducer's `secretSeen`, unchanged.
+- The summary box is never dimmed: it stays bright while flagged steps and group edges dim during a block.
 
 ## 8. Mock
 
-- `windowOfMock(all, shown, limit, cap, markedOrder)` returns the server's response shape for a prefix of a session; `markedOrder` is explicit (the steps carry no `marks` field) and is `null` until that step is within `shown`. `useRecorder` mock mode dispatches it. The default mock session marks step 40001; the long one marks its index-1 step. It takes the same `cap` parameter as the server.
+- `windowOfMock(all, limit, cap, markedOrder)` returns the server's response shape for `all`, the steps shown so far (the caller slices the prefix); `markedOrder` is explicit (the steps carry no `marks` field) and is `null` until that step is within `shown`. `useRecorder` mock mode dispatches it. The default mock session marks step 40001; the long one marks its index-1 step. It takes the same `cap` parameter as the server.
 - `?mock=1&len=N` (1 to 2000, else default) builds a deterministic long session: a marking read at index 1 and a blocked step about every 13 steps. `burst` works as today.
 
 ## 9. Tests
