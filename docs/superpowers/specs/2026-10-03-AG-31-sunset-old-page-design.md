@@ -39,7 +39,7 @@ unchanged and not repeated here.
 | `ui/dist/` | Rebuilt and committed. The build references `/assets/index.js` and `/assets/index.css`. |
 | `web/` | `git rm -r web` (includes `.gitkeep`). |
 | `tests/test_app.py` | See Tests. |
-| AGENTS.md | The dependency paragraph (drop the CDN sentence; `@xyflow/react` and `motion` are in `ui/package.json`, so "Add ... when the graph is drawn" becomes a plain statement), the "Live graph" paragraph, the `/v2/` lines in Testing rewritten to describe `/`. Nothing else in the file. The note "`/` is 404 without `ui/dist`" is not added here: it is new content outside the authorised list. It goes in HOOKS.md. |
+| AGENTS.md | The dependency paragraph (drop the CDN sentence; `@xyflow/react` and `motion` are in `ui/package.json`, so "Add ... when the graph is drawn" becomes a plain statement), the "Live graph" paragraph, the `/v2/` lines in Testing rewritten to describe `/`; the one sentence saying `/v2/` redirects to `/` (criterion 6) goes in those Testing lines only, not in the Live graph paragraph. Nothing else in the file. The note "`/` is 404 without `ui/dist`" is not added here: it is new content outside the authorised list. It goes in HOOKS.md. |
 | SPEC.md | § 6: the "Two pages" bullet, the "main view can still change later" sentence, the `/v2/?mock=1` line (becomes `/?mock=1`, and "with no server" is dropped because the mock now needs the recorder or `npm run dev`; it still needs no session data), "new" in "The new page is a timeline" and "The new page draws the 20 most recent steps". § 10: "`GET /v2/` and its assets" becomes "`GET /` and its assets (under `/assets/`)", so the page's assets stay listed. Nothing else. |
 | README.md | Step 4 (one page at `/`, mock is `/?mock=1`, drop "last 10 steps" and "with no server"), the `web/index.html` and `ui/` rows of the file table. |
 | HOOKS.md | Line 54 layout (drop `web/`), the "Live graph" section (226-236, add "`/` is a plain 404 when `ui/dist` is missing; build it"), the UI-only rehearsal line (269, drop "file:// OK"). |
@@ -55,8 +55,8 @@ Existing `/hook` tests are untouched and must pass with `ui/dist` present.
 
 - Wrong Host gives 403 on `/health`, `/`, `/assets/index.js` and `/v2`.
 - `GET /` (`requires_ui_dist`): 200, `text/html`, `Cache-Control: no-cache`, contains
-  `id="root"` and `/assets/`, contains no `/v2/`, and `"https://" not in text` (the
-  no-CDN check; it does not put `vis-network` into the test file, which would trip
+  `id="root"` and `/assets/`, contains no `/v2/`, and `"://" not in text` (the
+  no-CDN check, which also catches `http://` and `//host` links; it does not put `vis-network` into the test file, which would trip
   criterion 5's grep). The `/v2/` check makes a reverted `base` fail a test, not only the
   stale-build check.
 - The script named in `/`'s HTML loads from `/assets/` with 200 and `no-cache`
