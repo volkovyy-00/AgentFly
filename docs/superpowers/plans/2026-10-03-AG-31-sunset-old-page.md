@@ -33,7 +33,7 @@ Inputs a person is most likely to hit that the spec's tests do not already name.
 
 1. A bookmark with an odd query on the old address (`/v2/?`, `/v2?mock=1`, a percent-encoded value like `q=a%26b`): the redirect must keep the query verbatim, and an empty query must not leave a dangling `?`. [Task 1]
 2. A lookalike path (`/v2/foo`, `/v2x`) must be a 404, not a redirect. [Task 1]
-3. A `..` path under `/assets/` must not read files outside `ui/dist/assets`. [Task 1]
+3. A `..` path under `/assets/` must not read files outside `ui/dist/assets`, and `/assets/index.html` must be a 404 (it pins the mount root: a mount rooted at `dist` instead of `dist/assets` would serve it). [Task 1]
 4. A `dist` that has `index.html` but no `assets/` (or the reverse) must be treated as missing, with the warning, not mounted half-way. [Task 1]
 5. Wrong Host on the old address must give 403, not a 307 that reveals `/`. [Task 1]
 
@@ -62,7 +62,7 @@ Expected: `ag-31-sunset-old-page`, no status lines, the top commits are the AG-3
 
 - [ ] **Step 2: Ask the author for the two manual items and STOP until both are confirmed**
 
-Ask: "Is the Jira edit to AG-31 done (AG-30 gate item added, search criterion narrowed to exclude `docs/superpowers/`, the 'AG-30 is not required' line fixed)? Please paste the link to the gate comment on AG-31." The gate comment ticks every ticket item plus the AG-30 item, with date and Cursor version, checked at `/v2/?mock=1&len=500` on the unchanged build.
+Ask in chat and wait for the author's reply. Do not look in Jira yourself: a link counts as confirmed only when the author pastes it in the conversation. Ask: "Is the Jira edit to AG-31 done (AG-30 gate item added, search criterion narrowed to exclude `docs/superpowers/`, the 'AG-30 is not required' line fixed)? Please paste the link to the gate comment on AG-31." The gate comment ticks every ticket item plus the AG-30 item, with date and Cursor version, checked at `/v2/?mock=1&len=500` on the unchanged build.
 If there is no gate link, stop here and report that. Do not edit, delete or build anything.
 
 - [ ] **Step 3: Run the baseline check**
@@ -164,6 +164,11 @@ def test_get_hook_is_405(client: TestClient) -> None:
     assert client.get("/hook").status_code == 405
 
 
+def test_no_cache_header_only_on_ui_paths(client: TestClient) -> None:
+    assert "cache-control" not in client.get("/health").headers
+    assert "cache-control" not in client.get("/hook").headers
+
+
 @requires_ui_dist
 @pytest.mark.parametrize("path", ["/index.html", "/nope", "/v2/assets/index.js", "/v2/foo", "/v2x"])
 def test_unserved_paths_are_404(client: TestClient, path: str) -> None:
@@ -173,6 +178,8 @@ def test_unserved_paths_are_404(client: TestClient, path: str) -> None:
 @requires_ui_dist
 def test_assets_do_not_escape_their_directory(client: TestClient) -> None:
     assert client.get("/assets/%2e%2e/index.html").status_code == 404
+    # index.html lives in dist/, not dist/assets/: a mount rooted at dist would serve it.
+    assert client.get("/assets/index.html").status_code == 404
 
 
 @pytest.mark.parametrize("case", ["missing", "empty", "no_assets", "no_index"])
@@ -359,7 +366,7 @@ In the browser, **hard reload** (Cmd-Shift-R), then check:
 
 - [ ] **Step 4: Decide**
 
-If all pass: tell the executor "smoke passed" and continue. If anything fails: run `git revert <Task 1 commit>` (the later commits do not exist yet), report what failed, and stop. Record the result for the PR text.
+The executor asks in chat for the result and waits for the author's reply; it does not infer a pass. If all pass, the author says "smoke passed" and work continues. If anything fails: run `git revert --no-edit <Task 1 commit>` (the later commits do not exist yet), report what failed, and stop. Record the result for the PR text.
 
 ---
 
@@ -370,7 +377,7 @@ If all pass: tell the executor "smoke passed" and continue. If anything fails: r
 
 - [ ] **Step 1: Confirm Task 2 passed and nothing references the folder in code**
 
-Run: `git grep -n 'web/' -- recorder tests hooks fake_agent.py install.sh pyproject.toml`
+First ask the author in chat to paste the Task 2 smoke result, and stop without it. Then run: `git grep -n 'web/' -- recorder tests hooks fake_agent.py install.sh pyproject.toml`
 Expected: no output.
 
 - [ ] **Step 2: Remove it**
@@ -436,7 +443,7 @@ Testing lines. Replace
 with
 ```
   `?all=1` returns more than the default last 10; `GET /` serves the React
-  page and its `/assets/` load; wrong Host on `/` → 403; `/` and its assets send
+  page and its `/assets/` load; wrong Host on `/` (and `/v2`) → 403; `/` and its assets send
   `Cache-Control: no-cache`; `/v2/` (also `/v2`, `/v2/index.html`) answers 307 to
   `/` with the query kept; missing `ui/dist` logs a warning and does not
   prevent the app from importing.
@@ -557,7 +564,7 @@ Expected: no output from either (exit code 1 each). If a line prints, fix that p
 - [ ] **Step 7: The `/v2` grep (expected list)**
 
 Run: `git grep -nI '/v2' -- . ':(exclude)docs/superpowers' ':(exclude)ui/dist'`
-Expected: lines only in `recorder/app.py` (the three routes and the docstring), `tests/test_app.py` (redirect, 403, 404 tests), and one short redirect mention each in `AGENTS.md`, `README.md`, `HOOKS.md` and `ui/README.md`. `ui/vite.config.ts`, `SPEC.md` and `ui/src/` print nothing. Read every line: each must be code or a statement that `/v2/` redirects.
+Expected: lines only in `recorder/app.py` (the path tuple in `mount_v2_redirects`), `tests/test_app.py` (the redirect, 403 and 404 tests, and the negative check `assert "/v2/" not in text`), and short redirect mentions in `AGENTS.md` (one line), `README.md` (one), `HOOKS.md` (two lines) and `ui/README.md` (one). `ui/vite.config.ts`, `SPEC.md` and `ui/src/` print nothing. Read every line: each must be code or a statement that `/v2/` redirects.
 
 - [ ] **Step 8: Final checks**
 
@@ -602,4 +609,4 @@ Report: what is committed, the three commit hashes, and that the GIF and video a
 - **Spec coverage:** decisions 1-5 → Task 1 step 5 and tests; changes table → Tasks 1, 3, 4; tests list → Task 1 step 3 (403 incl. `/v2`, page test with `"://"`, asset test, redirects with `follow_redirects=False`, redirects without dist, `GET /hook` 405, 404 pins marked `requires_ui_dist`, traversal, incomplete-dist cases, complete-dist test creating `assets/`, old tests deleted); order of work → Tasks 0-4 (Jira + gate in Task 0, smoke in Task 2 before the delete); the three greps → Task 4 steps 6-7; checks → Task 4 step 8; after-merge follow-up and PR text → Task 4 step 10.
 - **Placeholder scan:** none. The only angle-bracket value is the Task 2 result pasted into the PR text, which does not exist until Task 2 runs.
 - **Type consistency:** `is_ui_path`, `mount_ui`, `v2_redirect`, `mount_v2_redirects` are used under the same names in tests and `app.py`.
-- **Review Focus:** items 1-5 map to `test_v2_redirects_to_root` (empty and encoded query), `test_unserved_paths_are_404` (`/v2/foo`, `/v2x`), `test_assets_do_not_escape_their_directory`, `test_mount_ui_skips_incomplete_dist` (`no_assets`, `no_index`), `test_forbidden_host` (`/v2`, `/v2/`).
+- **Review Focus:** items 1-5 map to `test_v2_redirects_to_root` (empty and encoded query), `test_unserved_paths_are_404` (`/v2/foo`, `/v2x`), `test_assets_do_not_escape_their_directory` (both assertions), `test_mount_ui_skips_incomplete_dist` (`no_assets`, `no_index`), `test_forbidden_host` (`/v2`, `/v2/`); the cache header staying off non-UI paths is `test_no_cache_header_only_on_ui_paths`.
