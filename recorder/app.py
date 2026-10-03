@@ -118,8 +118,8 @@ def mount_ui(application: FastAPI, dist: Path) -> None:
     assets: Path = dist / "assets"
     if not (index.is_file() and assets.is_dir()):
         logger.warning(
-            "ui/dist incomplete or missing; / has no page. Build it: "
-            "npm --prefix ui run build (%s)",
+            "ui/dist incomplete or missing; / has no page. Build it "
+            "(npm --prefix ui run build), then restart the server (%s)",
             dist,
         )
         return

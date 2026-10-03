@@ -315,7 +315,11 @@ def test_mount_ui_skips_incomplete_dist(
     with caplog.at_level(logging.WARNING, logger="flightrecorder"):
         app_module.mount_ui(bare, dist)
     assert not any(getattr(r, "path", None) in {"/", "/assets"} for r in bare.routes)
-    assert any("ui/dist" in message for message in caplog.messages)
+    # The build alone is not enough: the page is registered once, at start-up.
+    assert any(
+        "npm --prefix ui run build" in message and "restart" in message
+        for message in caplog.messages
+    )
 
 
 def test_mount_ui_serves_complete_dist(tmp_path: Path) -> None:

@@ -232,7 +232,8 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - `GET /` serves the committed `ui/dist` build (Host check only; no token); its
   assets are under `/assets/`. Both send `Cache-Control: no-cache`. If `ui/dist`
   is missing the server logs a warning and `/` is a plain 404: run
-  `npm --prefix ui run build`.
+  `npm --prefix ui run build`, then restart the server (the page is
+  registered once, at start-up).
 - `/v2/` (also `/v2` and `/v2/index.html`) answers 307 to `/`, query string
   kept; any other `/v2/...` path is a 404.
 - `GET /api/steps` → `{session, steps}` for the **most recent** session,
