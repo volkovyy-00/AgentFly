@@ -1,6 +1,6 @@
 # AG-31 Sunset the Old Page Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (the author chose native, inline execution on 2026-10-03) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `/` serves the `ui/dist` build, `/v2/` only redirects to it, `web/` is gone, and every doc describes one page.
 
