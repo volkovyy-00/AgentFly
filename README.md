@@ -112,17 +112,15 @@ The `.env` in this repo holds only a fake demo value (bait for the rule).
 Never put a real credential in it.
 
 **4. Watch the live graph.** With the recorder running, open
-<http://127.0.0.1:8787/>. The page polls `GET /api/steps` about once a second
-and draws the last 10 steps of the current session from the server's memory,
-so it works without Neo4j. The page needs no token; only `POST /hook` does.
-To preview the page with sample data and no server, open
-`web/index.html?mock=1`. The new UI (`ui/`, Vite + React) is at
-<http://127.0.0.1:8787/v2/>: a timeline with steps on the left, files in the
-middle and hosts and rules on the right, drawing the 20 most recent steps. In
-a long session a summary box above them counts the earlier steps, with up to 5
-flagged ones (the step that made R1 mark the session, and the newest blocks and
-warnings) one pan upward. `/v2/?mock=1` replays a sample session with no server
-(`&len=500&burst=10` replays a long one).
+<http://127.0.0.1:8787/>. The page (`ui/`, Vite + React) polls `GET /api/steps`
+about once a second from the server's memory, so it works without Neo4j. It is
+a timeline with steps on the left, files in the middle and hosts and rules on
+the right, drawing the 20 most recent steps. In a long session a summary box
+above them counts the earlier steps, with up to 5 flagged ones (the step that
+made R1 mark the session, and the newest blocks and warnings) one pan upward.
+The page needs no token; only `POST /hook` does. To preview it with sample
+data and no agent, open <http://127.0.0.1:8787/?mock=1> (`&len=500&burst=10`
+replays a long session). The old `/v2/` address redirects to `/`.
 
 ## Configuration
 
@@ -228,8 +226,7 @@ the database is unreachable.
 |---|---|
 | `hooks/hook.py` | Hook helper Cursor runs: drops file contents, posts to the server, fails open |
 | `recorder/` | Server (`app.py`), rules (`rules.py`), sessions, command cleaner, Neo4j store |
-| `web/index.html` | Current live graph page (vis-network from a CDN) at `/` |
-| `ui/` | New live graph app (Vite + React); committed build at `ui/dist`, served at `/v2/` |
+| `ui/` | Live graph app (Vite + React); committed build at `ui/dist`, served at `/` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
 
