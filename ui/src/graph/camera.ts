@@ -44,11 +44,16 @@ export interface Rows {
   last: number
 }
 
-export function rowsOf(steps: readonly PlacedStep[]): Rows {
+/**
+ * `groupRowCount` is the rows the group takes above the oldest window row (the
+ * summary plus the drawn flagged steps; 0 for no group), so the pan range and
+ * the follow target treat the summary row as the first row.
+ */
+export function rowsOf(steps: readonly PlacedStep[], groupRowCount = 0): Rows {
   const first = steps[0]
   const last = steps.at(-1)
   if (first === undefined || last === undefined) return { first: 0, last: -1 }
-  return { first: first.row, last: last.row }
+  return { first: first.row - groupRowCount, last: last.row }
 }
 
 /**

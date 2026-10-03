@@ -241,3 +241,17 @@ describe('rowsOf', () => {
     expect(rowsOf(place(stepsFrom(1, 3), 7))).toEqual({ first: 7, last: 9 })
   })
 })
+
+describe('rowsOf with a group', () => {
+  it('starts at the group top and leaves last alone', () => {
+    expect(rowsOf(place(stepsFrom(1, 3), 7), 4)).toEqual({ first: 3, last: 9 })
+    expect(rowsOf(place(stepsFrom(1, 3), 7), 0)).toEqual({ first: 7, last: 9 })
+    expect(rowsOf([], 3)).toEqual({ first: 0, last: -1 })
+  })
+
+  it('lets the pan range reach a group above row 0', () => {
+    const rows = rowsOf(place(stepsFrom(1, 20), 1), 6)
+    const [[, top]] = panExtent(rows, PANE)
+    expect(top).toBe(-5 * ROW_PITCH - TOP_PAD)
+  })
+})

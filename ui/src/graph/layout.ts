@@ -1,6 +1,6 @@
 import { MarkerType, Position, type Edge, type EdgeMarker, type Node, type NodeHandle } from '@xyflow/react'
 import { TIMING, enterDelay, type Span } from './choreography'
-import type { PlacedStep, Step } from './types'
+import type { Group, Hidden, PlacedStep, Step } from './types'
 
 // All sizes in px. Rows are 56 px apart; row i is the cell [56i, 56i + 56).
 export const ROW_PITCH = 56
@@ -57,6 +57,10 @@ export const chainEdgeId = (from: number, to: number): string => `chain:${from}:
 export const fileEdgeId = (order: number): string => `file-edge:${order}`
 export const hostEdgeId = (order: number): string => `host-edge:${order}`
 export const ruleEdgeId = (order: number): string => `rule-edge:${order}`
+export const SUMMARY_ID = 'summary'
+export const groupEdgeId = (order: number): string => `group-edge:${order}`
+export const MAX_LANE_BOXES = 15
+export const MAX_RULE_BOXES = 5
 
 /** How a box or edge enters: nothing for a first-paint step, else after the step's stagger delay. */
 export interface Enter {
@@ -80,11 +84,12 @@ export type BoxMeta = {
   enter: Enter
 }
 
-export type StepNode = Node<{ step: PlacedStep }, 'step'>
+export type StepNode = Node<{ step: PlacedStep; flagged: boolean; marked: boolean }, 'step'>
+export type SummaryNode = Node<{ hidden: Hidden }, 'summary'>
 export type FileNode = Node<{ path: string; sensitive: boolean } & BoxMeta, 'file'>
 export type HostNode = Node<{ host: string } & BoxMeta, 'host'>
 export type RuleNode = Node<{ rule: string } & BoxMeta, 'rule'>
-export type GraphNode = StepNode | FileNode | HostNode | RuleNode
+export type GraphNode = StepNode | SummaryNode | FileNode | HostNode | RuleNode
 
 export interface Layout {
   nodes: GraphNode[]
@@ -138,6 +143,7 @@ const STEP_HANDLES: NodeHandle[] = [
   handle('b', 'source', Position.Bottom, STEP_W, STEP_H),
   handle('r', 'source', Position.Right, STEP_W, STEP_H),
 ]
+const SUMMARY_HANDLES: NodeHandle[] = [handle('b', 'source', Position.Bottom, STEP_W, STEP_H)]
 
 function boxHandles(w: number): NodeHandle[] {
   return [handle('l', 'target', Position.Left, w, LANE_H)]
@@ -188,12 +194,60 @@ function link(
   }
 }
 
+/** The flagged steps that are drawn: ascending, each order once, none already in the window. */
+export function drawnFlagged(steps: readonly PlacedStep[], group: Group | null): Step[] {
+  if (group === null || steps.length === 0) return []
+  const seen = new Set(steps.map((s) => s.order))
+  return group.flagged
+    .filter((s) => {
+      if (seen.has(s.order)) return false
+      seen.add(s.order)
+      return true
+    })
+    .sort((a, b) => a.order - b.order)
+}
+
+/** Rows the group takes above the oldest window row: the summary plus the drawn flagged steps. */
+export function groupRows(steps: readonly PlacedStep[], group: Group | null): number {
+  return group === null || steps.length === 0 ? 0 : 1 + drawnFlagged(steps, group).length
+}
+
+interface Candidate {
+  id: string
+  meta: BoxMeta
+  /** A file is dropped before a host on a tie. */
+  rank: number
+}
+
+/**
+ * Ids over the cap, least recently touched first. Ties break by a fixed key that
+ * never changes as the window slides (kind, then id), so a box cannot come back
+ * without a touch. `anchorRow` is not a tie-break: it changes when a toucher leaves.
+ */
+function overCap(candidates: Candidate[], max: number): string[] {
+  if (candidates.length <= max) return []
+  const byId = (a: Candidate, b: Candidate): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  return [...candidates]
+    .sort((a, b) => a.meta.lastTouchRow - b.meta.lastTouchRow || a.rank - b.rank || byId(a, b))
+    .slice(0, candidates.length - max)
+    .map((c) => c.id)
+}
+
+const QUIET_WIPE: WipeData = { shape: 'straight', quiet: true, start: 0, end: 0 }
+
 /**
  * Pure layout. Positions come only from a step's `row` (fixed when first seen),
  * never from its place in the list or from `step.order`. A file, host or rule is
- * one box, level with the first step in the list that touches it.
+ * one box, level with the first step in the list that touches it; at most 15
+ * file/host boxes and 5 rule boxes are drawn. The group (summary box, then the
+ * flagged steps) sits in the rows directly above the oldest window row; its
+ * boxes and edges are always quiet, and only window steps touch shared boxes.
  */
-export function layoutGraph(steps: readonly PlacedStep[]): Layout {
+export function layoutGraph(
+  steps: readonly PlacedStep[],
+  group: Group | null = null,
+  markedOrder: number | null = null,
+): Layout {
   const files = new Map<string, BoxMeta>()
   const hosts = new Map<string, BoxMeta>()
   const rules = new Map<string, BoxMeta>()
@@ -208,6 +262,20 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
     if (step.rule !== null) touch(rules, step.rule, step)
   }
 
+  const dropped = new Set([
+    ...overCap(
+      [
+        ...[...files].map(([path, meta]) => ({ id: fileId(path), meta, rank: 0 })),
+        ...[...hosts].map(([host, meta]) => ({ id: hostId(host), meta, rank: 1 })),
+      ],
+      MAX_LANE_BOXES,
+    ),
+    ...overCap(
+      [...rules].map(([rule, meta]) => ({ id: ruleId(rule), meta, rank: 0 })),
+      MAX_RULE_BOXES,
+    ),
+  ])
+
   const nodes: GraphNode[] = []
   const edges: Edge[] = []
 
@@ -219,7 +287,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
       position: { x: STEP_X, y: cy - STEP_H / 2 },
       width: STEP_W,
       height: STEP_H,
-      data: { step },
+      data: { step, flagged: false, marked: step.order === markedOrder },
       handles: STEP_HANDLES,
       ...BASE,
     })
@@ -239,7 +307,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
       })
     }
 
-    if (step.file !== null) {
+    if (step.file !== null && !dropped.has(fileId(step.file))) {
       const secret = step.sensitive
       edges.push(
         link(
@@ -253,7 +321,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
         ),
       )
     }
-    if (step.host !== null) {
+    if (step.host !== null && !dropped.has(hostId(step.host))) {
       const blocked = step.verdict === 'blocked'
       const elevate = blocked || step.verdict === 'warned'
       edges.push(
@@ -270,7 +338,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
         ),
       )
     }
-    if (step.rule !== null) {
+    if (step.rule !== null && !dropped.has(ruleId(step.rule))) {
       const warned = step.verdict === 'warned'
       edges.push(
         link(
@@ -290,7 +358,50 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
     }
   })
 
+  if (group !== null && steps.length > 0) {
+    const flagged = drawnFlagged(steps, group)
+    const summaryRow = steps[0].row - 1 - flagged.length
+    nodes.push({
+      id: SUMMARY_ID,
+      type: 'summary',
+      position: { x: STEP_X, y: rowCentre(summaryRow) - STEP_H / 2 },
+      width: STEP_W,
+      height: STEP_H,
+      data: { hidden: group.hidden },
+      handles: SUMMARY_HANDLES,
+      ...BASE,
+    })
+    let upstream = SUMMARY_ID
+    flagged.forEach((step, i) => {
+      const row = summaryRow + 1 + i
+      const placed: PlacedStep = { ...step, row, quiet: true, slot: 0, of: 1 }
+      nodes.push({
+        id: stepId(step.order),
+        type: 'step',
+        position: { x: STEP_X, y: rowCentre(row) - STEP_H / 2 },
+        width: STEP_W,
+        height: STEP_H,
+        data: { step: placed, flagged: true, marked: step.order === markedOrder },
+        handles: STEP_HANDLES,
+        ...BASE,
+      })
+      edges.push({
+        id: groupEdgeId(step.order),
+        type: 'wipe',
+        data: QUIET_WIPE,
+        source: upstream,
+        sourceHandle: 'b',
+        target: stepId(step.order),
+        targetHandle: 't',
+        style: { stroke: 'var(--color-chain)', strokeWidth: 3 },
+        markerEnd: arrow(EDGE_COLOR.chain),
+      })
+      upstream = stepId(step.order)
+    })
+  }
+
   for (const [path, meta] of files) {
+    if (dropped.has(fileId(path))) continue
     nodes.push({
       id: fileId(path),
       type: 'file',
@@ -303,6 +414,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
     })
   }
   for (const [host, meta] of hosts) {
+    if (dropped.has(hostId(host))) continue
     nodes.push({
       id: hostId(host),
       type: 'host',
@@ -315,6 +427,7 @@ export function layoutGraph(steps: readonly PlacedStep[]): Layout {
     })
   }
   for (const [rule, meta] of rules) {
+    if (dropped.has(ruleId(rule))) continue
     nodes.push({
       id: ruleId(rule),
       type: 'rule',
