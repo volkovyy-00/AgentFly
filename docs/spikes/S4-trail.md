@@ -1,9 +1,30 @@
 # S4: trail mock vs today's page
-Status: blocked on the owner's verdict on v3 (as of 2026-10-16 00:46)
-Result: Trail mock reworked twice: v2 after an impeccable critique, v3 so it works at half-screen width (about 720 px), the owner's main use. D15 result still open.
-Evidence: docs/spikes/S4-trail-mock.html (v3), S4-trail.png (1440 px), S4-trail-half.png (720 px), S4-today-page.png. Detector: 0 findings.
-Needs owner: Look at v3 at half-screen and today's page, then answer: trail or today's page, what is missing, does the Why card carry the red box with a dashed line to R1. Recommended answer: trail.
-Details: see "## 2026-10-16 00:46" below.
+Status: done (as of 2026-10-16 00:49)
+Result: PASS. The owner chose the trail, named nothing missing, and said the Why card carries the red-box-and-dashed-line-to-R1 moment. D15-A (trail as home) is confirmed. One request for the build: let the owner hide or resize the Why card.
+Evidence: docs/spikes/S4-trail-mock.html (v3), S4-trail.png, S4-trail-half.png, S4-today-page.png; owner's answers below. No product code touched.
+Needs owner: none
+Details: see "## 2026-10-16 00:49" below.
+
+## 2026-10-16 00:49
+
+### Owner's verdict
+Answers, in the owner's words (after seeing v3 at half-screen):
+1. Trail or today's page? "trail"
+2. What is missing? "nothing"
+3. Does the Why card carry the old demo's red box with a dashed line to R1? "yes"
+Extra, unprompted: "i would make possible to hide or resize the card".
+
+### D15 result
+**Pass: D15-A, the trail as home.** The owner picked the trail and named nothing missing. The lane graph moves to a "Graph" tab as D15-A describes.
+For the build cards: the Why card must be hideable and resizable. The mock's card is fixed (about 480 px at full screen, 46% of the height when stacked) and has no control for this; the mock was not changed. How to hide or resize it (a drag handle, a collapse button, remembered between visits) is not decided; I did not guess.
+
+### Notes for whoever builds it
+- Keep the three things the owner reacted to: tinted idle blocks with only the selected block solid red, the rail from the secret read to the block, and the large red box with dashed lines to the host and `R1`.
+- Half-screen (about 720 px) is the main use, so the one-screen stacked layout below 1080 px is the main layout, not a fallback.
+- Not tested in this spike: live updates, motion, timestamps (the steps carry no time), and sessions that are not this synthetic one (one secret read, a block every 13 steps).
+
+### Cleanup
+The Vite dev server started for this card has been stopped.
 
 ## 2026-10-16 00:46
 
