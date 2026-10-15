@@ -1,9 +1,20 @@
 # S4: trail mock vs today's page
-Status: blocked on the owner's look at the revised mock (as of 2026-10-16 00:45)
-Result: Trail mock built from the same 240 steps. The owner disliked v1, so it was reworked after an impeccable critique (v2). D15 result still open: no verdict on v2 yet.
-Evidence: docs/spikes/S4-trail-mock.html (v2), S4-trail.png (v2), S4-today-page.png. Detector scan of v2: 0 findings. No product code touched.
-Needs owner: Look at v2 and today's page, 2 minutes each, then answer the 3 questions below, and say what you disliked in v1. Recommended answer: trail, if the Why card now carries the red box and dashed line to R1.
-Details: see "## 2026-10-16 00:45" below.
+Status: blocked on the owner's verdict on v3 (as of 2026-10-16 00:46)
+Result: Trail mock reworked twice: v2 after an impeccable critique, v3 so it works at half-screen width (about 720 px), the owner's main use. D15 result still open.
+Evidence: docs/spikes/S4-trail-mock.html (v3), S4-trail.png (1440 px), S4-trail-half.png (720 px), S4-today-page.png. Detector: 0 findings.
+Needs owner: Look at v3 at half-screen and today's page, then answer: trail or today's page, what is missing, does the Why card carry the red box with a dashed line to R1. Recommended answer: trail.
+Details: see "## 2026-10-16 00:46" below.
+
+## 2026-10-16 00:46
+
+### v3: half-screen
+The owner said v2 was "much better" but the UI will mostly sit on half the screen, and sent a screenshot at about 700 px wide: the header wrapped ("Live Trail" and the recorder text broke across lines), the page fell back to a stacked layout with the Why card below the fold, and the controls above the trail took about 450 px of height.
+Changes (all in `docs/spikes/S4-trail-mock.html`):
+- Below 1080 px the page is one screen: trail on top, Why card below (46% of the height), each scrolling on its own. Nothing scrolls the whole page.
+- Header stays on one line: tabs and chips do not wrap; the step count and the recorder address hide below 1080 px, the recorder text hides below 760 px (the green dot stays, with a tooltip).
+- The Why card measures its own width. When it is 560 px or wider, the chain runs left to right: `.env` read → folded steps → blocked box, with the dashed lines down to `ntfy.sh` and `R1` under the blocked box. Narrower (the 480 px side panel at full screen) it stays vertical.
+- The key-hint line hides below 760 px.
+Checked: 720 px window in Chrome (screenshot `S4-trail-half.png`: whole story, from the `.env` row to the messages sent, fits without scrolling the page) and 1440 px headless (`S4-trail.png`, unchanged layout). Detector: 0 findings. Not checked: windows narrower than about 600 px, and short windows (under 700 px tall).
 
 ## 2026-10-16 00:45
 
@@ -22,7 +33,7 @@ Detector: 0 findings after replacing a dashed CSS gradient with an SVG dashed li
 Default view renders as in `docs/spikes/S4-trail.png`. `Next` ×3 moved to block 4 of 18 (Step 53): the card, the "4 of 18" counter and the rail all updated.
 
 ### What changed in the sections below
-The 2026-10-16 00:40 section describes v1. Its "What to open", "The data" and "Limits" still hold. "What the trail shows" and "What I saw" are v1, so read them with the changes above.
+The 2026-10-16 00:40 section describes v1; the 00:45 section describes v2. Its "What to open", "The data" and "Limits" still hold. "What the trail shows" and "What I saw" are v1, so read them with the changes above.
 
 ## 2026-10-16 00:40
 

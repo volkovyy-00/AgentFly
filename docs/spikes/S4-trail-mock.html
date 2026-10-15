@@ -28,10 +28,10 @@
   header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 15px; margin: 0; letter-spacing: .01em; }
   nav { display: flex; gap: 2px; margin-left: 8px; }
-  nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: not-allowed; }
+  nav button { background: none; border: 0; padding: 6px 12px; white-space: nowrap; border-radius: 6px; color: var(--muted); cursor: not-allowed; }
   nav button[aria-current="page"] { background: var(--raised); color: var(--ink); cursor: default; }
   .spacer { flex: 1; }
-  .health { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .health { white-space: nowrap; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
   .chip { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
     padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
@@ -101,7 +101,7 @@
   .row.trigger { outline: 2px solid var(--secret); outline-offset: -2px; background: rgba(217, 119, 6, .22); }
 
   /* Why card */
-  .why { padding: 20px 22px; overflow-y: auto; background: var(--surface); }
+  .why { padding: 18px 22px; overflow-y: auto; background: var(--surface); container-type: inline-size; }
   .why .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
   .why h2 { margin: 6px 0 6px; font-size: 22px; line-height: 1.25; font-weight: 650; text-wrap: balance; }
   .why h2 .mono { font-size: .82em; }
@@ -139,10 +139,31 @@
   /* keyboard focus wins over selection styling */
   :focus-visible, .row.alarm:focus-visible, .row.alarm[aria-pressed="true"]:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
-  @media (max-width: 1000px) {
-    body { overflow: auto; }
-    main { grid-template-columns: 1fr; }
-    .trail { max-height: 60vh; }
+  /* Half-screen (about 700-1000 px): one column, trail on top, Why card below, both visible and scrolling on their own. */
+  @media (max-width: 1080px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 46%); }
+    .trail-col { border-right: 0; border-bottom: 1px solid var(--line); }
+    .why { border-top: 0; }
+    .hide-md { display: none; }
+    header { gap: 8px; padding: 8px 16px; }
+    nav { margin-left: 4px; }
+    nav button { padding: 6px 10px; }
+    .pinned, .toolbar, .trail { padding-left: 16px; padding-right: 16px; }
+    .rail { left: 87px; }
+    .pin-row { min-height: 32px; }
+    .why h2 { font-size: 20px; }
+    .why .rule-line { margin-bottom: 12px; }
+  }
+  @media (max-width: 760px) { .hide-sm { display: none; } }
+
+  /* Wide Why card (half-screen, stacked): the chain reads left to right, dashed lines hang under the blocked box. */
+  @container (min-width: 560px) {
+    .chain { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, .8fr) auto minmax(0, 1.5fr); align-items: stretch; margin-bottom: 14px; }
+    .vlink { width: 18px; height: 2px; margin: 0; align-self: center; }
+    .box.mid { display: flex; align-items: center; }
+    .box.blk { padding: 12px 14px; }
+    .dash, .ends { grid-column: 5; }
+    .dash { height: 26px; }
   }
   @media (prefers-reduced-motion: reduce) { .caret::before { transition: none; } }
 </style>
@@ -154,17 +175,17 @@
     <nav aria-label="Views">
       <button aria-current="page">Live Trail</button><button aria-disabled="true" title="Not part of this mock">History</button><button aria-disabled="true" title="Not part of this mock">Rules</button><button aria-disabled="true" title="Not part of this mock">Graph</button>
     </nav>
-    <span class="chip count" id="count"></span>
+    <span class="chip count hide-md" id="count"></span>
     <span class="chip secret">Secret seen</span>
     <span class="spacer"></span>
-    <div class="health"><span class="dot"></span> Recorder up · 127.0.0.1:8787 · session mock-0</div>
+    <div class="health" title="Recorder up · 127.0.0.1:8787 · session mock-0"><span class="dot"></span><span class="hide-sm">Recorder up</span><span class="hide-md">· 127.0.0.1:8787 · session mock-0</span></div>
   </header>
   <main>
     <section class="trail-col" aria-label="Trail">
       <div class="pinned" id="pinned"></div>
       <div class="toolbar">
         <span id="summary"></span><span class="sp"></span>
-        <span class="hint"><kbd>n</kbd> <kbd>p</kbd> next / previous block</span>
+        <span class="hint hide-sm"><kbd>n</kbd> <kbd>p</kbd> next / previous block</span>
         <button class="follow" id="follow" aria-pressed="false">Follow latest</button>
       </div>
       <div class="trail" id="trail"><div class="rail" id="rail" hidden></div><div id="items"></div></div>
