@@ -12,119 +12,139 @@
     --ink: #e6edf3; --muted: #a8b3c5;
     --step: #374151; --blocked: #ef4444; --fill-blocked: #7f1d1d; --chip-blocked: #fecaca;
     --warned: #a78bfa; --fill-warned: #4c1d95; --chip-warned: #ddd6fe;
-    --secret: #d97706; --fill-secret: #f59e0b; --link: #60a5fa; --fill-link: #1e3a8a;
+    --secret: #d97706; --fill-secret: #f59e0b; --chip-secret: #fde68a; --link: #60a5fa; --fill-link: #1e3a8a;
     --ok: #34d399;
     --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--ink);
-    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  body { overflow: hidden; }
   button { font: inherit; color: inherit; }
-  :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  ::selection { background: #1e3a8a; color: var(--ink); }
   .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
 
-  /* header + health strip */
+  /* header */
   header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 15px; margin: 0; letter-spacing: .01em; }
   nav { display: flex; gap: 2px; margin-left: 8px; }
-  nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: default; }
-  nav button[aria-current="page"] { background: var(--raised); color: var(--ink); }
+  nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: not-allowed; }
+  nav button[aria-current="page"] { background: var(--raised); color: var(--ink); cursor: default; }
   .spacer { flex: 1; }
-  .health { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+  .health { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
-  .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
-    padding: 2px 7px; border-radius: 4px; }
+  .chip { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
   .chip.secret { background: var(--fill-secret); color: #1a1100; }
   .chip.blocked { background: var(--chip-blocked); color: #450a0a; }
   .chip.warned { background: var(--chip-warned); color: #2e1065; }
-  .chip.ok { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+  .chip.count { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
 
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 460px; min-height: 0; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 480px); min-height: 0; }
 
   /* trail column */
   .trail-col { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
-  .pinned { padding: 10px 20px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
-  .pinned h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
-  .pin-row { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
-  .pin-row .lbl { font-size: 12.5px; min-width: 120px; color: var(--muted); }
-  .pin-row .lbl b { color: var(--ink); }
-  .pin { font: 600 12px var(--mono); padding: 2px 7px; border-radius: 4px; border: 1px solid; background: transparent; cursor: pointer; }
-  .pin.b { border-color: var(--blocked); color: var(--chip-blocked); }
-  .pin.b:hover, .pin.b[aria-pressed="true"] { background: var(--fill-blocked); }
-  .pin.w { border-color: var(--warned); color: var(--chip-warned); }
-  .pin.w:hover, .pin.w[aria-pressed="true"] { background: var(--fill-warned); }
-  .pin[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .pinned { padding: 8px 20px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .pin-row { display: flex; align-items: center; gap: 12px; min-height: 36px; }
+  .pin-row .lbl { flex: 1; font-size: 14px; color: var(--muted); }
+  .pin-row .lbl b { color: var(--ink); font-weight: 600; }
+  .pin-row .pos { font: 13px var(--mono); color: var(--muted); min-width: 84px; text-align: right; }
+  .nbtn { min-height: 28px; padding: 3px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; font-size: 13px; }
+  .nbtn:hover { border-color: var(--muted); }
+  .nbtn.b { border-color: #7f1d1d; }
+  .nbtn.w { border-color: #4c1d95; }
+  .hint { color: var(--muted); font-size: 12px; }
+  kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--raised); }
 
-  .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--line); }
+  .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
   .toolbar .sp { flex: 1; }
-  .follow { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  .follow { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 3px 12px; min-height: 28px; cursor: pointer; }
   .follow[aria-pressed="true"] { border-color: var(--link); color: var(--link); }
 
-  .trail { overflow-y: auto; padding: 8px 20px 24px; flex: 1; scroll-behavior: auto; }
-  .row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; min-height: 34px;
-    padding: 4px 10px; border-radius: 6px; border-left: 3px solid transparent; }
-  .no { font: 12px var(--mono); color: var(--muted); text-align: right; }
+  .trail { position: relative; overflow-y: auto; padding: 8px 20px 24px; flex: 1; }
+  .rail { position: absolute; left: 91px; width: 2px; border-radius: 1px; pointer-events: none; z-index: 2;
+    background: linear-gradient(to bottom, var(--secret), var(--blocked)); }
+  .row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; min-height: 32px; padding: 3px 10px; border-radius: 6px; }
+  .no { font: 13px var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kind { display: inline-block; min-width: 44px; font-weight: 600; color: var(--muted); margin-right: 4px; }
   .mono { font-family: var(--mono); font-size: 13px; }
-  .badge { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; }
+  .note { color: var(--muted); font-size: 12.5px; }
 
-  /* routine groups */
-  details.group { margin: 2px 0; }
-  details.group > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 56px 1fr auto; gap: 10px;
-    align-items: center; min-height: 34px; padding: 4px 10px; border-radius: 6px; color: var(--muted); border-left: 3px solid transparent; }
+  /* routine groups: no per-group verdict chip, the quiet default needs no label */
+  details.group { margin: 1px 0; }
+  details.group > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 56px 1fr; gap: 10px;
+    align-items: center; min-height: 32px; padding: 3px 10px; border-radius: 6px; color: var(--muted); }
   details.group > summary::-webkit-details-marker { display: none; }
   details.group > summary:hover { background: var(--surface); }
-  details.group > summary .no { color: #7d8896; }
+  details.group > summary .no { color: #8995a5; }
   details.group[open] > summary { background: var(--surface); }
   .gsum b { color: var(--ink); font-weight: 600; }
   .caret::before { content: '▸'; display: inline-block; width: 14px; transition: transform .12s; }
   details[open] > summary .caret::before { transform: rotate(90deg); }
   .inner { padding: 2px 0 6px 28px; }
-  .inner .row { min-height: 28px; font-size: 13px; color: var(--muted); }
+  .inner .row { min-height: 26px; font-size: 13px; color: var(--muted); }
 
-  /* pinned rows in the trail */
-  .row.alarm { cursor: pointer; margin: 3px 0; min-height: 40px; }
-  .row.alarm.b { background: var(--fill-blocked); border-left-color: var(--blocked); }
-  .row.alarm.w { background: #2e1f5a; border-left-color: var(--warned); }
-  .row.alarm.b:hover { background: #8f2222; }
-  .row.alarm.w:hover { background: #3a2872; }
-  .row.alarm .no { color: #e8c9c9; }
-  .row.alarm[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: -2px; }
-  .row.secret { background: rgba(217, 119, 6, .14); border-left-color: var(--secret); margin: 3px 0; min-height: 40px; }
-  .row.secret .no { color: #f3c98a; }
-  .row.trigger { box-shadow: inset 0 0 0 2px var(--secret); }
-  .row.chain-end { box-shadow: inset 0 0 0 2px var(--blocked); }
-  .badge.trig { background: var(--fill-secret); color: #1a1100; }
+  /* alarms: tinted and calm while idle; the selected one is the only solid-red thing on screen */
+  .row.alarm { cursor: pointer; margin: 2px 0; min-height: 36px; border: 1px solid transparent; }
+  .row.alarm.b { background: rgba(239, 68, 68, .09); border-color: rgba(239, 68, 68, .35); }
+  .row.alarm.w { background: rgba(167, 139, 250, .09); border-color: rgba(167, 139, 250, .35); }
+  .row.alarm.b:hover { background: rgba(239, 68, 68, .16); }
+  .row.alarm.w:hover { background: rgba(167, 139, 250, .16); }
+  .row.alarm .kind { color: #f5c4c4; }
+  .row.alarm.w .kind { color: #d9d0fb; }
+  .row.alarm.b[aria-pressed="true"] { background: var(--fill-blocked); border-color: var(--blocked); outline: 2px solid var(--ink); outline-offset: -2px; }
+  .row.alarm.w[aria-pressed="true"] { background: var(--fill-warned); border-color: var(--warned); outline: 2px solid var(--ink); outline-offset: -2px; }
+  .row.alarm[aria-pressed="true"] .no, .row.alarm[aria-pressed="true"] .kind { color: var(--ink); }
+  .row.secret { background: rgba(217, 119, 6, .12); border: 1px solid rgba(217, 119, 6, .5); margin: 2px 0; min-height: 36px; }
+  .row.secret .kind { color: var(--chip-secret); }
+  .row.trigger { outline: 2px solid var(--secret); outline-offset: -2px; background: rgba(217, 119, 6, .22); }
 
   /* Why card */
-  .why { padding: 20px; overflow-y: auto; background: var(--surface); }
-  .why .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
-  .why h2 { margin: 4px 0 6px; font-size: 18px; line-height: 1.25; }
-  .why .rule-line { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .why { padding: 20px 22px; overflow-y: auto; background: var(--surface); }
+  .why .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .why h2 { margin: 6px 0 6px; font-size: 22px; line-height: 1.25; font-weight: 650; text-wrap: balance; }
+  .why h2 .mono { font-size: .82em; }
+  .why .rule-line { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
 
-  .chain { position: relative; height: 226px; margin: 6px 0 14px; }
-  .chain svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-  .box { position: absolute; left: 0; width: 240px; border-radius: 8px; padding: 8px 10px; border: 1.5px solid var(--line); background: var(--step); }
-  .box small { display: block; color: var(--muted); font-size: 11.5px; }
-  .box .t { font-size: 13px; }
-  .box.sec { background: rgba(217, 119, 6, .16); border-color: var(--secret); top: 0; }
-  .box.mid { background: var(--raised); border-style: dashed; top: 86px; height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 12.5px; }
-  .box.blk { background: var(--fill-blocked); border-color: var(--blocked); top: 142px; }
-  .box.blk .t { font-weight: 600; }
-  .pill { position: absolute; left: 300px; top: 172px; width: 120px; padding: 6px 0; text-align: center; font-weight: 700;
-    border-radius: 999px; background: var(--fill-blocked); border: 1.5px solid var(--blocked); }
-  .host { position: absolute; left: 300px; top: 132px; width: 120px; padding: 4px 0; text-align: center; font: 600 12px var(--mono);
-    border-radius: 4px; background: var(--fill-link); border: 1.5px solid var(--link); }
-  .stepn { font: 700 11px var(--mono); color: var(--ink); background: #0006; padding: 1px 6px; border-radius: 3px; margin-right: 6px; }
+  .chain { display: flex; flex-direction: column; margin: 4px 0 18px; }
+  .box { border-radius: 8px; padding: 9px 12px; border: 1.5px solid var(--line); background: var(--step); }
+  .box small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .box .t { margin-top: 4px; }
+  .box.sec { background: rgba(217, 119, 6, .16); border-color: var(--secret); }
+  .box.sec small { color: var(--chip-secret); }
+  .box.mid { background: var(--raised); border-style: dashed; color: var(--muted); font-size: 13px; padding: 8px 12px; }
+  .box.blk { background: var(--fill-blocked); border-color: var(--blocked); padding: 14px 16px; border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .45); }
+  .box.blk .t { font-size: 15px; font-weight: 600; margin-top: 6px; }
+  .box.blk .t .kind { color: #f5c4c4; }
+  .box.blk small { color: #f5c4c4; font-size: 13px; margin-top: 4px; }
+  .vlink { width: 2px; height: 14px; margin-left: 24px; background: var(--chain, #6b7280); }
+  .vlink.amber { background: var(--secret); }
+  .dash { display: block; width: 100%; height: 34px; }
+  .dash line { stroke: var(--blocked); stroke-width: 2; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
+  .ends { display: grid; grid-template-columns: 1fr 1fr; }
+  .host, .pill { justify-self: center; text-align: center; font-weight: 700; }
+  .host { font: 600 14px var(--mono); padding: 6px 16px; border-radius: 6px; background: var(--fill-link); border: 1.5px solid var(--link); }
+  .pill { font-size: 20px; padding: 6px 34px; border-radius: 999px; background: var(--fill-blocked); border: 2px solid var(--blocked); }
+  .stepn { font: 700 12px var(--mono); color: var(--ink); background: rgba(0, 0, 0, .4); padding: 1px 6px; border-radius: 3px; margin-right: 6px; }
 
-  .why h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
-  .msg { background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
-  .msg b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; margin-bottom: 2px; letter-spacing: .03em; }
+  .why h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; font-weight: 600; }
+  .msg { background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13.5px; }
+  .msg b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
   .msg + .msg { margin-top: 6px; }
-  .cmd { font: 12.5px var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--ink); }
-  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  .why .none { color: var(--muted); }
+  .cmd { font: 13px var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--ink); }
+  .why .note { margin-top: 6px; }
+
+  /* keyboard focus wins over selection styling */
+  :focus-visible, .row.alarm:focus-visible, .row.alarm[aria-pressed="true"]:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+  @media (max-width: 1000px) {
+    body { overflow: auto; }
+    main { grid-template-columns: 1fr; }
+    .trail { max-height: 60vh; }
+  }
+  @media (prefers-reduced-motion: reduce) { .caret::before { transition: none; } }
 </style>
 </head>
 <body>
@@ -132,9 +152,9 @@
   <header>
     <h1>AgentFly</h1>
     <nav aria-label="Views">
-      <button aria-current="page">Live Trail</button><button>History</button><button>Rules</button><button>Graph</button>
+      <button aria-current="page">Live Trail</button><button aria-disabled="true" title="Not part of this mock">History</button><button aria-disabled="true" title="Not part of this mock">Rules</button><button aria-disabled="true" title="Not part of this mock">Graph</button>
     </nav>
-    <span class="chip ok" id="count"></span>
+    <span class="chip count" id="count"></span>
     <span class="chip secret">Secret seen</span>
     <span class="spacer"></span>
     <div class="health"><span class="dot"></span> Recorder up · 127.0.0.1:8787 · session mock-0</div>
@@ -144,11 +164,12 @@
       <div class="pinned" id="pinned"></div>
       <div class="toolbar">
         <span id="summary"></span><span class="sp"></span>
+        <span class="hint"><kbd>n</kbd> <kbd>p</kbd> next / previous block</span>
         <button class="follow" id="follow" aria-pressed="false">Follow latest</button>
       </div>
-      <div class="trail" id="trail" tabindex="0"></div>
+      <div class="trail" id="trail"><div class="rail" id="rail" hidden></div><div id="items"></div></div>
     </section>
-    <aside class="why" id="why" aria-label="Why card"></aside>
+    <aside class="why" id="why" aria-label="Why card" aria-live="polite"></aside>
   </main>
 </div>
 
@@ -157,7 +178,7 @@
 (function () {
   var BASE = 40000;
   var steps = JSON.parse(document.getElementById('steps').textContent);
-  // Step number shown = order - 40000 + 1 (1-based position in the session). The raw `order` is kept in tooltips.
+  // Step number shown = order - 40000 + 1 (1-based position in the session). The raw `order` is in each row's tooltip.
   var n = function (s) { return s.order - BASE + 1; };
   var secret = steps.filter(function (s) { return s.sensitive; })[0];
   var isRoutine = function (s) { return s.verdict === 'allowed' && !s.sensitive; };
@@ -178,110 +199,126 @@
   flush();
 
   function groupSummary(g) {
-    var kinds = {}, order = [];
-    g.forEach(function (s) {
-      var key = s.kind + ' ' + (s.file || s.command || s.tool);
-      if (!kinds[key]) { kinds[key] = 0; order.push(key); }
-      kinds[key]++;
-    });
     var by = { read: 0, edit: 0, shell: 0, tool: 0 };
     g.forEach(function (s) { by[s.kind]++; });
     var parts = Object.keys(by).filter(function (k) { return by[k]; }).map(function (k) { return by[k] + ' ' + k; });
-    var uniq = order.slice(0, 3).map(function (k) { return '<span class="mono">' + esc(k.split(' ').slice(1).join(' ')) + '</span>' + (kinds[k] > 1 ? ' ×' + kinds[k] : ''); }).join(', ');
-    return '<span class="caret"></span><b>' + g.length + ' routine step' + (g.length > 1 ? 's' : '') + '</b> · ' + parts.join(' · ') + ' — ' + uniq + (order.length > 3 ? ', …' : '');
+    return '<span class="caret"></span><b>' + g.length + ' routine step' + (g.length > 1 ? 's' : '') + '</b> · ' + parts.join(' · ');
   }
 
   // ---- render trail ----
+  var list = document.getElementById('items');
   var trail = document.getElementById('trail');
   var html = '';
   items.forEach(function (it) {
     if (it.group) {
       var g = it.group, a = n(g[0]), b = n(g[g.length - 1]);
-      html += '<details class="group"><summary><span class="no">' + (a === b ? a : a + '–' + b) + '</span><span class="what gsum">' + groupSummary(g) + '</span><span class="badge chip ok">allowed</span></summary><div class="inner">';
+      html += '<details class="group"><summary><span class="no">' + (a === b ? a : a + '–' + b) + '</span><span class="what gsum">' + groupSummary(g) + '</span></summary><div class="inner">';
       g.forEach(function (s) { html += '<div class="row"><span class="no">' + n(s) + '</span><span class="what">' + what(s) + '</span><span></span></div>'; });
       html += '</div></details>';
     } else {
       var s = it.step, cls = s.verdict === 'blocked' ? 'alarm b' : s.verdict === 'warned' ? 'alarm w' : 'secret';
-      var chip = s.verdict === 'blocked' ? '<span class="badge chip blocked">Blocked · ' + s.rule + '</span>' : s.verdict === 'warned' ? '<span class="badge chip warned">Warned · ' + s.rule + '</span>' : '<span class="badge chip secret">Secret read</span>';
-      var attrs = s.verdict === 'allowed' ? '' : ' role="button" tabindex="0" data-n="' + n(s) + '" aria-selected="false"';
+      var chip = s.verdict === 'blocked' ? '<span class="chip blocked">Blocked · ' + s.rule + '</span>' : s.verdict === 'warned' ? '<span class="chip warned">Warned · ' + s.rule + '</span>' : '<span class="chip secret">Secret read</span>';
+      var attrs = s.verdict === 'allowed' ? '' : ' role="button" tabindex="0" data-n="' + n(s) + '" aria-pressed="false"';
       html += '<div class="row ' + cls + '" id="s' + n(s) + '"' + attrs + ' title="order ' + s.order + '"><span class="no">' + n(s) + '</span><span class="what">' + what(s) + '</span>' + chip + '</div>';
     }
   });
-  trail.innerHTML = html;
+  list.innerHTML = html;
 
-  // ---- pinned strip ----
+  // ---- pinned strip: counters with prev / next, not a second list of the same rows ----
   var blocked = steps.filter(function (s) { return s.verdict === 'blocked'; });
   var warned = steps.filter(function (s) { return s.verdict === 'warned'; });
   var pinned = document.getElementById('pinned');
-  function pins(list, cls) { return list.map(function (s) { return '<button class="pin ' + cls + '" data-n="' + n(s) + '" aria-pressed="false">#' + n(s) + '</button>'; }).join(''); }
-  pinned.innerHTML = '<h2>Pinned · stays on screen</h2>' +
-    '<div class="pin-row"><span class="lbl"><b>' + blocked.length + ' blocked</b> · R1</span>' + pins(blocked, 'b') + '</div>' +
-    '<div class="pin-row"><span class="lbl"><b>' + warned.length + ' warned</b> · R2</span>' + pins(warned, 'w') + '</div>';
+  pinned.innerHTML =
+    '<div class="pin-row"><span class="lbl"><b>' + blocked.length + ' blocked</b> · R1, every curl after the <span class="mono">.env</span> read</span><span class="pos" id="posB"></span><button class="nbtn b" data-go="b-1">‹ Prev</button><button class="nbtn b" data-go="b1">Next ›</button></div>' +
+    '<div class="pin-row"><span class="lbl"><b>' + warned.length + ' warned</b> · R2, <span class="mono">rm -rf</span></span><span class="pos" id="posW"></span><button class="nbtn w" data-go="w-1">‹ Prev</button><button class="nbtn w" data-go="w1">Next ›</button></div>';
   document.getElementById('count').textContent = steps.length + ' steps';
-  document.getElementById('summary').textContent = items.filter(function (i) { return i.group; }).length + ' routine groups folded · ' + blocked.length + ' blocks and ' + warned.length + ' warnings kept in view';
+  document.getElementById('summary').textContent = items.filter(function (i) { return i.group; }).length + ' routine groups folded';
+
+  // ---- rail: from the secret read to the selected block, through the folded steps ----
+  var rail = document.getElementById('rail');
+  function updateRail() {
+    var t = trail.querySelector('.row.trigger'), e = trail.querySelector('.row.chain-end');
+    if (!t || !e) { rail.hidden = true; return; }
+    var top = t.offsetTop + t.offsetHeight / 2, bottom = e.offsetTop + e.offsetHeight / 2;
+    rail.hidden = false; rail.style.top = top + 'px'; rail.style.height = Math.max(0, bottom - top) + 'px';
+  }
+  trail.addEventListener('toggle', updateRail, true);
+  window.addEventListener('resize', updateRail);
 
   // ---- Why card ----
   var why = document.getElementById('why');
+  var current = null;
   function midText(from, to) {
     var r = 0, f = 0;
     for (var i = from + 1; i < to; i++) { if (isRoutine(steps[i - 1])) r++; else f++; }
     return r + ' routine step' + (r === 1 ? '' : 's') + (f ? ' and ' + f + ' flagged' : '') + ' between (' + (from + 1) + '–' + (to - 1) + ')';
   }
-  function stepBy(num) { return steps[num - 1]; }
+  function indexIn(list, num) { for (var i = 0; i < list.length; i++) if (n(list[i]) === num) return i; return -1; }
   function showWhy(num) {
-    var s = stepBy(num);
+    current = num;
+    var s = steps[num - 1];
     document.querySelectorAll('.row.trigger, .row.chain-end').forEach(function (e) { e.classList.remove('trigger', 'chain-end'); });
-    document.querySelectorAll('[aria-selected="true"]').forEach(function (e) { e.setAttribute('aria-selected', 'false'); });
-    document.querySelectorAll('.pin').forEach(function (e) { e.setAttribute('aria-pressed', e.dataset.n === String(num) ? 'true' : 'false'); });
+    document.querySelectorAll('.row.alarm[aria-pressed="true"]').forEach(function (e) { e.setAttribute('aria-pressed', 'false'); });
     var row = document.getElementById('s' + num);
-    if (row) { row.setAttribute('aria-selected', 'true'); row.classList.add('chain-end'); }
+    if (row) { row.setAttribute('aria-pressed', 'true'); row.classList.add('chain-end'); }
+    var ib = indexIn(blocked, num), iw = indexIn(warned, num);
+    document.getElementById('posB').textContent = ib >= 0 ? (ib + 1) + ' of ' + blocked.length : '';
+    document.getElementById('posW').textContent = iw >= 0 ? (iw + 1) + ' of ' + warned.length : '';
 
     if (s.verdict === 'blocked') {
-      var t = secret, between = num - n(t) - 1;
+      var t = secret;
       var trig = document.getElementById('s' + n(t)); if (trig) trig.classList.add('trigger');
-      var u = R1, a = R1 + AGENT_TAIL;
       why.innerHTML =
         '<div class="eyebrow">Why was this blocked?</div>' +
-        '<h2>Step ' + n(t) + ' read <span class="mono">' + esc(t.file) + '</span> → Step ' + num + ' tried <span class="mono">curl ' + esc(s.host) + '</span> → R1</h2>' +
+        '<h2>Step&nbsp;' + n(t) + ' read <span class="mono">' + esc(t.file) + '</span> → Step&nbsp;' + num + ' tried <span class="mono">curl ' + esc(s.host) + '</span> → R1</h2>' +
         '<div class="rule-line">Rule <b>R1</b> · severity block · decided in memory, before the command ran</div>' +
         '<div class="chain">' +
-          '<svg aria-hidden="true"><defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#9aa3b2"/></marker></defs>' +
-          '<path d="M120 74 L120 86" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#ar)"/>' +
-          '<path d="M120 130 L120 142" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#ar)"/>' +
-          '<path d="M240 168 C 270 168, 270 147, 300 147" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 5" fill="none"/>' +
-          '<path d="M240 188 C 270 188, 270 190, 300 190" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 5" fill="none"/>' +
-          '</svg>' +
           '<div class="box sec"><span class="stepn">STEP ' + n(t) + '</span><span class="chip secret">Secret read</span><div class="t"><span class="kind">read</span><span class="mono">' + esc(t.file) + '</span></div><small>marks the session</small></div>' +
-          '<div class="box mid">' + (between > 0 ? midText(n(t), num) : 'next step') + '</div>' +
+          '<div class="vlink amber"></div>' +
+          '<div class="box mid">' + midText(n(t), num) + '</div>' +
+          '<div class="vlink"></div>' +
           '<div class="box blk"><span class="stepn">STEP ' + num + '</span><span class="chip blocked">Blocked</span><div class="t"><span class="kind">shell</span><span class="mono">' + esc(s.command) + '</span></div><small>data sent to an outside host</small></div>' +
-          '<div class="host">' + esc(s.host) + '</div><div class="pill">R1</div>' +
+          '<svg class="dash" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><line x1="25" y1="0" x2="25" y2="34"/><line x1="75" y1="0" x2="75" y2="34"/></svg>' +
+          '<div class="ends"><div class="host">' + esc(s.host) + '</div><div class="pill">R1</div></div>' +
         '</div>' +
         '<h3>Messages sent</h3>' +
-        '<div class="msg"><b>To you (user_message)</b>' + esc(u) + '</div>' +
-        '<div class="msg"><b>To the agent (agent_message)</b>' + esc(a) + '</div>' +
+        '<div class="msg"><b>To you (user_message)</b>' + esc(R1) + '</div>' +
+        '<div class="msg"><b>To the agent (agent_message)</b>' + esc(R1 + AGENT_TAIL) + '</div>' +
         '<h3>To change this rule</h3>' +
         '<div class="cmd">agentfly rules draft …<br>sudo agentfly rules apply &lt;draft&gt;</div>' +
         '<div class="note">Read-only page (D19): it shows the command, it cannot change a rule.</div>';
     } else {
       why.innerHTML =
         '<div class="eyebrow">Why was this flagged?</div>' +
-        '<h2>Step ' + num + ' ran <span class="mono">' + esc(s.command) + '</span> → R2 warning</h2>' +
+        '<h2>Step&nbsp;' + num + ' ran <span class="mono">' + esc(s.command) + '</span> → R2 warning</h2>' +
         '<div class="rule-line">Rule <b>R2</b> · severity warn · the command was allowed</div>' +
         '<h3>Message</h3><div class="msg">' + esc(R2) + '</div>' +
         '<h3>To change this rule</h3><div class="cmd">agentfly rules draft …<br>sudo agentfly rules apply &lt;draft&gt;</div>';
     }
+    updateRail();
   }
-  window.showWhy = showWhy;
 
   function pick(num, scroll) {
     showWhy(num);
     if (scroll) { followOff(); var r = document.getElementById('s' + num); if (r) trail.scrollTop = r.offsetTop - 160; }
   }
+  function go(kind, dir) {
+    var list = kind === 'b' ? blocked : warned, i = indexIn(list, current);
+    if (i < 0) i = dir > 0 ? -1 : list.length; // jump into this list from the other kind
+    i = Math.min(list.length - 1, Math.max(0, i + dir));
+    pick(n(list[i]), true);
+  }
   document.addEventListener('click', function (e) {
-    var t = e.target.closest('[data-n]'); if (t) pick(Number(t.dataset.n), true);
+    var g = e.target.closest('[data-go]');
+    if (g) { var m = /^([bw])(-?1)$/.exec(g.dataset.go); go(m[1], Number(m[2])); return; }
+    var t = e.target.closest('.row.alarm[data-n]'); if (t) pick(Number(t.dataset.n), true);
   });
   document.addEventListener('keydown', function (e) {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row.alarm')) { e.preventDefault(); pick(Number(e.target.dataset.n), false); }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var cur = current && steps[current - 1].verdict === 'warned' ? 'w' : 'b';
+    if (e.key === 'n') go(cur, 1);
+    if (e.key === 'p') go(cur, -1);
   });
 
   // ---- Follow ----
@@ -290,17 +327,10 @@
   function followOff() { fBtn.setAttribute('aria-pressed', 'false'); }
   fBtn.addEventListener('click', function () { fBtn.getAttribute('aria-pressed') === 'true' ? followOff() : followOn(); });
 
-  // ---- initial state from URL: ?open=14&view=top|latest ----
+  // ---- initial state from URL: ?open=14&view=latest ----
   var q = new URLSearchParams(location.search);
-  var first = blocked[0];
-  var open = Number(q.get('open')) || n(first);
-  showWhy(open);
-  if (q.get('view') === 'latest') { followOn(); }
-  else {
-    // Default frame: top of the session, so the Step 2 → Step 14 story is on screen with the card.
-    trail.scrollTop = 0;
-    // expand the groups between the trigger and the first block? No: keep them folded, that is the point.
-  }
+  showWhy(Number(q.get('open')) || n(blocked[0]));
+  if (q.get('view') === 'latest') followOn(); else trail.scrollTop = 0;
 })();
 </script>
 </body>
