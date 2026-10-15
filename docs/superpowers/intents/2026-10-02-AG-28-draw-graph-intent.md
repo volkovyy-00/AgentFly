@@ -1,5 +1,5 @@
 # Intent: Draw the live graph on the new page (new layout, mock mode)
-Ticket: AG-28 | Author: Yevhenii Volkovych | Date: 2026-10-02 | Status: approved (2026-10-02)
+Ticket: AG-28 | Author: owner | Date: 2026-10-02 | Status: approved (2026-10-02)
 
 ## Problem
 See AG-28. `/v2/` is a blank scaffold, so the old page can't be retired. A first

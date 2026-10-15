@@ -1,5 +1,5 @@
 # Intent: Sunset the old page, one page at `/`
-Ticket: AG-31 | Author: Yevhenii Volkovych | Date: 2026-10-03 | Status: approved (2026-10-03)
+Ticket: AG-31 | Author: owner | Date: 2026-10-03 | Status: approved (2026-10-03)
 
 ## Problem
 See AG-31. The recorder serves two pages: the old `/` (vis-network from a CDN, last 10

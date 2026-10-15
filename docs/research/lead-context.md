@@ -121,11 +121,11 @@ After compaction [docs] context-window, "What survives compaction":
 |---|---|---|---|
 | `CLAUDE.md` (or `AGENTS.md` imported from it) | you or the lead, rarely | **auto, every session**, workers too | ≤ 100 lines: project purpose, hard constraints, test command, "never push", where the docs are, `# Compact instructions`. No role text, no history. |
 | `docs/roles/lead.md` | you | **on demand**: first line of every lead session | ≤ 80 lines: lead duties, the restart ritual below, the report format, the rule "only the lead edits BOARD/DECISIONS". |
-| `docs/STATE.md` (new) | lead only, **overwritten, never appended** | read at start; injected after compaction by hook | ≤ 60 lines and under 10,000 characters (hook cap). Phase; cards in flight (card → worker → worktree → report path); waiting on Yevhenii; last 3 decisions by ID; next 3 actions; last commit SHA; timestamp. |
+| `docs/STATE.md` (new) | lead only, **overwritten, never appended** | read at start; injected after compaction by hook | ≤ 60 lines and under 10,000 characters (hook cap). Phase; cards in flight (card → worker → worktree → report path); waiting on the owner; last 3 decisions by ID; next 3 actions; last commit SHA; timestamp. |
 | `docs/BOARD.md` | lead only | on demand | cards; done cards collapse to one line each. |
-| `docs/DECISIONS.md` | lead only, append-only | on demand, **never auto-loaded** | one-line index at top (`D4: offline guard default, approved by Yevhenii 15 Oct`); details below; record who decided (Daniel's lesson). |
+| `docs/DECISIONS.md` | lead only, append-only | on demand, **never auto-loaded** | one-line index at top (`D4: offline guard default, approved by the owner 15 Oct`); details below; record who decided (Daniel's lesson). |
 | `docs/SYNTHESIS.md` | lead | on demand, reference only | frozen once approved. |
-| `docs/reports/<worker>-<card>.md` | each worker | lead reads the **top block only** | top block ≤ 10 lines: `Status:` (done / blocked / in progress), `Result:`, `Evidence:` (commit, test command + count, screenshot path), `Needs Yevhenii:` (or `none`), `Details:` (pointer to section). |
+| `docs/reports/<worker>-<card>.md` | each worker | lead reads the **top block only** | top block ≤ 10 lines: `Status:` (done / blocked / in progress), `Result:`, `Evidence:` (commit, test command + count, screenshot path), `Needs owner:` (or `none`), `Details:` (pointer to section). |
 | `docs/learnings.md` | lead, at phase ends | on demand | lessons only, like Daniel's. |
 
 Notes:
@@ -189,7 +189,7 @@ Caveats:
 
 ```markdown
 # Compact instructions
-When compacting, keep: cards in flight with worker and report path, decisions approved or pending by ID (D-numbers), what is waiting on Yevhenii, next actions. Drop raw tool output, file contents and log excerpts — they are in the repo. The source of truth is docs/STATE.md, docs/BOARD.md, docs/DECISIONS.md.
+When compacting, keep: cards in flight with worker and report path, decisions approved or pending by ID (D-numbers), what is waiting on the owner, next actions. Drop raw tool output, file contents and log excerpts — they are in the repo. The source of truth is docs/STATE.md, docs/BOARD.md, docs/DECISIONS.md.
 ```
 
 ### 6.6 Signs the lead is polluted

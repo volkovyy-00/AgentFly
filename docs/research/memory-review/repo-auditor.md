@@ -44,17 +44,17 @@ lead.md 1,983 → + STATE 4,072 → + BOARD 21,400 = **27,455 chars (~6.9k tok)*
 ## Inventory (writer → loader / when → size → last change → notes)
 | Item | Writer | Loaded by / when | Lines/chars | Last change |
 |---|---|---|---|---|
-| CLAUDE.md | lead/Yevhenii | all Claude sessions, auto at start + re-injected after compact | 8 / 431 | aa3e7f2 10-15 22:32 |
+| CLAUDE.md | lead/owner | all Claude sessions, auto at start + re-injected after compact | 8 / 431 | aa3e7f2 10-15 22:32 |
 | AGENTS.md | workers (AG cards), V1 planned | Cursor: auto [unverified]; Claude: on demand only | 149 / 8,985 | 71b5225 10-03 (stale, see C1–C3) |
 | SPEC.md | AG cards; V1 to rewrite | on demand (via AGENTS) | 419 / 20,991 | 71b5225 10-03 (hackathon spec) |
 | README.md / HOOKS.md | AG cards | on demand | 241/9,912 · 300/13,383 | 10-03 |
-| docs/roles/lead.md | Yevhenii | lead, on demand (pointer in CLAUDE.md) | 31 / 1,983 | aa3e7f2 |
+| docs/roles/lead.md | owner | lead, on demand (pointer in CLAUDE.md) | 31 / 1,983 | aa3e7f2 |
 | docs/STATE.md | lead (overwrite) | lead on demand at start; no hook injects it yet | 55 / 4,072 | aa3e7f2, says "Updated 22:31", matches HEAD |
 | docs/BOARD.md | lead | on demand | 414 / 21,400 | committed in aa3e7f2; file mtime 21:25 |
 | docs/DECISIONS.md | lead | on demand | 502 / 34,065 | aa3e7f2 |
 | docs/SYNTHESIS.md | lead | on demand (lead.md:8, BOARD:77) | 499 / 34,457 | mtime 10-15 07:54 |
-| docs/product-goals.md | Yevhenii | on demand; only SYNTHESIS:7 points to it | 45 / 2,521 | mtime 10-14 |
-| docs/spikes/S1, S2 | lead + Yevhenii | on demand | 64/4,780 · 87/11,647 | aa3e7f2 |
+| docs/product-goals.md | owner | on demand; only SYNTHESIS:7 points to it | 45 / 2,521 | mtime 10-14 |
+| docs/spikes/S1, S2 | lead + owner | on demand | 64/4,780 · 87/11,647 | aa3e7f2 |
 | docs/superpowers/** | worker sessions (AG-28..31) | on demand | 11,989 / 704,560 | 10-03 |
 | docs/research/*.md | research runs | on demand | 9 files / ~238k | lead-context.md untracked |
 | demo/NOTES.md | hackathon | on demand (AGENTS.md:149) | 103 / 3,896 | c9411ba 09-30 |

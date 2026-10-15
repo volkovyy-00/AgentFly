@@ -7,7 +7,7 @@
 ## 1. What gets lost, and when
 | Event | Lost | Still there |
 |---|---|---|
-| `/clear` | Everything since the last STATE write. The research's hook matches `compact` only, so **nothing is injected after `/clear`** (source `clear`). The restart depends on Yevhenii pasting the prompt. | CLAUDE.md, files on disk |
+| `/clear` | Everything since the last STATE write. The research's hook matches `compact` only, so **nothing is injected after `/clear`** (source `clear`). The restart depends on the owner pasting the prompt. | CLAUDE.md, files on disk |
 | Auto/idle compaction | Talk-only facts (approvals said in chat but not yet written down, a worker's verbal status). The hook re-injects STATE **as of the last handoff** and labels it "current". The new summary and an older STATE then disagree, and nothing marks which one is older. | CLAUDE.md, `# Compact instructions`, 5 recent files [docs] |
 | Usage limit → Codex/Cursor | Hooks, slash commands and CLAUDE.md. Codex and Cursor read only AGENTS.md, which never mentions `docs/roles/lead.md` or STATE. The limit gives no warning, so no handoff runs. `autoContinueAtUsageLimit: true` is set in `~/.claude/settings.json` [seen], so the Claude lead may **resume by itself** after the reset while Codex is already writing STATE. That makes two writers. [inferred] | git, docs |
 | Away for a day | Idle compaction fires at about 54 min if the session is over 200K [docs]. Machine state goes stale silently: pid 34143 is alive now [seen], but a reboot kills it, and the reboot also empties `/tmp`. **`/tmp/af-spike/s1.sh` and `s2.sh` are the only copies of the S5 prerequisite** (STATE line 24). | — |
@@ -18,7 +18,7 @@
 3. **S2 report vs STATE**: S2-tamper.md line 3 says "cleanup (`s2.sh restore`) pending", while STATE says "Looks like s2.sh restore was already run" [seen]. That's a guess from the lead written as a finding.
 4. **AGENTS.md Hook facts** say Cursor 3.5.17; the installed version is 3.24.12 (`Info.plist`) [seen]. The only place this is recorded is in STATE's "risks" section.
 5. **Approved changes not applied**: D10 says "Changes: AGENTS.md Working rules", but AGENTS.md has no heredoc rule. D14 says "Changes: SPEC.md §3, §4", but SPEC has no SQLite [seen]. AGENTS.md tells every worker that "SPEC.md is the source of truth", so until V1 lands, a worker follows rules from before the approvals.
-6. **Report format has three versions**: lead.md says `Result/Evidence/Needs Yevhenii`; the proposed design adds `Status`; the actual S1/S2 reports start with `Status:` + `Plan:` [seen]. Also, `docs/reports/` does not exist yet.
+6. **Report format has three versions**: lead.md says `Result/Evidence/Needs owner`; the proposed design adds `Status`; the actual S1/S2 reports start with `Status:` + `Plan:` [seen]. Also, `docs/reports/` does not exist yet.
 7. **Size cap**: lead.md says under 9,000 chars; the research says under 10,000; the hook truncates with `head -c 9000`. If it truncates, it **drops the bottom of STATE, where "Next 3 actions" lives**, without saying so.
 8. **"Last commit" line**: STATE can't contain the SHA of its own commit, so the line holds a grep instruction. It's correct today (`aa3e7f2`, parent `0e6b8a6`), but it's a ritual where a computed value would do.
 9. These **match** today: STATE's pending list equals the proposed set in DECISIONS (D2 D3 D5–D9 D11–D13 D15–D19), and there are 0 commits since STATE [seen]. A script can keep them matching (fix 2).

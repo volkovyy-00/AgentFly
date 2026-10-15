@@ -29,7 +29,7 @@ index_lines() {
                                print "- " id " " s d " · " t; id = ""}' "$DECISIONS"
 }
 flight() { section "In flight" | grep -E '^- [A-Z][0-9]+' | sed 's/^- //' | ids; }
-waiting() { section "Waiting on Yevhenii" | grep -cE '^[0-9]+\.'; }
+waiting() { section "Waiting on owner" | grep -cE '^[0-9]+\.'; }
 pending_in_state() { grep -m 1 '^Pending decisions:' "$STATE" | cut -d: -f2- | ids; }
 
 if [ "${1:-}" = "--write-index" ]; then

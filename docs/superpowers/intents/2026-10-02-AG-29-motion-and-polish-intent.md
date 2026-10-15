@@ -1,5 +1,5 @@
 # Intent: Calm motion, a dark theme and one loud block moment on /v2/
-Ticket: AG-29 | Author: Yevhenii Volkovych | Date: 2026-10-02 | Status: approved (2026-10-02)
+Ticket: AG-29 | Author: owner | Date: 2026-10-02 | Status: approved (2026-10-02)
 
 ## Problem
 See AG-29. `/v2/` draws the graph on a light theme, and once the 20-step window is full

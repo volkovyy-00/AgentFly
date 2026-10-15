@@ -9,7 +9,7 @@ The lead reads only `head -n 6`, so keep each field to 300 characters or fewer.
 Status: in progress | blocked | done (as of YYYY-MM-DD HH:MM)
 Result: What works and what does not.
 Evidence: Commit SHA, check command and pass count, test names, file paths.
-Needs Yevhenii: none | one question, with your recommended answer.
+Needs owner: none | one question, with your recommended answer.
 Details: see "## YYYY-MM-DD HH:MM" below.
 ```
 

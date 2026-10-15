@@ -1,5 +1,5 @@
 # Intent: Long sessions stay light, with landmarks kept in reach
-Ticket: AG-30 | Author: Yevhenii Volkovych | Date: 2026-10-03 | Status: approved (2026-10-03)
+Ticket: AG-30 | Author: owner | Date: 2026-10-03 | Status: approved (2026-10-03)
 
 ## Problem
 See AG-30. In a long session the 20-step window pushes out the secret read and the old

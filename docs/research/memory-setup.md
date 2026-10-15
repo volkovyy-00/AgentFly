@@ -25,10 +25,10 @@ committing lead files. Slash commands are thin pointers into lead.md so Codex/Cu
 ## 2. Files
 | File | Writer | Loaded by / when | Cap | Status |
 |---|---|---|---|---|
-| `CLAUDE.md` | Yevhenii/lead, rarely | every Claude session, auto + after compaction | ≤20 lines | edit: `@AGENTS.md`, role-neutral |
+| `CLAUDE.md` | owner/lead, rarely | every Claude session, auto + after compaction | ≤20 lines | edit: `@AGENTS.md`, role-neutral |
 | `AGENTS.md` | V1 card | Cursor auto; Claude via import | V1 decides | 1-token loading fix only (§6) |
-| `docs/roles/lead.md` | Yevhenii/lead | lead only: system prompt via lead.sh | ≤80 lines / 6k chars | rewrite |
-| `docs/roles/lead.sh` | — | Yevhenii runs it to start the lead | — | new |
+| `docs/roles/lead.md` | owner/lead | lead only: system prompt via lead.sh | ≤80 lines / 6k chars | rewrite |
+| `docs/roles/lead.sh` | — | The owner runs it to start the lead | — | new |
 | `docs/roles/lead-settings.json` | — | lead only, via `--settings` | — | new |
 | `docs/roles/lead-context.sh` | — | SessionStart hook in lead only | output <9,500 chars | new |
 | `docs/roles/state-check.sh` | — | lead on demand, hook, pre-commit | — | new |
@@ -59,7 +59,7 @@ hook ≈6k (STATE + check + git log) → ≈21k chars ≈5k tokens, all of it st
 - **/catchup** (after any compaction or a pause): drift test below, then read what changed.
 - **Drift test** [C+D]: before any tool call, the lead writes `FLIGHT: … · PENDING: … · WAITING: n` from memory,
   then runs `state-check.sh drift "<flight>" "<pending>" <n>`. PASS = exact set match. FAIL → handoff is
-  not trusted; Yevhenii runs `/clear` (the hook re-injects STATE) and `/restart-lead`. No judgement involved.
+  not trusted; the owner runs `/clear` (the hook re-injects STATE) and `/restart-lead`. No judgement involved.
 
 | Situation | Do | Basis |
 |---|---|---|
@@ -85,7 +85,7 @@ hook ≈6k (STATE + check + git log) → ≈21k chars ≈5k tokens, all of it st
    overwrite STATE and merge cleanly. Every location reaches worktrees anyway: untracked `.claude/commands`
    reads through ([docs] worktrees#what-worktrees-share-with-the-main-checkout), and `~/.claude` reaches every
    project. **Pick committed + D's pre-commit guard** (mechanical, also covers Cursor/Codex workers).
-4. **DECISIONS index.** C: hand-written + diff check. D: generated, never hand-written. Yevhenii asked for an index
+4. **DECISIONS index.** C: hand-written + diff check. D: generated, never hand-written. The owner asked for an index
    at the top. **Pick: generated in place** between markers by `state-check.sh --write-index`; check fails if stale.
 5. **Hook matcher.** LC: `compact`. D: `startup|clear|compact|resume`. **Pick D**: covers /clear, so restart needs no paste.
 6. **Report reading.** Daniel reads the last section; C reads the top. **Pick top** (`head -n 6`, no parser) [C].
@@ -103,7 +103,7 @@ each `- <card> ·` row under `## In flight` names a report path or worktree that
 paths exist (warn) · DECISIONS index block = bodies · info: commits since STATE last changed, HEAD SHA (replaces the
 hand-kept "Last commit" line [D]). Modes: `drift <flight> <pending> <n>`, `--write-index`.
 Pre-commit: on a branch other than main, reject staged `docs/{STATE,BOARD,DECISIONS}.md`, `docs/learnings.md`;
-on main, run state-check if STATE is staged; always reject `.DS_Store`. Bypass is `--no-verify` (Yevhenii only).
+on main, run state-check if STATE is staged; always reject `.DS_Store`. Bypass is `--no-verify` (the owner only).
 
 ## 6. Changes, file by file (diff summary)
 - `CLAUDE.md`: `@AGENTS.md`; "role is given at launch; without one you are a worker on one card, follow AGENTS.md
@@ -112,7 +112,7 @@ on main, run state-check if STATE is staged; always reject `.DS_Store`. Bypass i
 - `AGENTS.md:6`: `Read @SPEC.md first.` → ``Read `SPEC.md` first.`` (loading only; keeps SPEC out of every session).
   **Needs your yes.** Proposed for V1, not applied: a "Report" section (C §1), Cursor 3.24.12, D10/D14 changes.
 - `docs/roles/lead.md`: rewrite: Owns, Rules, Start, Keep STATE live, Handoff, Drift check, When to compact/clear,
-  Tool switch, BOARD collapse rule, report format (Status/Result/Evidence/Needs Yevhenii/Details).
+  Tool switch, BOARD collapse rule, report format (Status/Result/Evidence/Needs owner/Details).
 - New: `docs/roles/{lead.sh, lead-settings.json, lead-context.sh, state-check.sh, git-hooks/pre-commit}`,
   `.claude/commands/{handoff,restart-lead,catchup}.md`, `.claude/settings.json`, `docs/reports/README.md`, `docs/learnings.md`.
 - `docs/STATE.md`: add a `Pending decisions: D2 …` line; in-flight row format `- <card> · <worker> · <worktree> ·
@@ -128,7 +128,7 @@ missing STATE → one line, exit 0; path with a space. Live: `claude -p --settin
 asked for a STATE fact with tools disabled → answers; without `--settings` → UNKNOWN (proves workers don't get it).
 Import: same no-tools question about AGENTS.md before/after. state-check: OK today; negative case → FAIL, exit 1.
 Pre-commit: throwaway worktree commit of STATE → rejected. `git check-ignore` for `.DS_Store`, `logs/spike/`.
-/handoff dry run: follow its steps without committing. `/hooks` is interactive: Yevhenii runs it in `lead.sh`.
+/handoff dry run: follow its steps without committing. `/hooks` is interactive: the owner runs it in `lead.sh`.
 
 Results (applied 15 Oct, before commit): all of the above passed [checked]. Interactive `lead.sh` on 2.1.300 kept the role
 after /clear and /compact (a lead.md-only fact was recalled and placed "in my system prompt"). With
