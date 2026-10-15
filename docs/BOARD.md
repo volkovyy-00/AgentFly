@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5 may start now. v1 cards (V1–V9) wait for your approval
-of `docs/DECISIONS.md`.** After approval, any card whose plan depends on a
+Status: **spikes S1, S2 and S4 are done; S3 and S5 may start. v1 cards (V1–V9)
+wait for your approval of `docs/DECISIONS.md`.** After approval, any card whose plan depends on a
 decision you changed is rewritten before it starts.
 
 Revision 3 (2026-10-15) applies your Rev 2 review: spikes unblocked; S1's
@@ -74,52 +74,18 @@ in parallel.
 
 ---
 
+## Done
+- S1 ✅ 2026-10-15 · docs/spikes/S1-global-hooks.md · changed D9 D11 · body: git show 5b41ac1:docs/BOARD.md
+- S2 ✅ 2026-10-15 · docs/spikes/S2-tamper.md · changed D1 D2 D3 D4 D5 D8 D19 · body: git show 5b41ac1:docs/BOARD.md
+- S4 ✅ 2026-10-16 · docs/spikes/S4-trail.md · changed D15, V8 · body: git show 5b41ac1:docs/BOARD.md (before the 2026-10-16 screenshot edit)
+
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
-
-### S1 · G1 · Global hooks fire in a fresh folder; `ask` and allow messages
-- **Owner:** lead (you at the keyboard)
-- **Lane:** lead, first
-- **Time box:** 45 min. That is 30 for the global-hook test and 15 for the two
-  answer checks you added. The throwaway stub is written before the clock
-  starts.
-- **May touch:** `~/.cursor/hooks.json` (created, then removed); the repo's
-  `.cursor/hooks.json` (moved aside, then restored); `/tmp/af-fresh/`;
-  `/tmp/af-spike/stub.py` (throwaway, never committed); new
-  `docs/spikes/S1-global-hooks.md`.
-- **Done when** `docs/spikes/S1-global-hooks.md` records:
-  - the Cursor app and `cursor-agent` versions, and the exact `hooks.json`
-    used;
-  - event counts by type for the fresh folder, plus a screenshot of the R1 deny
-    in the app and the CLI output;
-  - whether `tool_use_id` arrived;
-  - whether `ask` pauses the agent and asks you, in the app and in the CLI;
-  - whether `user_message` is shown, and `agent_message` used, when the answer
-    is allow;
-  - the key names (never values) inside `preToolUse.tool_input` for Write,
-    Read, Grep and one MCP tool;
-  - pass or fail against SYNTHESIS §3, and what it changes in D2, D9 and D11.
-
-### S2 · Hard constraint · Root-owned registration and tamper attempts
-- **Owner:** lead (you at the keyboard, `sudo`)
-- **Lane:** lead, after S1
-- **Time box:** 60 min, for nine attempts.
-- **May touch:** `/Library/Application Support/Cursor/hooks.json` and
-  `/Library/Application Support/AgentFly/` (created, then removed);
-  `~/.cursor/hooks.json`; `/tmp/af-fresh/` (including `.cursor/`); new
-  `docs/spikes/S2-tamper.md`.
-- **Done when** `docs/spikes/S2-tamper.md` has:
-  - whether hooks fire from the system file, with event counts;
-  - a table of tamper attempts (a)–(i), each with its command, result, error
-    text and whether AgentFly still denied a follow-up `curl`;
-  - whether `/usr/bin/python3` exists;
-  - who owns `$(brew --prefix)/Cellar`;
-  - pass or fail, with the resulting choices for D1, D2, D3, D5 and D19.
 
 ### S3 · G2 · Do your rules fit the fixed kinds; drafting accuracy
 - **Owner:** worker-backend (input: your 10 sentences)
 - **Lane:** backend, ∥ S1 and S2
-- **Time box:** 30 min, after your sentences arrive. A cloud model needs your
-  OK first (D13).
+- **Time box:** 30 min, after your sentences arrive. Cloud-model drafting is
+  OK for S3 only (owner, 2026-10-16); D13 itself stays open.
 - **May touch:** new `docs/spikes/S3-rule-fit.md` and new
   `docs/spikes/S3-rules.toml` (paper format only, never loaded by code).
 - **Done when** `docs/spikes/S3-rule-fit.md` has:
@@ -128,18 +94,6 @@ in parallel.
   - the model's drafts beside the hand-written versions, as an exact-match
     count out of 10 and an invented-field count;
   - pass or fail, with the resulting choices for D10 and D13.
-
-### S4 · G3 · Static trail mock vs today's page
-- **Owner:** worker-ui (you judge)
-- **Lane:** UI, ∥ S1 and S2
-- **Time box:** 30 min.
-- **May touch:** new `docs/spikes/S4-trail-mock.html` (one static file, no
-  build, never served by the app) and new `docs/spikes/S4-trail.md`.
-- **Done when** `docs/spikes/S4-trail.md` has:
-  - screenshots of the mock and of today's page on the same 200+ step mock
-    session;
-  - your choice, plus what you said is missing;
-  - the resulting choice for D15.
 
 ### S5 · G4 · Smoke test: does a brief reach the agent at all (n = 2)
 - **Owner:** lead (you at the keyboard)
@@ -152,7 +106,9 @@ in parallel.
   - for each of the four chats, the commands before the first passing run,
     taken from the hook log;
   - whether the agent mentioned the brief;
-  - the `additional_context` result, if tried.
+  - the `additional_context` result, if tried;
+  - the S2 (d) re-run: `sudo -v` in Terminal, then within a minute
+    `sudo -n true; echo exit=$?` in an agent chat.
 
   The report states that n = 2 per arm measures nothing about value. A pass only
   unlocks the pre-registered A/B (D16).
@@ -370,14 +326,28 @@ in parallel.
 ### V8 · UI: trail home, Why card, health strip
 - **Owner:** worker-ui
 - **Lane:** UI. Starts after V1 and merges after V2 (for the `/health` count).
-- **Depends on:** S4, V1; V2 for the merge
+- **Depends on:** S4 ✅, V1; V2 for the merge
 - **May touch:** `ui/src/**` except `ui/src/history/**` and `ui/src/rules/**`;
   `ui/dist` (rebuilt); ui tests. No Python. No new npm dependencies without
   your approval.
 - **Done when:**
   - The home trail works on a 500-step mock session: routine runs are grouped,
-    blocks, warnings and secret reads are never grouped, and Follow still works
-    (tests and a screenshot).
+    blocks, warnings and secret reads are never grouped (repeated identical
+    blocks stay separate rows), and Follow still works (tests and a screenshot).
+  - It works at half-screen, about 700 px wide: the header stays on one line
+    and the Why card stays usable (screenshot at 700 px). From S4.
+  - The Why card can be hidden and resized. Propose how in the PR before
+    building it (S4: the owner asked; the mechanism is not decided).
+  - **Live check before the switch** (the owner asked, 2026-10-16). Build the
+    trail first at a non-home address (for example `/?view=trail`); today's
+    page stays home. With the recorder running, the owner watches the trail
+    while `uv run python fake_agent.py` replays the R1 scenario, and again
+    during one real Cursor chat that reads `.env` and then tries a send to
+    `https://example.invalid`: new steps appear without a reload, Follow keeps
+    up, the block pins and its Why card opens. Only after the owner's yes does
+    the commit land that makes the trail home and moves the lane graph to a
+    "Graph" tab. The PR records the owner's answer and a screenshot. Needs
+    the owner at the keyboard.
   - Every block and warning opens a Why card with the rule id and text, the
     trigger step → blocked step, and the messages sent to you and to the agent.
     There is **no "allow once" button** (D19); the card shows the

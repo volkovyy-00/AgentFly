@@ -12,17 +12,17 @@ hand; "approved" always means the owner's explicit yes):
 - D2 proposed · Where the Cursor hook entries are written
 - D3 proposed · Where rules live, and how a change is approved
 - D4 approved 2026-10-15 · What happens when the recorder is down or slow
-- D5 proposed · Form of the hook client
+- D5 approved 2026-10-16 · Form of the hook client
 - D6 proposed · Distribution, package layout and platforms
 - D7 proposed · File locations and name
 - D8 proposed · Service manager
 - D9 proposed · Which Cursor events to register
 - D10 approved 2026-10-15 · Rule file language
-- D11 proposed · What block, warn and highlight do in Cursor
+- D11 approved 2026-10-16 · What block, warn and highlight do in Cursor
 - D12 proposed · Rule change flow (v1)
 - D13 proposed · Plain-language drafting: which model, and when
 - D14 approved 2026-10-15 · Local store for past sessions; what happens to Neo4j
-- D15 proposed · UI structure
+- D15 approved 2026-10-16 · UI structure
 - D16 proposed · G4 direction
 - D17 proposed · SPEC.md and AGENTS.md
 - D18 proposed · Other agents (Claude Code later)
@@ -49,6 +49,13 @@ Revision 3 (2026-10-15) records your answers:
   asserts 405 for HEAD on API GET routes (confirmed on the locked versions);
 - D1 approved as option A (sudo by default), with the wording in its status
   line. D2, D3, D5, V3 and V7 are written for it.
+
+Revision 4 (2026-10-16) records your answers:
+- D5 approved: one stdlib-only hook file on a bundled root-owned Python;
+- D11 approved as revised: warn = `ask` on shell, "Always Run" accepted;
+- S3 may use a cloud model for drafting; D13 itself stays open until S3;
+- D1's S2 note: the sudo grace-period result is marked unproven;
+- D15 approved after S4 (option A, with S4's requests in V8).
 
 Items marked **Approval item** need an explicit yes or no from you, not just a
 nod to the recommendation.
@@ -83,7 +90,7 @@ editing a config file, the pattern behind the 2025–2026 CVEs in
 **Your sign-off is needed on the wording:** "prevented for hook config and
 rules; detected for tampering with installed code".
 
-S2 result (2026-10-15): a root-owned system `hooks.json` and hook script cannot be edited by the agent (edit tool and `python3 -c` both got `Permission denied`), and the sudo grace period did not reach the agent's shell. Two limits for the "detected" half: `/usr/local/Cellar` is writable by your user, and the Python interpreter the hook runs on is group-writable (see D5). `docs/spikes/S2-tamper.md`.
+S2 result (2026-10-15): a root-owned system `hooks.json` and hook script cannot be edited by the agent (edit tool and `python3 -c` both got `Permission denied`), and the agent's `sudo -n true` got `a password is required`. Whether a fresh `sudo -v` grace period reaches the agent's shell is unproven (the owner is not sure it was run just before); it is re-run in the S5 session. Two limits for the "detected" half: `/usr/local/Cellar` is writable by your user, and the Python interpreter the hook runs on is group-writable (see D5). `docs/spikes/S2-tamper.md`.
 
 ---
 
@@ -168,7 +175,7 @@ S2 result (2026-10-15): the baseline is confirmed: with the recorder killed (`pk
 ---
 
 ## D5. Form of the hook client
-Status: proposed · Depends on: D1, D2
+Status: **approved (2026-10-16), option A on a bundled root-owned Python.** `init -g` installs a relocatable standalone Python build (the kind uv downloads) under `/Library/Application Support/AgentFly/`, root-owned and not group-writable, and the hook runs only on it, never on `/usr/bin/python3`. `doctor` checks the interpreter's permissions; the command path is quoted (S2 F1). The runtime is approved as a dependency; V3 picks the exact build and its update path. · Depends on: D1, D2
 
 | Option | What it means |
 |---|---|
@@ -313,7 +320,7 @@ outbound tool; that is weaker against obfuscation.
 ---
 
 ## D11. What block, warn and highlight do in Cursor
-Status: proposed · Tested by: S1 (message display)
+Status: **approved (2026-10-16), revised recommendation.** block = deny and highlight = allow plus a UI mark (A); warn = `ask` on `beforeShellExecution` (B) and allow plus a UI mark on every other event. "Always Run" accepted: a warn can become a standing allowance inside Cursor; block is unaffected. No demo mode other than S1's "Auto-review with Sandbox" was named; re-check `ask` if that changes. · Tested by: S1 (message display)
 
 | Option | What it means |
 |---|---|
@@ -362,7 +369,7 @@ what needs extra machinery. For a "shadow" trial, add a new rule as
 ---
 
 ## D13. Plain-language drafting: which model, and when
-Status: proposed · Tested by: S3
+Status: proposed · Tested by: S3 · S3 may use a cloud model (owner OK 2026-10-16, for S3 only; it gets the sentences and the rule schema, never session data)
 
 | Option | What it means |
 |---|---|
@@ -397,7 +404,7 @@ lists.
 ---
 
 ## D15. UI structure
-Status: proposed · Tested by: S4 · Changes: SPEC.md §6
+Status: **approved (2026-10-16), option A**, with S4's requests added to V8: the layout works at half-screen (about 700 px), and the Why card can be hidden and resized (V8 proposes how). Repeated identical blocks stay separate rows. Added 2026-10-16: the lane graph moves to a tab only after the owner sees the trail working on live steps (V8 live check). · Tested by: S4 · Changes: SPEC.md §6
 
 | Option | What it means |
 |---|---|
@@ -413,6 +420,8 @@ the Why card. Under D19 the page cannot change anything, so the card shows the
 `agentfly rules …` command instead.
 Risk: the demo's "wow" was the red box with a dashed line to R1. The Why card
 must carry that moment, and S4 checks it does.
+
+S4 result (2026-10-16): **pass.** The owner chose the trail over today's page on the same 200+ step mock session, named nothing missing, and said the Why card carries the red-box-to-R1 moment. Requests for the build: the UI mostly sits at half-screen (about 700 px wide), and the Why card must be hideable and resizable (how is not decided). Repeated identical blocks: the owner keeps separate rows. `docs/spikes/S4-trail.md`.
 
 ---
 
