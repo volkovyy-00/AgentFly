@@ -1,0 +1,502 @@
+# AgentFly v1 decisions
+
+Status of every entry: **proposed, waiting for the owner's approval.** When you
+approve one, change its status line to `approved (date)` and note any change.
+After that, a decision changes only through a new entry that replaces it.
+
+Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
+Citations follow the convention in SYNTHESIS.md: file name plus section.
+
+Revision 2 (2026-10-14) applies your review:
+- D4 is labelled as my judgement, with its cost listed as an approval item;
+- D10 normalisation now covers R1;
+- forum-sourced bugs are marked "to reproduce";
+- the split API is recorded as D19;
+- per-project `init` is deferred as D20;
+- drafts no longer go through the UI (D3, D12, D13).
+
+Revision 3 (2026-10-15) records your answers:
+- D4, D10, D14 and D20 approved (D4 and D10 with changes, see each entry);
+- the UI guided form and downloadable draft are dropped for v1: drafts come
+  only from `agentfly rules draft` (D3, D12, D13);
+- D19's test allows HEAD only on static and plain Starlette routes, and
+  asserts 405 for HEAD on API GET routes (confirmed on the locked versions);
+- D1 approved as option A (sudo by default), with the wording in its status
+  line. D2, D3, D5, V3 and V7 are written for it.
+
+Items marked **Approval item** need an explicit yes or no from you, not just a
+nod to the recommendation.
+
+Dependencies: the recommended defaults need no new dependency. `tomllib`,
+`sqlite3` and `argparse` ship with Python, and `httpx` is already approved.
+Options that would need your approval under AGENTS.md: PyYAML (D10-B/C),
+elkjs or dagre (D15), an LLM SDK (D13-A, avoidable by calling the API with
+`httpx`), and Ollama or another local model runtime (D13-B).
+
+---
+
+## D1. What "the agent can never edit, disable or weaken its own rules" means
+Status: **approved (2026-10-15), option A**, sudo by default (one at install, one per rule change). Approved wording: **"prevented for config and rules; detected for tampering with installed code"**. No sudo-free default and no `--hardened` flag in v1. · Drives: D2, D3, D4, D5 · Tested by: S2
+
+**Context.** The agent runs as your macOS user. It can change anything your user
+can change: your home folder, and (unverified, checked in S2) the Homebrew
+folder. R0 matches names, so a `python3 -c` one-liner that builds a path from
+pieces gets past it (2-rules-claude.md Opinions A.4, E). SPEC.md §9 already says
+"a determined agent could go around it".
+
+| Option | What it means | Cost |
+|---|---|---|
+| **A. Prevent the obvious, detect the determined** | The hook registration and the active rules become root-owned files, so editing them is impossible without your password. If the recorder is killed, the hook client keeps blocking outbound commands (D4). Deeper tampering, such as patching AgentFly's installed code inside the Homebrew folder, is *detected*: `agentfly doctor` and each session start compare file hashes and raise a red banner. | One `sudo` at install, and one for each rule change |
+| B. Prevent everything | Same as A, plus the code is installed root-owned (a `.pkg` into `/usr/local`, not Homebrew) and the recorder runs as a separate system user with its own admin socket (2-rules-claude.md Opinions D.2–D.3) | No `brew install`; much harder install, upgrade and uninstall; a macOS service account to create |
+| C. Detect only | Everything stays in your user's folders, guarded by R0, hash checks and loud alerts | Nothing at install, but the constraint must be reworded to "never without you noticing" |
+
+**Recommended: A.** It is the cheapest option that makes the common failure
+impossible rather than merely visible. That failure is a prompt-injected agent
+editing a config file, the pattern behind the 2025–2026 CVEs in
+2-rules-claude.md §3. It also keeps G1's Homebrew install; B gives that up.
+**Your sign-off is needed on the wording:** "prevented for hook config and
+rules; detected for tampering with installed code".
+
+S2 result (2026-10-15): a root-owned system `hooks.json` and hook script cannot be edited by the agent (edit tool and `python3 -c` both got `Permission denied`), and the sudo grace period did not reach the agent's shell. Two limits for the "detected" half: `/usr/local/Cellar` is writable by your user, and the Python interpreter the hook runs on is group-writable (see D5). `docs/spikes/S2-tamper.md`.
+
+---
+
+## D2. Where the Cursor hook entries are written
+Status: proposed · Depends on: D1 · Tested by: S1, S2
+
+| Option | What it means |
+|---|---|
+| A. User file `~/.cursor/hooks.json` | Both install reports recommend it. Entries are merged and tagged, with a backup and an atomic write (1-install-claude.md Rec. B; 1-install-chatgpt.md "Recommended Install" 2). The agent can edit this file. |
+| **B. System file `/Library/Application Support/Cursor/hooks.json`**, root-owned | Written by `agentfly init -g` with one `sudo`. It points at a hook client in a root-owned `/Library/Application Support/AgentFly/`. Cursor documents this path as the "Enterprise (MDM)" level. A deny wins across all levels, so a project's hooks can't cancel it (1-install-claude.md §2; 2-rules-claude.md Opinions D.1). |
+| C. Per-project `.cursor/hooks.json` (today) | Fails G1, and it is the surface every config-rewrite CVE used (2-rules-claude.md Opinions E). |
+
+**Recommended: B if S2 shows Cursor loads the system file on a Mac without
+MDM. Otherwise A, and D1 falls back to C.**
+Notes: when v1 is installed, remove AgentFly's own repo-level
+`.cursor/hooks.json`, or every event arrives twice. Neither option covers
+Cursor Cloud Agents (1-install-claude.md §2).
+
+S2 result (2026-10-15): option B works. Cursor 3.24.12 runs `/Library/Application Support/Cursor/hooks.json` on a Mac without MDM, with no prompt. User-level and project-level hooks run alongside it, and an allow-all hook in either did not cancel AgentFly's deny (shell events only). The command in the file must be quoted: an unquoted path with a space made Python exit 2 and Cursor denied every action.
+
+---
+
+## D3. Where rules live, and how a change is approved
+Status: proposed · Depends on: D1 · Tested by: S2
+
+| Option | What it means |
+|---|---|
+| A. `~/.config/agentfly/rules.toml`, editable by your user | Guarded by R0 plus a hash alert. The agent can still edit it with an obfuscated command. |
+| **B. Active rules in a root-owned file**, readable by everyone | Drafts are files in your user folder. Only `agentfly rules draft` writes them in v1 (no UI form or download); the UI has no write endpoint (D19). `sudo agentfly rules apply <draft>` shows the diff, with loosening changes in red, and the backtest, then installs the rules; the recorder reloads. Your sudo password is the secret the agent doesn't have. 2-rules-claude.md Opinions C.6 lists "an OS auth prompt" as one such channel. |
+| C. A separate OS user owns the rules and the recorder | An admin socket only that user can reach, plus signed rulesets (2-rules-claude.md Opinions D.2–D.5). |
+
+**Recommended: B.** It meets D1-A with one familiar mechanism. C's main extra,
+that the agent cannot kill the recorder, is already covered by D4. A draft the
+agent writes does nothing until you approve it, and the diff shows what it
+changes.
+Unverified (S2): after you run `sudo` in your own Terminal, can the agent's
+terminal run `sudo` without a password? macOS normally ties the sudo grace
+period to one terminal, but neither report covers this.
+Note: rules are not secret, so a world-readable file is fine. The token stays
+readable by your user; SPEC.md §10 already accepts that the agent can read it.
+
+S2 result (2026-10-15): a root-owned rules file is feasible: writes fail with `Permission denied` and `sudo -n` fails in the agent's shell after `sudo -v` elsewhere. Cursor also asks you before the agent runs `sudo`. That prompt depends on your Cursor settings, so the root-owned file is the control.
+
+---
+
+## D4. What happens when the recorder is down or slow
+Status: **approved (2026-10-15)**, offline guard (C) as default, on two conditions: launchd `KeepAlive` is in D8 and V3 for every install path (brew and our own LaunchAgent), and the deny message says `agentfly start`. · Depends on: D1
+v1.1 option, not built now: a client-side per-chat taint marker, reconciled by the recorder, with a banner if a marker was deleted. · Cost accepted.
+
+| Option | What it means |
+|---|---|
+| A. Fail open loudly | Allow the action, put "AgentFly offline — not checked" in the messages, log the miss, show a UI banner (1-install-claude.md Rec. C.2; 1-install-chatgpt.md "Fail Policy"). But killing the recorder then switches protection off, which breaks D1. |
+| B. Cursor `failClosed: true` on every hook | 2-rules-claude.md Opinions D.4. A forum report (to reproduce) says the agent's shell intermittently hard-locks with it ("MainThreadShellExec not initialized"). It also can't tell a broken launcher from a policy decision; the workit project reverted it for that reason (1-install-claude.md §2, §4). |
+| **C. An offline guard in the hook client** | The client always prints valid JSON and exits 0. If the recorder doesn't answer within the time budget, it applies a fixed subset: it denies outbound commands (the R1 list, except localhost and private ranges) and R0 guard-path commands, allows everything else, logs the miss, and says so in `user_message`. |
+
+**Recommended: C as the default. This is my judgement, not a research finding.**
+1-install-claude.md Rec. C.3 proposed this guard only for an opt-in strict mode,
+and its default was fail open loudly (A). I made it the default because A lets
+"kill the recorder" switch protection off, which breaks D1, and B depends on a
+`failClosed` that has a reported hard-lock.
+
+**Approval item: the cost.** Whenever the recorder is down (not started,
+crashed, or killed), in **every** project and **even with no secret read**, the
+agent cannot run:
+- `curl`, `wget`, `nc`, `scp`, `ssh`, `rsync`;
+- `git push`, `gh`, `aws`;
+- inline `python -c` / `node -e` one-liners;
+- the same commands wrapped in `bash -c`, `env` or `sudo`.
+
+An unparseable command is denied only if its raw text names one of those tools.
+The agent's message tells you to run `agentfly start`. If you'd rather keep
+these working while the recorder is down, choose A and reword D1.
+
+Also: the client must never exit 2 by accident, so wrap everything
+(1-install-claude.md Rec. C.1). The time budget is 0.5 s today; Claude suggests
+a 300 ms connect and 1.5 s total. Settle it from V2's measurements. The guard's
+matcher has to sit inside the one client file (D5), so it is a simpler,
+word-level copy of V5's normalisation, tested against the same cases.
+
+S2 result (2026-10-15): the baseline is confirmed: with the recorder killed (`pkill -f uvicorn` succeeded from a normal shell), a curl after a secret read was allowed, and the page showed OFFLINE. Cursor's sandbox proxy blocked the first attempt and the agent re-ran it outside the sandbox, so the offline guard in the hook client is what must catch it.
+
+---
+
+## D5. Form of the hook client
+Status: proposed · Depends on: D1, D2
+
+| Option | What it means |
+|---|---|
+| **A. One stdlib-only Python file** | Run with `python -I -S`, like today's `hooks/hook.py`. Target p95 under 50 ms (1-install-claude.md Rec. A.4). |
+| B. `agentfly <subcommand>` through the full CLI | 1-install-chatgpt.md "Recommended Install" 2. It imports FastAPI and more; other projects measured 60–390 ms per call (1-install-claude.md §3). |
+| C. A compiled client (Go or Rust) | Fast, though no source gives numbers. A new language and toolchain. |
+
+**Recommended: A.** Under D1-A, `init -g` copies this one file into the
+root-owned folder, so deleting or editing AgentFly's Homebrew files cannot
+switch the guard off. It runs under `/usr/bin/python3` if S2 finds it, and
+otherwise under the Homebrew Python, with a hash check. If AgentFly is still
+registered but its files are missing, treat that as tampering and apply the
+offline guard. Answer plain "allow" only after `agentfly uninstall` has removed
+the registration, so a half-uninstalled AgentFly never bricks Cursor
+(1-install-claude.md Rec. B). Revisit C only if the measured p95 is a problem.
+
+S2 result (2026-10-15): the hook script can be root-owned, but on this Mac `/usr/bin/python3` launches `/Library/Frameworks/Python.framework/Versions/3.13`, which is `root:admin` group-writable (`os.py` and the binary are writable by you without sudo). A root-owned script run by that interpreter can be subverted. **Open:** pick an interpreter or launcher the agent cannot change (for example a root-owned bundled runtime or a small compiled launcher under `/Library/Application Support/AgentFly/`), and have `doctor` check the interpreter's permissions. Also: quote the command path (S2 F1).
+
+---
+
+## D6. Distribution, package layout and platforms
+Status: proposed
+
+| Option | What it means |
+|---|---|
+| **A. Own tap plus PyPI** | `volkovyy-00/homebrew-tap` with a formula built on `virtualenv_install_with_resources` and a `service do` block, giving `brew install volkovyy-00/tap/agentfly`. The same wheel goes to PyPI for `uv tool install` and `pipx`, with `ui/dist` inside the wheel (1-install-claude.md Rec. A). |
+| B. PyPI only | No Homebrew. |
+| C. A plus PyInstaller binaries | 1-install-chatgpt.md "Recommended Install" 1. Rejected for startup cost (see SYNTHESIS §5). |
+
+**Recommended: A.** Other details:
+- **macOS only in v1.** It is your machine, and the goals say local. XDG paths
+  keep Linux cheap later. Windows is out (1-install-claude.md "Risks").
+- **One import package `agentfly`.** `recorder/` and `hooks/` move under it, so
+  the wheel has a single top-level name.
+- **CLI built with `argparse`.** AGENTS.md bans CLI frameworks;
+  1-install-claude.md suggested "Typer or argparse".
+- **Before any release, check that `agentfly` is free on PyPI.** Neither report
+  checked. Each publish is outward-facing, so you approve it.
+
+---
+
+## D7. File locations and name
+Status: proposed
+
+| Option | What it means |
+|---|---|
+| **A. XDG folders** | `~/.config/agentfly/` holds the token, config, drafts and `neo4j.env` (mode 600). `~/.local/share/agentfly/` holds sessions, the store and logs. Root-owned parts (D2, D3) go in `/Library/Application Support/AgentFly/`. `~/.config/flightrecorder` is migrated once (1-install-claude.md Rec. B). |
+| B. `~/Library/Application Support/AgentFly/` | The macOS-native location. |
+| C. Keep `~/.config/flightrecorder` | No migration. |
+
+**Recommended: A.** Rename every "flightrecorder" (paths, logger names) to
+"agentfly". The repo-relative `logs/events.jsonl` moves to the data folder.
+
+---
+
+## D8. Service manager
+Status: proposed · Condition from D4: `KeepAlive` is set in both the brew-services plist and the LaunchAgent AgentFly writes itself (V3 checks it)
+
+| Option | What it means |
+|---|---|
+| **A. `brew services`** | `agentfly start/stop/status` delegate to `brew services` (a launchd LaunchAgent with KeepAlive). For uv and pipx installs, AgentFly writes its own LaunchAgent. Both install reports recommend this. |
+| B. A self-managed background process | `agentfly start` launches the process itself. |
+
+**Recommended: A.** `brew uninstall` leaves the plist behind, so run
+`agentfly uninstall` before `brew uninstall`. The formula caveats must say so
+(1-install-claude.md §3, Rec. B).
+
+S2 result (2026-10-15): `pkill -f uvicorn` stops the recorder from a normal user shell, so `KeepAlive` (D4's condition) is what keeps it up between kills.
+
+---
+
+## D9. Which Cursor events to register
+Status: proposed · Tested by: S1
+
+| Option | What it means |
+|---|---|
+| **A. Gates, de-duplicated, plus session events** | Gates: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`, and `preToolUse`. Duplicates between `preToolUse` and the specific gates are merged by `tool_use_id`. Record-only: `afterFileEdit` (edit text dropped, as today), `sessionStart`, `sessionEnd`. Registration depends on the Cursor version. |
+| B. Claude's list | The gates without `preToolUse`, plus `afterFileEdit`, `sessionStart`, `sessionEnd` and `stop` (1-install-claude.md Rec. B). |
+| C. Today's five events | No session events. |
+
+**Recommended: A.** [repo check] In `logs/events.jsonl`, `preToolUse` is the only
+pre-hook for the agent's Write and Grep tools, so B would leave file edits
+ungated. Today's client replaces all of `tool_input` with `<omitted>`
+(`hooks/hook.py:45-46`), which leaves the server blind to which file a Write
+targets. V2 keeps only the target path, using the key names S1 records, and
+drops the rest. "One unknown event name disables the whole file" is a community
+report (to reproduce, first step of V3); whether `init` gates events by Cursor
+version depends on that result. Never register `beforeSubmitPrompt`, `afterAgentResponse` or
+`afterAgentThought` (1-install-claude.md Rec. B). Register
+`afterShellExecution` only if the G4 experiment goes ahead, and then keep only
+the exit code; the client drops `output` (4-memory-claude.md "Productization
+prerequisites" 4).
+S1 result (2026-10-15, Cursor 3.24.12 desktop): `tool_use_id` arrives on
+`preToolUse` and `beforeShellExecution`, not on `beforeReadFile` or
+`afterFileEdit`, so only shell and tool calls can be merged by it. Key names in
+`preToolUse.tool_input`: Shell `command`, `cwd`, `timeout`; Read `file_path`;
+Write `file_path`, `content`; Grep `file_path`, `pattern`. MCP was not tested.
+`docs/spikes/S1-global-hooks.md`.
+
+---
+
+## D10. Rule file language
+Status: **approved (2026-10-15) with a change** (quoted-heredoc rule, see the approval item) · Tested by: S3 · Changes: AGENTS.md "Working rules"
+
+| Option | What it means |
+|---|---|
+| **A. Fixed rule kinds in TOML** | A small, fixed set of kinds, for example `match` (event plus path class, command class or host) and `after_then` (once X has happened in this session, Y gets this severity). A `count` kind can come later. Each kind is one named pure Python check; the file only fills in parameters and named lists (sensitive names, outbound tools, local hosts). Each rule carries inline tests, Semgrep-style (2-rules-claude.md Opinions B). Read with the stdlib `tomllib`. Precedent for TOML rules: the Gemini CLI policy engine (2-rules-claude.md §1). |
+| B. Claude's `agentfly/v1` YAML | `when:` expressions and macros (2-rules-claude.md Opinions B). The most expressive, but it is a condition language, which AGENTS.md forbids, and it needs PyYAML plus an expression evaluator. |
+| C. ChatGPT's YAML `conditions:` list | 2-rules-chatgpt.md "Proposed Rule Format". Simple, but "in sequence or in the same step" is ambiguous, and it needs PyYAML. |
+
+**Recommended: A.** It meets G2's "done when" (add a rule without touching
+Python) for every example in the goals and in both reports. The goal's "block
+npm publish after reading .env" is one `after_then`. It also keeps AGENTS.md's
+"rules are small named pure functions". AGENTS.md wording changes from "no
+condition language" to "no expression language; a new rule *kind* is Python".
+S3 checks that your real rules fit.
+Also:
+- R0 lives in code only. No rules file can switch it off.
+- **Command normalisation applies to every rule, R1 included, not only R0**
+  (2-rules-claude.md Opinions B, E). It unwraps `bash -c`, `sh -c`, `env` and
+  `sudo`, looks inside `$(…)` and backticks, and case-folds paths. This extends
+  what `recorder/clean.py` already does. Once a session is marked, R1 counts
+  three more things as outbound:
+  - an inline-code one-liner (`python -c`, `node -e`, and similar), **whether
+    or not it mentions "http"**. Today's check looks for "http", and splitting
+    the string defeats it.
+  - an unparseable command: an unbalanced quote, or a `<<EOF` block.
+  - the same tools when they sit inside a wrapper.
+
+  This changes the R1 definition in SPEC.md §5, so V1 updates SPEC.
+
+**Approved with change (2026-10-15).** The normaliser treats the body of a quoted-delimiter heredoc (`<<'EOF'`) as literal data, so `git commit -m "$(cat <<'EOF' … EOF)"` parses and is not blocked. Every other unparseable command counts as outbound after a secret read. V5 tests both.
+
+**Approval item (original wording): the cost of "unparseable counts as outbound".** After a secret
+read, agents commonly write commit messages as
+`git commit -m "$(cat <<'EOF' … EOF)"`. That command is unparseable, so R1 will
+block it in a marked session. The agent then has to commit another way (for
+example `git commit -F file`), or you start a new chat. The alternative is to
+count an unparseable command as outbound only when its raw text names an
+outbound tool; that is weaker against obfuscation.
+
+---
+
+## D11. What block, warn and highlight do in Cursor
+Status: proposed · Tested by: S1 (message display)
+
+| Option | What it means |
+|---|---|
+| **A. Deny / allow with a message / allow with a UI mark** | block = deny, with the rule text in both messages (as today). warn = allow, plus a note in `user_message` and `agent_message`, shown purple in the UI. highlight = allow, marked in the UI only. |
+| B. warn = Cursor `ask` | A Cursor staff forum post says "hooks only enforce the deny permission", and the docs say `ask` is not enforced for `preToolUse` (1-install-claude.md §2; 3-ui-claude.md §4). Forum-sourced, so to reproduce: S1 checks whether `ask` pauses the agent. |
+| C. warn = deny that you can override in the UI | 2-rules-claude.md maps warn to deny wherever `ask` isn't supported. With D19 there is no override endpoint, so the override would be a CLI command. |
+
+**S1 result (2026-10-15, Cursor 3.24.12 desktop, two trials each):**
+- `ask` from `beforeShellExecution` pauses the agent and shows "Hook requested
+  approval: <user_message>" with Skip / Always Run / Run. The forum report did
+  not reproduce for shell. Not tested for `beforeReadFile`, `beforeMCPExecution`
+  or `preToolUse` (the docs say `ask` is not enforced for `preToolUse`).
+- An allow with `user_message` and `agent_message` showed nothing to the user,
+  and the agent did not act on the `agent_message`. So option A's warn is
+  invisible in Cursor and visible only in AgentFly's UI.
+
+**Recommended (revised after S1): A for block and highlight, and for warn use
+`ask` on shell commands (B), with an allow plus a UI mark on every other
+event.** A warn then reaches you at the moment it matters, and Cursor's own
+Run button is a per-command "allow once" that needs no AgentFly endpoint
+(D19). Open items for your approval:
+- **"Always Run"** lets you turn a warned command into a standing allowance
+  inside Cursor, outside AgentFly's rules. Block is unaffected (deny cannot be
+  overridden), but a warn can stop warning. Accept that, or make warn a deny.
+- The answer was seen in the "Auto-review with Sandbox" mode only. Repeat it in
+  the mode you will demo in before relying on it.
+- The `ask` timeout and the hook timeout interact (the hook must answer within
+  its own timeout, and the human then answers in Cursor); V2 measures it.
+
+---
+
+## D12. Rule change flow (v1)
+Status: proposed · Depends on: D3, D10
+
+| Option | What it means |
+|---|---|
+| A. Claude's full seven steps | Compile, validate, explain, backtest, approve out-of-band, run in shadow, activate, with signed rulesets (2-rules-claude.md Opinions C). |
+| **B. Draft → check → diff → backtest → `sudo` approve → reload** | All steps run in the CLI. A draft is a file, written only by `agentfly rules draft` in v1; nothing goes through `:8787` (D19). Check covers the schema, unknown fields and over-broad globs. The diff shows loosening changes in red. The backtest reports "would have blocked N steps in M sessions". No shadow period and no signing; the root-owned file does signing's job. |
+| C. Hand-edit the file, then `agentfly rules check` | No diff or backtest. |
+
+**Recommended: B.** It keeps what both reports agree on (see, simulate,
+approve) and Claude's loosening check (2-rules-claude.md Opinions C.3). It drops
+what needs extra machinery. For a "shadow" trial, add a new rule as
+`highlight` first.
+
+---
+
+## D13. Plain-language drafting: which model, and when
+Status: proposed · Tested by: S3
+
+| Option | What it means |
+|---|---|
+| A. A cloud model (for example the Claude API) | It receives only your sentence and the rule schema, never session data. Taken literally this breaks "Everything runs locally", so it needs your explicit OK. It can be called with the approved `httpx`, so no SDK is needed. |
+| B. A local model (for example through Ollama) | Meets local-only. A new runtime, of unknown quality. |
+| **C. No plain language in v1** | `agentfly rules draft` fills in a rule kind, its lists and a severity from flags, and writes a draft file, applied with `sudo agentfly rules apply`. No UI form or download in v1. Plain language comes later. |
+
+**Recommended: C for v1, then choose between A and B using S3's numbers.** G2's
+"done when" doesn't need plain language, and both reports say drafts must be
+reviewed anyway; the open risk is accuracy, which S3 measures. Whichever model
+you pick, it only drafts. It is never in the decision path (2-rules-claude.md
+Opinions E), and the fixed schema stops it inventing fields.
+
+---
+
+## D14. Local store for past sessions; what happens to Neo4j
+Status: **approved (2026-10-15)**: SQLite default, Neo4j optional, workspace path stored locally, 28-day retention, `agentfly wipe` · Changes: SPEC.md §3, §4
+
+| Option | What it means |
+|---|---|
+| **A. SQLite by default, Neo4j optional** | SQLite (stdlib) is the local store, written in the background as Neo4j is today. Neo4j becomes an optional copy, off by default (4-memory-claude.md "Productization prerequisites" 3). |
+| B. Neo4j required, backing History | 3-ui-claude.md view 4. On AuraDB this breaks "Everything runs locally"; a local Neo4j means installing Neo4j or Docker. |
+| C. JSONL files | Plain append-only files. |
+
+**Recommended: A.** Keep sessions 28 days by default, the TTL Copilot uses;
+4-memory-claude.md suggests 14–28 days. Add `agentfly wipe`.
+**Needs your explicit OK (new stored data):** the workspace root path of each
+session. History can't tell projects apart without it once AgentFly watches
+every project (3-ui-claude.md view 4). Everything else stays as SPEC.md §4
+lists.
+
+---
+
+## D15. UI structure
+Status: proposed · Tested by: S4 · Changes: SPEC.md §6
+
+| Option | What it means |
+|---|---|
+| **A. Decision-first** | Home is a Live Trail: a badge on every step, routine runs grouped, blocks and warnings pinned, Follow kept. Every block opens a Why card: the rule, trigger step → blocked step, and the messages sent. A health strip shows recorder status. History and Rules are tabs, and today's lane graph becomes a "Graph" tab (3-ui-claude.md). |
+| B. ChatGPT's five views | Trace tree, DAG, replay, diff, chat (3-ui-chatgpt.md). |
+| C. Keep the lane graph as home | Add History and Rules tabs around it. |
+
+**Recommended: A, if S4 confirms it.** No new layout library: elkjs and dagre
+need approval, and the lane layout is already deterministic. The chat view is
+out (no content). Run diff and the replay scrubber come later.
+3-ui-claude.md view 2 also suggests "allow once" and "add exception" buttons on
+the Why card. Under D19 the page cannot change anything, so the card shows the
+`agentfly rules …` command instead.
+Risk: the demo's "wow" was the red box with a dashed line to R1. The Why card
+must carry that moment, and S4 checks it does.
+
+---
+
+## D16. G4 direction
+Status: proposed · Tested by: S5
+
+| Option | What it means |
+|---|---|
+| **A. Experiment only** | (1) Cross-session taint as an *option* on R1, for example "a secret read in this project in the last 24 hours counts". It is loaded into memory at start and never queried live from a database. First replay history to measure its false positives (4-memory-claude.md, experiment step 5). (2) The working-set brief, only if S5 passes, followed by the pre-registered weekend A/B (4-memory-claude.md "Minimal weekend experiment"). |
+| B. Project context recall with scrubbed summaries | 4-memory-chatgpt.md use case 1. Needs content, so it crosses the privacy line. |
+| C. Stop | Answer "no" now. |
+
+**Recommended: A.** S5 is a **smoke test** (n = 2 per arm). Its pass shows only
+that a brief reaches the agent. It says nothing about value, and only unlocks
+the pre-registered A/B, whose decision rule is fixed in advance in
+4-memory-claude.md. Only the A/B can say "yes" to the brief.
+The delivery channel for a brief is open until S5. One choice is a file in each
+project's `.cursor/rules/`: it writes into your repos, the agent can edit it, so
+it is rebuilt every session, never read back, and added to
+`.git/info/exclude`. The other is `sessionStart` `additional_context`, which has
+"never reaches the model" forum reports (4-memory-claude.md §1; to reproduce,
+S5 step 3).
+
+---
+
+## D17. SPEC.md and AGENTS.md
+Status: proposed · Card: V1
+
+| Option | What it means |
+|---|---|
+| **A. Rewrite SPEC.md as the v1 spec** | Built from the approved decisions. The hackathon version moves to `docs/archive/SPEC-hackathon.md`. AGENTS.md is updated: commands, paths, approved dependencies, rule shape, and a test list that matches real tests. |
+| B. Keep SPEC.md and add SPEC-v1.md | Two documents side by side. |
+| C. Patch SPEC.md as each card lands | Piecemeal edits. |
+
+**Recommended: A.** AGENTS.md makes SPEC.md the source of truth and says to stop
+whenever the code and SPEC disagree. Almost every v1 card would disagree with
+today's SPEC: paths, AuraDB, the page, the rule format, the fail mode. B leaves
+two sources of truth.
+
+---
+
+## D18. Other agents (Claude Code later)
+Status: proposed
+
+| Option | What it means |
+|---|---|
+| **A. An `agent` argument now** | The hook client becomes `agentfly-hook <agent> <event>`, with a small step that normalizes input. Only Cursor is built (1-install-claude.md Rec. D.10; 1-install-chatgpt.md "Other Agent Hook Models"). |
+| B. Cursor-only code | Refactor later. |
+
+**Recommended: A.** It costs one argument. Note: Cursor can import Claude Code
+hooks, so if both are ever installed, de-duplicate by `cursor_version`
+(1-install-claude.md Rec. D.10).
+
+---
+
+## D19. Recorder API surface (split API)
+Status: proposed, at your direction (2026-10-14) · Cards: V2 (test), V5, V6, V7,
+V8, V9 · Tested by: S2 (i)
+
+**Rule.** Port `:8787` serves exactly two kinds of route:
+- `POST /hook`: token, JSON body and an allowed Host header required (as today).
+- **read-only GETs**: the page (`/`, `/assets/*`), `/health`, `/api/steps`, and
+  the v1 additions `/api/sessions`, `/api/sessions/{id}/steps` and
+  `/api/rules`.
+
+There is **no** endpoint that edits, adds or removes rules, allows an action
+once, adds an exception, resets a session's "secret was read" mark, or deletes
+data. Those happen only through the CLI. Rule changes go through
+`sudo agentfly rules apply` (D3). Data deletion is `agentfly wipe`. A session's
+mark clears only with a new chat, as in SPEC.md §2.
+
+**Test.** `tests/test_api_surface.py` (written in V2) lists every
+`(method, path)` the app serves against an explicit whitelist. It fails on any
+route that isn't listed, and on any method other than GET apart from
+`POST /hook`. FastAPI GET routes do not answer HEAD (checked 2026-10-15 on
+fastapi 0.142.2 / starlette 1.7.0 from `uv.lock`: `HEAD /api/x` is 405), so HEAD
+is allowed only on the `StaticFiles` mount and plain Starlette routes, if any.
+The test also asserts that HEAD on every API GET route returns 405. Today the
+app also serves FastAPI's built-in `/docs`, `/redoc` and `/openapi.json` (GET
+and HEAD), which D19's "exactly two kinds of route" does not list. V2 sets
+`docs_url=None, redoc_url=None, openapi_url=None` unless you want them kept. Every card that adds a GET route adds its whitelist line in the
+same PR. This file is a declared merge point in BOARD.md.
+
+**Why.** The agent can reach `127.0.0.1:8787` from its own shell, and it can
+read the token (2-rules-claude.md Opinions A.3; SPEC.md §10). R0 blocks commands
+that name the port, but that is name matching. The real guarantee is that
+nothing on the port can loosen anything. 2-rules-claude.md Opinions D.3 proposes
+the same split; its admin socket is replaced here by the `sudo` CLI.
+
+**Accepted risk (S2 measures it).** With the token, a forged `POST /hook` can add
+fake steps to the trail or mark a session. Both pollute or tighten; neither
+loosens. 3-ui-claude.md's "allow once" button is dropped (D15).
+
+S2 result (2026-10-15): confirmed live. A token holder can forge `POST /hook` steps and marks for any `conversation_id` (accepted risk, tighten-only). `PUT`/`DELETE`/`POST`/`PATCH` on `/api/rules` return 404, `DELETE`/`HEAD` on `/api/steps` return 405, a wrong Host returns 403, and no token returns 401. `GET /docs` and `GET /openapi.json` return 200 today, which the whitelist does not list; V2 switches them off.
+
+---
+
+## D20. Per-project `agentfly init`
+Status: **approved (2026-10-15)**: defer; watch-list (C) later if needed · Card: V3 (out of scope there) · Changes:
+`docs/product-goals.md` G1 target flow
+
+| Option | What it means |
+|---|---|
+| **A. Defer it** | v1 has only the global install (`agentfly init -g`). |
+| B. `agentfly init` writes the project's `.cursor/hooks.json` | It only runs in trusted workspaces, the agent can edit it, and it is the surface the config-rewrite CVEs used (2-rules-claude.md Opinions E). |
+| C. `agentfly init` adds the project to a "watch list" | The hooks stay global and root-owned. A root-owned list of project roots says which projects AgentFly records and enforces in; all others are answered "allow" and not recorded. |
+
+**Recommended: A.** With the global install every project is already covered,
+so a per-project command adds nothing to G1's "done when". B weakens D1. If you
+later want AgentFly to watch only some projects, C is the safe shape, and it
+needs no change to the hooks.
+**Approval item:** this drops "(or `agentfly init` for one project)" from G1's
+target flow in `docs/product-goals.md`. V1 makes the edit once you approve.
