@@ -3,7 +3,7 @@
 ## What this project is
 Cursor hooks send every agent action to a local server. The server decides
 allow/block using rules, and saves a cleaned copy to Neo4j. A web page draws
-the session as a live graph. Read @SPEC.md first. It is the source of truth.
+the session as a live graph. Read `SPEC.md` first. It is the source of truth.
 If code and SPEC.md disagree, stop and ask. Do not silently pick one.
 
 ## Commands

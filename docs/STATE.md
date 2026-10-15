@@ -1,6 +1,7 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-15 22:31 CEST (Europe/Prague) · Last commit: handoff commit on main, find it with `git log --grep=handoff -1` (parent 0e6b8a6)
+Updated: 2026-10-15 22:53 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: Spikes S1 ✅ S2 ✅ (S1 app half only); S3 S4 S5 not started; no V-card started; DECISIONS partly approved.
+Pending decisions: D2 D3 D5 D6 D7 D8 D9 D11 D12 D13 D15 D16 D17 D18 D19
 
 ## Spikes and cards
 - S1 passed (app only) · docs/spikes/S1-global-hooks.md · global hooks fire in a fresh folder (no trust prompt); R1 deny shown; `ask` pauses shell (2/2); allow-with-message invisible (2/2); `tool_use_id` on preToolUse + beforeShellExecution only; `cursor-agent` not tested.
@@ -18,7 +19,7 @@ none
 - ~/.cursor/hooks.json: absent (verified). Repo .cursor/hooks.json: present (verified).
 - Recorder: running, pid 34143, GET /api/steps 200 (verified); started about 22:19.
 - ~/.config/flightrecorder/sessions.json: restored from backup, no `s2-forged` entries (verified); 35 sessions, 18 marked.
-- /tmp/af-spike: throwaway scripts, logs and sessions.json.bak (verified, never commit).
+- /tmp/af-spike: throwaway scripts, logs and sessions.json.bak (verified, never commit). Copy in logs/spike/ (gitignored); after a reboot run `cp -Rp logs/spike/. /tmp/af-spike/`.
 - /tmp/af-fresh: .env (fake demo value) and test.txt; no .cursor/ (verified).
 - /usr/local/Cellar/af-s2-test: removed (verified).
 - For S5, global hooks must be installed again first: `/tmp/af-spike/s1.sh real` (user-level, moves repo hooks aside) or `s2.sh install` (sudo); then `s1.sh restore` or `s2.sh restore` after.
@@ -28,7 +29,7 @@ none
 2. Write 10 rule sentences for S3, and say whether a cloud model may draft rules (D13).
 3. D11: approve warn = `ask` on shell, accept "Always Run", re-check `ask` in the mode you will demo in.
 4. D5: choose an interpreter or launcher the agent cannot change (blocks V3).
-5. Approve the remaining decisions: D2 D3 D5 D6 D7 D8 D9 D11 D12 D13 D15 D16 D17 D18 D19.
+5. Approve the pending decisions (line 4).
 6. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
 7. Go-ahead for S3, S4, S5 (S5 needs hooks reinstalled, see Machine state).
 

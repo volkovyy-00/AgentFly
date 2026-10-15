@@ -1,0 +1,24 @@
+#!/bin/sh
+# Wired with: git config core.hooksPath docs/roles/git-hooks (shared by every worktree).
+# The lead's files are written on main only (docs/roles/lead.md). Bypass: git commit --no-verify.
+branch=$(git symbolic-ref --short -q HEAD || echo detached)
+staged=$(git diff --cached --name-only)
+fail=0
+
+if echo "$staged" | grep -q '\.DS_Store$'; then
+  echo "pre-commit: .DS_Store files are never committed" >&2
+  fail=1
+fi
+
+lead=$(echo "$staged" | grep -E '^docs/(STATE|BOARD|DECISIONS|learnings)\.md$')
+if [ -n "$lead" ] && [ "$branch" != "main" ]; then
+  echo "pre-commit: lead-only file(s) staged on branch $branch:" $lead >&2
+  echo "pre-commit: only the lead edits these, on main. Unstage them: git restore --staged $lead" >&2
+  fail=1
+fi
+
+if [ "$branch" = "main" ] && echo "$staged" | grep -qE '^docs/(STATE|DECISIONS)\.md$'; then
+  "$(git rev-parse --show-toplevel)/docs/roles/state-check.sh" >&2 || fail=1
+fi
+
+exit $fail
