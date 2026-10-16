@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Cursor hook client (`agentfly-hook`): sanitize, POST to local recorder, print allow/deny.
+"""Hook client (`agentfly-hook <agent> <event>`): strip, ask the local recorder, print the answer.
 
-Stdlib only. Called via .cursor/hooks.json. Stdout must be ONLY the JSON
-permission answer; diagnostics go to stderr.
+Standard library only, one file, run with `python -I -S`. Stdout holds ONLY the JSON answer and the
+exit code is always 0 (exit 2 would block the action); diagnostics go to stderr and never carry
+payload text. If the recorder does not answer, the offline guard (SPEC section 9, D4) answers.
 """
 
 from __future__ import annotations
@@ -10,135 +11,460 @@ from __future__ import annotations
 import json
 import os
 import sys
-import urllib.request
-from datetime import UTC, datetime
-from pathlib import Path
+import time
 from typing import Any
 
-# v1 folders (SPEC section 3). Nothing is written next to this file, so the installed
-# package stays read-only.
-_LOG_PATH: Path = Path.home() / ".local" / "share" / "agentfly" / "logs" / "events.jsonl"
-_TOKEN_PATH: Path = Path.home() / ".config" / "agentfly" / "token"
-_HOOK_URL: str = "http://127.0.0.1:8787/hook"
-_TIMEOUT_S: float = 0.5
+try:  # the C module alone is enough here, and importing `socket` costs ~12 ms at start-up
+    import _socket as _net
+except ImportError:  # pragma: no cover
+    import socket as _net  # type: ignore[no-redef]
 
-# Checkpoint A (SPEC §7): temporary hard-coded deny. Keep disabled after the decision.
-_T0_ENABLED: bool = False
-_T0_USER: str = "Blocked by test rule T0 (Checkpoint A)."
-_T0_AGENT: str = (
-    "Blocked by test rule T0 (Checkpoint A). "
-    "Do not retry with another tool or language. Stop and tell the user."
+# D25: the client always talks to the recorder on this address. No env var and no
+# port file may change it; tests set these module attributes from inside their own harness.
+_HOST: str = "127.0.0.1"
+_PORT: int = 8787
+_BUDGET_S: float = 0.5  # total wait for the recorder, connect and answer together
+_MAX_STDIN: int = 64 * 1024 * 1024
+_MAX_GUARD_TEXT: int = 4 * 1024 * 1024
+_MAX_ANSWER: int = 1024 * 1024
+_MAX_DEPTH: int = 24  # nested containers deeper than this are cut before they reach the body
+
+_STRIP_KEYS: frozenset[str] = frozenset({"content", "output", "edits"})
+_MCP_KEEP: tuple[str, ...] = (
+    "hook_event_name",
+    "conversation_id",
+    "session_id",
+    "generation_id",
+    "model",
+    "cwd",
+    "workspace_roots",
+    "tool_use_id",
+    "tool_name",
+    "mcp_server_name",
+    "server",
+    "server_name",
+)
+_AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell the user."
+
+# Offline guard (SPEC section 9): a word-level copy of what agentfly/recorder/rules.py treats as
+# outbound, plus R0's guard paths. tests/test_offline_guard.py runs both over the same cases.
+_ALWAYS_OUTBOUND: frozenset[str] = frozenset({"gh", "aws"})
+_HOSTED_OUTBOUND: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
+_INTERPRETERS: frozenset[str] = frozenset({"python", "python3", "node"})
+_GUARD_PATHS: tuple[str, ...] = (
+    ".config/agentfly",
+    ".local/share/agentfly",
+    "/library/application support/agentfly",
+    "hooks.json",
 )
 
 
-def sanitize(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy safe to send/log (no file contents or edit text)."""
+def say(message: str) -> None:
+    """One line on stderr, never raising (stderr may be closed or broken)."""
+    try:
+        sys.stderr.write(f"agentfly: {message}\n")
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+
+# ---------------------------------------------------------------- paths (computed on use)
+
+
+def _home() -> str | None:
+    home: str = os.path.expanduser("~")
+    return home if home.startswith("/") else None  # unset HOME and no passwd entry: no files
+
+
+def _under_home(*parts: str) -> str | None:
+    home: str | None = _home()
+    return os.path.join(home, *parts) if home else None
+
+
+def log_path() -> str | None:
+    return _under_home(".local", "share", "agentfly", "logs", "events.jsonl")
+
+
+def count_path() -> str | None:
+    return _under_home(".local", "share", "agentfly", "logs", "offline-count")
+
+
+def token_path() -> str | None:
+    return _under_home(".config", "agentfly", "token")
+
+
+# ---------------------------------------------------------------- stripping
+
+
+def _scrub(text: str) -> str:
+    """Replace lone surrogates, which neither UTF-8 nor the recorder's log can hold."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "".join("\ufffd" if "\ud800" <= char <= "\udfff" else char for char in text)
+    return text
+
+
+def strip_tree(root: Any, drop: frozenset[str]) -> None:
+    """In place, with no recursion: drop `drop` keys at every depth, scrub strings, cut depth."""
+    stack: list[tuple[Any, int]] = [(root, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            for key in [k for k in node if k in drop]:
+                del node[key]
+            slots = list(node.items())
+        else:
+            slots = list(enumerate(node))
+        for key, value in slots:
+            if isinstance(value, str):
+                node[key] = _scrub(value)
+            elif isinstance(value, dict | list):
+                if depth >= _MAX_DEPTH:
+                    node[key] = None
+                else:
+                    stack.append((value, depth + 1))
+
+
+def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
+    """The copy sent to the recorder: no file, edit, output or tool-input text (SPEC section 8)."""
     out: dict[str, Any] = dict(payload)
-    event: str = str(out.get("hook_event_name", ""))
-
-    # SPEC §4: beforeReadFile includes full file contents — drop first.
-    out.pop("content", None)
-
-    if event == "afterFileEdit" and "edits" in out:
-        edits: Any = out["edits"]
-        count: int = len(edits) if isinstance(edits, list) else 0
-        out["edits"] = f"<{count} edits>"
-
-    if "tool_input" in out:
-        out["tool_input"] = "<omitted>"
+    tool_input: Any = out.pop("tool_input", None)
+    tool_name: str = str(out.get("tool_name", "")).lower()
+    if event == "beforeMCPExecution" or (event == "preToolUse" and tool_name.startswith("mcp")):
+        out = {key: out[key] for key in _MCP_KEEP if key in out}
+        out["hook_event_name"] = event
+    else:
+        if event != "beforeShellExecution":
+            out.pop("command", None)
+        if isinstance(tool_input, dict) and isinstance(tool_input.get("file_path"), str):
+            out["tool_input"] = {"file_path": tool_input["file_path"]}
+    edits: Any = out.pop("edits", None)
+    strip_tree(out, _STRIP_KEYS)
+    if event == "afterFileEdit" and edits is not None:
+        out["edits"] = f"<{len(edits) if isinstance(edits, list) else 0} edits>"
     if "agent_message" in out:
         out["agent_message"] = "<omitted>"
+    return out
 
+
+# ---------------------------------------------------------------- offline guard
+
+
+def _clean(token: str) -> str:
+    return token.strip("\"'`,{}[]()")
+
+
+def words(text: str, *, quick: bool = False) -> list[str]:
+    """Shell-ish words. `quick` (unreadable input) skips shlex, so large garbage stays fast."""
+    separators: str = ";|&()`$\n\r\t" + ("\"'{}[],\\" if quick else "")  # quick: broken JSON text
+    spaced: str = text.translate(str.maketrans(dict.fromkeys(separators, " ")))
+    if not quick:
+        import shlex
+
+        try:
+            return [_clean(w) for w in shlex.split(spaced)]
+        except ValueError:
+            pass
+    return [w for w in (_clean(t) for t in spaced.split()) if w]
+
+
+def _is_local_host(host: str) -> bool:
+    if host.lower() == "localhost" or host == "::1":
+        return True
+    import ipaddress
+
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(addr.is_loopback or addr.is_private)
+
+
+def _host_of_token(token: str) -> str | None:
+    from urllib.parse import urlparse
+
+    if "://" in token:
+        try:
+            return urlparse(token).hostname
+        except ValueError:
+            return None
+    if ":" in token and not token.startswith("-"):
+        left: str = token.split(":", 1)[0]
+        if "@" in left:
+            left = left.rsplit("@", 1)[-1]
+        if left and not left.isdigit() and "/" not in left:
+            return left
+    if token.startswith("-") or "/" in token or "=" in token:
+        return None
+    if "." in token or token == "localhost" or ":" in token:
+        if token.replace(".", "").isdigit():
+            return token
+        if any(c.isalpha() for c in token) or ":" in token:
+            return token
+    return None
+
+
+def _outbound_words(argv: list[str], text: str) -> bool:
+    lower: list[str] = [a.lower() for a in argv]
+    names: list[str] = [a.split("/")[-1].lower() for a in argv]
+    if any(n in _ALWAYS_OUTBOUND for n in names) or ("git" in names and "push" in lower):
+        return True
+    if any(n in _INTERPRETERS for n in names) and "http" in text.lower():
+        return True
+    if any(n in _HOSTED_OUTBOUND for n in names):
+        hosts = [h for h in (_host_of_token(a) for a in argv) if h]
+        return not hosts or any(not _is_local_host(h) for h in hosts)
+    return False
+
+
+def guard_reason(text: str, *, quick: bool = False, depth: int = 0) -> str | None:
+    """'guard_path', 'outbound' or None. Wrapped commands are found by scanning every word."""
+    if any(path in text.casefold() for path in _GUARD_PATHS):
+        return "guard_path"
+    argv: list[str] = words(text, quick=quick)
+    if _outbound_words(argv, text):
+        return "outbound"
+    if depth < 5 and not quick:  # `bash -c '...'`, `eval "..."`: one word that is a command
+        for word in argv:
+            if " " in word and (inner := guard_reason(word, depth=depth + 1)) is not None:
+                return inner
+    return None
+
+
+def deny_answer(reason: str) -> dict[str, str]:
+    what: str = (
+        "touches AgentFly's own files" if reason == "guard_path" else "sends data off this computer"
+    )
+    message: str = (
+        f"AgentFly's recorder is not running, so this command, which {what}, is blocked. "
+        "Run `agentfly start`, then try again."
+    )
+    return {
+        "permission": "deny",
+        "user_message": message,
+        "agent_message": f"{message} {_AGENT_SUFFIX}",
+    }
+
+
+def offline_answer(text: str, *, quick: bool = False) -> tuple[dict[str, str], str | None]:
+    reason: str | None = guard_reason(text, quick=quick)
+    if reason is None:
+        return {"permission": "allow"}, None
+    return deny_answer(reason), reason
+
+
+# ---------------------------------------------------------------- recorder, log, output
+
+
+def _recv_until_closed(sock: Any, deadline: float) -> bytes:
+    chunks: list[bytes] = []
+    total: int = 0
+    while total <= _MAX_ANSWER:
+        sock.settimeout(max(deadline - time.monotonic(), 0.001))
+        chunk: bytes = sock.recv(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
+def post_hook(body: bytes, token: str, deadline: float) -> dict[str, Any]:
+    """POST to the recorder. Raises on any failure; the caller then applies the offline guard."""
+    if not (token.isascii() and token.isprintable() and token):
+        raise ValueError("bad token file")
+    head: bytes = (
+        f"POST /hook HTTP/1.1\r\nHost: {_HOST}:{_PORT}\r\nContent-Type: application/json\r\n"
+        f"X-Recorder-Token: {token}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+    ).encode("ascii")
+    sock = _net.socket(_net.AF_INET, _net.SOCK_STREAM)
+    try:
+        sock.settimeout(max(deadline - time.monotonic(), 0.001))
+        sock.connect((_HOST, _PORT))
+        sock.sendall(head + body)
+        raw: bytes = _recv_until_closed(sock, deadline)
+    finally:
+        sock.close()
+    header, _, answer = raw.partition(b"\r\n\r\n")
+    status: list[bytes] = header.split(b"\r\n", 1)[0].split()
+    if len(status) < 2 or status[1] != b"200":
+        raise ValueError("bad recorder status")
+    if b"transfer-encoding" in header.lower():
+        raise ValueError("unsupported recorder answer")
+    parsed: Any = json.loads(answer)
+    if not isinstance(parsed, dict) or parsed.get("permission", "allow") not in {
+        "allow",
+        "deny",
+        "ask",
+    }:
+        raise ValueError("recorder answer is not a permission object")
+    out: dict[str, str] = {"permission": str(parsed.get("permission", "allow"))}
+    for key in ("user_message", "agent_message"):
+        if key in parsed:
+            out[key] = str(parsed[key])
     return out
 
 
 def append_log(record: dict[str, Any]) -> None:
-    # Until the client strips commands (V2b) the log can hold them, so only the user may read it.
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _LOG_PATH.parent.chmod(0o700)
-    line: str = json.dumps(record, ensure_ascii=False)
-    fd: int = os.open(_LOG_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
+    """One line per call in the hook log (folder 700, file 600). Never raises."""
+    try:
+        path: str | None = log_path()
+        if path is None:
+            return
+        folder: str = os.path.dirname(path)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
+        line: bytes = (json.dumps(record, ensure_ascii=True) + "\n").encode("ascii")
+        fd: int = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception as exc:  # noqa: BLE001
+        say(f"could not write the hook log ({type(exc).__name__})")
 
 
-def allow_fail_open(reason: str) -> dict[str, str]:
-    print(f"agentfly: {reason}", file=sys.stderr)
-    return {"permission": "allow"}
+def count_offline_answer() -> None:
+    """One byte per guard answer made while the recorder was down; `/health` reports the size."""
+    try:
+        path: str | None = count_path()
+        if path is None:
+            return
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd: int = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, b"\n")
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001, S110
+        pass
 
 
-def post_hook(payload: dict[str, Any]) -> dict[str, Any]:
-    """POST sanitized payload to the recorder. Raises on transport/HTTP errors."""
-    token: str = _TOKEN_PATH.read_text(encoding="utf-8").strip()
-    body: bytes = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        _HOOK_URL,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-Recorder-Token": token,
-        },
+def emit(answer: dict[str, str]) -> None:
+    """Print the answer. If stdout is broken, silence it so shutdown cannot exit non-zero."""
+    try:
+        sys.stdout.write(json.dumps(answer, ensure_ascii=True) + "\n")
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001
+        try:
+            fd: int = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(fd, 1)
+            sys.stdout = open(os.devnull, "w")  # noqa: SIM115
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+
+# ---------------------------------------------------------------- one call
+
+
+def read_stdin() -> bytes:
+    chunks: list[bytes] = []
+    total: int = 0
+    try:
+        while total <= _MAX_STDIN:
+            chunk: bytes = os.read(0, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    except OSError:
+        pass
+    return b"".join(chunks)
+
+
+def parse_payload(raw: bytes) -> dict[str, Any] | None:
+    if len(raw) > _MAX_STDIN:
+        return None
+    try:
+        parsed: Any = json.loads(raw)
+    except Exception:  # noqa: BLE001 - RecursionError, ValueError (5000 digits), bad UTF-8, ...
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def unreadable(raw: bytes) -> dict[str, str]:
+    text: str = raw[:_MAX_GUARD_TEXT].decode("utf-8", "replace")
+    answer, guard = offline_answer(text, quick=True)
+    say("unreadable hook input; offline guard applied")
+    append_log(
+        {
+            "ts": now(),
+            "decision": answer["permission"],
+            "offline": True,
+            "reason": "unreadable_input",
+            "guard": guard,
+        }
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as response:
-        raw: bytes = response.read()
-    parsed: Any = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("recorder response is not a JSON object")
-    return parsed
+    return answer
 
 
-def main() -> int:
+def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str, str]:
+    sanitized: dict[str, Any] = sanitize(payload, event)
+    body: str = json.dumps(sanitized, ensure_ascii=True)
+    logged: dict[str, Any] = json.loads(body)
+    strip_tree(logged, frozenset({"command"}))
+    record: dict[str, Any] = {"ts": now(), "event": logged}
+    command: Any = payload.get("command")
     try:
-        payload: dict[str, Any] = json.load(sys.stdin)
-    except json.JSONDecodeError as exc:
-        decision = allow_fail_open(f"invalid hook JSON: {exc}")
-        print(json.dumps(decision))
-        return 0
-
-    if not isinstance(payload, dict):
-        decision = allow_fail_open("hook payload is not an object")
-        print(json.dumps(decision))
-        return 0
-
-    # Local T0 remains available for Checkpoint A replay; disabled by default.
-    if (
-        _T0_ENABLED
-        and str(payload.get("hook_event_name", "")) == "beforeShellExecution"
-        and "curl" in str(payload.get("command", ""))
-    ):
-        decision = {
-            "permission": "deny",
-            "user_message": _T0_USER,
-            "agent_message": _T0_AGENT,
-        }
-        print(json.dumps(decision))
-        return 0
-
-    sanitized: dict[str, Any] = sanitize(payload)
-    try:
-        decision_any: dict[str, Any] = post_hook(sanitized)
-        decision: dict[str, str] = {
-            "permission": str(decision_any.get("permission", "allow")),
-        }
-        if "user_message" in decision_any:
-            decision["user_message"] = str(decision_any["user_message"])
-        if "agent_message" in decision_any:
-            decision["agent_message"] = str(decision_any["agent_message"])
-    except Exception as exc:  # noqa: BLE001 — fail-open for any transport/IO error
-        decision = allow_fail_open(f"recorder unreachable or error: {exc}")
-
-    record: dict[str, Any] = {
-        "ts": datetime.now(UTC).isoformat(),
-        "event": sanitized,
-        "decision": decision.get("permission", "allow"),
-    }
-    try:
+        path: str | None = token_path()
+        if path is None:
+            raise FileNotFoundError("no home folder")
+        with open(path, encoding="ascii", errors="replace") as handle:
+            token: str = handle.read(4096).strip()
+        answer = post_hook(body.encode("ascii"), token, start + _BUDGET_S)
+        record.update(decision=answer["permission"])
         append_log(record)
-    except OSError as exc:
-        print(f"agentfly: failed to write log: {exc}", file=sys.stderr)
+        return answer
+    except Exception as exc:  # noqa: BLE001 - any failure means "recorder did not answer"
+        say(f"recorder unreachable ({type(exc).__name__}); offline guard applied")
+        text: str = command if event == "beforeShellExecution" and isinstance(command, str) else ""
+        answer, guard = offline_answer(text)
+        count_offline_answer()
+        record.update(
+            decision=answer["permission"], offline=True, reason="recorder_unreachable", guard=guard
+        )
+        append_log(record)
+        return answer
 
-    print(json.dumps(decision))
+
+def run(args: list[str], start: float, ctx: dict[str, bytes]) -> dict[str, str]:
+    if args and args[0] != "cursor":
+        say(f"unknown agent {_clean(args[0])[:40]!r}; allowing")
+        return {"permission": "allow"}
+    raw: bytes = read_stdin()
+    ctx["raw"] = raw
+    payload: dict[str, Any] | None = parse_payload(raw)
+    if payload is None:
+        return unreadable(raw)
+    event: str = str(payload.get("hook_event_name", ""))
+    given: str = args[1] if len(args) > 1 else ""
+    if given and given != event:
+        if event:
+            say(f"event argument {given!r} and payload event {event!r} differ; using the argument")
+        event = given
+        payload["hook_event_name"] = given
+    return ask_recorder(payload, event, start)
+
+
+def main(argv: list[str] | None = None) -> int:
+    start: float = time.monotonic()
+    args: list[str] = list(sys.argv[1:] if argv is None else argv)
+    ctx: dict[str, bytes] = {}
+    try:
+        answer: dict[str, str] = run(args, start, ctx)
+    except BaseException as exc:  # noqa: BLE001 - nothing may escape: no deny is ever lost
+        say(f"internal error ({type(exc).__name__}); offline guard applied")
+        try:
+            answer, _ = offline_answer(
+                ctx.get("raw", b"")[:_MAX_GUARD_TEXT].decode("utf-8", "replace"), quick=True
+            )
+        except BaseException:  # noqa: BLE001
+            answer = {"permission": "allow"}
+    emit(answer)
     return 0
 
 
