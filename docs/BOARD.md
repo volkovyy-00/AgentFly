@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S4 and V1a are done; S5 and V2 may start (2026-10-16).
-All decisions but D16 (after S5) are approved.** V2 is split into V2 and V2b.
+Status: **spikes S1–S5 and V1a are done; V2 and V8 are in flight (2026-10-16).
+All decisions but D16 (open after S5) are approved.** V2 is split into V2 and V2b.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
 before it starts.
@@ -56,7 +56,7 @@ first request's cap of 12.
 ## Lanes
 
 ```
-Spikes        Lead (your machine): S1 ──► S2 ──► S5
+Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
               Backend:             S3              (∥ S1, S2)
               UI:                  S4              (∥ S1, S2)
 
@@ -82,38 +82,12 @@ V7 and V9 can run in parallel.
 - S2 ✅ 2026-10-15 · docs/spikes/S2-tamper.md · changed D1 D2 D3 D4 D5 D8 D19 · body: git show 5b41ac1:docs/BOARD.md
 - S4 ✅ 2026-10-16 · docs/spikes/S4-trail.md · changed D15, V8 · body: git show 5b41ac1:docs/BOARD.md (before the 2026-10-16 screenshot edit)
 - S3 ✅ 2026-10-16 · docs/spikes/S3-rule-fit.md · changed D10 D13, V5 · body: git show d0f403b:docs/BOARD.md
+- S5 ✅ 2026-10-16 · docs/spikes/S5-brief.md · pass (smoke test; D16 open); findings for D9, S3 subagents, V3, V1b · body: git show f0d68e3:docs/BOARD.md
 - V1a ✅ 2026-10-16 · docs/reports/V1a.md · merged b7f7192 · changed D5 D9 D10 D14 (review answers) · body: git show b7f7192:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
-### S5 · G4 · Smoke test: does a brief reach the agent at all (n = 2)
-- **Owner:** lead (you at the keyboard)
-- **Lane:** lead, after S2 (it reuses `/tmp/af-fresh`)
-- **Time box:** 60 min (30 for the brief, 30 for the hook dump).
-- **May touch:** `/tmp/af-fresh/` (Makefile, `.cursor/rules/`, `.cursor/hooks.json`);
-  a throwaway dump script under `/tmp/af-spike/`; new `docs/spikes/S5-brief.md`.
-- **Done when** `docs/spikes/S5-brief.md` has:
-  - the brief text;
-  - for each of the four chats, the commands before the first passing run,
-    taken from the hook log;
-  - whether the agent mentioned the brief;
-  - the `additional_context` result, if tried;
-  - the S2 (d) re-run: `sudo -v` in Terminal, then within a minute
-    `sudo -n true; echo exit=$?` in an agent chat;
-  - **hook dump (added 2026-10-16):** a passive hook (always allows) on every
-    event in Cursor's hooks docs for the installed version (the owner counts
-    21), plus one made-up event name. It logs the event name, the input's key
-    names, and only the id fields (`conversation_id`, `generation_id`,
-    `tool_use_id`, any parent or subagent id); never values of content,
-    prompt, reply, `tool_input`, `output` or `edits`. Then one chat that
-    starts one foreground and one background subagent, each reading a file
-    and running `ls`. Report: which events fire, whether a subagent gets a new
-    `conversation_id`, any field linking it to the parent, and whether the
-    made-up event name stops the other hooks. These facts settle S3's
-    subagent recommendation and the D9 revisit.
-
-  The report states that n = 2 per arm measures nothing about value. A pass only
-  unlocks the pre-registered A/B (D16).
+(S5 done; see Done.)
 
 ---
 
