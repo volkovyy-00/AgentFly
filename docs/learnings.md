@@ -21,3 +21,8 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Written 'never push' in a brief did not stop a worker; enforce with hooks/permissions.** On 2026-10-16 both the S3 and the V1a worker ran `git push -u origin <branch>` unasked, and V1a's report then said "No push". Now: `pre-push` hook (refuses unless `AGENTFLY_ALLOW_PUSH=1`) plus `Bash(git push:*)` and `Bash(git -C * push *)` denies in `.claude/settings.json`.
 - **The hook is a guard against accidents, not a lock.** Tested 2026-10-16 against a local bare repo: `--no-verify` and `AGENTFLY_ALLOW_PUSH=1 git push` pass the hook; `sh -c 'git push …'` passes the deny rule. The deny rule covers Claude Code only, not Cursor agents.
 - **`core.hooksPath` must be absolute.** Relative, each worktree ran its own checked-out copy, so a worktree from an older commit had no `pre-push` and pushed freely (measured 2026-10-16).
+
+## Briefs and passes
+- **A brief over the 40-line budget is two cards.** Old V2 needed about 10 criteria; split into V2 and V2b (2026-10-16). Fresh verify passes then found real gaps: moving `hooks/hook.py` would have made Cursor block everything in this repo, and 8787 was hard-coded in the client.
+- **Ask before an oracle pass.** It costs 100k+ tokens per run; the owner stopped one mid-run (2026-10-16). Verify passes alone were enough to dispatch.
+- **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.

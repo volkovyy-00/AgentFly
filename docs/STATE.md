@@ -1,60 +1,55 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-16 11:21 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: S1 ✅ S2 ✅ S3 ✅ S4 ✅ V1a ✅ (merged b7f7192); V2 brief in review (verify + oracle passes); V2 split into V2 and V2b; S5 next with the owner.
+Updated: 2026-10-16 11:35 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: v2-dispatched. S1–S4 ✅, V1a ✅ (merged b7f7192). V2 in flight (plan mode). S5 next with the owner.
 Pending decisions: D16
 
 ## Spikes and cards
-- S1, S2, S4: done, one line each under BOARD.md `## Done`.
+- Done (one line each under BOARD `## Done`): S1, S2, S3, S4, V1a.
 - S1 limits: app half only (`cursor-agent` not tested); `ask` pauses shell; allow messages invisible · docs/spikes/S1-global-hooks.md
-- S2 limit: (d) sudo needed a password, but the grace-period claim is unproven (owner unsure `sudo -v` ran just before) → re-run in S5 · docs/spikes/S2-tamper.md
-- S4: owner chose the trail; D15 approved; V8 gained half-screen (~700 px), hide/resize Why card, separate rows for repeated blocks, and a live check before the lane graph moves to a tab · docs/spikes/S4-trail.md
-- S3 done 2026-10-16, merged (4d4bad2) · FAIL 7-8 band; owner accepted D10 extension (flag variants, path_scope, pipe_into; wget flags), D13 = C, subagent option (a) 30 min pending S5. V5 card gained bypass tests.
-- S5 not started · after S3; reuses /tmp/af-fresh; sudo re-run + passive dump hook on all events + 2 subagents + one made-up event · docs/spikes/S5-brief.md.
-- V1a merged b7f7192 (checks: 162 passed on main). Stale in SPEC: D13/S3 additions and the revision 7 answers → V1b (lead, after S5).
-- V2 (package, paths, API, cleaner leak) and V2b (hook client) briefs: docs/briefs/V2.md, V2b.md; worktree for V2 created after the passes.
+- S3: FAIL 7-8 band → D10 extended (flag variants, path_scope, pipe_into, wget flags); D13 = C; subagent option (a) 30 min pending S5 · docs/spikes/S3-rule-fit.md
+- S5 not started: brief smoke test + S2 (d) sudo re-run + passive dump hook on all events, one made-up event, one foreground and one background subagent; record generation_id on both read events (D9) and workspace_roots/parent ids for subagents (S3 §5) · BOARD S5 card.
+- V2 split (2026-10-16, brief over budget): V2 = package `agentfly-recorder`, v1 paths, API whitelist, cleaner leak (hooks/hook.py stays a shim); V2b = hook client (agent arg, stripping, offline guard, duplicates, port override, wait budget, read-dedup proposal). Briefs in docs/briefs/. Verify passes: both ready; oracle pass stopped by the owner, no verdict.
+- V1b (lead, after S5): SPEC still says D13 pending and lacks the S3 additions and revision 7 answers.
+- V8 may start now (ui/** only; merges after V2); needs a brief first.
 
 ## In flight
-none
+- V2 · worker-backend · .claude/worktrees/ag-v2-package · ag-v2-package · docs/reports/V2.md · docs/briefs/V2.md
 
-## Machine state (verified 2026-10-16 00:55 CEST unless marked)
-- /Library/Application Support/Cursor/hooks.json and /Library/Application Support/AgentFly/: absent (verified).
-- ~/.cursor/hooks.json: absent (verified). Repo .cursor/hooks.json: present (verified).
-- Pushing: pre-push hook (absolute core.hooksPath to main's docs/roles/git-hooks) + Bash(git push) denies in .claude/settings.json (tested 2026-10-16; bypassable, see learnings).
-- Recorder: not running, nothing listens on 8787 (verified). Start: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`.
-- Worktrees: none besides main (S3, V1a removed after merge). origin still has ag-s3-rule-fit and ag-v1a-spec (worker pushes); owner deletes them.
-- ~/.config/flightrecorder/sessions.json: 35 sessions, 18 marked, no `s2-forged` entries (verified).
-- /tmp/af-spike: throwaway scripts, logs and sessions.json.bak (present, verified; never commit). Copy in logs/spike/ (gitignored); after a reboot run `cp -Rp logs/spike/. /tmp/af-spike/`.
-- /tmp/af-fresh: .env (fake demo value) and test.txt only; no .cursor/ (verified).
-- /usr/local/Cellar/af-s2-test: absent (verified).
-- For S5, global hooks must be installed again first: `/tmp/af-spike/s1.sh real` (user-level, moves repo hooks aside) or `s2.sh install` (sudo); then `s1.sh restore` or `s2.sh restore` after.
+## Machine state (verified 2026-10-16 11:34 CEST)
+- /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present.
+- Recorder: nothing listens on 8787 or 5173. Start: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`.
+- Worktrees: main and .claude/worktrees/ag-v2-package (5aff9e1).
+- Git: core.hooksPath is absolute (main's docs/roles/git-hooks: pre-commit, pre-push). `.claude/settings.json` denies `git push` and `git -C * push *`. Owner pushes with `AGENTFLY_ALLOW_PUSH=1`.
+- origin still has ag-s3-rule-fit and ag-v1a-spec (pushed by workers, unasked).
+- ~/.config/flightrecorder/sessions.json: 35 sessions, 18 marked.
+- AuraDB: paused; its host gave NXDOMAIN at 11:00 (as of then). Neo4j `--clear` not run.
+- /tmp/af-spike: throwaway scripts and logs (copy in logs/spike/, gitignored; after a reboot `cp -Rp logs/spike/. /tmp/af-spike/`). /tmp/af-fresh: .env (fake) and test.txt only.
+- For S5, reinstall global hooks first: `/tmp/af-spike/s1.sh real` (user-level) or `s2.sh install` (sudo); `s1.sh restore` / `s2.sh restore` after.
 
 ## Waiting on owner
-1. Resume AuraDB (paused; its host gave NXDOMAIN 2026-10-16); then the lead runs `python -m recorder.store --clear` (owner asked, test data only).
-2. Be at the keyboard for S5 (Cursor app, sudo).
-3. D16 after S5; subagent option (a) confirmed or replaced after S5.
+1. Resume AuraDB; then the lead runs `uv run python -m recorder.store --clear` (owner asked; test data only).
+2. Delete pushed branches: `AGENTFLY_ALLOW_PUSH=1 git push origin --delete ag-v1a-spec ag-s3-rule-fit`.
+3. Be at the keyboard for S5 (Cursor app, sudo).
 4. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
 
-## Decisions changed since last handoff (aa3e7f2)
-- Revision 7 (2026-10-16, V1a review): D10 heredoc exception excludes shells/interpreters; D5 missing client = loud failure; D14 `highlighted` verdict; D9 read-dedup key from V2.
-- D10 extended after S3 and D13 approved as C (2026-10-16, DECISIONS revision 6).
-- D2 D3 D6 D7 D8 D9 D12 D17 D18 D19 approved 2026-10-16 as recommended (DECISIONS revision 5); D19 turns /docs off; D3 reopens if the S5 sudo re-run fails.
-- D6: PyPI name `agentfly-recorder`, hatchling approved; PyPI `agentfly` 0.7.2 also installs an `agentfly` command (known conflict).
-- D9: revisit after S5 (subagents may get a new conversation_id; untested report).
-- D5 approved 2026-10-16: one stdlib-only hook file on a bundled root-owned standalone Python under /Library/Application Support/AgentFly/; doctor checks interpreter permissions; quoted path (F1). V3 picks the build and update path.
-- D11 approved 2026-10-16 as revised: warn = `ask` on shell, allow + UI mark elsewhere; "Always Run" accepted; no other demo mode named.
-- D15 approved 2026-10-16 after S4: option A; S4's requests and the live check are in V8; repeated blocks stay separate rows.
+## Decisions changed since last handoff (bb72b37)
+- Revision 5: D2 D3 D6 D7 D8 D9 D12 D17 D18 D19 approved as recommended; D19 turns /docs off; D3 reopens if the S5 sudo re-run fails.
+- D6: PyPI name `agentfly-recorder`, hatchling; PyPI `agentfly` 0.7.2 also installs an `agentfly` command (known conflict).
+- Revision 6: D10 extended after S3; D13 approved as C (no plain language in v1).
+- Revision 7: D10 heredoc exception excludes shells/interpreters (sh bash zsh python* node ruby perl, also via env/sudo/xargs); D5 missing client = loud failure; D14 `highlighted` verdict; D9 read-dedup key proposed by V2b, revisit event list after S5.
+- SPEC §3/§7 (lead, 5aff9e1): the recorder's first start migrates ~/.config/flightrecorder.
 
 ## Open risks and findings
-- Cleaner leak (today's code, reproduced 2026-10-16): attached short-option values (`-uuser:pw`, `-pX`, `-H'Authorization: …'`) are stored as is, in memory and Neo4j · docs/reports/V1a.md gap 21
-- File reads fire both preToolUse and beforeReadFile with no shared id → recorded twice (S1 log) · V1a gap 22
-- Subagents may run under a new conversation_id with no parent link, bypassing per-chat R1 taint (docs/forum report, untested on 3.24.12) · S3 paper, S5 test
-- F1 quoting: unquoted path with a space made python exit 2 and Cursor denied everything · docs/spikes/S2-tamper.md
-- F2 writable interpreter: /usr/bin/python3 launches an admin-writable python.org framework · S2-tamper.md; fix approved in D5, built in V3
-- (h) offline gap: recorder down + secret read, curl allowed; sandbox escalation · S2-tamper.md, D4
+- Cleaner leak (today's code): attached short-option values (`-uuser:X`, `-pX`, `-p'X'`, `-H'Authorization: …'`) stored as is, in memory and Neo4j · fixed by V2
+- Merging V2 must keep `.venv/bin/python hooks/hook.py` working, or Cursor blocks everything in this repo · V2 criterion
+- File reads fire preToolUse and beforeReadFile with no shared id → recorded twice · V2b proposal, S5 data
+- Subagents may get a new conversation_id with no parent link (untested report) · S5
+- F1 quoting and F2 writable interpreter · docs/spikes/S2-tamper.md; fixes in D5, built in V3
+- Push block is a guard, not a lock: `--no-verify`, the env var, and `sh -c` get through; Cursor agents are not covered by the deny rule · docs/learnings.md
 
 ## Next 3 actions
-1. Finish V2 brief passes, commit, create .claude/worktrees/ag-v2-package; owner starts V2 in plan mode.
-2. S5 with the owner (reinstall global hooks first; sudo re-run, hook dump, subagents; check workspace_roots and parent ids for S3 §5).
-3. Then D13, D16, D9 revisit, V1b.
+1. When the owner relays V2's plan or report: review (head -n 6, `git diff --stat main...ag-v2-package`, checks), merge, then create V2b's worktree.
+2. S5 with the owner; then D16, D9 revisit, V1b.
+3. If the owner wants parallel UI work: write V8's brief (agent-ready-tickets, verify pass only) and dispatch.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.
