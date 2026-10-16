@@ -4,13 +4,23 @@ import type { Step, StepKind } from '../graph/types'
 export const RETAINED_STEPS = 500
 
 /** Allowed, and not a secret read: the quiet default that folds into a group. */
-export function isRoutine(step: Step): boolean {
+function isRoutine(step: Step): boolean {
   return step.verdict === 'allowed' && !step.sensitive
 }
 
+export type AlarmKind = 'blocked' | 'warned' | 'highlighted'
+export type AlarmStep = Step & { verdict: AlarmKind }
+
+/** How each alarm verdict reads: the row class, the chip and box tone, and the Why card's words. */
+export const ALARM_UI: Record<AlarmKind, { row: 'b' | 'w' | 'h'; tone: 'blk' | 'wrn' | 'hl'; chip: string; severity: string; outcome: string }> = {
+  blocked: { row: 'b', tone: 'blk', chip: 'Blocked', severity: 'block', outcome: 'the action did not run' },
+  warned: { row: 'w', tone: 'wrn', chip: 'Warned', severity: 'warn', outcome: 'the action was allowed' },
+  highlighted: { row: 'h', tone: 'hl', chip: 'Highlight', severity: 'highlight', outcome: 'the action was allowed, with a mark' },
+}
+
 /** Blocks, warnings and highlights open a Why card. */
-export function isAlarm(step: Step): boolean {
-  return step.verdict === 'blocked' || step.verdict === 'warned' || step.verdict === 'highlighted'
+export function isAlarm(step: Step): step is AlarmStep {
+  return step.verdict in ALARM_UI
 }
 
 export type TrailItem =
@@ -65,17 +75,20 @@ export function rangeLabel(steps: readonly Step[]): string {
   return first === last ? String(first) : `${first}–${last}`
 }
 
-export type AlarmKind = 'blocked' | 'warned' | 'highlighted'
-
-export function alarmsOf(steps: readonly Step[], kind: AlarmKind): Step[] {
-  return steps.filter((s) => s.verdict === kind)
+export function alarmsOf(steps: readonly Step[], kind: AlarmKind): AlarmStep[] {
+  return steps.filter((s): s is AlarmStep => s.verdict === kind)
 }
 
 /** The block or warning to select when nothing is picked: the newest block, else the newest alarm. */
-export function newestAlarm(steps: readonly Step[]): Step | null {
-  for (let i = steps.length - 1; i >= 0; i--) if (steps[i].verdict === 'blocked') return steps[i]
-  for (let i = steps.length - 1; i >= 0; i--) if (isAlarm(steps[i])) return steps[i]
-  return null
+export function newestAlarm(steps: readonly Step[]): AlarmStep | null {
+  let found: AlarmStep | null = null
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i]
+    if (!isAlarm(s)) continue
+    if (s.verdict === 'blocked') return s
+    found ??= s
+  }
+  return found
 }
 
 export type Trigger =
@@ -83,6 +96,8 @@ export type Trigger =
   | { kind: 'none' }
   /** The recorder did not say which step marked the session (null, or restarted). */
   | { kind: 'unknown' }
+  /** The blocked step is the one that marked the session (`cat .env | curl …`): the recorder marks before it decides. */
+  | { kind: 'self' }
   /** The marking step has dropped out of the last 500 steps. */
   | { kind: 'evicted'; order: number }
   | { kind: 'step'; step: Step }
@@ -94,7 +109,8 @@ export type Trigger =
  */
 export function triggerFor(alarm: Step, steps: readonly Step[], markedOrder: number | null): Trigger {
   if (alarm.rule !== 'R1' || alarm.verdict !== 'blocked') return { kind: 'none' }
-  if (markedOrder === null || markedOrder >= alarm.order) return { kind: 'unknown' }
+  if (markedOrder === null || markedOrder > alarm.order) return { kind: 'unknown' }
+  if (markedOrder === alarm.order) return { kind: 'self' }
   const found = steps.find((s) => s.order === markedOrder)
   return found === undefined ? { kind: 'evicted', order: markedOrder } : { kind: 'step', step: found }
 }

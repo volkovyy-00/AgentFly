@@ -43,7 +43,7 @@ export function Splitter({ layout, size, min, max, onResize, onCommit }: Splitte
   function endDrag(): void {
     const d = drag.current
     drag.current = null
-    if (d !== null) onCommit(d.last)
+    if (d !== null && d.last !== d.startSize) onCommit(d.last)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {

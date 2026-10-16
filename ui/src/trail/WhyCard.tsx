@@ -1,15 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Step } from '../graph/types'
-import { RETAINED_STEPS, RULE_COMMANDS, between, triggerFor, what, type Trigger } from './model'
-
-const SEVERITY: Record<string, string> = { blocked: 'block', warned: 'warn', highlighted: 'highlight' }
-const TONE: Record<string, string> = { blocked: 'blk', warned: 'wrn', highlighted: 'hl' }
-const CHIP: Record<string, string> = { blocked: 'Blocked', warned: 'Warned', highlighted: 'Highlight' }
-const OUTCOME: Record<string, string> = {
-  blocked: 'the action did not run',
-  warned: 'the action was allowed',
-  highlighted: 'the action was allowed, with a mark',
-}
+import { ALARM_UI, RETAINED_STEPS, RULE_COMMANDS, between, triggerFor, what, type AlarmStep, type Trigger } from './model'
 
 const NOT_RECORDED = 'Contents not recorded'
 
@@ -17,12 +8,12 @@ function Mono({ children }: { children: ReactNode }) {
   return <span className="tr-mono">{children}</span>
 }
 
-function verbOf(step: Step): string {
+function verbOf(step: AlarmStep): string {
   if (step.verdict === 'blocked') return 'tried'
   return step.kind === 'read' ? 'read' : 'ran'
 }
 
-function Title({ alarm, trigger }: { alarm: Step; trigger: Trigger }) {
+function Title({ alarm, trigger }: { alarm: AlarmStep; trigger: Trigger }) {
   const rule = alarm.rule ?? 'rule not recorded'
   return (
     <>
@@ -39,12 +30,11 @@ function Title({ alarm, trigger }: { alarm: Step; trigger: Trigger }) {
   )
 }
 
-function StepBox({ step, tone, small }: { step: Step; tone: 'sec' | 'blk' | 'wrn' | 'hl'; small: string }) {
-  const chip = tone === 'sec' ? 'Secret read' : CHIP[step.verdict]
+function StepBox({ step, tone, chip, small }: { step: Step; tone: 'sec' | 'blk' | 'wrn' | 'hl'; chip: string; small: string }) {
   return (
     <div className={`tr-box ${tone}`}>
       <span className="tr-stepn">STEP {step.order}</span>
-      <span className={`tr-chip ${tone === 'sec' ? 'secret' : TONE[step.verdict]}`}>{chip}</span>
+      <span className={`tr-chip ${tone === 'sec' ? 'secret' : tone}`}>{chip}</span>
       <div className="t">
         <span className="tr-kind">{step.kind}</span>
         <Mono>{what(step)}</Mono>
@@ -55,7 +45,7 @@ function StepBox({ step, tone, small }: { step: Step; tone: 'sec' | 'blk' | 'wrn
 }
 
 /** Two dashed lines when there is a host and a rule, one when there is only one of them. */
-function Ends({ alarm }: { alarm: Step }) {
+function Ends({ alarm }: { alarm: AlarmStep }) {
   const both = alarm.host !== null && alarm.rule !== null
   if (alarm.host === null && alarm.rule === null) return null
   return (
@@ -78,7 +68,7 @@ function Ends({ alarm }: { alarm: Step }) {
   )
 }
 
-function Messages({ alarm }: { alarm: Step }) {
+function Messages({ alarm }: { alarm: AlarmStep }) {
   const items: [string, string][] = []
   if (alarm.rule_text) items.push(['Rule text', alarm.rule_text])
   if (alarm.user_message) items.push(['To you (user_message)', alarm.user_message])
@@ -100,6 +90,9 @@ function Messages({ alarm }: { alarm: Step }) {
 }
 
 function TriggerNote({ trigger }: { trigger: Trigger }) {
+  if (trigger.kind === 'self') {
+    return <p className="tr-note">This step marked the session and was blocked in the same action.</p>
+  }
   if (trigger.kind === 'unknown') {
     return <p className="tr-note">The step that marked this session is not known: the recorder did not report it.</p>
   }
@@ -114,7 +107,7 @@ function TriggerNote({ trigger }: { trigger: Trigger }) {
 }
 
 interface WhyCardProps {
-  alarm: Step | null
+  alarm: AlarmStep | null
   steps: readonly Step[]
   markedOrder: number | null
   /** The step the owner picked has dropped out of the last 500: the newest block shows instead. */
@@ -140,7 +133,7 @@ export function WhyCard({ alarm, steps, markedOrder, pickedGone, onHide }: WhyCa
     )
   }
   const trigger = triggerFor(alarm, steps, markedOrder)
-  const tone = TONE[alarm.verdict] as 'blk' | 'wrn' | 'hl'
+  const ui = ALARM_UI[alarm.verdict]
   const mid = trigger.kind === 'step' ? between(steps, trigger.step.order, alarm.order) : null
   return (
     <div className="tr-why-body">
@@ -151,17 +144,17 @@ export function WhyCard({ alarm, steps, markedOrder, pickedGone, onHide }: WhyCa
         {hide}
       </div>
       {pickedGone && (
-        <p className="tr-note">The step you picked is older than the last {RETAINED_STEPS} steps, so the newest block is shown.</p>
+        <p className="tr-note">The step you picked is no longer in the last {RETAINED_STEPS} steps the recorder keeps, so the newest block is shown.</p>
       )}
       <p className="tr-rule-line">
-        Rule <b>{alarm.rule ?? 'not recorded'}</b> · severity {SEVERITY[alarm.verdict]} · {OUTCOME[alarm.verdict]}
+        Rule <b>{alarm.rule ?? 'not recorded'}</b> · severity {ui.severity} · {ui.outcome}
         {alarm.verdict === 'blocked' && ', decided in memory before the action ran'}
       </p>
       <TriggerNote trigger={trigger} />
       <div className={`tr-chain${trigger.kind === 'step' ? '' : ' solo'}`}>
         {trigger.kind === 'step' && (
           <>
-            <StepBox step={trigger.step} tone="sec" small={`marks the session · ${NOT_RECORDED}`} />
+            <StepBox step={trigger.step} tone="sec" chip="Secret read" small={`marks the session · ${NOT_RECORDED}`} />
             <div className="tr-vlink amber" />
             {mid !== null && mid.routine + mid.flagged > 0 ? (
               <div className="tr-box mid">
@@ -174,7 +167,7 @@ export function WhyCard({ alarm, steps, markedOrder, pickedGone, onHide }: WhyCa
             <div className="tr-vlink" />
           </>
         )}
-        <StepBox step={alarm} tone={tone} small={NOT_RECORDED} />
+        <StepBox step={alarm} tone={ui.tone} chip={ui.chip} small={NOT_RECORDED} />
         <Ends alarm={alarm} />
       </div>
       <Messages alarm={alarm} />

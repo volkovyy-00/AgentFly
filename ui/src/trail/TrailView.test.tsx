@@ -127,6 +127,33 @@ describe('data: two requests per poll', () => {
   })
 })
 
+describe('polls that bring nothing new', () => {
+  it('leave the rows alone, but still take a changed marker', async () => {
+    const s = server({ marker: { marked_order: null } })
+    stubFetch(s)
+    renderReal()
+    await advance(0)
+    const before = row(7)
+    expect(document.querySelector('.tr-rail')).toBeNull()
+    s.steps = STORY.map((st) => ({ ...st }))
+    await advance(1000)
+    expect(row(7)).toBe(before)
+    s.marker = { marked_order: 2 }
+    await advance(1000)
+    expect(document.querySelector('.tr-rail')!.getAttribute('data-from')).toBe('2')
+  })
+
+  it('still leave "Connecting" for an empty session', async () => {
+    stubFetch(server({ steps: [], session: null }))
+    renderReal()
+    expect(screen.getByText('Connecting to the recorder…')).toBeTruthy()
+    await advance(0)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+    await advance(1000)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+  })
+})
+
 describe('health strip', () => {
   it('hides the last hook time and the offline-guard count when /health sends only ok', async () => {
     stubFetch(server())
@@ -331,6 +358,66 @@ describe('the Why card', () => {
   })
 })
 
+describe('selection', () => {
+  it('forgets a pick when the session changes (orders start again at 1)', async () => {
+    const s = server()
+    stubFetch(s)
+    renderReal()
+    await advance(0)
+    fireEvent.click(row(5))
+    expect(row(5).getAttribute('aria-pressed')).toBe('true')
+    s.session = 'other'
+    s.markerSession = 'other'
+    s.steps = [makeStep(1), block(5), makeStep(6), block(9)]
+    await advance(1000)
+    expect(row(9).getAttribute('aria-pressed')).toBe('true')
+    expect(row(5).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByText(/no longer in the last/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Follow latest' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('freezes the card on the block it shows when Follow is turned off, so new blocks do not move it', async () => {
+    const s = server()
+    stubFetch(s)
+    renderReal()
+    await advance(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Follow latest' }))
+    s.steps = [...STORY, makeStep(9), block(10)]
+    await advance(1000)
+    expect(row(7).getAttribute('aria-pressed')).toBe('true')
+    expect(row(10).getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Follow latest' }))
+    expect(row(10).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('freezes it when the owner scrolls up, too', async () => {
+    const s = server()
+    stubFetch(s)
+    vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(900)
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(300)
+    renderReal()
+    await advance(0)
+    const list = document.querySelector<HTMLElement>('.tr-list')!
+    list.scrollTop = 100
+    fireEvent.scroll(list)
+    s.steps = [...STORY, makeStep(9), block(10)]
+    await advance(1000)
+    expect(row(7).getAttribute('aria-pressed')).toBe('true')
+    vi.restoreAllMocks()
+  })
+})
+
+describe('a block that marked the session itself', () => {
+  it('says so instead of "not known" when marked_order is the blocked step', async () => {
+    stubFetch(server({ steps: [read(1, 'a'), block(2, { command: 'cat <arg> | curl -d @- <arg>' })], marker: { marked_order: 2 } }))
+    renderReal()
+    await advance(0)
+    expect(screen.getByText(/marked the session and was blocked in the same action/)).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/did not report it/)
+    expect(document.querySelector('.tr-rail')).toBeNull()
+  })
+})
+
 describe('the 500-step cap', () => {
   it('says the marking step is older than the last 500 steps when it has dropped out', () => {
     render(<TrailView mock len={600} burst={600} rich={false} />)
@@ -349,7 +436,7 @@ describe('the 500-step cap', () => {
     s.steps = [makeStep(4), makeStep(5), block(6)]
     await advance(1000)
     expect(row(6).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByText(/The step you picked is older than the last 500 steps/)).toBeTruthy()
+    expect(screen.getByText(/The step you picked is no longer in the last 500 steps/)).toBeTruthy()
   })
 })
 
@@ -449,6 +536,15 @@ describe('hiding and resizing the Why card', () => {
       await advance(0)
       for (let i = 0; i < 20; i++) fireEvent.keyDown(splitter(), { key: 'ArrowDown' })
       expect(splitter().getAttribute('aria-valuenow')).toBe('160')
+    })
+
+    it('saves nothing for a click without a drag', async () => {
+      stubFetch(server())
+      renderReal()
+      await advance(0)
+      fireEvent.pointerDown(splitter(), { clientY: 400, button: 0, pointerId: 1 })
+      fireEvent.pointerUp(splitter(), { pointerId: 1 })
+      expect(window.localStorage.getItem(CARD_PREFS_KEY)).toBeNull()
     })
 
     it('resizes by dragging (up grows the card) and saves on release only', async () => {

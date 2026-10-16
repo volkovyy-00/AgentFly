@@ -13,6 +13,7 @@ import {
 } from './cardPrefs'
 import { HealthStrip } from './HealthStrip'
 import {
+  ALARM_UI,
   alarmsOf,
   groupSteps,
   isAlarm,
@@ -22,6 +23,7 @@ import {
   triggerFor,
   what,
   type AlarmKind,
+  type AlarmStep,
   type TrailItem,
 } from './model'
 import { Splitter } from './Splitter'
@@ -35,11 +37,7 @@ interface TrailViewProps {
   rich: boolean
 }
 
-const ALARM_KINDS: readonly { kind: AlarmKind; word: string }[] = [
-  { kind: 'blocked', word: 'blocked' },
-  { kind: 'warned', word: 'warned' },
-  { kind: 'highlighted', word: 'highlighted' },
-]
+const ALARM_KINDS: readonly AlarmKind[] = ['blocked', 'warned', 'highlighted']
 
 /** Pixels from the bottom of the list that still count as "at the newest step". */
 const BOTTOM_SLACK_PX = 48
@@ -47,12 +45,11 @@ const BOTTOM_SLACK_PX = 48
 const PICK_OFFSET_PX = 160
 
 function chipOf(step: Step): { cls: string; text: string } | null {
-  const rule = step.rule === null ? '' : ` · ${step.rule}`
-  if (step.verdict === 'blocked') return { cls: 'blocked', text: `Blocked${rule}` }
-  if (step.verdict === 'warned') return { cls: 'warned', text: `Warned${rule}` }
-  if (step.verdict === 'highlighted') return { cls: 'hl', text: `Highlight${rule}` }
-  if (step.sensitive) return { cls: 'secret', text: 'Secret read' }
-  return null
+  if (isAlarm(step)) {
+    const { tone, chip } = ALARM_UI[step.verdict]
+    return { cls: tone, text: step.rule === null ? chip : `${chip} · ${step.rule}` }
+  }
+  return step.sensitive ? { cls: 'secret', text: 'Secret read' } : null
 }
 
 function What({ step }: { step: Step }) {
@@ -76,7 +73,7 @@ interface StepRowProps {
 const StepRow = memo(function StepRow({ step, selected, trigger, onPick }: StepRowProps) {
   const chip = chipOf(step)
   const alarm = isAlarm(step)
-  const cls = `tr-row ${alarm ? `alarm ${step.verdict === 'blocked' ? 'b' : step.verdict === 'warned' ? 'w' : 'h'}` : 'secret'}${trigger ? ' trigger' : ''}`
+  const cls = `tr-row ${alarm ? `alarm ${ALARM_UI[step.verdict].row}` : 'secret'}${trigger ? ' trigger' : ''}`
   const interactive = alarm
     ? {
         role: 'button' as const,
@@ -162,9 +159,21 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
   const [follow, setFollow] = useState(true)
   const [picked, setPicked] = useState<number | null>(null)
   const newest = useMemo(() => newestAlarm(steps), [steps])
-  const pickedStep = follow || picked === null ? undefined : steps.find((s) => s.order === picked)
+  const pickedStep = follow || picked === null ? undefined : steps.find((s): s is AlarmStep => s.order === picked && isAlarm(s))
   const pickedGone = !follow && picked !== null && pickedStep === undefined
-  const selected: Step | null = pickedStep ?? newest
+  const selected = pickedStep ?? newest
+
+  // A new session (or a restarted recorder) numbers its steps from 1 again: a pick from the old one means nothing.
+  useEffect(() => {
+    setPicked(null)
+    setFollow(true)
+  }, [session])
+  // Turning Follow off freezes the card on what it shows now; otherwise it would keep jumping to each new block.
+  const selectedOrder = selected?.order ?? null
+  const stopFollowing = useCallback(() => {
+    setFollow(false)
+    setPicked((p) => p ?? selectedOrder)
+  }, [selectedOrder])
 
   const trigger = selected === null ? null : triggerFor(selected, steps, markedOrder)
   const triggerOrder = trigger !== null && trigger.kind === 'step' ? trigger.step.order : null
@@ -192,7 +201,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
   const commitSize = useCallback(
     (px: number | null) => {
       setDragSize(null)
-      savePrefs({ ...prefs, [layout === 'stacked' ? 'stacked' : 'side']: px })
+      savePrefs({ ...prefs, [layout]: px })
     },
     [layout, prefs, savePrefs],
   )
@@ -221,7 +230,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
 
   function onListScroll(): void {
     const list = listRef.current
-    if (follow && list !== null && list.scrollHeight - list.scrollTop - list.clientHeight > BOTTOM_SLACK_PX) setFollow(false)
+    if (follow && list !== null && list.scrollHeight - list.scrollTop - list.clientHeight > BOTTOM_SLACK_PX) stopFollowing()
   }
 
   useEffect(() => {
@@ -264,7 +273,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
     [steps, selected, pick],
   )
 
-  const selectedKind: AlarmKind = selected === null ? 'blocked' : (selected.verdict as AlarmKind)
+  const selectedKind: AlarmKind = selected === null ? 'blocked' : selected.verdict
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return
@@ -280,10 +289,8 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
   const folded = items.filter((i) => i.type === 'group').length
   const hidden = prefs.hidden
 
-  const mainStyle: CSSProperties =
-    layout === 'stacked'
-      ? { gridTemplateRows: hidden ? `minmax(0, 1fr) ${HIDE_BAR_PX}px` : `minmax(0, 1fr) auto ${cardSize}px` }
-      : { gridTemplateColumns: hidden ? `minmax(0, 1fr) ${HIDE_BAR_PX}px` : `minmax(0, 1fr) auto ${cardSize}px` }
+  const tracks = hidden ? `minmax(0, 1fr) ${HIDE_BAR_PX}px` : `minmax(0, 1fr) auto ${cardSize}px`
+  const mainStyle: CSSProperties = layout === 'stacked' ? { gridTemplateRows: tracks } : { gridTemplateColumns: tracks }
 
   const barLabel =
     selected === null ? 'Why card · no blocks or warnings yet' : `Why card · ${selected.rule ?? 'no rule'} · Step ${selected.order}`
@@ -306,7 +313,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
       <main className="tr-main" ref={mainRef} style={mainStyle} data-hidden={hidden}>
         <section className="tr-trail-col" aria-label="Trail">
           <div className="tr-pinned">
-            {ALARM_KINDS.map(({ kind, word }) => {
+            {ALARM_KINDS.map((kind) => {
               const list = alarmsOf(steps, kind)
               if (list.length === 0 && kind === 'highlighted') return null
               const at = list.findIndex((s) => s.order === selected?.order)
@@ -314,7 +321,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
                 <div className="tr-pin-row" key={kind} data-kind={kind}>
                   <span className="tr-lbl">
                     <b>
-                      {list.length} {word}
+                      {list.length} {kind}
                     </b>
                   </span>
                   <span className="tr-pos">{at >= 0 ? `${at + 1} of ${list.length}` : ''}</span>
@@ -339,8 +346,11 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
               className="tr-btn follow"
               aria-pressed={follow}
               onClick={() => {
-                setFollow((f) => !f)
-                setPicked(null)
+                if (follow) stopFollowing()
+                else {
+                  setFollow(true)
+                  setPicked(null)
+                }
               }}
             >
               Follow latest

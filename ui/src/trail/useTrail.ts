@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { LONG_MARKED_ORDER, longSession } from '../graph/mock'
 import { parseSnapshot } from '../graph/snapshot'
 import type { Step } from '../graph/types'
+import { MOCK_INTERVAL_MS, POLL_GAP_MS, POLL_TIMEOUT_MS } from '../graph/useRecorder'
 import { RETAINED_STEPS } from './model'
 
-export const POLL_GAP_MS = 1000
-export const POLL_TIMEOUT_MS = 1500
-export const MOCK_INTERVAL_MS = 1500
+/** `longSession` numbers its steps from this order; the trail's mock renumbers them from 1 like real sessions. */
+const LONG_BASE_ORDER = longSession(1)[0].order
 
 /** What `/health` sends beyond `ok`. Both arrive from a later recorder card; absent means hidden. */
 export interface Health {
@@ -27,7 +27,7 @@ export interface Trail {
 
 const NO_HEALTH: Health = { lastHookAt: null, offlineGuardCount: null }
 
-export function parseHealth(raw: unknown): Health {
+function parseHealth(raw: unknown): Health {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return NO_HEALTH
   const r = raw as Record<string, unknown>
   let lastHookAt: Date | null = null
@@ -38,6 +38,30 @@ export function parseHealth(raw: unknown): Health {
   const n = r.offline_guard_count
   const offlineGuardCount = typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null
   return { lastHookAt, offlineGuardCount }
+}
+
+const sameStep = (a: Step, b: Step): boolean =>
+  a.order === b.order &&
+  a.kind === b.kind &&
+  a.verdict === b.verdict &&
+  a.file === b.file &&
+  a.command === b.command &&
+  a.tool === b.tool &&
+  a.host === b.host &&
+  a.rule === b.rule
+
+/**
+ * The same session with the same first and last step: nothing was added or dropped since the last poll.
+ * (Comparing content as well as order means a recorder that restarted and numbers from 1 again is not mistaken for the old one.)
+ */
+function sameSteps(prev: Pick<Trail, 'steps' | 'session'>, next: Pick<Trail, 'steps' | 'session'>): boolean {
+  const a = prev.steps
+  const b = next.steps
+  return (
+    a.length === b.length &&
+    prev.session === next.session &&
+    (a.length === 0 || (sameStep(a[0], b[0]) && sameStep(a[a.length - 1], b[b.length - 1])))
+  )
 }
 
 async function getJson(url: string, signal: AbortSignal): Promise<unknown> {
@@ -51,9 +75,9 @@ async function getJson(url: string, signal: AbortSignal): Promise<unknown> {
  * sessions, and cut to the last 500 steps like the recorder's memory. The marking step
  * (the `.env` read) is remembered even after it drops out of the 500.
  */
-export function trailMock(len: number, rich: boolean): { steps: Step[]; markedOrder: number } {
+function trailMock(len: number, rich: boolean): { steps: Step[]; markedOrder: number } {
   const steps = longSession(len).map((s) => {
-    const mapped: Step = { ...s, order: s.order - 40000 + 1 }
+    const mapped: Step = { ...s, order: s.order - LONG_BASE_ORDER + 1 }
     if (rich && mapped.verdict === 'blocked') {
       mapped.rule_text = 'Blocked by rule R1: a secret was read earlier in this session, and now data is being sent out.'
       mapped.user_message = mapped.rule_text
@@ -65,16 +89,20 @@ export function trailMock(len: number, rich: boolean): { steps: Step[]; markedOr
     }
     return mapped
   })
-  return { steps, markedOrder: LONG_MARKED_ORDER - 40000 + 1 }
+  return { steps, markedOrder: LONG_MARKED_ORDER - LONG_BASE_ORDER + 1 }
 }
 
 /**
- * The trail's data source. Real mode polls once a second, two requests per poll:
- * `GET /api/steps?all=1` for the steps (up to 500) and `GET /api/steps?limit=1`
- * for `marked_order`, which `?all=1` does not send. The marker is used only when
- * both bodies name the same session. A failed or malformed steps request sets
- * `offline` (the last steps stay); a failed marker or `/health` request only
- * hides what it would have added. Mock mode never calls the server.
+ * The trail's data source. Real mode polls once a second, three requests per poll:
+ * `GET /api/steps?all=1` for the steps (up to 500), `GET /api/steps?limit=1` for
+ * `marked_order`, and `GET /health`. The second request is a stopgap: `?all=1` does
+ * not send `marked_order` and `?limit=` is capped at 50, so until a recorder card
+ * adds it to `?all=1` the marker needs its own request. It is used only when both
+ * bodies name the same session. A failed or malformed steps request sets `offline`
+ * (the last steps stay); a failed marker or `/health` request only hides what it
+ * would have added. Steps never change once recorded, so a poll that brings no new
+ * step keeps the previous array, so the step rows re-render nothing. Mock mode never
+ * calls the server.
  */
 export function useTrail(mock: boolean, len: number, burst: number, rich: boolean): Trail {
   const [state, setState] = useState<Omit<Trail, 'offline' | 'health'>>({
@@ -114,7 +142,11 @@ export function useTrail(mock: boolean, len: number, burst: number, rich: boolea
         }
         setOffline(false)
         setHealth(parseHealth(healthBody))
-        setState({ steps: snapshot.steps, session: snapshot.session, markedOrder: lastMarker.current.order, loaded: true })
+        const next = { steps: snapshot.steps, session: snapshot.session, markedOrder: lastMarker.current.order, loaded: true }
+        setState((prev) => {
+          if (!prev.loaded || !sameSteps(prev, next)) return next
+          return prev.markedOrder === next.markedOrder ? prev : { ...prev, markedOrder: next.markedOrder }
+        })
       } catch {
         if (!cancelled) setOffline(true)
       } finally {

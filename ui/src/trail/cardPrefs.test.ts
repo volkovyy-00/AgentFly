@@ -29,14 +29,14 @@ describe('sizes', () => {
     expect(defaultCardSize('side', 3000)).toBe(480)
   })
 
-  it('keeps the card at least 160 px (280 wide) and leaves the trail 25% and at least 240 px', () => {
-    expect(cardBounds('stacked', 750)).toEqual([160, 510])
+  it('keeps the card at least 160 px (280 wide) and leaves the trail 25% and at least 300 px', () => {
+    expect(cardBounds('stacked', 750)).toEqual([160, 450])
     expect(cardBounds('stacked', 1600)).toEqual([160, 1200])
     expect(cardBounds('side', 1400)).toEqual([280, 1050])
   })
 
   it('clamps a remembered size into the bounds of the current pane', () => {
-    expect(resolveCardSize('stacked', 750, 700)).toBe(510)
+    expect(resolveCardSize('stacked', 750, 700)).toBe(450)
     expect(resolveCardSize('stacked', 750, 50)).toBe(160)
     expect(resolveCardSize('stacked', 750, null)).toBe(345)
   })

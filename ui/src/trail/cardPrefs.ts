@@ -1,5 +1,5 @@
 /** Below this pane width the trail is on top and the Why card below (the half-screen layout, the main one). */
-export const STACK_BELOW_PX = 1080
+const STACK_BELOW_PX = 1080
 
 export type Layout = 'stacked' | 'side'
 
@@ -18,13 +18,13 @@ export interface CardPrefs {
 
 export const DEFAULT_PREFS: CardPrefs = { hidden: false, stacked: null, side: null }
 
-/** Card limits. The trail keeps at least a quarter of the pane and at least 240 px (the pinned strip and toolbar take about 160 of them). */
-export const MIN_CARD_HEIGHT = 160
-export const MIN_CARD_WIDTH = 280
-export const MIN_TRAIL_SHARE = 0.25
-export const MIN_TRAIL_PX = 240
+/** Card limits. The trail keeps at least a quarter of the pane and at least 300 px (the pinned strip and toolbar take about 160 of them). */
+const MIN_CARD_HEIGHT = 160
+const MIN_CARD_WIDTH = 280
+const MIN_TRAIL_SHARE = 0.25
+const MIN_TRAIL_PX = 300
 /** Size used before the pane has been measured. */
-export const UNMEASURED_CARD_PX = 280
+const UNMEASURED_CARD_PX = 280
 /** Arrow-key step on the splitter. */
 export const KEY_STEP_PX = 24
 /** The hide bar's thickness (stacked: height, side: width). */

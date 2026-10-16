@@ -75,8 +75,11 @@ describe('triggerFor', () => {
     expect(triggerFor(warn(4), steps, 2)).toEqual({ kind: 'none' })
     expect(triggerFor(makeStep(4, { verdict: 'blocked', rule: 'R0' }), steps, 2)).toEqual({ kind: 'none' })
   })
-  it('does not use a marker that is not before the block', () => {
-    expect(triggerFor(block(4), steps, 4)).toEqual({ kind: 'unknown' })
+  it('is the block itself when it is the marking step (`cat .env | curl …`: marked first, then blocked)', () => {
+    expect(triggerFor(block(4), steps, 4)).toEqual({ kind: 'self' })
+  })
+  it('does not use a marker from after the block', () => {
+    expect(triggerFor(block(4), steps, 9)).toEqual({ kind: 'unknown' })
   })
 })
 
