@@ -1,6 +1,6 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5, V1a and V2 are done; V8 is done; V2b is in flight (2026-10-16).
+Status: **spikes S1–S5, V1a and V2 are done; V8 and V2b are done (2026-10-16).
 D16 and D21–D24 are open.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
@@ -63,7 +63,7 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
               ─────────── you approve DECISIONS.md ───────────
 
 v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
-              Backend:  V2 ✅ ┬──► V2b ──┬──► V3  CLI install commands ──┐
+              Backend:  V2 ✅ ┬──► V2b ✅ ┬──► V3  CLI install commands ──┐
                              │          └──► V5  rules + R0 ──────┐     │ (V4's last check needs V3)
                              ├──► V4  formula + release           ├─────┼──► V7  rule change flow
                              └──► V6  local store ────────────────┘     │
@@ -87,6 +87,7 @@ V7 and V9 can run in parallel.
 - V1a ✅ 2026-10-16 · docs/reports/V1a.md · merged b7f7192 · changed D5 D9 D10 D14 (review answers) · body: git show b7f7192:docs/BOARD.md
 - V2 ✅ 2026-10-16 · docs/reports/V2.md · merged 3da6dc7 · accepted edits outside Touches (setup_credentials.sh, .env.example, AGENTS.md paths); `ls -la` → `ls -l<arg>` per SPEC § 4 · body: git show ba74ffe:docs/BOARD.md
 - V8 ✅ 2026-10-16 · docs/reports/V8.md · merged 92e7fdc (part 1) and 4af8125 (home switch: trail at /, lane graph at /?view=graph) · GIF dropped by the owner; real Cursor chat check passed · body: git show f786847:docs/BOARD.md
+- V2b ✅ 2026-10-16 · docs/reports/V2b.md · merged 79a46a7 · changed D25 (new); owner addendum: serve port check, 401/403 → guard, all one-liners denied offline, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV; p95 69 ms accepted until V3 · body: git show 7f7cd70:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -110,13 +111,6 @@ V7 and V9 can run in parallel.
   - The approved dependencies, paths, commands, rule shape, R1 outbound
     definition (D10) and API surface (D19) match the decisions.
   - You approve the PR.
-
-### V2b · Hardened hook client: never fails, fixed port, strips everything, offline guard
-- **Owner:** worker-backend · **Brief (authoritative):** `docs/briefs/V2b.md`
-- **Lane:** backend, after V2 merges; ∥ V4 and V6.
-- **Depends on:** V2 ✅
-- Owner's priority order (2026-10-16): never exits non-zero on any input (offline
-  guard on unreadable input, fuzz tests); port fixed at 8787 (D25); nested stripping; install.sh paths.
 
 ### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
 - **Owner:** worker-backend · brief to write after V2b and the D9 review

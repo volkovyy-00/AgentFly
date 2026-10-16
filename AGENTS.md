@@ -22,7 +22,9 @@ These are today's commands; `init`, `start` and `doctor` (V3) add to them.
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`
 - Auto-fix style: `uv run ruff check --fix . && uv run ruff format .`
-- Run server: `uv run agentfly serve` (`--port N` for another port; 127.0.0.1 only)
+- Run server: `uv run agentfly serve` (127.0.0.1 only; `--port N` or `AGENTFLY_PORT=N` for
+  tests only: hooks always post to 8787, D25). A second `serve` on a busy port exits 1 and
+  changes nothing.
 - Build the wheel (carries `ui/dist`): `uv build`; try it with `uv tool install dist/*.whl`
 - Replay a scripted session without Cursor: `uv run python fake_agent.py`
 - UI dev server (proxies `/api` to the recorder): `npm --prefix ui run dev`
@@ -78,11 +80,14 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 
 ## Hook client rules
 (`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is a shim for it
-until V3; the `<agent> <event>` arguments come with V2b. SPEC section 8.)
+until V3. Called as `agentfly-hook <agent> <event>`; with no arguments it acts as `cursor`.
+SPEC section 8.)
 - Standard library only, one file. Run it with `python -I -S` on a Python
   directly (never `uv run`, which is slow to start). In v1 that is the bundled
   system-owned Python, not the project's virtualenv or `/usr/bin/python3`.
-- HTTP timeout about 0.5 s (V2 settles it from measurements). Set an explicit
+- Posts only to `127.0.0.1:8787` (D25): no port file, no environment override. Tests
+  set the client's port inside the test harness. HTTP wait 0.5 s (V2b measured it;
+  p95 69 ms with the recorder up, accepted until V3 re-measures). Set an explicit
   `timeout` in `hooks.json`, and quote the command path.
 - Stdout must contain ONLY the JSON answer. Any other print to stdout can
   make Cursor block the action. All logging goes to stderr. Always print valid
@@ -91,12 +96,15 @@ until V3; the `<agent> <event>` arguments come with V2b. SPEC section 8.)
   section 9), not a plain allow: deny outbound commands (except localhost and
   private ranges) and R0 guard-path commands, allow the rest, log the miss, and
   say "run `agentfly start`" in the deny message. Plain allow only after
-  `agentfly uninstall` has removed the registration. *Today's hackathon client
-  still answers allow when the server is down; V2 changes that.*
+  `agentfly uninstall` has removed the registration. A 401 or 403 from the
+  recorder (wrong token) and input the client cannot parse get the same guard,
+  never an allow. Every inline `python -c` / `node -e` is denied offline.
 - Strip content before doing anything else: `content` of `beforeReadFile`,
   `edits` of `afterFileEdit`, `output` of `afterShellExecution`, and the
   contents of `tool_input` (keep only a file tool's target path, and an MCP
-  call's server and tool names).
+  call's server and tool names), and any nested `content` / `output` (for
+  example `attachments[].content`). The hook log keeps no command text.
+  Top-level fields such as `parent_tool_call_id` pass through (D21).
 - On deny, put the rule text in BOTH `user_message` and `agent_message`, and
   add to `agent_message`: "Do not retry with another tool or language. Stop
   and tell the user."
@@ -117,6 +125,9 @@ until V3; the `<agent> <event>` arguments come with V2b. SPEC section 8.)
   `python -m agentfly.recorder.store --counts` / `--clear`. Writes are background-only;
   never DELETE except `--clear`. If `neo4j+s://` fails TLS verify on the host, use `neo4j+ssc://`
   (documented in `.env.example`); restart the server after editing creds.
+- Tests never use that login. The live Neo4j tests run only when
+  `AGENTFLY_TEST_NEO4J_ENV` names a separate credentials file for a test
+  database, and skip otherwise; never point it at the owner's AuraDB.
 - The page: `GET /` (and its assets under `/assets/`) and `GET /api/steps` are
   Host-only (no token). The page never talks to a database; the live trail reads
   process memory. See README / HOOKS for the JSON contract.
@@ -130,7 +141,7 @@ until V3; the `<agent> <event>` arguments come with V2b. SPEC section 8.)
 
 ## Testing (tests/test_rules.py, tests/test_clean.py, tests/test_app.py, ...)
 Only tests that exist are listed here. Each card adds its own tests and the
-lines for them (R0 and normalisation: V5; hook-client stripping: V2b).
+lines for them (R0 and normalisation: V5).
 - `cat .env` marks the session; `curl https://x.com` afterwards is blocked.
 - `curl` without a prior secret read is allowed.
 - `.env.local` is sensitive; `.env.example` and `id_rsa.pub` are not.
@@ -153,6 +164,19 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2b).
   `/openapi.json` are 404.
 - Paths: the first start moves `~/.config/flightrecorder` once (`tests/test_paths.py`);
   every test runs under a temporary HOME (`tests/conftest.py`).
+- Hook client (`tests/test_hook_client.py`, `tests/client_harness.py`): fuzzed stdin
+  (surrogates, non-UTF-8, 5000-digit numbers, deep nesting, random bytes) always gives
+  one JSON object and exit 0; planted markers in content, edits, output, nested
+  fields and `tool_input` never reach the log, stderr or the request body;
+  `parent_tool_call_id` arrives; an unknown agent gets allow and a stderr warning.
+- Offline guard (`tests/test_offline_guard.py`): with no recorder, a slow one, or
+  401/403, outbound commands (bare and wrapped in `bash -c`, `env`, `sudo`), every
+  one-liner and guard-path commands are denied with "agentfly start"; `ls`,
+  `curl localhost:8000/health` and private addresses are allowed.
+- Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
+  token is unchanged and the first recorder still blocks R1. Docs
+  (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
+  README and HOOKS.md name `/` as the trail.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
   under a temporary HOME and runs `agentfly serve` and `agentfly-hook`.
 - Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
@@ -186,8 +210,8 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2b).
     (dir 700, file 600). Compat shim: `recorder/hook_passthrough.py` (delegates
     to `hooks/hook.py`).
   - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
-    `X-Recorder-Token` (from `~/.config/agentfly/token`); fail-open if
-    the server is down.
+    `X-Recorder-Token` (from `~/.config/agentfly/token`); offline guard if
+    the server is down, slow or answers 401/403.
   - R1 (`agentfly/recorder/rules.py`): mark on sensitive read/shell word, then block
     outbound sends; sessions in `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
@@ -197,5 +221,9 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2b).
     `content`; Grep `file_path`, `pattern`. `ask` from `beforeShellExecution`
     pauses the agent (Skip / Always Run / Run); an allow with messages shows
     nothing. The system `hooks.json` runs alongside user and project hooks.
+  - S5 (Cursor 3.24.12): a subagent has its own `conversation_id` and carries
+    `parent_tool_call_id` on every event (D21 A links it to the parent's mark).
+    One unknown event name disables a whole `hooks.json` (D23);
+    `~/.claude/settings.json` is a third hook source (D24).
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
     notes in `demo/NOTES.md`; T0 disabled in the hook client.
