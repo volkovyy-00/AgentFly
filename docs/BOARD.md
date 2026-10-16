@@ -68,6 +68,7 @@ v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
                              ├──► V4  formula + release           ├─────┼──► V7  rule change flow
                              └──► V6  local store ────────────────┘     │
               UI:       V8  trail + Why + health  (starts now, merges after V2)
+                             ├──► V8b recorder fields for V8 (backend, after V2b)
                              └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
 ```
 
@@ -77,7 +78,7 @@ V7 and V9 can run in parallel.
 ---
 
 ## Done
-- S1 ✅ 2026-10-15 · docs/spikes/S1-global-hooks.md · changed D9 D11 · body: git show 5b41ac1:docs/BOARD.md
+- S1 ✅ 2026-10-15 · docs/spikes/S1-global-hooks.md · changed D9 D11 · `cursor-agent` half not tested, accepted by the owner 2026-10-16 · body: git show 5b41ac1:docs/BOARD.md
 - S2 ✅ 2026-10-15 · docs/spikes/S2-tamper.md · changed D1 D2 D3 D4 D5 D8 D19 · body: git show 5b41ac1:docs/BOARD.md
 - S4 ✅ 2026-10-16 · docs/spikes/S4-trail.md · changed D15, V8 · body: git show 5b41ac1:docs/BOARD.md (before the 2026-10-16 screenshot edit)
 - S3 ✅ 2026-10-16 · docs/spikes/S3-rule-fit.md · changed D10 D13, V5 · body: git show d0f403b:docs/BOARD.md
@@ -298,39 +299,22 @@ V7 and V9 can run in parallel.
   - Plain-language drafting is not included unless D13 is approved.
 
 ### V8 · UI: trail home, Why card, health strip
-- **Owner:** worker-ui
-- **Lane:** UI. Starts after V1a and merges after V2 (for the `/health` count).
-- **Depends on:** S4 ✅, V1a; V2 for the merge
-- **May touch:** `ui/src/**` except `ui/src/history/**` and `ui/src/rules/**`;
-  `ui/dist` (rebuilt); ui tests. No Python. No new npm dependencies without
-  your approval.
-- **Done when:**
-  - The home trail works on a 500-step mock session: routine runs are grouped,
-    blocks, warnings and secret reads are never grouped (repeated identical
-    blocks stay separate rows), and Follow still works (tests and a screenshot).
-  - It works at half-screen, about 700 px wide: the header stays on one line
-    and the Why card stays usable (screenshot at 700 px). From S4.
-  - The Why card can be hidden and resized. Propose how in the PR before
-    building it (S4: the owner asked; the mechanism is not decided).
-  - **Live check before the switch** (the owner asked, 2026-10-16). Build the
-    trail first at a non-home address (for example `/?view=trail`); today's
-    page stays home. With the recorder running, the owner watches the trail
-    while `uv run python fake_agent.py` replays the R1 scenario, and again
-    during one real Cursor chat that reads `.env` and then tries a send to
-    `https://example.invalid`: new steps appear without a reload, Follow keeps
-    up, the block pins and its Why card opens. Only after the owner's yes does
-    the commit land that makes the trail home and moves the lane graph to a
-    "Graph" tab. The PR records the owner's answer and a screenshot. Needs
-    the owner at the keyboard.
-  - Every block and warning opens a Why card with the rule id and text, the
-    trigger step → blocked step, and the messages sent to you and to the agent.
-    There is **no "allow once" button** (D19); the card shows the
-    `agentfly rules …` command instead (test and screenshot).
-  - The health strip shows recorder online/offline, the last hook seen, and the
-    offline-guard count.
-  - "Contents not recorded" appears wherever content would have been.
-  - The web check and the stale-build check pass. A 60-second GIF of the R1 demo
-    on the new page is attached.
+- **Owner:** worker-ui · **Brief (authoritative):** `docs/briefs/V8.md`
+- **Lane:** UI, ∥ V2 and S5; merges after V2.
+- **Depends on:** S4 ✅, V1a ✅; V2 for the merge
+- 2026-10-16 (owner): V8 stays UI-only. Fields the recorder does not send yet
+  (rule text, the two messages, last hook time, offline-guard count) come from
+  V8b; the page shows them when present. Old card text: `git show f8145f9:docs/BOARD.md`.
+
+### V8b · Recorder fields for the Why card and health strip
+- **Owner:** worker-backend · brief to write
+- **Lane:** backend, after V2b; ∥ V3, V4, V6.
+- **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
+- **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
+- **Done when:** each step on `/api/steps` carries `rule_text`, `user_message`
+  and `agent_message` when a rule fired, and the `highlighted` verdict when a highlight rule fired, and `/health` carries `last_hook_at`
+  and `offline_guard_count`, under the names V8's page reads; nothing stored
+  gains content (SPEC §4); the route whitelist test is unchanged.
 
 ### V9 · UI: History and Rules tabs
 - **Owner:** worker-ui

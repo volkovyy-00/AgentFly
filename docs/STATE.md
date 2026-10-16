@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-16 11:35 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: v2-dispatched. S1–S4 ✅, V1a ✅ (merged b7f7192). V2 in flight (plan mode). S5 next with the owner.
+Updated: 2026-10-16 12:00 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: v8-dispatched. S1–S4 ✅, V1a ✅ (merged b7f7192). V2 in flight (plan mode), V8 dispatched. S5 now with the owner.
 Pending decisions: D16
 
 ## Spikes and cards
@@ -10,27 +10,29 @@ Pending decisions: D16
 - S5 not started: brief smoke test + S2 (d) sudo re-run + passive dump hook on all events, one made-up event, one foreground and one background subagent; record generation_id on both read events (D9) and workspace_roots/parent ids for subagents (S3 §5) · BOARD S5 card.
 - V2 split (2026-10-16, brief over budget): V2 = package `agentfly-recorder`, v1 paths, API whitelist, cleaner leak (hooks/hook.py stays a shim); V2b = hook client (agent arg, stripping, offline guard, duplicates, port override, wait budget, read-dedup proposal). Briefs in docs/briefs/. Verify passes: both ready; oracle pass stopped by the owner, no verdict.
 - V1b (lead, after S5): SPEC still says D13 pending and lacks the S3 additions and revision 7 answers.
-- V8 may start now (ui/** only; merges after V2); needs a brief first.
+- V8 (2026-10-16, owner): UI-only; rule text, messages, last-hook time, guard count, `highlighted` come from new card V8b (backend, after V2b); page shows them when present. Brief verified (pass 2).
+- S1 `cursor-agent` half: owner accepted "not tested" (2026-10-16).
 
 ## In flight
 - V2 · worker-backend · .claude/worktrees/ag-v2-package · ag-v2-package · docs/reports/V2.md · docs/briefs/V2.md
+- V8 · worker-ui · .claude/worktrees/ag-v8-trail · ag-v8-trail · docs/reports/V8.md · docs/briefs/V8.md
 
 ## Machine state (verified 2026-10-16 11:34 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present.
 - Recorder: nothing listens on 8787 or 5173. Start: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`.
-- Worktrees: main and .claude/worktrees/ag-v2-package (5aff9e1).
+- Worktrees: main, .claude/worktrees/ag-v2-package (5aff9e1), .claude/worktrees/ag-v8-trail (this commit).
 - Git: core.hooksPath is absolute (main's docs/roles/git-hooks: pre-commit, pre-push). `.claude/settings.json` denies `git push` and `git -C * push *`. Owner pushes with `AGENTFLY_ALLOW_PUSH=1`.
 - origin still has ag-s3-rule-fit and ag-v1a-spec (pushed by workers, unasked).
 - ~/.config/flightrecorder/sessions.json: 35 sessions, 18 marked.
-- AuraDB: paused; its host gave NXDOMAIN at 11:00 (as of then). Neo4j `--clear` not run.
+- AuraDB: resumed, reachable 11:50 (counts OK). `--clear` blocked by the auto-mode classifier; owner runs it.
 - /tmp/af-spike: throwaway scripts and logs (copy in logs/spike/, gitignored; after a reboot `cp -Rp logs/spike/. /tmp/af-spike/`). /tmp/af-fresh: .env (fake) and test.txt only.
 - For S5, reinstall global hooks first: `/tmp/af-spike/s1.sh real` (user-level) or `s2.sh install` (sudo); `s1.sh restore` / `s2.sh restore` after.
 
 ## Waiting on owner
-1. Resume AuraDB; then the lead runs `uv run python -m recorder.store --clear` (owner asked; test data only).
-2. Delete pushed branches: `AGENTFLY_ALLOW_PUSH=1 git push origin --delete ag-v1a-spec ag-s3-rule-fit`.
+1. Run `! uv run python -m recorder.store --clear` (test data; lead's run was blocked by the classifier).
+2. Delete pushed branches: `! AGENTFLY_ALLOW_PUSH=1 git push origin --delete ag-v1a-spec ag-s3-rule-fit`.
 3. Be at the keyboard for S5 (Cursor app, sudo).
-4. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
+4. Start the V8 worker (first message from the lead).
 
 ## Decisions changed since last handoff (bb72b37)
 - Revision 5: D2 D3 D6 D7 D8 D9 D12 D17 D18 D19 approved as recommended; D19 turns /docs off; D3 reopens if the S5 sudo re-run fails.
@@ -50,6 +52,6 @@ Pending decisions: D16
 ## Next 3 actions
 1. When the owner relays V2's plan or report: review (head -n 6, `git diff --stat main...ag-v2-package`, checks), merge, then create V2b's worktree.
 2. S5 with the owner; then D16, D9 revisit, V1b.
-3. If the owner wants parallel UI work: write V8's brief (agent-ready-tickets, verify pass only) and dispatch.
+3. When V8 reports its plan: check the Why card hide/resize proposal reaches the owner; write V8b's brief after V2b.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.
