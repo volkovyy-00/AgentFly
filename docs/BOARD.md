@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5 and V1a are done; V2 and V8 are in flight (2026-10-16).
-All decisions but D16 (open after S5) are approved.** V2 is split into V2 and V2b.
+Status: **spikes S1–S5, V1a and V2 are done; V8 is in flight, V2b next (2026-10-16).
+D16 and D21–D24 are open.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
 before it starts.
@@ -63,16 +63,17 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
               ─────────── you approve DECISIONS.md ───────────
 
 v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
-              Backend:  V2 ──┬──► V2b ──┬──► V3  CLI install commands ──┐
+              Backend:  V2 ✅ ┬──► V2b ──┬──► V3  CLI install commands ──┐
                              │          └──► V5  rules + R0 ──────┐     │ (V4's last check needs V3)
                              ├──► V4  formula + release           ├─────┼──► V7  rule change flow
                              └──► V6  local store ────────────────┘     │
+                                        V2b ──► V2c  step merge + read-dedup proposal (∥ V3, V5)
               UI:       V8  trail + Why + health  (starts now, merges after V2)
                              ├──► V8b recorder fields for V8 (backend, after V2b)
                              └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
 ```
 
-V2b, V4 and V6 run in parallel once V2 has merged; V3 and V5 once V2b has.
+V2b, V4 and V6 run in parallel once V2 has merged; V3, V5 and V2c once V2b has.
 V7 and V9 can run in parallel.
 
 ---
@@ -84,6 +85,7 @@ V7 and V9 can run in parallel.
 - S3 ✅ 2026-10-16 · docs/spikes/S3-rule-fit.md · changed D10 D13, V5 · body: git show d0f403b:docs/BOARD.md
 - S5 ✅ 2026-10-16 · docs/spikes/S5-brief.md · pass (smoke test; D16 open); findings for D9, S3 subagents, V3, V1b · body: git show f0d68e3:docs/BOARD.md
 - V1a ✅ 2026-10-16 · docs/reports/V1a.md · merged b7f7192 · changed D5 D9 D10 D14 (review answers) · body: git show b7f7192:docs/BOARD.md
+- V2 ✅ 2026-10-16 · docs/reports/V2.md · merged 3da6dc7 · accepted edits outside Touches (setup_credentials.sh, .env.example, AGENTS.md paths); `ls -la` → `ls -l<arg>` per SPEC § 4 · body: git show ba74ffe:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -108,21 +110,20 @@ V7 and V9 can run in parallel.
     definition (D10) and API surface (D19) match the decisions.
   - You approve the PR.
 
-### V2 · Installable `agentfly-recorder` package, v1 paths, API surface, cleaner leak
-- **Owner:** worker-backend · **Brief (authoritative):** `docs/briefs/V2.md`
-- **Lane:** backend, first; ∥ S5 on a temporary HOME and a port other than 8787.
-  It moves files, so V2b–V6 wait for it to merge.
-- **Depends on:** V1a ✅
-- Split 2026-10-16: the old V2 card did not fit one brief (agent-ready-tickets
-  budget), so the hook-client half is V2b. Old card text: `git show b7f7192:docs/BOARD.md`.
-- Includes the cleaner leak fix (V1a gap 21) with every secret shape the owner
-  listed and a "no dummy secret survives" test.
-
-### V2b · Hardened hook client: agent argument, stripping, offline guard, duplicates
+### V2b · Hardened hook client: never fails, fixed port, strips everything, offline guard
 - **Owner:** worker-backend · **Brief (authoritative):** `docs/briefs/V2b.md`
 - **Lane:** backend, after V2 merges; ∥ V4 and V6.
-- **Depends on:** V2
-- Proposes (does not build) the merge key for duplicate file reads (D9 note).
+- **Depends on:** V2 ✅
+- Owner's priority order (2026-10-16): never exits non-zero on any input (offline
+  guard on unreadable input, fuzz tests); port fixed at 8787 (D25); nested stripping; install.sh paths.
+
+### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
+- **Owner:** worker-backend · brief to write after V2b and the D9 review
+- **Lane:** backend, after V2b; ∥ V3, V5.
+- **Depends on:** V2b
+- Split from V2b 2026-10-16 (brief budget). A `preToolUse` and a `beforeShellExecution`
+  call with the same `tool_use_id` show as one step in `/api/steps`; the report proposes
+  (does not build) the merge key for duplicate file reads (D9 note), with fixture evidence.
 
 ### V3 · CLI install commands: `init -g`, `uninstall`, `doctor`, `start`, `stop`, `status`
 - **Owner:** worker-backend

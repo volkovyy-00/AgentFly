@@ -32,6 +32,7 @@ hand; "approved" always means the owner's explicit yes):
 - D22 proposed · Cursor's sandbox is not a security control
 - D23 proposed · Only events the installed Cursor accepts are registered
 - D24 proposed · `~/.claude/settings.json` is a third hook source
+- D25 approved 2026-10-16 · Hooks always use port 8787; no port file
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -670,3 +671,15 @@ hooks on a gate event (`preToolUse`, `beforeShellExecution`, `beforeReadFile`,
 `beforeMCPExecution`). Untested: how Cursor combines an allow from one source
 with AgentFly's deny from the system file; S1 showed only that they all run.
 V3 tests it first, and the warning becomes a failure if an allow can override.
+
+## D25. Hooks always use port 8787; no port file
+Status: **approved (2026-10-16), changed by the owner**: the proposed port file in `~/.config/agentfly/` is rejected · Cards: V2b (build), V5 (R0 port check), V1b (SPEC §3, §8) · Tested by: V2b
+
+**Rule.** The hook client always posts to 127.0.0.1:8787. It reads no port file
+and no environment variable. Tests set the port with `AGENTFLY_PORT`, which only
+`agentfly serve` and the test harness read, never the production hook path. If a
+configurable port is ever needed, it goes in the root-owned config (D1), not in
+`~/.config`.
+
+**Why.** A port in a user-writable file would let an agent point the client at
+its own server that always answers allow.
