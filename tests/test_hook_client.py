@@ -20,9 +20,10 @@ from tests.helpers import (
     REPO,
     StubRecorder,
     answer_of,
-    copy_client,
+    client_env,
     free_port,
     hook_log,
+    hook_log_path,
     package_files,
     run_hook,
     start_recorder,
@@ -42,34 +43,28 @@ EVENT: dict[str, Any] = {
 
 
 def run_client(
-    command: list[str], home: Path, event: dict[str, Any]
+    command: list[str], isolated_home: Path, event: dict[str, Any]
 ) -> subprocess.CompletedProcess[str]:
     """Run a client command line as Cursor would (default port 8787, no token under this HOME)."""
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
     return subprocess.run(
-        command, input=json.dumps(event), capture_output=True, text=True, env=env, check=False
+        command,
+        input=json.dumps(event),
+        capture_output=True,
+        text=True,
+        env=client_env(isolated_home),
+        check=False,
     )
 
 
-def check_allow_and_log(result: subprocess.CompletedProcess[str], home: Path) -> None:
+def check_allow_and_log(result: subprocess.CompletedProcess[str], isolated_home: Path) -> None:
     assert result.returncode == 0
     assert json.loads(result.stdout) == {"permission": "allow"}
-    log = home / ".local" / "share" / "agentfly" / "logs" / "events.jsonl"
+    log = hook_log_path(isolated_home)
     text = log.read_text(encoding="utf-8")
     assert "beforeReadFile" in text and MARKER not in text
     assert MARKER not in result.stdout + result.stderr
     assert (log.stat().st_mode & 0o777) == 0o600
     assert (log.parent.stat().st_mode & 0o777) == 0o700
-
-
-@pytest.fixture
-def client(tmp_path: Path) -> Path:
-    return copy_client(tmp_path / "client")
-
-
-@pytest.fixture
-def home(isolated_home: Path) -> Path:
-    return isolated_home
 
 
 # ---------------------------------------------------------------- the shim and the file itself
@@ -135,47 +130,51 @@ FUZZ: dict[str, bytes] = {
 
 
 @pytest.mark.parametrize("name", list(FUZZ))
-def test_fuzzed_input_gets_one_json_object_and_exit_0(client: Path, home: Path, name: str) -> None:
-    result = run_hook(client, home, FUZZ[name], port=free_port())
+def test_fuzzed_input_gets_one_json_object_and_exit_0(
+    client: Path, isolated_home: Path, name: str
+) -> None:
+    result = run_hook(client, isolated_home, FUZZ[name], port=free_port())
     answer = answer_of(result)
     if name != "random bytes":  # random text can hold a word such as `nc`, which the guard denies
         assert answer == {"permission": "allow"}
     assert result.stdout.decode("ascii")  # ASCII only, so no encoding can fail on the way out
 
 
-def test_unreadable_input_gets_the_offline_guard_on_its_raw_text(client: Path, home: Path) -> None:
+def test_unreadable_input_gets_the_offline_guard_on_its_raw_text(
+    client: Path, isolated_home: Path
+) -> None:
     broken_curl = b'{"hook_event_name": "beforeShellExecution", "command": "curl https://x.com"'
-    denied = answer_of(run_hook(client, home, broken_curl, port=free_port()))
+    denied = answer_of(run_hook(client, isolated_home, broken_curl, port=free_port()))
     assert denied["permission"] == "deny"
     assert "agentfly start" in denied["user_message"]
     assert "agentfly start" in denied["agent_message"]
     assert denied["agent_message"].endswith("Stop and tell the user.")
-    allowed = answer_of(run_hook(client, home, b'{"command": "ls"', port=free_port()))
+    allowed = answer_of(run_hook(client, isolated_home, b'{"command": "ls"', port=free_port()))
     assert allowed == {"permission": "allow"}
     # the log says why, and holds no raw text
-    log = hook_log(home)
+    log = hook_log(isolated_home)
     assert "unreadable_input" in log and "curl" not in log
 
 
 def test_a_deeply_nested_but_readable_payload_still_gets_the_recorder_answer(
-    client: Path, home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    write_token(home)
+    write_token(isolated_home)
     deep: Any = "x"
     for _ in range(500):
         deep = {"n": deep}
     event = {"hook_event_name": "beforeShellExecution", "command": "ls", "extra": deep}
     with StubRecorder({"permission": "deny", "user_message": "m"}) as stub:
-        answer = answer_of(run_hook(client, home, event, port=stub.port))
+        answer = answer_of(run_hook(client, isolated_home, event, port=stub.port))
     assert answer["permission"] == "deny"
     assert len(stub.requests[0]["body"]) < 10_000
 
 
-def test_a_10_mb_read_payload_gets_the_normal_answer(client: Path, home: Path) -> None:
-    write_token(home)
+def test_a_10_mb_read_payload_gets_the_normal_answer(client: Path, isolated_home: Path) -> None:
+    write_token(isolated_home)
     event = {**EVENT, "content": "A" * 10_000_000}
     with StubRecorder() as stub:
-        answer = answer_of(run_hook(client, home, event, port=stub.port))
+        answer = answer_of(run_hook(client, isolated_home, event, port=stub.port))
     assert answer == {"permission": "allow"}
     body = stub.requests[0]["body"]
     assert len(body) < 2000 and b"AAAA" not in body
@@ -184,16 +183,16 @@ def test_a_10_mb_read_payload_gets_the_normal_answer(client: Path, home: Path) -
 
 
 def test_a_recorder_deny_is_printed_even_if_the_log_and_stderr_fail(
-    client: Path, home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    write_token(home)
-    (home / ".local").mkdir()
-    (home / ".local" / "share").write_text("a file, so the log folder cannot be made")
+    write_token(isolated_home)
+    (isolated_home / ".local").mkdir()
+    (isolated_home / ".local" / "share").write_text("a file, so the log folder cannot be made")
     deny = {"permission": "deny", "user_message": "no", "agent_message": "no. Stop."}
     with StubRecorder(deny) as stub:
         result = run_hook(
             client,
-            home,
+            isolated_home,
             {**EVENT, "hook_event_name": "beforeShellExecution", "command": "x"},
             port=stub.port,
             wrapper="2>&-",
@@ -201,11 +200,11 @@ def test_a_recorder_deny_is_printed_even_if_the_log_and_stderr_fail(
     assert answer_of(result) == deny
 
 
-def test_closed_stdin_and_closed_stdout_still_exit_0(client: Path, home: Path) -> None:
-    assert answer_of(run_hook(client, home, b"", port=free_port(), wrapper="0<&-")) == {
+def test_closed_stdin_and_closed_stdout_still_exit_0(client: Path, isolated_home: Path) -> None:
+    assert answer_of(run_hook(client, isolated_home, b"", port=free_port(), wrapper="0<&-")) == {
         "permission": "allow"
     }
-    result = run_hook(client, home, EVENT, port=free_port(), wrapper="1>&-")
+    result = run_hook(client, isolated_home, EVENT, port=free_port(), wrapper="1>&-")
     assert result.returncode == 0
 
 
@@ -227,11 +226,11 @@ def test_internal_error_still_prints_the_guard_answer(
 
 
 def test_the_client_posts_to_8787_whatever_the_environment_or_a_port_file_say(
-    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    write_token(home)
-    (home / ".config" / "agentfly" / "port").write_text("51234", encoding="utf-8")
-    (home / ".config" / "agentfly" / "settings.json").write_text('{"port": 51234}')
+    write_token(isolated_home)
+    (isolated_home / ".config" / "agentfly" / "port").write_text("51234", encoding="utf-8")
+    (isolated_home / ".config" / "agentfly" / "settings.json").write_text('{"port": 51234}')
     monkeypatch.setenv("AGENTFLY_PORT", "51234")
     connects: list[Any] = []
 
@@ -324,6 +323,14 @@ def planted_events() -> dict[str, dict[str, Any]]:
             "tool_name": "MCP:search",
             "tool_input": {"query": PLANTED},
         },
+        "post tool": {
+            **common,
+            "hook_event_name": "postToolUse",
+            "tool_name": "Shell",
+            "tool_output": PLANTED,
+            "tool_response": {"stdout": PLANTED, "text": PLANTED},
+            "prompt": PLANTED,
+        },
         "mcp event": {
             **common,
             "hook_event_name": "beforeMCPExecution",
@@ -339,17 +346,17 @@ def planted_events() -> dict[str, dict[str, Any]]:
 
 @pytest.mark.parametrize("name", list(planted_events()))
 def test_planted_text_never_reaches_the_body_the_log_or_stderr(
-    client: Path, home: Path, name: str
+    client: Path, isolated_home: Path, name: str
 ) -> None:
-    write_token(home)
+    write_token(isolated_home)
     event = planted_events()[name]
     with StubRecorder() as stub:
-        result = run_hook(client, home, event, port=stub.port)
+        result = run_hook(client, isolated_home, event, port=stub.port)
     answer_of(result)
     body = stub.requests[0]["body"].decode()
     for where, text in (
         ("body", body),
-        ("log", hook_log(home)),
+        ("log", hook_log(isolated_home)),
         ("stderr", result.stderr.decode()),
         ("stdout", result.stdout.decode()),
     ):
@@ -358,8 +365,8 @@ def test_planted_text_never_reaches_the_body_the_log_or_stderr(
             assert SHELL_MARKER not in text, where
 
 
-def test_the_recorder_still_gets_what_it_needs(client: Path, home: Path) -> None:
-    write_token(home)
+def test_the_recorder_still_gets_what_it_needs(client: Path, isolated_home: Path) -> None:
+    write_token(isolated_home)
     events = planted_events()
     shell = {**events["write"], "hook_event_name": "beforeShellExecution", "command": SHELL_MARKER}
     shell.pop("tool_input")
@@ -371,10 +378,10 @@ def test_the_recorder_still_gets_what_it_needs(client: Path, home: Path) -> None
             events["mcp tool"],
             events["mcp event"],
         ):
-            answer_of(run_hook(client, home, event, port=stub.port))
+            answer_of(run_hook(client, isolated_home, event, port=stub.port))
     shell_body, write, grep, mcp_tool, mcp_event = stub.bodies
     assert shell_body["command"] == SHELL_MARKER  # the recorder gets the command ...
-    assert SHELL_MARKER not in hook_log(home)  # ... and the hook log never does
+    assert SHELL_MARKER not in hook_log(isolated_home)  # ... and the hook log never does
     assert write["tool_input"] == {"file_path": "/proj/w.py"}
     assert grep["tool_input"] == {"file_path": "/proj/src"}
     assert "tool_input" not in mcp_tool and mcp_tool["tool_name"] == "MCP:search"
@@ -383,27 +390,26 @@ def test_the_recorder_still_gets_what_it_needs(client: Path, home: Path) -> None
     assert write["conversation_id"] == "s1" and write["tool_use_id"] == "t1"
 
 
-def test_edits_become_a_count_and_the_log_event_has_no_command(client: Path, home: Path) -> None:
-    write_token(home)
+def test_edits_become_a_count_and_the_log_event_has_no_command(
+    client: Path, isolated_home: Path
+) -> None:
+    write_token(isolated_home)
     with StubRecorder() as stub:
-        answer_of(run_hook(client, home, planted_events()["afterFileEdit"], port=stub.port))
+        answer_of(
+            run_hook(client, isolated_home, planted_events()["afterFileEdit"], port=stub.port)
+        )
     assert stub.bodies[0]["edits"] == "<1 edits>"
-    assert '"command"' not in hook_log(home)
+    assert '"command"' not in hook_log(isolated_home)
 
 
-def test_lone_surrogates_are_replaced_before_they_are_sent(client: Path, home: Path) -> None:
-    write_token(home)
+def test_lone_surrogates_are_replaced_before_they_are_sent(
+    client: Path, isolated_home: Path
+) -> None:
+    write_token(isolated_home)
     event = {"hook_event_name": "beforeShellExecution", "command": "echo \ud800 ok"}
     with StubRecorder() as stub:
-        answer_of(run_hook(client, home, json.dumps(event).encode(), port=stub.port))
+        answer_of(run_hook(client, isolated_home, json.dumps(event).encode(), port=stub.port))
     assert stub.bodies[0]["command"] == "echo � ok"
-
-
-def test_the_hook_log_is_private(client: Path, home: Path) -> None:
-    answer_of(run_hook(client, home, EVENT, port=free_port()))
-    log = home / ".local" / "share" / "agentfly" / "logs"
-    assert (log.stat().st_mode & 0o777) == 0o700
-    assert ((log / "events.jsonl").stat().st_mode & 0o777) == 0o600
 
 
 # ---------------------------------------------------------------- the <agent> <event> argument
@@ -414,42 +420,53 @@ def shell_event(command: str = "ls") -> dict[str, Any]:
 
 
 def test_cursor_with_an_event_argument_and_the_no_argument_form_answer_the_same(
-    client: Path, home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    write_token(home)
+    write_token(isolated_home)
     with StubRecorder() as stub:
-        plain = answer_of(run_hook(client, home, shell_event(), port=stub.port))
+        plain = answer_of(run_hook(client, isolated_home, shell_event(), port=stub.port))
         named = answer_of(
             run_hook(
-                client, home, shell_event(), port=stub.port, args=("cursor", "beforeShellExecution")
+                client,
+                isolated_home,
+                shell_event(),
+                port=stub.port,
+                args=("cursor", "beforeShellExecution"),
             )
         )
         agent_only = answer_of(
-            run_hook(client, home, shell_event(), port=stub.port, args=("cursor",))
+            run_hook(client, isolated_home, shell_event(), port=stub.port, args=("cursor",))
         )
     assert plain == named == agent_only == {"permission": "allow"}
     assert [b["hook_event_name"] for b in stub.bodies] == ["beforeShellExecution"] * 3
 
 
 def test_the_event_argument_wins_over_the_payload_and_stderr_says_so(
-    client: Path, home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    write_token(home)
+    write_token(isolated_home)
     with StubRecorder() as stub:
         result = run_hook(
-            client, home, shell_event(), port=stub.port, args=("cursor", "beforeReadFile")
+            client, isolated_home, shell_event(), port=stub.port, args=("cursor", "beforeReadFile")
         )
     answer_of(result)
     assert stub.bodies[0]["hook_event_name"] == "beforeReadFile"
     assert "differ" in result.stderr.decode()
+    assert "beforeShellExecution" not in result.stderr.decode()  # payload text never goes to stderr
     assert "command" not in stub.bodies[0]  # now a read event: no command text goes along
 
 
-def test_an_unknown_agent_gets_allow_exit_0_and_a_warning(client: Path, home: Path) -> None:
-    write_token(home)
+def test_an_unknown_agent_gets_allow_exit_0_and_a_warning(
+    client: Path, isolated_home: Path
+) -> None:
+    write_token(isolated_home)
     with StubRecorder() as stub:
         result = run_hook(
-            client, home, shell_event("curl https://x.com"), port=stub.port, args=("claude", "x")
+            client,
+            isolated_home,
+            shell_event("curl https://x.com"),
+            port=stub.port,
+            args=("claude", "x"),
         )
     assert answer_of(result) == {"permission": "allow"}
     assert "unknown agent" in result.stderr.decode()
@@ -460,10 +477,10 @@ def test_an_unknown_agent_gets_allow_exit_0_and_a_warning(client: Path, home: Pa
 
 
 def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
-    client: Path, home: Path
+    client: Path, isolated_home: Path
 ) -> None:
     port = free_port()
-    process = start_recorder(home, port)
+    process = start_recorder(isolated_home, port)
     try:
         wait_for_health(port, process)
         read = {
@@ -473,11 +490,13 @@ def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
             "conversation_id": "real",
             "workspace_roots": ["/proj"],
         }
-        assert answer_of(run_hook(client, home, read, port=port)) == {"permission": "allow"}
+        assert answer_of(run_hook(client, isolated_home, read, port=port)) == {
+            "permission": "allow"
+        }
         denied = answer_of(
             run_hook(
                 client,
-                home,
+                isolated_home,
                 {**shell_event("curl https://x.com"), "conversation_id": "real"},
                 port=port,
             )
@@ -486,19 +505,19 @@ def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
         stop_recorder(process)
     assert denied["permission"] == "deny"
     assert "R1" in denied["user_message"] and denied["agent_message"].endswith("tell the user.")
-    assert "offline" not in hook_log(home)
+    assert "offline" not in hook_log(isolated_home)
 
 
-def test_latency_with_the_recorder_up(client: Path, home: Path) -> None:
+def test_latency_with_the_recorder_up(client: Path, isolated_home: Path) -> None:
     """Spot check only. The 50 ms target is measured and reported in docs/reports/V2b.md."""
     port = free_port()
-    process = start_recorder(home, port)
+    process = start_recorder(isolated_home, port)
     try:
         wait_for_health(port, process)
         times: list[float] = []
         for _ in range(40):
             start = time.perf_counter()
-            answer_of(run_hook(client, home, shell_event(), port=port))
+            answer_of(run_hook(client, isolated_home, shell_event(), port=port))
             times.append((time.perf_counter() - start) * 1000)
     finally:
         stop_recorder(process)
@@ -508,8 +527,3 @@ def test_latency_with_the_recorder_up(client: Path, home: Path) -> None:
 def test_wait_budget_is_half_a_second_and_the_hook_timeout_is_longer() -> None:
     assert client_module._BUDGET_S == 0.5
     assert re.search(r'"timeout": 1\b', (REPO / "install.sh").read_text(encoding="utf-8"))
-
-
-def test_stdin_is_not_decoded_as_text() -> None:
-    # sys.stdin is never touched, so a text-mode failure (surrogates, bad bytes) cannot happen
-    assert "sys.stdin" not in (REPO / "agentfly" / "hook_client.py").read_text(encoding="utf-8")

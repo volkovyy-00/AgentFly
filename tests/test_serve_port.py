@@ -10,6 +10,7 @@ import pytest
 
 from agentfly.cli import serve
 from tests.helpers import (
+    RECORDER_CODE,
     REPO,
     client_env,
     free_port,
@@ -52,9 +53,8 @@ def test_the_port_option_wins_over_agentfly_port(isolated_home: Path) -> None:
 
 
 def test_a_bad_agentfly_port_stops_serve_with_a_message(isolated_home: Path) -> None:
-    code = "import sys; from agentfly.cli import main; sys.exit(main(['serve']))"
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", RECORDER_CODE, "serve"],
         cwd=REPO,
         env={**client_env(isolated_home), "AGENTFLY_PORT": "nope"},
         capture_output=True,

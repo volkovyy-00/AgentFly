@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import shutil
 import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 NEO4J_ENV = "NEO4J_URI=neo4j+s://x.databases.neo4j.io\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw\n"
 
@@ -35,14 +43,6 @@ def package_files(package: Path) -> list[Path]:
 
 # ---------------------------------------------------------------- hook client harness
 
-import http.server  # noqa: E402
-import shutil  # noqa: E402
-import subprocess  # noqa: E402
-import sys  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-import urllib.request  # noqa: E402
-from typing import Any  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 HARNESS = REPO / "tests" / "client_harness.py"
@@ -104,8 +104,12 @@ def write_token(home: Path, token: str = "test-token") -> None:
     path.write_text(token, encoding="utf-8")
 
 
+def hook_log_path(home: Path) -> Path:
+    return home / ".local" / "share" / "agentfly" / "logs" / "events.jsonl"
+
+
 def hook_log(home: Path) -> str:
-    path = home / ".local" / "share" / "agentfly" / "logs" / "events.jsonl"
+    path = hook_log_path(home)
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
@@ -169,25 +173,22 @@ class StubRecorder:
         return [json.loads(r["body"]) for r in self.requests]
 
 
+# What `agentfly serve ...` runs as; tests start the recorder from the repo, not from an install.
+RECORDER_CODE = "import sys; from agentfly.cli import main; sys.exit(main(sys.argv[1:]))"
+
+
 def start_recorder(
     home: Path, port: int, env_extra: dict[str, str] | None = None
 ) -> subprocess.Popen[bytes]:
     """The real recorder (`agentfly serve`) under a temporary HOME."""
     env = {**client_env(home), **(env_extra or {})}
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import sys; from agentfly.cli import main; sys.exit(main(sys.argv[1:]))",
-            "serve",
-            *(["--port", str(port)] if port else []),
-        ],
+    return subprocess.Popen(
+        [sys.executable, "-c", RECORDER_CODE, "serve", *(["--port", str(port)] if port else [])],
         cwd=REPO,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return process
 
 
 def wait_for_health(port: int, process: subprocess.Popen[bytes]) -> dict[str, Any]:

@@ -12,7 +12,10 @@ import json
 import os
 import sys
 import time
-from typing import Any
+
+TYPE_CHECKING = False  # `import typing` alone costs ~5 ms per call
+if TYPE_CHECKING:
+    from typing import Any
 
 try:  # the C module alone is enough here, and importing `socket` costs ~12 ms at start-up
     import _socket as _net
@@ -25,11 +28,17 @@ _HOST: str = "127.0.0.1"
 _PORT: int = 8787
 _BUDGET_S: float = 0.5  # total wait for the recorder, connect and answer together
 _MAX_STDIN: int = 64 * 1024 * 1024
-_MAX_GUARD_TEXT: int = 4 * 1024 * 1024
+_MAX_GUARD_TEXT: int = 1024 * 1024
 _MAX_ANSWER: int = 1024 * 1024
 _MAX_DEPTH: int = 24  # nested containers deeper than this are cut before they reach the body
 
-_STRIP_KEYS: frozenset[str] = frozenset({"content", "output", "edits"})
+_STRIP_KEYS: frozenset[str] = frozenset(
+    {"content", "output", "edits", "tool_output", "tool_response", "prompt", "text"}
+)
+# Events whose `command` is not a shell command line (an MCP server launch) or which carry none.
+_NOT_SHELL: frozenset[str] = frozenset(
+    {"beforeReadFile", "afterFileEdit", "beforeMCPExecution", "preToolUse", "afterShellExecution"}
+)
 _MCP_KEEP: tuple[str, ...] = (
     "hook_event_name",
     "conversation_id",
@@ -50,7 +59,7 @@ _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell 
 # outbound, plus R0's guard paths. tests/test_offline_guard.py runs both over the same cases.
 _ALWAYS_OUTBOUND: frozenset[str] = frozenset({"gh", "aws"})
 _HOSTED_OUTBOUND: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
-_INTERPRETERS: frozenset[str] = frozenset({"python", "python3", "node"})
+_INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
 _GUARD_PATHS: tuple[str, ...] = (
     ".config/agentfly",
     ".local/share/agentfly",
@@ -150,22 +159,16 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
 # ---------------------------------------------------------------- offline guard
 
 
-def _clean(token: str) -> str:
-    return token.strip("\"'`,{}[]()")
+# Shell operators, quotes and the punctuation of (possibly broken) JSON all separate words, so a
+# quoted `bash -c 'curl x'` and a truncated `{"command": "curl x"` are scanned the same way.
+_SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'{},\\", " "))
 
 
-def words(text: str, *, quick: bool = False) -> list[str]:
-    """Shell-ish words. `quick` (unreadable input) skips shlex, so large garbage stays fast."""
-    separators: str = ";|&()`$\n\r\t" + ("\"'{}[],\\" if quick else "")  # quick: broken JSON text
-    spaced: str = text.translate(str.maketrans(dict.fromkeys(separators, " ")))
-    if not quick:
-        import shlex
-
-        try:
-            return [_clean(w) for w in shlex.split(spaced)]
-        except ValueError:
-            pass
-    return [w for w in (_clean(t) for t in spaced.split()) if w]
+def words(text: str) -> list[str]:
+    """Words of a shell command or of raw hook text. Never raises, and is fast on big input."""
+    for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
+        text = text.replace(escape, " ")
+    return text.translate(_SEPARATORS).split()
 
 
 def _is_local_host(host: str) -> bool:
@@ -183,11 +186,13 @@ def _is_local_host(host: str) -> bool:
 def _host_of_token(token: str) -> str | None:
     from urllib.parse import urlparse
 
-    if "://" in token:
+    if "://" in token:  # also `--url=https://host` and `-d@https://host`
         try:
-            return urlparse(token).hostname
+            return urlparse("//" + token.split("://", 1)[1]).hostname
         except ValueError:
             return None
+    if token.startswith("-") and "=" in token:  # `--url=host`
+        return _host_of_token(token.split("=", 1)[1])
     if ":" in token and not token.startswith("-"):
         left: str = token.split(":", 1)[0]
         if "@" in left:
@@ -205,11 +210,12 @@ def _host_of_token(token: str) -> str | None:
 
 
 def _outbound_words(argv: list[str], text: str) -> bool:
+    """`text` is the case-folded command, for the `http` test."""
     lower: list[str] = [a.lower() for a in argv]
     names: list[str] = [a.split("/")[-1].lower() for a in argv]
     if any(n in _ALWAYS_OUTBOUND for n in names) or ("git" in names and "push" in lower):
         return True
-    if any(n in _INTERPRETERS for n in names) and "http" in text.lower():
+    if any(n.startswith(_INTERPRETERS) for n in names) and "http" in text:
         return True
     if any(n in _HOSTED_OUTBOUND for n in names):
         hosts = [h for h in (_host_of_token(a) for a in argv) if h]
@@ -217,18 +223,15 @@ def _outbound_words(argv: list[str], text: str) -> bool:
     return False
 
 
-def guard_reason(text: str, *, quick: bool = False, depth: int = 0) -> str | None:
+def guard_reason(text: str) -> str | None:
     """'guard_path', 'outbound' or None. Wrapped commands are found by scanning every word."""
-    if any(path in text.casefold() for path in _GUARD_PATHS):
+    folded: str = text.casefold()
+    plain: str = folded.replace("\\", "")  # `Application\ Support`
+    while "//" in plain:
+        plain = plain.replace("//", "/")
+    if any(path in plain for path in _GUARD_PATHS):
         return "guard_path"
-    argv: list[str] = words(text, quick=quick)
-    if _outbound_words(argv, text):
-        return "outbound"
-    if depth < 5 and not quick:  # `bash -c '...'`, `eval "..."`: one word that is a command
-        for word in argv:
-            if " " in word and (inner := guard_reason(word, depth=depth + 1)) is not None:
-                return inner
-    return None
+    return "outbound" if _outbound_words(words(text), folded) else None
 
 
 def deny_answer(reason: str) -> dict[str, str]:
@@ -246,8 +249,8 @@ def deny_answer(reason: str) -> dict[str, str]:
     }
 
 
-def offline_answer(text: str, *, quick: bool = False) -> tuple[dict[str, str], str | None]:
-    reason: str | None = guard_reason(text, quick=quick)
+def offline_answer(text: str) -> tuple[dict[str, str], str | None]:
+    reason: str | None = guard_reason(text)
     if reason is None:
         return {"permission": "allow"}, None
     return deny_answer(reason), reason
@@ -292,34 +295,34 @@ def post_hook(body: bytes, token: str, deadline: float) -> dict[str, Any]:
     if b"transfer-encoding" in header.lower():
         raise ValueError("unsupported recorder answer")
     parsed: Any = json.loads(answer)
-    if not isinstance(parsed, dict) or parsed.get("permission", "allow") not in {
-        "allow",
-        "deny",
-        "ask",
-    }:
+    permission: Any = parsed.get("permission", "allow") if isinstance(parsed, dict) else None
+    if permission not in {"allow", "deny", "ask"}:
         raise ValueError("recorder answer is not a permission object")
-    out: dict[str, str] = {"permission": str(parsed.get("permission", "allow"))}
+    out: dict[str, str] = {"permission": permission}
     for key in ("user_message", "agent_message"):
         if key in parsed:
             out[key] = str(parsed[key])
     return out
 
 
-def append_log(record: dict[str, Any]) -> None:
-    """One line per call in the hook log (folder 700, file 600). Never raises."""
+def _append(path: str | None, data: bytes) -> None:
+    """Append to a private file (folder 700, file 600, never through a symlink). May raise."""
+    if path is None:
+        return
+    folder: str = os.path.dirname(path)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    os.chmod(folder, 0o700)
+    fd: int = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
-        path: str | None = log_path()
-        if path is None:
-            return
-        folder: str = os.path.dirname(path)
-        os.makedirs(folder, mode=0o700, exist_ok=True)
-        os.chmod(folder, 0o700)
-        line: bytes = (json.dumps(record, ensure_ascii=True) + "\n").encode("ascii")
-        fd: int = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            os.write(fd, line)
-        finally:
-            os.close(fd)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def append_log(record: dict[str, Any]) -> None:
+    """One line per call in the hook log. Never raises."""
+    try:
+        _append(log_path(), (json.dumps(record, ensure_ascii=True) + "\n").encode("ascii"))
     except Exception as exc:  # noqa: BLE001
         say(f"could not write the hook log ({type(exc).__name__})")
 
@@ -327,15 +330,7 @@ def append_log(record: dict[str, Any]) -> None:
 def count_offline_answer() -> None:
     """One byte per guard answer made while the recorder was down; `/health` reports the size."""
     try:
-        path: str | None = count_path()
-        if path is None:
-            return
-        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        fd: int = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            os.write(fd, b"\n")
-        finally:
-            os.close(fd)
+        _append(count_path(), b"\n")
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -386,9 +381,16 @@ def now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
+    """The offline guard on input that could not be read as a hook payload."""
+    if len(raw) > _MAX_GUARD_TEXT:  # a tool name may sit at either end of a cut-off payload
+        half: int = _MAX_GUARD_TEXT // 2
+        raw = raw[:half] + b" " + raw[-half:]
+    return offline_answer(raw.decode("utf-8", "replace"))
+
+
 def unreadable(raw: bytes) -> dict[str, str]:
-    text: str = raw[:_MAX_GUARD_TEXT].decode("utf-8", "replace")
-    answer, guard = offline_answer(text, quick=True)
+    answer, guard = guard_raw(raw)
     say("unreadable hook input; offline guard applied")
     append_log(
         {
@@ -409,6 +411,7 @@ def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str,
     strip_tree(logged, frozenset({"command"}))
     record: dict[str, Any] = {"ts": now(), "event": logged}
     command: Any = payload.get("command")
+    shell: bool = event not in _NOT_SHELL and command is not None
     try:
         path: str | None = token_path()
         if path is None:
@@ -421,7 +424,9 @@ def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str,
         return answer
     except Exception as exc:  # noqa: BLE001 - any failure means "recorder did not answer"
         say(f"recorder unreachable ({type(exc).__name__}); offline guard applied")
-        text: str = command if event == "beforeShellExecution" and isinstance(command, str) else ""
+        text: str = ""
+        if shell:  # a missing or odd event name, or a command that is not a string, still counts
+            text = command if isinstance(command, str) else json.dumps(command, default=str)
         answer, guard = offline_answer(text)
         count_offline_answer()
         record.update(
@@ -431,12 +436,10 @@ def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str,
         return answer
 
 
-def run(args: list[str], start: float, ctx: dict[str, bytes]) -> dict[str, str]:
+def run(args: list[str], raw: bytes, start: float) -> dict[str, str]:
     if args and args[0] != "cursor":
-        say(f"unknown agent {_clean(args[0])[:40]!r}; allowing")
+        say(f"unknown agent {args[0][:40]!r}; allowing")
         return {"permission": "allow"}
-    raw: bytes = read_stdin()
-    ctx["raw"] = raw
     payload: dict[str, Any] | None = parse_payload(raw)
     if payload is None:
         return unreadable(raw)
@@ -444,7 +447,7 @@ def run(args: list[str], start: float, ctx: dict[str, bytes]) -> dict[str, str]:
     given: str = args[1] if len(args) > 1 else ""
     if given and given != event:
         if event:
-            say(f"event argument {given!r} and payload event {event!r} differ; using the argument")
+            say("event argument and payload event differ; using the argument")
         event = given
         payload["hook_event_name"] = given
     return ask_recorder(payload, event, start)
@@ -453,15 +456,14 @@ def run(args: list[str], start: float, ctx: dict[str, bytes]) -> dict[str, str]:
 def main(argv: list[str] | None = None) -> int:
     start: float = time.monotonic()
     args: list[str] = list(sys.argv[1:] if argv is None else argv)
-    ctx: dict[str, bytes] = {}
+    raw: bytes = b""
     try:
-        answer: dict[str, str] = run(args, start, ctx)
+        raw = read_stdin()
+        answer: dict[str, str] = run(args, raw, start)
     except BaseException as exc:  # noqa: BLE001 - nothing may escape: no deny is ever lost
         say(f"internal error ({type(exc).__name__}); offline guard applied")
         try:
-            answer, _ = offline_answer(
-                ctx.get("raw", b"")[:_MAX_GUARD_TEXT].decode("utf-8", "replace"), quick=True
-            )
+            answer, _ = guard_raw(raw)
         except BaseException:  # noqa: BLE001
             answer = {"permission": "allow"}
     emit(answer)

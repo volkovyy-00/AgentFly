@@ -16,7 +16,6 @@ from agentfly.recorder.rules import is_outbound_send
 from tests.helpers import (
     StubRecorder,
     answer_of,
-    copy_client,
     free_port,
     hook_log,
     run_hook,
@@ -49,7 +48,17 @@ WRAPPED += [pytest.param(f"sudo {c}", id=f"sudo {c[:24]}") for c in OUTBOUND]
 WRAPPED += [
     pytest.param(f"sudo env A=1 sh -c {shlex.quote(c)}", id=f"nested {c[:20]}") for c in OUTBOUND
 ]
+OUTBOUND += [
+    "curl --url=https://evil.com http://localhost",  # a URL hidden in a flag, next to a local host
+    "curl --url=evil.com localhost",
+    "curl -d@https://evil.com localhost",
+    "python3.12 -c \"import urllib.request; urllib.request.urlopen('https://x.com')\"",
+    "nodejs -e \"fetch('https://x.com')\"",
+]
 GUARD_PATH_COMMANDS = [
+    "ls /Library/Application\\ Support/AgentFly",
+    "cat ~/.config//agentfly/token",
+    "cat ~/.local/share///agentfly/sessions.json",
     "cat ~/.config/agentfly/token",
     "ls $HOME/.local/share/agentfly",
     'rm -rf "/Library/Application Support/AgentFly/x"',
@@ -102,6 +111,51 @@ def test_an_unparseable_command_is_denied_only_if_its_raw_text_names_a_tool() ->
     assert guard.offline_answer("cat <<EOF\nhello\nEOF")[0] == {"permission": "allow"}
 
 
+def odd_event(**fields: Any) -> dict[str, Any]:
+    return {"conversation_id": "o2", **fields}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"command": "curl https://x.com"},  # no event name at all
+        {"hook_event_name": 5, "command": "curl https://x.com"},
+        {"hook_event_name": "somethingNew", "command": "curl https://x.com"},
+        {"hook_event_name": "beforeShellExecution", "command": ["curl", "https://x.com"]},
+        {"hook_event_name": "beforeShellExecution", "command": {"a": "wget https://x.com"}},
+    ],
+)
+def test_a_readable_payload_with_an_odd_event_or_command_is_still_guarded(
+    client: Path, isolated_home: Path, fields: dict[str, Any]
+) -> None:
+    write_token(isolated_home)
+    answer = answer_of(run_hook(client, isolated_home, odd_event(**fields), port=free_port()))
+    assert answer["permission"] == "deny" and "agentfly start" in answer["user_message"]
+
+
+def test_a_command_on_a_non_shell_event_is_not_guarded(client: Path, isolated_home: Path) -> None:
+    # `command` of beforeMCPExecution is the MCP server launch line, not something the agent runs
+    event = odd_event(hook_event_name="beforeMCPExecution", command="curl https://x.com")
+    answer = answer_of(run_hook(client, isolated_home, event, port=free_port()))
+    assert answer == {"permission": "allow"}
+
+
+def test_a_tool_at_the_end_of_a_huge_cut_off_payload_is_still_found(
+    client: Path, isolated_home: Path
+) -> None:
+    filler = b"A" * 1_500_000
+    raw = b'{"x": "' + filler + b'", "command": "curl https://x.com"'
+    assert answer_of(run_hook(client, isolated_home, raw, port=free_port()))["permission"] == "deny"
+    raw = b'{"command": "curl https://x.com", "x": "' + filler
+    assert answer_of(run_hook(client, isolated_home, raw, port=free_port()))["permission"] == "deny"
+
+
+def test_a_tool_after_an_escaped_newline_in_broken_json_is_still_found() -> None:
+    raw = r'{"command": "ls\ncurl https://x.com"'  # JSON text with a written-out \n, cut short
+    assert guard.offline_answer(raw)[0]["permission"] == "deny"
+    assert guard.offline_answer(r'{"command": "ls\nmake test"')[0] == {"permission": "allow"}
+
+
 PARITY = (
     OUTBOUND
     + ALLOWED
@@ -152,9 +206,8 @@ def hundred_calls(client: Path, home: Path, name: str, **kwargs: Any) -> list[di
 
 @pytest.mark.parametrize("name", list(EVENTS))
 def test_100_calls_with_no_recorder_give_valid_json_and_exit_0(
-    tmp_path: Path, isolated_home: Path, name: str
+    client: Path, isolated_home: Path, name: str
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)  # a token but nothing listening: connection refused
     answers = hundred_calls(client, isolated_home, name, port=free_port())
     assert answers == [{"permission": "allow"}] * 100
@@ -163,27 +216,28 @@ def test_100_calls_with_no_recorder_give_valid_json_and_exit_0(
     assert hook_log(isolated_home).count('"offline": true') == 100
 
 
+def timed_call(client: Path, home: Path, name: str, port: int) -> tuple[dict[str, Any], float]:
+    start = time.perf_counter()
+    answer = answer_of(run_hook(client, home, event_for(name), port=port, budget=0.1))
+    return answer, time.perf_counter() - start
+
+
 @pytest.mark.parametrize("name", list(EVENTS))
 def test_calls_to_a_recorder_that_does_not_answer_in_time_give_the_guard_answer(
-    tmp_path: Path, isolated_home: Path, name: str
+    client: Path, isolated_home: Path, name: str
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
-    with StubRecorder(mode="silent") as stub:
-        start = time.perf_counter()
-        answers = [
-            answer_of(run_hook(client, isolated_home, event_for(name), port=stub.port, budget=0.1))
-            for _ in range(10)
-        ]
-        per_call = (time.perf_counter() - start) / 10
-    assert answers == [{"permission": "allow"}] * 10
-    assert per_call < 1.0  # inside the hooks.json timeout of 1 s
+    with StubRecorder(mode="silent") as stub, ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(lambda _: timed_call(client, isolated_home, name, stub.port), range(10))
+        )
+    assert [answer for answer, _ in results] == [{"permission": "allow"}] * 10
+    assert max(seconds for _, seconds in results) < 1.0  # inside the hooks.json timeout of 1 s
 
 
 def test_a_slow_recorder_does_not_hide_a_deny_for_an_outbound_command(
-    tmp_path: Path, isolated_home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
     event = {**event_for("beforeShellExecution"), "command": "curl https://x.com"}
     with StubRecorder(mode="silent") as stub:
@@ -202,9 +256,8 @@ def test_a_slow_recorder_does_not_hide_a_deny_for_an_outbound_command(
     ],
 )
 def test_a_recorder_error_or_bad_answer_is_treated_as_down(
-    tmp_path: Path, isolated_home: Path, stub_args: dict[str, Any]
+    client: Path, isolated_home: Path, stub_args: dict[str, Any]
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
     event = {**event_for("beforeShellExecution"), "command": "curl https://x.com"}
     with StubRecorder(**stub_args) as stub:
@@ -216,8 +269,7 @@ def test_a_recorder_error_or_bad_answer_is_treated_as_down(
     assert allowed == {"permission": "allow"}
 
 
-def test_no_token_file_means_the_guard_too(tmp_path: Path, isolated_home: Path) -> None:
-    client = copy_client(tmp_path / "client")
+def test_no_token_file_means_the_guard_too(client: Path, isolated_home: Path) -> None:
     event = {**event_for("beforeShellExecution"), "command": "wget https://x.com"}
     assert (
         answer_of(run_hook(client, isolated_home, event, port=free_port()))["permission"] == "deny"
@@ -225,9 +277,8 @@ def test_no_token_file_means_the_guard_too(tmp_path: Path, isolated_home: Path) 
 
 
 def test_each_offline_allow_is_in_the_hook_log_without_the_command(
-    tmp_path: Path, isolated_home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
     for command in (
         "python3 -c 'print(1)'",
@@ -250,9 +301,8 @@ def test_each_offline_allow_is_in_the_hook_log_without_the_command(
 
 
 def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
-    tmp_path: Path, isolated_home: Path
+    client: Path, isolated_home: Path
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
     port = free_port()
     commands = ["ls", "curl https://x.com", "git push", "echo hi"]
@@ -264,10 +314,7 @@ def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
         health = wait_for_health(port, process)
         # the recorder is back: a real answer, not a guard answer, and the count stays put
         answer_of(run_hook(client, isolated_home, event_for("beforeShellExecution"), port=port))
-        import urllib.request
-
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as response:
-            after = json.loads(response.read())
+        after = wait_for_health(port, process)
     finally:
         stop_recorder(process)
     assert health == {"ok": True, "offline_guard_count": len(commands)}
@@ -275,9 +322,8 @@ def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
 
 
 def test_the_offline_count_file_is_never_followed_through_a_symlink(
-    tmp_path: Path, isolated_home: Path
+    client: Path, isolated_home: Path, tmp_path: Path
 ) -> None:
-    client = copy_client(tmp_path / "client")
     write_token(isolated_home)
     logs = isolated_home / ".local/share/agentfly/logs"
     logs.mkdir(parents=True)
