@@ -1,6 +1,6 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5, V1a and V2 are done; V8 is in flight, V2b next (2026-10-16).
+Status: **spikes S1–S5, V1a and V2 are done; V8 is done; V2b is in flight (2026-10-16).
 D16 and D21–D24 are open.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
@@ -68,7 +68,7 @@ v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
                              ├──► V4  formula + release           ├─────┼──► V7  rule change flow
                              └──► V6  local store ────────────────┘     │
                                         V2b ──► V2c  step merge + read-dedup proposal (∥ V3, V5)
-              UI:       V8  trail + Why + health  (starts now, merges after V2)
+              UI:       V8 ✅ trail + Why + health
                              ├──► V8b recorder fields for V8 (backend, after V2b)
                              └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
 ```
@@ -86,6 +86,7 @@ V7 and V9 can run in parallel.
 - S5 ✅ 2026-10-16 · docs/spikes/S5-brief.md · pass (smoke test; D16 open); findings for D9, S3 subagents, V3, V1b · body: git show f0d68e3:docs/BOARD.md
 - V1a ✅ 2026-10-16 · docs/reports/V1a.md · merged b7f7192 · changed D5 D9 D10 D14 (review answers) · body: git show b7f7192:docs/BOARD.md
 - V2 ✅ 2026-10-16 · docs/reports/V2.md · merged 3da6dc7 · accepted edits outside Touches (setup_credentials.sh, .env.example, AGENTS.md paths); `ls -la` → `ls -l<arg>` per SPEC § 4 · body: git show ba74ffe:docs/BOARD.md
+- V8 ✅ 2026-10-16 · docs/reports/V8.md · merged 92e7fdc (part 1) and 4af8125 (home switch: trail at /, lane graph at /?view=graph) · GIF dropped by the owner; real Cursor chat check passed · body: git show f786847:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -205,6 +206,9 @@ V7 and V9 can run in parallel.
     - touching AgentFly's config and system folders, any `hooks.json` (user,
       system or project) and the token;
     - `kill`, `pkill` and `launchctl` aimed at the recorder;
+    - `agentfly serve`, `agentfly stop`, `agentfly uninstall` and `brew services`
+      for AgentFly (owner, 2026-10-16: a second `serve` rotated the token and
+      switched protection off);
     - commands naming the recorder's port;
     - a Write or Edit whose target path (from V2) is a guard path.
 
@@ -272,14 +276,6 @@ V7 and V9 can run in parallel.
     pasted).
   - `tests/test_api_surface.py` is unchanged by this card.
   - Plain-language drafting is not included unless D13 is approved.
-
-### V8 · UI: trail home, Why card, health strip
-- **Owner:** worker-ui · **Brief (authoritative):** `docs/briefs/V8.md`
-- **Lane:** UI, ∥ V2 and S5; merges after V2.
-- **Depends on:** S4 ✅, V1a ✅; V2 for the merge
-- 2026-10-16 (owner): V8 stays UI-only. Fields the recorder does not send yet
-  (rule text, the two messages, last hook time, offline-guard count) come from
-  V8b; the page shows them when present. Old card text: `git show f8145f9:docs/BOARD.md`.
 
 ### V8b · Recorder fields for the Why card and health strip
 - **Owner:** worker-backend · brief to write
