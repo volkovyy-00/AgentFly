@@ -19,11 +19,11 @@ function GraphApp() {
 
   return (
     <div className={`flex h-dvh w-full flex-col ${TONES.app.classes}`}>
-      <header className={`flex items-center gap-3 px-4 py-2 ${TONES.header.classes}`}>
+      <header className={`flex items-center gap-3 px-4 py-2 ${TONES.app.classes}`}>
         <h1 className="m-0 text-base font-semibold">AgentFly</h1>
         <ViewTabs view="graph" />
       </header>
-      <main className={`relative min-h-0 w-full flex-1 overflow-hidden text-base ${TONES.app.classes}`}>
+      <main className="relative min-h-0 w-full flex-1 overflow-hidden text-base">
         <GraphView steps={steps} epoch={epoch} group={group} markedOrder={markedOrder} />
         {steps.length === 0 && (
           <p className={`pointer-events-none absolute inset-0 grid place-items-center text-base ${TONES.empty.classes}`}>

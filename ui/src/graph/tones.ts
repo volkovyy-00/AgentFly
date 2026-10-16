@@ -31,9 +31,7 @@ export const TONES = {
   chipSecret: tone('fill-secret', 'canvas', null, 'bg-fill-secret text-canvas'),
   banner: tone('fill-blocked', 'ink', null, 'bg-fill-blocked text-ink'),
   button: tone('surface', 'ink', 'ink', 'bg-surface text-ink border-ink'),
-  // The view tabs (ViewTabs.tsx): a bar, an idle tab and the current one.
-  header: tone('canvas', 'ink', null, 'bg-canvas text-ink'),
-  tab: tone('canvas', 'muted', null, 'bg-canvas text-muted'),
+  // The current view tab (ViewTabs.tsx); an idle tab uses `empty`, the graph's header uses `app`.
   tabCurrent: tone('raised', 'ink', null, 'bg-raised text-ink'),
 } as const satisfies Record<string, Tone>
 

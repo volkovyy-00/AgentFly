@@ -1,6 +1,7 @@
+import { memo } from 'react'
 import { DECOR, TONES } from './graph/tones'
 
-export type View = 'trail' | 'graph'
+type View = 'trail' | 'graph'
 
 /** The trail is home: only `?view=graph` selects the lane graph, anything else (including `?view=trail`) is the trail. */
 export function viewOf(search: string): View {
@@ -22,7 +23,7 @@ const TABS: readonly { view: View; label: string }[] = [
 ]
 
 /** The page's view switch, shown in the trail's header and above the lane graph. History and Rules come with V9. */
-export function ViewTabs({ view }: { view: View }) {
+export const ViewTabs = memo(function ViewTabs({ view }: { view: View }) {
   const search = window.location.search
   return (
     <nav aria-label="Views" className="flex gap-0.5">
@@ -32,7 +33,7 @@ export function ViewTabs({ view }: { view: View }) {
           href={viewHref(tab.view, search)}
           aria-current={tab.view === view ? 'page' : undefined}
           className={`whitespace-nowrap rounded-md px-2.5 py-1 text-base outline-offset-2 focus-visible:outline-2 ${DECOR.focusRing.classes} ${
-            tab.view === view ? TONES.tabCurrent.classes : TONES.tab.classes
+            tab.view === view ? TONES.tabCurrent.classes : TONES.empty.classes
           }`}
         >
           {tab.label}
@@ -40,4 +41,4 @@ export function ViewTabs({ view }: { view: View }) {
       ))}
     </nav>
   )
-}
+})
