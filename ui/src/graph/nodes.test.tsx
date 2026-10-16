@@ -57,6 +57,18 @@ describe('lane boxes', () => {
   })
 })
 
+describe('highlighted steps', () => {
+  it('draw as a plain step with a HIGHLIGHT chip, not as an alarm', async () => {
+    const { container } = render(
+      <GraphView steps={place([makeStep(1, { verdict: 'highlighted', rule: 'H1', command: 'ls' })])} epoch={0} />,
+    )
+    await settle()
+    expect(screen.getByText('HIGHLIGHT')).toBeTruthy()
+    expect(screen.queryByText('WARN')).toBeNull()
+    expect(container.querySelector('.react-flow__node-step')).not.toBeNull()
+  })
+})
+
 describe('re-anchor', () => {
   const read = (order: number) => makeStep(order, { kind: 'read', file: 'f', command: null })
   const fileBox = (container: HTMLElement) => container.querySelector('.react-flow__node-file') as HTMLElement
