@@ -1,8 +1,8 @@
 # V1a: Rewrite SPEC.md and AGENTS.md for the approved decisions
 Status: done (as of 2026-10-16 12:00)
 Result: SPEC.md is now the v1 spec (sections 0–13, §4 still "what is stored and how commands are cleaned"). AGENTS.md, G1 flow, HOOKS/README references updated. Hackathon spec archived. D13 and D16 are marked pending. No code touched.
-Evidence: branch ag-v1a-spec, commit in `git log -1 -- SPEC.md`. Check command: ruff check clean, ruff format 72 files clean, pytest 158 passed, 4 skipped. Decision table and 20 code gaps below.
-Needs owner: none. Two small inferences to confirm are listed under "Judgement calls".
+Evidence: branch ag-v1a-spec, commit 863b3e8 (report fix on top). Check command: ruff check clean, ruff format 72 files clean, pytest 158 passed, 4 skipped. Decision table and 20 code gaps below.
+Needs owner: none. Five judgement calls (e.g. a 'highlighted' verdict in §4) are listed in the report for you to confirm.
 Details: see "## 2026-10-16 12:00" below.
 
 ## 2026-10-16 12:00
