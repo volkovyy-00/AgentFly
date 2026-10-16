@@ -14,7 +14,7 @@ fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 warn() { echo "WARN: $*"; warns=$((warns + 1)); }
 
 # IDs such as D2 or V1, one per word, sorted.
-ids() { tr ',;·' '   ' | tr ' ' '\n' | grep -E '^[A-Z][0-9]+$' | sort -u | xargs; }
+ids() { tr ',;·' '   ' | tr ' ' '\n' | grep -E '^[A-Z][0-9]+[a-z]?$' | sort -u | xargs; }
 section() { awk -v h="$1" 'index($0, "## " h) == 1 {f = 1; next} /^## / {f = 0} f' "$STATE"; }
 proposed() {
   awk '/^## D[0-9]+\./ {id = $2; sub(/\.$/, "", id)}

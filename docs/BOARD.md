@@ -1,7 +1,9 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1, S2 and S4 are done; S3 and S5 may start. v1 cards (V1–V9)
-wait for your approval of `docs/DECISIONS.md`.** After approval, any card whose plan depends on a
+Status: **spikes S1, S2 and S4 are done; S3 and S5 may start. All decisions
+but D13 (after S3) and D16 (after S5) are approved (2026-10-16); v1 cards
+(V1–V9) wait for V1a.** V1 is split (owner, 2026-10-16): V1a rewrites SPEC.md and
+AGENTS.md for the approved decisions now; V1b fills in what S3 and S5 change. After approval, any card whose plan depends on a
 decision you changed is rewritten before it starts.
 
 Revision 3 (2026-10-15) applies your Rev 2 review: spikes unblocked; S1's
@@ -60,12 +62,12 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5
 
               ─────────── you approve DECISIONS.md ───────────
 
-v1            Lead:     V1
+v1            Docs:     V1a (worker, ∥ S3) ──► Lead: V1b (after S3, S5)
               Backend:  V2 ──┬──► V3  CLI install commands ──┐
                              ├──► V4  formula + release      │ (V4's last check needs V3)
                              ├──► V5  rules + R0 ──────┬─────┼──► V7  rule change flow
                              └──► V6  local store ─────┤     │
-              UI:       V8  trail + Why + health  (starts after V1, merges after V2)
+              UI:       V8  trail + Why + health  (starts after V1a, merges after V2)
                              └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
 ```
 
@@ -84,8 +86,10 @@ in parallel.
 ### S3 · G2 · Do your rules fit the fixed kinds; drafting accuracy
 - **Owner:** worker-backend (input: your 10 sentences)
 - **Lane:** backend, ∥ S1 and S2
-- **Time box:** 30 min, after your sentences arrive. Cloud-model drafting is
-  OK for S3 only (owner, 2026-10-16); D13 itself stays open.
+- **Time box:** 45 min (30 + 15 for the subagent question). Cloud-model
+  drafting is OK for S3 only (owner, 2026-10-16); D13 itself stays open.
+- **Sentences (owner, 2026-10-16):** candidates 1, 2, 3, 4, 7, 10, 13 (expected
+  to fit) and 5, 8, 14 (stretch), text in the dispatch brief.
 - **May touch:** new `docs/spikes/S3-rule-fit.md` and new
   `docs/spikes/S3-rules.toml` (paper format only, never loaded by code).
 - **Done when** `docs/spikes/S3-rule-fit.md` has:
@@ -93,14 +97,23 @@ in parallel.
   - a list of misfits, each with what's missing;
   - the model's drafts beside the hand-written versions, as an exact-match
     count out of 10 and an invented-field count;
-  - pass or fail, with the resulting choices for D10 and D13.
+  - pass or fail, with the resulting choices for D10 and D13;
+  - **subagents (added 2026-10-16):** a docs/forum report, untested, says
+    Cursor subagents fire hooks under a new `conversation_id` with no parent
+    link, so "rest of the chat" taint (sentences 3, 4, 13) can be bypassed by
+    delegating the send to a subagent. On paper, compare (a) taint per
+    workspace with a time window (as in D16-A's cross-session option) and
+    (b) denying `subagentStart` after a secret read, plus (c) a parent link if
+    one exists. For each: how sentences 3, 4 and 13 are written, what new kind
+    or field it needs, false positives, and which S5 fact would decide it.
+    Recommend one, marked "provisional until S5".
 
 ### S5 · G4 · Smoke test: does a brief reach the agent at all (n = 2)
 - **Owner:** lead (you at the keyboard)
 - **Lane:** lead, after S2 (it reuses `/tmp/af-fresh`)
-- **Time box:** 30 min.
-- **May touch:** `/tmp/af-fresh/` (Makefile, `.cursor/rules/`); new
-  `docs/spikes/S5-brief.md`.
+- **Time box:** 60 min (30 for the brief, 30 for the hook dump).
+- **May touch:** `/tmp/af-fresh/` (Makefile, `.cursor/rules/`, `.cursor/hooks.json`);
+  a throwaway dump script under `/tmp/af-spike/`; new `docs/spikes/S5-brief.md`.
 - **Done when** `docs/spikes/S5-brief.md` has:
   - the brief text;
   - for each of the four chats, the commands before the first passing run,
@@ -108,7 +121,18 @@ in parallel.
   - whether the agent mentioned the brief;
   - the `additional_context` result, if tried;
   - the S2 (d) re-run: `sudo -v` in Terminal, then within a minute
-    `sudo -n true; echo exit=$?` in an agent chat.
+    `sudo -n true; echo exit=$?` in an agent chat;
+  - **hook dump (added 2026-10-16):** a passive hook (always allows) on every
+    event in Cursor's hooks docs for the installed version (the owner counts
+    21), plus one made-up event name. It logs the event name, the input's key
+    names, and only the id fields (`conversation_id`, `generation_id`,
+    `tool_use_id`, any parent or subagent id); never values of content,
+    prompt, reply, `tool_input`, `output` or `edits`. Then one chat that
+    starts one foreground and one background subagent, each reading a file
+    and running `ls`. Report: which events fire, whether a subagent gets a new
+    `conversation_id`, any field linking it to the parent, and whether the
+    made-up event name stops the other hooks. These facts settle S3's
+    subagent recommendation and the D9 revisit.
 
   The report states that n = 2 per arm measures nothing about value. A pass only
   unlocks the pre-registered A/B (D16).
@@ -117,10 +141,38 @@ in parallel.
 
 ## v1 cards
 
-### V1 · Rewrite SPEC.md and AGENTS.md from the approved decisions
+### V1a · Rewrite SPEC.md and AGENTS.md for the decisions approved so far
+- **Owner:** worker-docs (owner, 2026-10-16); the lead verifies and merges
+- **Lane:** docs, ∥ S3
+- **Depends on:** D1–D12, D14, D15, D17–D20 approved (2026-10-16)
+- **May touch:** `SPEC.md`, `AGENTS.md`; `HOOKS.md` and `README.md` (SPEC
+  references only); `docs/product-goals.md` (G1 target flow only, per D6 and
+  D20); new `docs/archive/SPEC-hackathon.md` (`git mv` of today's SPEC); new
+  `docs/reports/V1a.md`. Not `docs/DECISIONS.md`, `BOARD.md`, `STATE.md`, and
+  no code or tests.
+- **Done when:**
+  - SPEC.md is the v1 spec, built only from approved decisions. What S3 and S5
+    can still change (rule kinds and fields, plain-language drafting, G4,
+    subagent taint, the sudo grace-period note, the event list) is marked
+    "Pending S3" or "Pending S5" with one line on what is open.
+  - Section 4 is still "what is stored and how commands are cleaned", so
+    HOOKS.md's "SPEC §4" references stay true.
+  - AGENTS.md says SPEC.md is the v1 target and the code is moving there card
+    by card: inside your card, follow SPEC and the card; outside it, leave the
+    code and note the gap in your report; if SPEC and your card disagree, stop
+    and ask. It keeps today's commands (V2 changes them), adds hatchling and the
+    bundled Python runtime (D5) to approved dependencies, rewords the rule
+    shape per D10, replaces the hook-helper "unreachable → allow" rule with the
+    D4 offline guard, and its Testing list names only tests that exist (no R0
+    line, no "helper drops content" line: V5 and V2 add them).
+  - The report has a table mapping each approved decision to its SPEC section,
+    and lists every place where today's code differs from the new SPEC.
+  - The AGENTS.md check command passes.
+
+### V1b · Fill in what S3 and S5 decided
 - **Owner:** lead
 - **Lane:** lead
-- **Depends on:** all decisions approved; S1–S5 done
+- **Depends on:** S3, S5, D13 and D16 answered
 - **May touch:** `SPEC.md`, `AGENTS.md`, `HOOKS.md`, `README.md`,
   `docs/product-goals.md` (G1 flow wording only, per D6 and D20),
   `docs/DECISIONS.md` (status lines), new `docs/archive/SPEC-hackathon.md`.
@@ -135,19 +187,31 @@ in parallel.
 ### V2 · Installable `agentfly` package, hardened hook client, API surface
 - **Owner:** worker-backend
 - **Lane:** backend, first. It moves files, so V3–V6 wait for it to merge.
-- **Depends on:** V1
-- **May touch:** `pyproject.toml`, `uv.lock`; `recorder/**` → `agentfly/recorder/**`
+  Runs ∥ S3 and S5 (owner, 2026-10-16).
+- **Depends on:** V1a
+- **May touch:** `pyproject.toml`, `uv.lock`; AGENTS.md "Commands" section and
+  README commands (only to keep them true after the move); `recorder/**` → `agentfly/recorder/**`
   (routes split into `agentfly/recorder/api/*.py`, with an explicit router list
   in `app.py`); `hooks/hook.py` → `agentfly/hook_client.py`;
   `recorder/hook_passthrough.py`; new `agentfly/cli/__init__.py` (dispatcher
   that discovers `agentfly/cli/commands/*.py`); new
   `agentfly/cli/commands/serve.py`; `fake_agent.py`; `tests/**`. Not `ui/**`,
   and not `install.sh`.
+- **Isolation (machine is shared with S5):** tests and manual runs never use
+  port 8787 or the real home folder: a temporary HOME and a free port (for
+  example 8797) for every recorder V2 starts. Never touch
+  `~/.config/flightrecorder`, `~/.cursor`, `/Library/Application Support/` or
+  `/tmp/af-*`.
 - **Done when:**
-  - **Package.** `uv build` makes a wheel that contains `ui/dist`. Installing it
+  - **Package.** Distribution name `agentfly-recorder`, build backend
+    hatchling (D6). `uv build` makes a wheel that contains `ui/dist`. Installing it
     with `uv tool install` under a temporary HOME puts `agentfly` and
     `agentfly-hook` on PATH. `agentfly serve` runs the recorder (terminal output
     pasted).
+  - **Agent argument (D18).** The client is called as
+    `agentfly-hook <agent> <event>`; only `cursor` is implemented, and a small
+    step normalizes its input. An unknown agent prints allow JSON, exits 0 and
+    warns on stderr (test).
   - **Stripping, with new tests in `tests/test_hook_client.py`.** No content
     leaves the client, to the log or to the server:
     - `content` from `beforeReadFile`;
@@ -195,7 +259,7 @@ in parallel.
   `install.sh` (becomes a short dev wrapper or is deleted); README "Install"
   section; new `tests/test_install_*.py`.
 - **Out of scope:** per-project `agentfly init` is deferred (D20).
-- **First step, on your Mac:** add one made-up event name to `hooks.json` and
+- **First step, on your Mac (skip if S5's dump settled it):** add one made-up event name to `hooks.json` and
   check whether the other hooks still fire. This reproduces, or rules out, the
   "unknown event disables the file" report, and decides whether `init` must
   gate events by Cursor version.
@@ -325,8 +389,8 @@ in parallel.
 
 ### V8 · UI: trail home, Why card, health strip
 - **Owner:** worker-ui
-- **Lane:** UI. Starts after V1 and merges after V2 (for the `/health` count).
-- **Depends on:** S4 ✅, V1; V2 for the merge
+- **Lane:** UI. Starts after V1a and merges after V2 (for the `/health` count).
+- **Depends on:** S4 ✅, V1a; V2 for the merge
 - **May touch:** `ui/src/**` except `ui/src/history/**` and `ui/src/rules/**`;
   `ui/dist` (rebuilt); ui tests. No Python. No new npm dependencies without
   your approval.
