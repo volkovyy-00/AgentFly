@@ -25,4 +25,9 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 ## Briefs and passes
 - **A brief over the 40-line budget is two cards.** Old V2 needed about 10 criteria; split into V2 and V2b (2026-10-16). Fresh verify passes then found real gaps: moving `hooks/hook.py` would have made Cursor block everything in this repo, and 8787 was hard-coded in the client.
 - **Ask before an oracle pass.** It costs 100k+ tokens per run; the owner stopped one mid-run (2026-10-16). Verify passes alone were enough to dispatch.
+- **Check what data a UI card needs against what the API sends before writing its brief.** V8's Why card and health strip needed fields `/api/steps` and `/health` lack; found by reading `types.ts`, split into V8b (2026-10-16).
 - **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.
+
+## Cursor facts
+- **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).
+- **The agent leaves Cursor's sandbox on its own.** S5 (2026-10-16): `sudo` failed in the sandbox (127); the agent re-ran it with `sandbox: false`, no prompt to the owner. Never treat the sandbox as a control (D22).

@@ -28,6 +28,10 @@ hand; "approved" always means the owner's explicit yes):
 - D18 approved 2026-10-16 · Other agents (Claude Code later)
 - D19 approved 2026-10-16 · Recorder API surface (split API)
 - D20 approved 2026-10-15 · Per-project `agentfly init`
+- D21 proposed · How the "secret was read" mark reaches a subagent
+- D22 proposed · Cursor's sandbox is not a security control
+- D23 proposed · Only events the installed Cursor accepts are registered
+- D24 proposed · `~/.claude/settings.json` is a third hook source
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -609,3 +613,60 @@ later want AgentFly to watch only some projects, C is the safe shape, and it
 needs no change to the hooks.
 **Approval item:** this drops "(or `agentfly init` for one project)" from G1's
 target flow in `docs/product-goals.md`. V1 makes the edit once you approve.
+
+---
+
+## D21. How the "secret was read" mark reaches a subagent
+Status: **proposed (2026-10-16)**, owner's leaning A · Cards: V2b (client keeps `parent_tool_call_id`), V5 (engine), V1b (SPEC §5 R1) · Tested by: S5 §4 · Replaces: S3 §5's provisional (a)
+
+| Option | What it means |
+|---|---|
+| **A. Parent link, workspace taint as fallback** | A subagent's events carry `parent_tool_call_id`, which equals the `tool_use_id` of the parent's `Task` call (already a `preToolUse` the recorder sees, under the parent's `conversation_id`). The engine maps that id to the parent chat; a child of a marked chat is marked, and a mark set inside a child also marks the parent. `subagentStart` (it carries `parent_conversation_id` and the same id) is registered record-only as a second source of the link. Fallback, S3's (a): if a marked chat starts a `Task` and no event with that id arrives, new chats in the same workspace inherit the mark for 30 minutes. |
+| B. Workspace taint only (S3's (a)) | Every chat in the same workspace inherits the mark for 30 minutes. Blocks parallel chats in one repo; beaten by waiting. |
+| C. Deny `subagentStart` after a secret read (S3's (b)) | Untested whether a deny stops it; misses subagents already running. |
+
+**Recommended: A.** S5 (Cursor 3.24.12): each subagent gets its own
+`conversation_id`, and `parent_tool_call_id` is on every child event, foreground
+and background, including `preToolUse`, `beforeShellExecution` and
+`beforeReadFile`. Nothing may depend on `subagentStop`: the background subagent
+fired none in both runs. The fallback covers a Cursor version that drops the field.
+
+---
+
+## D22. Cursor's sandbox is not a security control
+Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V1b (SPEC §10 threat model), V3 (test) · Tested by: S5 §5
+
+**Rule.** Decisions never depend on the `sandbox` field. A command AgentFly
+denies is denied whether it runs inside or outside Cursor's sandbox; the field
+is recorded only. SPEC's threat model states that the agent can leave the
+sandbox on its own: in S5, after `sudo` failed in the sandbox (127), the agent
+re-ran it with `sandbox: false` and Cursor asked nothing. **V3 adds a check:**
+with the real Cursor, a command R1 blocks is denied on both a sandboxed and an
+unsandboxed run.
+
+---
+
+## D23. Only events the installed Cursor accepts are registered
+Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V3 (`init -g`, `doctor`) · Tested by: S5 §2 · Settles: D9's "unknown event name" report
+
+**Rule.** One unknown event name makes Cursor reject the whole hooks.json, with
+an error only in its Hooks log, and then no AgentFly hook runs (S5, 3.24.12).
+So `agentfly init -g` writes only events on a known list for the installed
+Cursor version, and refuses (writes nothing) when the version or an event is
+unknown. `agentfly doctor` checks the registered events against that list and
+reads Cursor's Hooks log for "Invalid … config" / "Failed to parse" lines about
+AgentFly's file; either finding is a failure, not a warning. A Cursor update
+that drops an event is caught by `doctor`, not prevented.
+
+---
+
+## D24. `~/.claude/settings.json` is a third hook source
+Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V1b (SPEC §8, §10), V3 (`doctor`) · Tested by: S5 §2
+
+**Rule.** Cursor 3.24.12 also runs hooks from `~/.claude/settings.json`
+("claude-plugin config"), next to user and project hooks.json; the agent can
+write that file. SPEC lists it as a hook source. `doctor` warns when it holds
+hooks on a gate event (`preToolUse`, `beforeShellExecution`, `beforeReadFile`,
+`beforeMCPExecution`). Untested: how Cursor combines an allow from one source
+with AgentFly's deny from the system file; S1 showed only that they all run.
+V3 tests it first, and the warning becomes a failure if an allow can override.
