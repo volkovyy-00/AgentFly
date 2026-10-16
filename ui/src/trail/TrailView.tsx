@@ -256,8 +256,9 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
       setRail(null)
       return
     }
-    const top = a.offsetTop + a.offsetHeight / 2
-    const bottom = b.offsetTop + b.offsetHeight / 2
+    // Edge to edge: from the bottom of the secret-read row to the top of the selected row, so the line never cuts across their outlines.
+    const top = a.offsetTop + a.offsetHeight
+    const bottom = b.offsetTop
     setRail((r) => (r !== null && r.top === top && r.height === Math.max(0, bottom - top) ? r : { top, height: Math.max(0, bottom - top) }))
   }, [railFrom, railTo, items, tick])
 
