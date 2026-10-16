@@ -9,7 +9,7 @@ Pending decisions: D16 D21 D22 D23 D24
 - S5 pass (smoke test; D16 open): brief used, never named (tool calls 8,8 without; 2,3 with; additional_context 3, n=1); unknown event disables whole hooks.json; Cursor runs ~/.claude/settings.json hooks; subagents: own conversation_id + parent_tool_call_id on every event; bg subagent fires no subagentStop; read events share no id; sudo -n exit=1 (D3 stands) · docs/spikes/S5-brief.md
 - V2 ✅ merged 3da6dc7 (lead review: checks 292 passed/4 skipped on branch and on main after `uv sync`; shim answers allow, exit 0). Done line in BOARD.
 - V2b: brief rewritten 2026-10-16 in the owner's priority order (never non-zero + guard on unreadable input + fuzz; port fixed at 8787 per D25; nested stripping; install.sh/HOOKS.md paths; then guard, agent arg). Duplicates moved to new card V2c. Pass-2 review done, fixes applied (no-arg = cursor, log keeps no command text, guard paths named, fuzz adds 5000-digit number). D25 approved.
-- V8 (report head, 13:40 in worker time): part 1 merged to main 92e7fdc (owner yes 2026-10-16): trail at /?view=trail, lane graph still home; on main: 296 passed, stale-build OK. Owner viewed /?view=trail on the live recorder: "looks and works fantastic". Real Cursor chat check passed (lead verified /api/steps: .env read sensitive at step 2, `curl example.invalid` blocked at step 8). GIF dropped by the owner 2026-10-16. Left: home switch on the owner's yes; worker merges main into ag-v8-trail first.
+- V8 (report head, 13:48): done. Home switch f78a0a6: trail at /, lane graph at /?view=graph. Branch ag-v8-trail 93ce959 contains main f786847. Lead check 14:06: ruff clean, pytest 292 passed (4 live deselected), web 443 passed, stale-build OK. Ready to merge on the owner's yes. Stale docs outside the card: README.md and HOOKS.md still say / is the lane graph.
 - V2c (new card, BOARD): `tool_use_id` step merge + duplicate-read proposal; brief after V2b and D9 review.
 - V8b (new card, BOARD): recorder fields `rule_text`, `user_message`, `agent_message`, `highlighted`, `/health` `last_hook_at` + `offline_guard_count`; brief after V2b.
 - V1b (lead): SPEC still says D13 pending; lacks S3 additions, revision 7, S5 facts and D21–D24 once approved.
@@ -20,11 +20,11 @@ Pending decisions: D16 D21 D22 D23 D24
 
 ## Machine state (verified 2026-10-16 13:30 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present.
-- Recorder: main's `agentfly serve` on 127.0.0.1:8787, PID 72988, started by the owner 13:28; /health 200. Migration ran 13:28:03: ~/.config/agentfly (neo4j.env, token, marker) and ~/.local/share/agentfly/sessions.json (36 sessions), both byte-identical to the backup; ~/.config/flightrecorder removed.
+- Recorder: main's `agentfly serve` on 127.0.0.1:8787, PID 90283, detached, restarted by the V8 worker with the owner's yes at 13:50 (in-memory steps from before are gone); token written 13:50:50. Migration ran 13:28:03: ~/.config/agentfly (neo4j.env, token, marker) and ~/.local/share/agentfly/sessions.json (36 sessions), both byte-identical to the backup; ~/.config/flightrecorder removed.
 - Backup: ~/.config/flightrecorder.bak-2026-10-16 (mode 700, identical copy, taken before the merge).
 - Worktrees: main (92e7fdc), ag-v2-package (f742667, merged; removable), ag-v8-trail (808c7ee, merged part 1), ag-v2b-hook-client (a21cac9).
 - Git: core.hooksPath absolute (main's docs/roles/git-hooks: pre-commit, pre-push). `.claude/settings.json` denies `git push`, `git -C * push *`. Owner pushes with `AGENTFLY_ALLOW_PUSH=1`. origin: main only (verified).
-- AuraDB: owner asked the lead to run `--clear` at 13:3x after the lead's pytest wrote live-test nodes; `--counts` all 0 (verified). The standard check writes to AuraDB while ~/.config/agentfly/neo4j.env exists.
+- AuraDB: cleared at 13:3x; as of 14:06 counts Session 51, Step 98 (live recorder writes plus the V8 worker's live tests). The standard pytest runs the 4 live Neo4j tests while ~/.config/agentfly/neo4j.env exists; the lead runs `-k 'not live'`.
 - /tmp/af-spike: spike scripts and logs incl. s5-* (copy in logs/spike/, gitignored; after a reboot `cp -Rp logs/spike/. /tmp/af-spike/`). /tmp/af-fresh: S5 test project (scripts/check.sh) and fake .env.
 - No Xcode Command Line Tools: `make` (and other /usr/bin dev shims) open an install dialog.
 
@@ -40,6 +40,7 @@ Pending decisions: D16 D21 D22 D23 D24
 - S5 verdict pass (owner); D16 stays open until the A/B.
 
 ## Open risks and findings
+- A second `agentfly serve` on a busy 8787 rewrites the token at start-up (app.py lifespan) before the bind fails, so the running recorder rejects every hook until restarted (V8 worker hit it 13:50) · proposed for V2b
 - V8 and V2 both touch ui/dist build output: merge V2 first, rebuild ui/dist on V8's branch, rerun the stale-build check
 - File reads fire preToolUse and beforeReadFile with no shared id → recorded twice · V2b proposal; S5: generation_id is per turn, file_path on both
 - One unknown event name disables a whole hooks.json; ~/.claude/settings.json is a third hook source; allow-vs-deny across sources untested · D23, D24, V3
