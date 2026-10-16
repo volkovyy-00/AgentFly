@@ -1,7 +1,7 @@
 # V2b: Hardened hook client: never fails, fixed port, strips everything, offline guard
 Status: done (as of 2026-10-16 12:00)
 Result: All acceptance items work except 95 % of calls under 50 ms: measured median 74 ms, p95 122 ms with the recorder up; bare `python -I -S` is 41 / 61 ms in the same run. Wait budget stays 0.5 s (a silent recorder costs ~570 ms per call).
-Evidence: code 1916e0e plus uncommitted final-verification edits on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 503 passed (296 before); new tests in tests/test_hook_client.py, test_offline_guard.py, test_serve_port.py, test_install_docs.py.
+Evidence: code 97a1633 (first commit 1916e0e) on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 503 passed (296 before); new tests in tests/test_hook_client.py, test_offline_guard.py, test_serve_port.py, test_install_docs.py.
 Needs owner: SPEC §9/D4 say the guard denies every inline `python -c`/`node -e`; the brief allows `python3 -c 'print(1)'`. I followed the brief (deny only if the text mentions http). Fix SPEC §9, or tell me to deny all one-liners.
 Details: see "## 2026-10-16 12:00" below.
 
@@ -42,7 +42,7 @@ Details: see "## 2026-10-16 12:00" below.
 - `tests/test_hook_client.py::test_latency_with_the_recorder_up` only asserts a loose bound (median < 150 ms) so it does not flake; the numbers above are the real measurement.
 
 ### Final verification (after the first commit)
-Simplification and an independent audit ran on the finished work; fixes below are in the working tree, not yet committed.
+Simplification and an independent audit ran on the finished work; fixes below are in the second commit.
 - Simplified: one tokenizer for the guard (no shlex, no `quick` mode, no recursion), one `_append` for the log and the count file, no `ctx` out-parameter, `typing` imported lazily (about 8 ms faster per call: before 83 / 139 ms, after 74 / 122 ms median / p95, interleaved with bare Python at 41 / 61 ms). Tests: shared `client` fixture, one recorder launcher, hoisted helper imports.
 - Audit findings fixed: a URL hidden in a flag next to a local host (`curl --url=https://evil.com http://localhost`) was allowed; a payload with no/odd event name or a non-string `command` skipped the guard; `/Library/Application\ Support/AgentFly` and `~/.config//agentfly` were not matched; a tool name at either end of a huge cut-off payload could fall outside the 1 MB window (now head and tail are scanned); `python3.12` and `nodejs` were not treated as interpreters; the payload's event name was echoed to stderr; `tool_output`, `tool_response`, `prompt` and `text` keys are now stripped too. One more found while simplifying: a tool after a written-out `\n` in broken JSON was missed.
 - Audit findings dismissed: `curl -H 'Content-Type: ...' http://localhost`, `curl -o out.json http://127.0.0.1` and `rsync -av ./a/ /tmp/b/` are denied offline, but `rules.py` calls them outbound too (same host guess), so the guard matches the recorder.
