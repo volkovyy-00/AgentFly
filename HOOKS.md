@@ -80,7 +80,8 @@ Do **not** use `uv run` in the hook path (slow cold start). `timeout` in
 `hooks.json` is `1` second.
 
 **Before Checkpoint A / demos:** turn Cursor’s “ask before running commands”
-style prompts **OFF** (SPEC §8).
+style prompts **OFF** (hackathon demo setup,
+`docs/archive/SPEC-hackathon.md` §8).
 
 ---
 
@@ -101,7 +102,7 @@ style prompts **OFF** (SPEC §8).
 ## Helper behaviour
 
 1. Read JSON from stdin.
-2. **Immediately drop** `content` (SPEC: `beforeReadFile` includes full file text).
+2. **Immediately drop** `content` (SPEC §8: `beforeReadFile` includes full file text).
 3. Replace `afterFileEdit.edits` with a count placeholder; omit `tool_input`.
 4. `POST` the sanitized payload to `http://127.0.0.1:8787/hook` (0.5 s timeout,
    header `X-Recorder-Token`).

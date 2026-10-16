@@ -232,7 +232,9 @@ the database is unreachable.
 
 ## Documentation
 
-- [SPEC.md](SPEC.md): the full specification and the source of truth
+- [SPEC.md](SPEC.md): the v1 specification and the source of truth (the code is
+  still the hackathon version and moves toward it; the old spec is
+  [docs/archive/SPEC-hackathon.md](docs/archive/SPEC-hackathon.md))
 - [HOOKS.md](HOOKS.md): hook wiring, real Cursor input fields and server details
 - [AGENTS.md](AGENTS.md): working rules for coding agents on this repo
 
