@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
 Status: **spikes S1–S5, V1a and V2 are done; V8 and V2b are done (2026-10-16).
-D16 and D21–D24 are open.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
+D16 is the only open decision.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
 before it starts.

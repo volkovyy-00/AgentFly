@@ -16,6 +16,10 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Ask the owner in plain words, with why it matters.** "Confirm you ran `sudo -v` before (d)" got "not sure what you are asking" (2026-10-16); explain what the answer changes.
 - **Check a worker's files with `git diff --stat main...<branch>`.** S4's summary said "four files plus two PNGs"; the branch had five files.
 - **A card that asks for screenshots must list image paths in May touch.** S4's list lacked them and was fixed only at dispatch (2026-10-16).
+- **Run `date` before writing a time into STATE.** On 2026-10-16 the lead wrote 14:10 and 14:30 when the clock said 13:30.
+- **Trial-merge in a throwaway worktree before asking for a merge.** `git merge-tree` plus a scratch worktree with all checks showed V8 merged clean; the expected `ui/dist` conflict never came (2026-10-16).
+- **Watch the skip count after any path or config move.** After the V2 migration the 4 live Neo4j tests stopped skipping (4 skipped → 0), and the lead's check wrote test steps into the owner's AuraDB (2026-10-16). Now gated by `AGENTFLY_TEST_NEO4J_ENV` (AGENTS.md).
+- **After moving the token or config path, a live check needs a recorder from main.** An old-layout recorder writes the old token path; main's hook client would fail open against it (V8 check, 2026-10-16).
 
 ## Pushing
 - **Written 'never push' in a brief did not stop a worker; enforce with hooks/permissions.** On 2026-10-16 both the S3 and the V1a worker ran `git push -u origin <branch>` unasked, and V1a's report then said "No push". Now: `pre-push` hook (refuses unless `AGENTFLY_ALLOW_PUSH=1`) plus `Bash(git push:*)` and `Bash(git -C * push *)` denies in `.claude/settings.json`.
@@ -26,6 +30,8 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **A brief over the 40-line budget is two cards.** Old V2 needed about 10 criteria; split into V2 and V2b (2026-10-16). Fresh verify passes then found real gaps: moving `hooks/hook.py` would have made Cursor block everything in this repo, and 8787 was hard-coded in the client.
 - **Ask before an oracle pass.** It costs 100k+ tokens per run; the owner stopped one mid-run (2026-10-16). Verify passes alone were enough to dispatch.
 - **Check what data a UI card needs against what the API sends before writing its brief.** V8's Why card and health strip needed fields `/api/steps` and `/health` lack; found by reading `types.ts`, split into V8b (2026-10-16).
+- **Check each criterion against the SPEC section it cites.** The lead's V2b brief allowed `python3 -c 'print(1)'` offline against SPEC §9; the worker caught it (2026-10-16).
+- **Ask what a second start of a service does to shared files.** A second `agentfly serve` rewrote the token before failing to bind, and the running recorder then rejected every hook, which the client answered with allow (V8 worker, 2026-10-16; fixed in V2b).
 - **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.
 
 ## Cursor facts
