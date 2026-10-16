@@ -1,7 +1,7 @@
 # V2b: Hardened hook client: never fails, fixed port, strips everything, offline guard
 Status: done (as of 2026-10-16 14:30)
 Result: Addendum items 5-8 and the D21 test are done: a second serve fails and changes nothing, 401/403 get the guard, docs say `/` is the trail, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV, every inline one-liner is denied. Latency still misses 50 ms (median 53 ms, p95 69 ms).
-Evidence: commit 96d3a11 on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 650 passed, 4 skipped (the live Neo4j tests); final-verification edits uncommitted on top; main merged twice (f2941b6, 51c8bff).
+Evidence: commit affb468 (addendum 96d3a11) on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 650 passed, 4 skipped (the live Neo4j tests); main merged twice (f2941b6, 51c8bff).
 Needs owner: none
 Details: see "## 2026-10-16 14:30" below.
 
@@ -32,7 +32,7 @@ Commit 96d3a11. Merged `main` into `ag-v2b-hook-client` first (f2941b6: V8 and t
 - The client sends `parent_tool_call_id` (and `tool_use_id`, `conversation_id`) unchanged. It was only lost on MCP events: the MCP allowlist had no place for it, so a subagent's MCP call arrived without its parent link. Both ids (`parent_tool_call_id`, `parent_conversation_id`) are now in the allowlist.
 - Tests (`tests/test_hook_client.py`): `parent_tool_call_id` and the child's own `conversation_id` reach the recorder body unchanged for `beforeShellExecution`, `beforeReadFile`, `afterFileEdit`, `preToolUse` (Write and MCP) and `beforeMCPExecution`, with planted text still absent; the parent's `Task` `preToolUse` keeps `tool_use_id` and a `subagentStart` keeps `parent_conversation_id`, `tool_call_id` and `parent_tool_call_id`. What the recorder does with the link is V5's.
 
-### Final verification (same day, after the commit above; edits are uncommitted)
+### Final verification (same day, after the commit above; commit affb468)
 - Smoke: two `serve` on one port (second exits 1, token byte-identical, first still blocks R1); 401 and 403 recorders give the guard; one-liners denied, `python3 script.py` allowed; with the owner's real `neo4j.env` present the live tests made no socket connect and never opened that file (checked with a connect/open spy).
 - Simplified: shared helpers in `test_store.py` (`free_port`, `client_env`, `REPO`), the one-liner cases folded into the existing outbound lists, the Neo4j child-run test cut from 3 variants to 2, the verb-guessing regex dropped from the docs test.
 - Audit findings fixed: node `--eval=` / `--print=` and node options with a separate value (`-C dev -e`, `--input-type module -e`, `--env-file .env -e`) were allowed; python `-c1` and `-c__import__(...)` (code glued on) were allowed; `nodemon -e js` was denied (interpreter match is now `python`, `python3.12`, `node`, `nodejs`, `node18`, not any name starting with them); `serve` bound its socket but did not listen, so two bound-only sockets could share a port on some systems (not reproducible on macOS; it now listens at once); uvicorn prints no "running on" line when it is handed a socket, so `serve` logs it, with the real port for `--port 0`; `--port 1` said "already in use" for a permission error (it now prints the real reason); `--port 70000` and `-1` gave a traceback (argparse now rejects them with exit 2).
