@@ -25,7 +25,7 @@ requires_ui_dist = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client() -> TestClient:
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         # App tests must not race live Neo4j writes from the background worker.
         from agentfly.recorder.store import graph_store
@@ -41,7 +41,7 @@ def token(client: TestClient) -> str:
 
 
 @pytest.mark.parametrize("path", ["/health", "/", "/assets/index.js", "/v2", "/v2/"])
-def test_forbidden_host(path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forbidden_host(path: str) -> None:
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
         response = bad.get(path)
     assert response.status_code == 403
@@ -146,7 +146,7 @@ def test_api_steps_no_token_empty(client: TestClient) -> None:
     assert response.json() == {"session": None, "steps": []}
 
 
-def test_api_steps_forbidden_host(tmp_path: Path) -> None:
+def test_api_steps_forbidden_host() -> None:
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
         response = bad.get("/api/steps")
     assert response.status_code == 403
@@ -480,7 +480,6 @@ def test_the_app_serves_only_whitelisted_routes() -> None:
     served, mounts = served_routes()
     assert served <= ROUTE_WHITELIST, sorted(served - ROUTE_WHITELIST)
     assert mounts <= MOUNT_WHITELIST, sorted(mounts - MOUNT_WHITELIST)
-    assert {method for method, _ in served if method != "GET"} == {"POST"}
     assert [path for method, path in served if method == "POST"] == ["/hook"]
 
 

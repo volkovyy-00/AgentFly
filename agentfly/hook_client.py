@@ -54,7 +54,7 @@ def sanitize(payload: dict[str, Any]) -> dict[str, Any]:
 
 def append_log(record: dict[str, Any]) -> None:
     # Until the client strips commands (V2b) the log can hold them, so only the user may read it.
-    _LOG_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _LOG_PATH.parent.chmod(0o700)
     line: str = json.dumps(record, ensure_ascii=False)
     fd: int = os.open(_LOG_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)

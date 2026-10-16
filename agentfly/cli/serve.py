@@ -23,7 +23,6 @@ def run(args: argparse.Namespace) -> int:
 
     from agentfly.recorder import app as recorder_app
 
-    recorder_app.set_port(args.port)
     # 127.0.0.1 only (SPEC section 3): there is deliberately no --host option.
     uvicorn.run(recorder_app.app, host="127.0.0.1", port=args.port, log_level="info")
     return 0

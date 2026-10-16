@@ -95,6 +95,9 @@ def test_no_secret_survives_cleaning(project_root: Path, raw: str) -> None:
         ("export K=SEKRET9", "export <arg>"),
         ("TOKEN='my SEKRET9' curl $(x)", "curl <unparsed>"),
         ("curl https://u:SEKRET9@[host/", "curl <arg>"),
+        ("K+=SEKRET9 make", "K=<removed> make"),
+        ("a[0]=SEKRET9 make", "a=<removed> make"),
+        ("curl -d @f.json https://x.com", "curl -d <arg> x.com"),
     ],
 )
 def test_secret_shapes_store_this_output(project_root: Path, raw: str, expected: str) -> None:

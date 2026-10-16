@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tarfile
@@ -22,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import free_port, make_legacy, package_files
 from tests.test_hook_client import EVENT, check_allow_and_log, run_client
 
 REPO = Path(__file__).resolve().parents[1]
@@ -41,6 +41,7 @@ class Installed:
     def bin(self) -> Path:
         return self.home / ".local" / "bin"
 
+    @property
     def package_dir(self) -> Path:
         found = list(
             (self.home / ".local/share/uv/tools").glob("*/lib/python*/site-packages/agentfly")
@@ -130,15 +131,8 @@ def fetch(port: int, path: str) -> tuple[int, bytes]:
 @pytest.fixture()
 def running_recorder(installed: Installed, tmp_path: Path) -> Iterator[tuple[int, Path]]:
     home = tmp_path / "serve-home"
-    old = home / ".config" / "flightrecorder"
-    old.mkdir(parents=True)
-    (old / "token").write_text("old-token", encoding="utf-8")
-    sessions = [{"id": "s1", "marked": True, "start_time": "t", "next_step": 2}]
-    (old / "sessions.json").write_text(json.dumps(sessions), encoding="utf-8")
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    assert port != 8787
+    make_legacy(home)
+    port = free_port()
     env = {**installed.env, "HOME": str(home)}
     process = subprocess.Popen(
         [str(installed.bin / "agentfly"), "serve", "--port", str(port)],
@@ -175,7 +169,7 @@ def test_serve_answers_health_and_serves_the_page_from_the_wheel(
     assert status == 200
     inside = zipfile.ZipFile(installed.wheel).read("agentfly/ui_dist" + asset.group().decode())
     assert body == inside
-    assert (installed.package_dir() / "ui_dist" / "index.html").read_bytes() == page
+    assert (installed.package_dir / "ui_dist" / "index.html").read_bytes() == page
     assert fetch(port, "/docs")[0] == 404 and fetch(port, "/openapi.json")[0] == 404
     # first start moved the hackathon folder, and the token was rewritten
     assert json.loads((home / ".local/share/agentfly/sessions.json").read_text())[0]["marked"]
@@ -186,9 +180,10 @@ def test_serve_answers_health_and_serves_the_page_from_the_wheel(
 def test_installed_hook_with_no_recorder_prints_allow(
     installed: Installed, isolated_home: Path
 ) -> None:
-    package = installed.package_dir()
-    before = sorted(p.relative_to(package) for p in package.rglob("*") if p.is_file())
+    package = installed.package_dir
+    before = package_files(package)
     result = run_client([str(installed.bin / "agentfly-hook")], isolated_home, EVENT)
     check_allow_and_log(result, isolated_home)
-    after = sorted(p.relative_to(package) for p in package.rglob("*") if p.is_file())
-    assert after == before  # run with PYTHONDONTWRITEBYTECODE=1, so not even a __pycache__
+    assert (
+        package_files(package) == before
+    )  # run with PYTHONDONTWRITEBYTECODE=1, so not even a __pycache__

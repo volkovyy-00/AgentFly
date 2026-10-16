@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import io
 import json
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 
 import agentfly.hook_client as client_module
+from agentfly.recorder import paths
+from tests.helpers import free_port, package_files
 
 REPO = Path(__file__).resolve().parents[1]
 MARKER = "FILE-CONTENT-MARKER-77"
@@ -62,10 +64,9 @@ def test_client_file_runs_directly_too(isolated_home: Path) -> None:
 
 def test_nothing_is_written_next_to_the_client(isolated_home: Path) -> None:
     package = REPO / "agentfly"
-    before = sorted(p.relative_to(package) for p in package.rglob("*") if p.is_file())
+    before = package_files(package)
     run_client([sys.executable, str(REPO / "hooks" / "hook.py")], isolated_home, EVENT)
-    after = sorted(p.relative_to(package) for p in package.rglob("*") if p.is_file())
-    assert after == before
+    assert package_files(package) == before
 
 
 def test_recorder_down_with_a_token_still_allows(
@@ -74,13 +75,18 @@ def test_recorder_down_with_a_token_still_allows(
     token = isolated_home / ".config" / "agentfly" / "token"
     token.parent.mkdir(parents=True)
     token.write_text("t", encoding="utf-8")
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    assert port != 8787
+    port = free_port()
     monkeypatch.setattr(client_module, "_TOKEN_PATH", token)
     monkeypatch.setattr(client_module, "_HOOK_URL", f"http://127.0.0.1:{port}/hook")
     monkeypatch.setattr(client_module, "_LOG_PATH", isolated_home / "log" / "events.jsonl")
-    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps(EVENT)))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(EVENT)))
     assert client_module.main() == 0
     assert json.loads(capsys.readouterr().out) == {"permission": "allow"}
+
+
+def test_client_paths_match_the_recorder_paths(isolated_home: Path) -> None:
+    # The client is stdlib-only and cannot import agentfly.recorder.paths, so pin the copy.
+    # It fixes its paths at import, under another HOME, so compare the folders below HOME.
+    assert client_module._TOKEN_PATH.parts[-3:] == (*paths.config_dir().parts[-2:], "token")
+    log_tail = (*paths.data_dir().parts[-3:], "logs", "events.jsonl")
+    assert client_module._LOG_PATH.parts[-5:] == log_tail

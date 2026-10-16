@@ -54,7 +54,7 @@ _FORBIDDEN: tuple[str, ...] = (
 
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
+def client() -> TestClient:
     # Keep Neo4j off during ordinary gate tests unless a live test re-enables it.
     previous_enabled: bool = graph_store.enabled
     graph_store.enabled = False

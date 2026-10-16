@@ -13,18 +13,7 @@ import agentfly.recorder.app as app_module
 from agentfly.recorder import paths
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.store import graph_store
-
-NEO4J_ENV = "NEO4J_URI=neo4j+s://x.databases.neo4j.io\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw\n"
-
-
-def make_legacy(home: Path, *, marked: bool = True) -> Path:
-    old: Path = home / ".config" / "flightrecorder"
-    old.mkdir(parents=True)
-    (old / "token").write_text("old-token", encoding="utf-8")
-    (old / ".env").write_text(NEO4J_ENV, encoding="utf-8")
-    sessions = [{"id": "s1", "marked": marked, "start_time": "t", "next_step": 4}]
-    (old / "sessions.json").write_text(json.dumps(sessions), encoding="utf-8")
-    return old
+from tests.helpers import NEO4J_ENV, make_legacy
 
 
 def mode(path: Path) -> int:
@@ -111,3 +100,15 @@ def test_first_start_migrates_and_second_start_ignores_the_old_folder(
         assert app_module.get_store().get("s1").marked is True  # type: ignore[union-attr]
     assert json.loads((decoy / "sessions.json").read_text(encoding="utf-8"))[0]["marked"] is False
     assert (decoy / ".env").exists() and (decoy / "token").read_text() == "old-token"
+
+
+def test_a_linked_legacy_file_is_not_followed(isolated_home: Path) -> None:
+    old = make_legacy(isolated_home)
+    outside = isolated_home / "elsewhere.txt"
+    outside.write_text("keep", encoding="utf-8")
+    outside.chmod(0o644)
+    (old / ".env").unlink()
+    (old / ".env").symlink_to(outside)
+    paths.migrate_legacy()
+    assert not paths.credentials_path().exists()
+    assert mode(outside) == 0o644

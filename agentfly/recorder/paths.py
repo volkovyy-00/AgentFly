@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -37,8 +38,8 @@ def private_dir(path: Path) -> Path:
 
 
 def _move(source: Path, target: Path, mode: int) -> None:
-    if not source.is_file():
-        return
+    if source.is_symlink() or not source.is_file():
+        return  # a link could point anywhere, and chmod would follow it
     if target.exists():
         logger.warning("not overwriting %s; old copy left at %s", target, source)
         return
@@ -62,12 +63,10 @@ def migrate_legacy() -> None:
             _move(old / "sessions.json", data_dir() / "sessions.json", 0o600)
             _move(old / ".env", credentials_path(), 0o600)
             token: Path = old / "token"
-            if token.is_file():
-                token.unlink()  # the token is rewritten on every start
-            try:
-                old.rmdir()
-            except OSError:
-                pass  # other files left in it are not ours to move
+            if token.is_symlink() or token.is_file():
+                token.unlink()  # rewritten on every start
+            with contextlib.suppress(OSError):
+                old.rmdir()  # other files left in it are not ours to move
         private_dir(config_dir())
         marker.write_text("", encoding="utf-8")
     except OSError as exc:

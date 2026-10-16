@@ -15,7 +15,6 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from agentfly.recorder import DEFAULT_PORT
 from agentfly.recorder.memory import memory_steps, parse_limit
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
 from agentfly.recorder.rules import Session, decide, deny_messages, mark
@@ -25,16 +24,6 @@ from agentfly.recorder.store import StepRecord, build_step_record, graph_store
 logger = logging.getLogger("agentfly")
 
 TOKEN_HEADER: str = "X-Recorder-Token"
-ALLOWED_HOSTS: frozenset[str] = frozenset()
-
-
-def set_port(port: int) -> None:
-    """Allow only this port's localhost names as Host (`agentfly serve --port`)."""
-    global ALLOWED_HOSTS
-    ALLOWED_HOSTS = frozenset({f"localhost:{port}", f"127.0.0.1:{port}"})
-
-
-set_port(DEFAULT_PORT)
 
 
 def find_ui_dist() -> Path:
@@ -62,8 +51,13 @@ def write_token(directory: Path) -> str:
 
 
 def host_allowed(request: Request) -> bool:
+    """Host must be a localhost name on the port this server is bound to (any `--port`)."""
+    server: Any = request.scope.get("server")
+    if not server:
+        return False
+    port: int = server[1]
     host: str = request.headers.get("host", "")
-    return host in ALLOWED_HOSTS
+    return host in {f"localhost:{port}", f"127.0.0.1:{port}"}
 
 
 def content_type_is_json(request: Request) -> bool:

@@ -39,9 +39,10 @@ def commands() -> list[str]:
 
 
 def subcommands() -> set[str]:
-    parser = build_parser()
-    action = next(a for a in parser._actions if getattr(a, "choices", None))
-    return set(action.choices)
+    return set(next(a.choices for a in build_parser()._actions if getattr(a, "choices", None)))
+
+
+SUBCOMMANDS = subcommands()
 
 
 @pytest.mark.parametrize("command", commands())
@@ -54,7 +55,7 @@ def test_command_names_exist(command: str) -> None:
         if word == "-m" and index > 0 and words[index - 1].startswith("python"):
             assert importlib.util.find_spec(words[index + 1]) is not None, command
         elif word == "agentfly" and index + 1 < len(words) and not words[index + 1].startswith("-"):
-            assert words[index + 1] in subcommands(), command
+            assert words[index + 1] in SUBCOMMANDS, command
         elif _FILE_LIKE.match(word) and not word.startswith(("http", "~")):
             candidate = word.removeprefix("./")
             if "<" in candidate or "*" in candidate:
