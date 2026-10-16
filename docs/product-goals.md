@@ -9,7 +9,7 @@ Watch and protect any Cursor project on my machine, with rules I can change easi
 ## Goals
 
 ### G1. Install once, protected everywhere
-- Target flow: `brew install agentfly` -> `agentfly init -g` (or `agentfly init` for one project) -> `agentfly start` -> open any project in Cursor and it is watched and protected.
+- Target flow: `brew install agentfly` -> `agentfly init -g` -> `agentfly start` -> open any project in Cursor and it is watched and protected.
 - No cloning AgentFly and no working inside its repo.
 - Clean upgrade and uninstall that removes the hooks.
 - Done when: a fresh project opened in Cursor is protected with no per-project setup.
