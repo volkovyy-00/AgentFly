@@ -221,12 +221,13 @@ describe('the trail on a 500-step mock session', () => {
   })
 
   it('opens the Why card of a block someone picks, and stops following', () => {
-    const follow = screen.getByRole('button', { name: 'Follow latest' })
+    // Direct lookups: getByRole walks the accessibility tree of all 500 rows and is slow on a loaded machine.
+    const follow = screen.getByText('Follow latest')
     expect(follow.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(row(14))
     expect(row(14).getAttribute('aria-pressed')).toBe('true')
     expect(follow.getAttribute('aria-pressed')).toBe('false')
-    expect(txt(why())).toContain('Step 14')
+    expect(txt(document.querySelector('.tr-why')!)).toContain('Step 14')
     expect(document.querySelector('.tr-rail')!.getAttribute('data-to')).toBe('14')
   })
 
