@@ -599,17 +599,41 @@ describe('layout and header', () => {
   })
 })
 
-describe('routing', () => {
-  it('shows the trail at ?view=trail and the lane graph otherwise', async () => {
+describe('routing: the trail is home, the lane graph is the Graph tab', () => {
+  async function open(url: string) {
+    window.history.replaceState({}, '', url)
+    const view = render(<App />)
+    await advance(0)
+    return view
+  }
+
+  it.each(['/', '/?view=trail', '/?view=unknown', '/?mock=1&len=20'])('shows the trail at %s', async (url) => {
     stubFetch(server())
-    window.history.replaceState({}, '', '/?view=trail')
-    const trail = render(<App />)
-    await advance(0)
+    await open(url)
     expect(document.querySelector('.tr')).not.toBeNull()
-    trail.unmount()
-    window.history.replaceState({}, '', '/')
-    render(<App />)
-    await advance(0)
+  })
+
+  it('shows the lane graph at ?view=graph, with the tabs above it', async () => {
+    stubFetch(server())
+    await open('/?view=graph')
     expect(document.querySelector('.tr')).toBeNull()
+    expect(document.querySelector('.react-flow')).not.toBeNull()
+    expect(screen.getByRole('link', { name: 'Graph' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Live Trail' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('has the same two tabs in the trail header, with Live Trail current', async () => {
+    stubFetch(server())
+    await open('/')
+    const nav = screen.getByRole('navigation', { name: 'Views' })
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Live Trail', 'Graph'])
+    expect(within(nav).getByRole('link', { name: 'Live Trail' }).getAttribute('aria-current')).toBe('page')
+    expect(within(nav).getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/?view=graph')
+  })
+
+  it('keeps the other query parameters when switching view', async () => {
+    stubFetch(server())
+    await open('/?mock=1&len=60&burst=10')
+    expect(screen.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/?mock=1&len=60&burst=10&view=graph')
   })
 })

@@ -31,6 +31,10 @@ export const TONES = {
   chipSecret: tone('fill-secret', 'canvas', null, 'bg-fill-secret text-canvas'),
   banner: tone('fill-blocked', 'ink', null, 'bg-fill-blocked text-ink'),
   button: tone('surface', 'ink', 'ink', 'bg-surface text-ink border-ink'),
+  // The view tabs (ViewTabs.tsx): a bar, an idle tab and the current one.
+  header: tone('canvas', 'ink', null, 'bg-canvas text-ink'),
+  tab: tone('canvas', 'muted', null, 'bg-canvas text-muted'),
+  tabCurrent: tone('raised', 'ink', null, 'bg-raised text-ink'),
 } as const satisfies Record<string, Tone>
 
 /** Shape shared by the New session and Follow buttons (each adds its own position). */
@@ -43,5 +47,6 @@ export const DECOR = {
   // The OFFLINE banner's text pair is a quiet 7:1 fill; this bright stripe along its bottom edge is what reads as red from across a room.
   bannerStripe: { token: 'blocked', classes: 'border-blocked' },
   ring: { token: 'secret', classes: 'border-secret' },
+  focusRing: { token: 'link', classes: 'focus-visible:outline-link' },
   flash: { token: null, classes: 'bg-ink' },
 } as const

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { usePaneSize } from '../graph/usePaneSize'
 import type { Step } from '../graph/types'
+import { ViewTabs } from '../ViewTabs'
 import './trail.css'
 import {
   HIDE_BAR_PX,
@@ -300,7 +301,7 @@ export function TrailView({ mock, len, burst, rich }: TrailViewProps) {
     <div className="tr" data-layout={layout}>
       <header className="tr-header">
         <h1>AgentFly</h1>
-        <span className="tr-view">Live Trail</span>
+        <ViewTabs view="trail" />
         <span className="tr-chip count hide-md">{steps.length} steps</span>
         {secretSeen && <span className="tr-chip secret">Secret seen</span>}
         <span className="tr-spacer" />

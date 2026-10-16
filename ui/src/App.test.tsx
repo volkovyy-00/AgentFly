@@ -19,7 +19,7 @@ async function advance(ms: number): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers()
   window.sessionStorage.clear()
-  window.history.replaceState({}, '', '/')
+  window.history.replaceState({}, '', '/?view=graph')
 })
 
 afterEach(() => {
@@ -140,7 +140,7 @@ describe('App', () => {
   })
 
   it('/?burst=5 without mock=1 is real mode: it still polls /api/steps and draws the response', async () => {
-    window.history.replaceState({}, '', '/?burst=5')
+    window.history.replaceState({}, '', '/?view=graph&burst=5')
     const fetchMock = vi.fn(async () => respond('s', stepsFrom(40000, 2)))
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
@@ -151,7 +151,7 @@ describe('App', () => {
   })
 
   it('mock mode never calls /api/steps and plays the scenario', async () => {
-    window.history.replaceState({}, '', '/?mock=1')
+    window.history.replaceState({}, '', '/?view=graph&mock=1')
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
@@ -164,13 +164,13 @@ describe('App', () => {
   it('/?mock=1&first=1 paints the first tick still: its block does not dim, unlike plain mock', async () => {
     vi.stubGlobal('fetch', vi.fn())
     const dims = () => document.querySelectorAll('[data-dim="true"]').length
-    window.history.replaceState({}, '', '/?mock=1&burst=10')
+    window.history.replaceState({}, '', '/?view=graph&mock=1&burst=10')
     const live = render(<App />)
     await advance(300)
     expect(screen.getByText('BLOCKED')).toBeTruthy()
     expect(dims()).toBeGreaterThan(0)
     live.unmount()
-    window.history.replaceState({}, '', '/?mock=1&burst=10&first=1')
+    window.history.replaceState({}, '', '/?view=graph&mock=1&burst=10&first=1')
     render(<App />)
     await advance(300)
     expect(screen.getByText('BLOCKED')).toBeTruthy()
@@ -178,7 +178,7 @@ describe('App', () => {
   })
 
   it('/?mock=1&len=60&burst=10 replays a generated long session and shows its group', async () => {
-    window.history.replaceState({}, '', '/?mock=1&len=60&burst=10')
+    window.history.replaceState({}, '', '/?view=graph&mock=1&len=60&burst=10')
     vi.stubGlobal('fetch', vi.fn())
     render(<App />)
     await advance(1500 * 6)

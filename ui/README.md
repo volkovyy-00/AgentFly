@@ -1,6 +1,9 @@
 # AgentFly UI
 
-Vite + React + TypeScript live-graph page, served by the recorder at `/`.
+Vite + React + TypeScript page, served by the recorder at `/`. It has two views,
+chosen by the tabs in the header: **Live Trail** (home, `/`) and **Graph** (the
+lane graph, `/?view=graph`). `/?view=trail` still opens the trail. Other query
+parameters (`mock`, `len`, `burst`, …) are kept when you switch tab.
 
 Requires **Node `^22.12.0 || >=24`** (see `engines` in `package.json`).
 `.nvmrc` pins Node 22 for reproducible `ui/dist` builds.
@@ -23,7 +26,22 @@ npm --prefix ui run dev   # proxies /api to http://127.0.0.1:8787
 
 Commit `dist/` after build.
 
-## What the page draws
+## The Live Trail (`src/trail/`)
+
+Decision first: a badge on every step, routine runs of allowed steps folded into
+one row, blocks, warnings and secret reads never folded, a rail from the secret
+read to the selected block, a Follow button, and a Why card for each block or
+warning (the rule, the trigger step and the blocked step, the `agentfly rules …`
+commands, never an "allow" button). The card can be hidden (key `w`) and resized
+(drag the divider, arrow keys, double-click to reset); the page remembers both.
+Each poll makes three requests: `/api/steps?all=1` (up to 500 steps),
+`/api/steps?limit=1` (only for `marked_order`, which `?all=1` does not send) and
+`/health`. `/?mock=1&len=500` replays a generated session without a server
+(`&burst=N` streams N steps per tick, `&rich=1` adds rule text, messages and
+highlights). `src/trail/trail.css` is the trail's stylesheet; the 16 px text
+test cannot read it (see below).
+
+## What the Graph tab draws
 
 A timeline: steps in a left column (oldest at the top), files in the middle
 lane, hosts and rules in the right lane. The page asks for
@@ -34,11 +52,11 @@ host boxes and 5 rule boxes are drawn. The group moves with the window and
 never animates. The server keeps at most 500 steps per session (see `HOOKS.md`).
 The camera follows the newest step, one slide per poll. The viewer can pan up
 and down; a Follow button returns. Zoom is locked: at most 1, and panes
-narrower than the content scale down (floor 0.5). `/?mock=1` replays a
+narrower than the content scale down (floor 0.5). `/?view=graph&mock=1` replays a
 sample session without calling the server; "New session" restarts it. The mock
 replays a 34-step session (enough to slide the 20-step window and show a
 group) through the same window shape the server returns (`hidden`, `flagged`,
-the marking step); `?mock=1&burst=10` emits 10 steps per tick to check bursts,
+the marking step); `&burst=10` emits 10 steps per tick to check bursts,
 `&len=500` replays a generated 500-step session (a marking `.env` read, a
 block about every 13 steps), and `&first=1` makes the first tick paint still,
 as after a reload of the real page. The page is dark only. Every colour pair is
@@ -50,5 +68,9 @@ Layout and camera are pure functions in `src/graph/` (`layout.ts`,
 or its place in the list. Text is at least 16 px at full width; the one exception is React
 Flow's own attribution link, kept on purpose. Tests use a jsdom setup that
 measures nodes like a browser (`src/test-setup.ts`); it cannot check layout,
-so after a UI change also open `/?mock=1` and a real `fake_agent.py` run in
-a browser.
+so after a UI change also open `/?mock=1` and `/?view=graph&mock=1` and a real
+`fake_agent.py` run in a browser.
+
+The 16 px text test (`src/textSize.test.ts`) and the colour test read sources with
+Vite's `?raw` import, which Vitest returns empty for CSS files, so `src/trail/trail.css`
+(12 to 15 px text, as in the owner-approved S4 mock) is not covered by them.
