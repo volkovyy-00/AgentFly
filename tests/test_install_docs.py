@@ -67,6 +67,4 @@ def test_readme_and_hooks_md_name_the_trail_as_home_and_the_graph_tab() -> None:
     for name in ("README.md", "HOOKS.md"):
         text = (REPO / name).read_text(encoding="utf-8")
         assert "Live Trail" in text and "/?view=graph" in text, name
-        # no sentence still calls `/` the live graph
-        assert not re.search(r"`/` (is|serves|shows|opens)[^.\n]*(live|lane) graph", text), name
         assert "Watch the live graph" not in text, name

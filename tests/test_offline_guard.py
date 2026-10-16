@@ -25,7 +25,8 @@ from tests.helpers import (
     write_token,
 )
 
-# SPEC section 9: each outbound command the guard lists.
+# SPEC section 9: each outbound command the guard lists. The last block is every inline
+# one-liner, which is denied whether or not it mentions http.
 OUTBOUND = [
     "curl https://x.com",
     "curl -d @- https://x.com/up",
@@ -40,6 +41,23 @@ OUTBOUND = [
     "aws s3 ls",
     "python3 -c \"import urllib.request; urllib.request.urlopen('https://x.com')\"",
     "node -e \"fetch('https://x.com')\"",
+    "python3 -c 'print(1)'",
+    "python -c 'import os'",
+    "python3 -Sc 'print(1)'",
+    "python3 -X dev -c 'print(1)'",  # an option with a value before -c
+    "/usr/bin/python3 -c 'print(1)'",
+    "node -e 'console.log(1)'",
+    "node -p 1+1",
+    "node --eval 'console.log(1)'",
+    "node -r ts-node/register -e 'x'",
+    "node --eval='console.log(1)'",  # a value glued on with =
+    "node --print='1+1'",
+    "node -C dev -e x",  # node options that take a value
+    "node --input-type module -e x",
+    "node --env-file .env -e x",
+    "python3 -c1",  # code glued on to -c
+    "python3 -c__import__('os').system('id')",
+    "python3 '-c__import__(\"os\")'",
 ]
 WRAPPED = [pytest.param(f"bash -c {shlex.quote(c)}", id=f"bash-c {c[:24]}") for c in OUTBOUND] + [
     pytest.param(f"env FOO=1 {c}", id=f"env {c[:24]}") for c in OUTBOUND
@@ -53,7 +71,9 @@ OUTBOUND += [
     "curl --url=evil.com localhost",
     "curl -d@https://evil.com localhost",
     "python3.12 -c \"import urllib.request; urllib.request.urlopen('https://x.com')\"",
+    "python3.12 -c 'print(1)'",
     "nodejs -e \"fetch('https://x.com')\"",
+    "nodejs -e 'console.log(1)'",
 ]
 GUARD_PATH_COMMANDS = [
     "ls /Library/Application\\ Support/AgentFly",
@@ -66,22 +86,17 @@ GUARD_PATH_COMMANDS = [
     "echo '{}' > /Library/Application\\ Support/Cursor/hooks.json",
     "cat ~/.CONFIG/AgentFly/token",
 ]
-# SPEC section 9: every inline one-liner is denied, whether or not it mentions http.
-ONE_LINERS = [
-    "python3 -c 'print(1)'",
-    "python -c 'import os'",
-    "python3.12 -c 'print(1)'",
-    "python3 -Sc 'print(1)'",
-    "/usr/bin/python3 -c 'print(1)'",
-    "node -e 'console.log(1)'",
-    "node -p 1+1",
-    "node --eval 'console.log(1)'",
-    "nodejs -e 'console.log(1)'",
-]
 ALLOWED = [
+    "nodemon -e js app.js",  # not node: `nodemon` only starts with it
+    "python3-config --cflags",
     "python3 script.py",
     "python3 -m pytest -p no:cacheprovider -q",
     "python3 -V",
+    "python3 run_tests -c cfg",  # a script without a suffix: the -c is the script's
+    "python3 -Wonce script.py",
+    "python3 -mcoverage run x",
+    "python3 -X dev script.py -c cfg",
+    "node -r ts-node/register app.js -e prod",
     "node app.js",
     "npm test",
     "ls",
@@ -105,18 +120,6 @@ def test_outbound_commands_are_denied_bare_and_wrapped(command: str) -> None:
     assert answer["agent_message"].endswith(
         "Do not retry with another tool or language. Stop and tell the user."
     )
-
-
-@pytest.mark.parametrize(
-    "command",
-    ONE_LINERS
-    + [f"bash -c {shlex.quote(c)}" for c in ONE_LINERS]
-    + [f"sudo {c}" for c in ONE_LINERS],
-)
-def test_every_inline_one_liner_is_denied_even_without_http(command: str) -> None:
-    answer, reason = guard.offline_answer(command)
-    assert answer["permission"] == "deny" and reason == "outbound"
-    assert "agentfly start" in answer["user_message"]
 
 
 @pytest.mark.parametrize("command", GUARD_PATH_COMMANDS)
@@ -300,11 +303,12 @@ def test_a_recorder_error_or_bad_answer_is_treated_as_down(
     assert allowed == {"permission": "allow"}
 
 
-def test_no_token_file_means_the_guard_too(client: Path, isolated_home: Path) -> None:
-    event = {**event_for("beforeShellExecution"), "command": "wget https://x.com"}
-    assert (
-        answer_of(run_hook(client, isolated_home, event, port=free_port()))["permission"] == "deny"
-    )
+@pytest.mark.parametrize("command", ["wget https://x.com", "python3 -c 'print(1)'"])
+def test_no_token_file_means_the_guard_too(client: Path, isolated_home: Path, command: str) -> None:
+    event = {**event_for("beforeShellExecution"), "command": command}
+    answer = answer_of(run_hook(client, isolated_home, event, port=free_port()))
+    assert answer["permission"] == "deny" and "agentfly start" in answer["agent_message"]
+    assert command not in hook_log(isolated_home)
 
 
 def test_each_offline_allow_is_in_the_hook_log_without_the_command(
@@ -363,17 +367,3 @@ def test_the_offline_count_file_is_never_followed_through_a_symlink(
     (logs / "offline-count").symlink_to(victim)
     answer_of(run_hook(client, isolated_home, event_for("beforeShellExecution"), port=free_port()))
     assert victim.read_text(encoding="utf-8") == "keep"
-
-
-@pytest.mark.parametrize("command", ["python3 -c 'print(1)'", "node -e 'console.log(1)'"])
-def test_a_one_liner_is_denied_by_the_whole_client_with_no_recorder(
-    client: Path, isolated_home: Path, command: str
-) -> None:
-    write_token(isolated_home)
-    event = {**event_for("beforeShellExecution"), "command": command}
-    answer = answer_of(run_hook(client, isolated_home, event, port=free_port()))
-    assert answer["permission"] == "deny"
-    assert (
-        "agentfly start" in answer["user_message"] and "agentfly start" in answer["agent_message"]
-    )
-    assert command not in hook_log(isolated_home)

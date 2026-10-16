@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import errno
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -69,11 +72,8 @@ def test_a_bad_agentfly_port_stops_serve_with_a_message(isolated_home: Path) -> 
 
 def snapshot(home: Path) -> dict[str, tuple[int, int]]:
     """Every file under HOME as (size, mtime in ns): a second serve must change none of it."""
-    return {
-        str(p.relative_to(home)): (p.stat().st_size, p.stat().st_mtime_ns)
-        for p in sorted(home.rglob("*"))
-        if p.is_file()
-    }
+    stats = {p: p.stat() for p in sorted(home.rglob("*")) if p.is_file()}
+    return {str(p.relative_to(home)): (st.st_size, st.st_mtime_ns) for p, st in stats.items()}
 
 
 def test_a_second_serve_on_a_taken_port_fails_and_changes_nothing(
@@ -120,3 +120,41 @@ def test_a_second_serve_on_a_taken_port_fails_and_changes_nothing(
         assert denied["permission"] == "deny" and "R1" in denied["user_message"]
     finally:
         stop_recorder(first)
+
+
+def test_bind_port_listens_at_once_and_refuses_a_second_taker() -> None:
+    port = free_port()
+    first = serve.bind_port(port)
+    try:
+        # listening already, before uvicorn starts: a connection is accepted into the backlog
+        socket.create_connection(("127.0.0.1", port), timeout=2).close()
+        with pytest.raises(OSError) as taken:
+            serve.bind_port(port)
+        assert taken.value.errno == errno.EADDRINUSE
+    finally:
+        first.close()
+
+
+@pytest.mark.parametrize("bad", ["abc", "-1", "70000", "1e3", ""])
+def test_the_port_option_rejects_a_bad_number(bad: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        serve.port_option(bad)
+    assert serve.port_option("0") == 0 and serve.port_option("65535") == 65535
+
+
+def test_serve_logs_the_address_it_listens_on(isolated_home: Path) -> None:
+    port = free_port()
+    process = subprocess.Popen(
+        [sys.executable, "-c", RECORDER_CODE, "serve", "--port", str(port)],
+        cwd=REPO,
+        env=client_env(isolated_home),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        wait_for_health(port, process)
+    finally:
+        stop_recorder(process)
+    assert process.stderr is not None
+    assert f"Uvicorn running on http://127.0.0.1:{port}" in process.stderr.read()

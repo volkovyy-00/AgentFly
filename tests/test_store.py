@@ -29,6 +29,7 @@ from agentfly.recorder.store import (
     build_step_record,
     graph_store,
 )
+from tests.helpers import REPO, client_env, free_port
 from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
 # The owner's real login file. Collection runs under the real HOME (conftest swaps it per test).
@@ -439,77 +440,51 @@ def test_only_a_separate_named_file_counts_as_test_credentials(tmp_path: Path) -
     assert pick(str(separate)) == separate
 
 
-def run_live_tests(home: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Only the live tests, in a child pytest whose HOME holds a real-looking neo4j.env."""
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", **extra_env}
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/test_store.py",
-            "-k",
-            "live",
-            "-q",
-            "-rs",
-            "-p",
-            "no:cacheprovider",
-        ],  # fmt: skip
-        cwd=Path(__file__).resolve().parents[1],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-
-
 @pytest.mark.parametrize(
-    "variant", ["unset", "names the real login file", "separate file, dead port"]
+    "named_test_file", [False, True], ids=["unset", "separate file, dead port"]
 )
-def test_database_tests_skip_and_never_touch_the_real_login(tmp_path: Path, variant: str) -> None:
-    # A listener stands in for the Neo4j named in the real login file: it must see no connection.
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(8)
-    listener.settimeout(0.2)
-    port = listener.getsockname()[1]
+def test_database_tests_skip_and_never_touch_the_real_login(
+    tmp_path: Path, named_test_file: bool
+) -> None:
+    """A child pytest runs only the live tests under a HOME whose neo4j.env names a listener.
+
+    The listener stands in for the owner's database: it must see no connection, and every live
+    test must skip. (A variable naming the real login file is covered by the helper test above.)
+    """
     home = tmp_path / "home"
     real = home / ".config" / "agentfly" / "neo4j.env"
     real.parent.mkdir(parents=True)
-    real.write_text(
-        f"NEO4J_URI=bolt://127.0.0.1:{port}\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-real\n",
-        encoding="utf-8",
-    )
-    extra: dict[str, str] = {}
-    if variant == "names the real login file":
-        extra[TEST_ENV_VAR] = str(real)
-    if variant == "separate file, dead port":
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            dead = probe.getsockname()[1]
-        separate = tmp_path / "test-db.env"
-        separate.write_text(
-            f"NEO4J_URI=bolt://127.0.0.1:{dead}\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-test\n",
+    env = client_env(home)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        listener.settimeout(0.2)
+        real.write_text(
+            f"NEO4J_URI=bolt://127.0.0.1:{listener.getsockname()[1]}\n"
+            "NEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-real\n",
             encoding="utf-8",
         )
-        extra[TEST_ENV_VAR] = str(separate)
-    try:
-        result = run_live_tests(home, extra)
-        connections = 0
-        try:
-            while True:
-                listener.accept()[0].close()
-                connections += 1
-        except OSError:
-            pass
-    finally:
-        listener.close()
+        if named_test_file:
+            separate = tmp_path / "test-db.env"
+            separate.write_text(
+                f"NEO4J_URI=bolt://127.0.0.1:{free_port()}\n"
+                "NEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-test\n",
+                encoding="utf-8",
+            )
+            env[TEST_ENV_VAR] = str(separate)
+        child = [sys.executable, "-m", "pytest", "tests/test_store.py", "-k", "live", "-q", "-rs"]
+        result = subprocess.run(
+            [*child, "-p", "no:cacheprovider"],
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        with pytest.raises(OSError):  # the accept times out: nobody connected
+            listener.accept()
     assert result.returncode == 0, result.stdout + result.stderr
     assert " skipped" in result.stdout and "passed" not in result.stdout
-    assert connections == 0
     assert "pw-real" not in result.stdout + result.stderr
-    if variant == "separate file, dead port":
-        assert "unreachable" in result.stdout
-    else:
-        assert TEST_ENV_VAR in result.stdout
+    assert ("unreachable" if named_test_file else TEST_ENV_VAR) in result.stdout

@@ -61,7 +61,7 @@ _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell 
 # outbound, plus R0's guard paths. tests/test_offline_guard.py runs both over the same cases.
 _ALWAYS_OUTBOUND: frozenset[str] = frozenset({"gh", "aws"})
 _HOSTED_OUTBOUND: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
-_PYTHON, _NODE = "python", "node"  # name prefixes: python3.12, nodejs
+_INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
 _GUARD_PATHS: tuple[str, ...] = (
     ".config/agentfly",
     ".local/share/agentfly",
@@ -211,26 +211,66 @@ def _host_of_token(token: str) -> str | None:
     return None
 
 
+def _interpreter(name: str) -> str | None:
+    """'python' for python, python3, python3.12; 'node' for node, nodejs, node18; else None."""
+    for family in _INTERPRETERS:
+        rest: str = name.removeprefix(family)
+        if rest != name and (not rest.strip("0123456789.") or (family == "node" and rest == "js")):
+            return family
+    return None
+
+
+def _python_one_liner(args: list[str]) -> bool:
+    """`-c` in python's own options, found letter by letter (`-Sc`, `-c1`, `-X dev -c`)."""
+    options = iter(args)
+    for arg in options:
+        if arg == "--" or not arg.startswith("-") or arg.startswith("-m"):
+            return False  # the script (first plain word), `--`, or `python -m module`
+        if arg.startswith("--"):
+            if arg == "--check-hash-based-pycs":
+                next(options, None)
+            continue
+        for index, letter in enumerate(arg[1:], 1):
+            if letter == "c":
+                return True
+            if letter == "m":
+                return False
+            if letter in "WXQ":  # the rest of the word, or the next word, is its value
+                if index == len(arg) - 1:
+                    next(options, None)
+                break
+    return False
+
+
+def _node_one_liner(args: list[str]) -> bool:
+    """`-e`, `-p`, `--eval[=]`, `--print[=]` before node's script.
+
+    Node has too many options that take a value to walk past them, so the options end at the
+    first word that names a script file or at `--`.
+    """
+    for arg in args:
+        if arg == "--" or arg.endswith((".js", ".mjs", ".cjs", ".ts")):
+            return False
+        if arg.startswith(("--eval", "--print")):
+            return True
+        if arg.startswith("-") and not arg.startswith("--") and arg[1:].isalpha():
+            if "e" in arg[1:] or "p" in arg[1:]:
+                return True
+    return False
+
+
 def _inline_code(argv: list[str], names: list[str]) -> bool:
     """An inline one-liner: `python -c`, `node -e` (SPEC section 9 denies every one).
 
-    Looks at the words right after the interpreter, up to its script or `-m`, so the `-c` of
-    `bash -c 'python3 script.py'` or the `-c` of `python3 -m pytest -c cfg` is not taken for it.
+    Only the words after the interpreter are looked at, so the `-c` of `bash -c 'python3 x.py'`
+    or of `python3 -m pytest -c cfg` is not taken for it.
     """
     for index, name in enumerate(names):
-        python, node = name.startswith(_PYTHON), name.startswith(_NODE)
-        if not (python or node):
-            continue
-        for arg in argv[index + 1 : index + 7]:
-            if arg in ("-m", "--") or arg.endswith((".py", ".js", ".mjs", ".cjs", ".ts")):
-                break
-            if node and arg in ("--eval", "--print"):
-                return True
-            letters: str = arg[1:] if arg.startswith("-") else ""
-            if letters.isalpha() and (
-                ("c" in letters and python) or (("e" in letters or "p" in letters) and node)
-            ):
-                return True
+        family: str | None = _interpreter(name)
+        if family == "python" and _python_one_liner(argv[index + 1 :]):
+            return True
+        if family == "node" and _node_one_liner(argv[index + 1 :]):
+            return True
     return False
 
 
@@ -240,9 +280,7 @@ def _outbound_words(argv: list[str], text: str) -> bool:
     names: list[str] = [a.split("/")[-1].lower() for a in argv]
     if any(n in _ALWAYS_OUTBOUND for n in names) or ("git" in names and "push" in lower):
         return True
-    if _inline_code(argv, names) or (
-        any(n.startswith((_PYTHON, _NODE)) for n in names) and "http" in text
-    ):
+    if _inline_code(argv, names) or (any(map(_interpreter, names)) and "http" in text):
         return True
     if any(n in _HOSTED_OUTBOUND for n in names):
         hosts = [h for h in (_host_of_token(a) for a in argv) if h]
