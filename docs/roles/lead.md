@@ -33,7 +33,7 @@ In Codex or Cursor (no hook, no system prompt) the owner pastes: "You are the Ag
 ## Handoff (/handoff <phase>)
 1. Overwrite `docs/STATE.md`: 60 lines or fewer, under 9,000 characters, facts and IDs, no history. Keep the formats state-check reads:
    - `Pending decisions: D2 D3 …` (every decision whose status is proposed);
-   - under `## In flight`, one row per card `- <card> · <worker> · <worktree path> · <branch> · <report path>`, or `none`;
+   - under `## In flight`, one row per card `- <card> · <worker> · <worktree path> · <branch> · <report path> · docs/briefs/<card>.md`, or `none`;
    - under `## Waiting on owner`, numbered items `1.`.
 2. Make `BOARD.md` and `DECISIONS.md` agree with STATE. A done card collapses to one line under `## Done`: `- S1 ✅ <date> · <report path> · changed D9 D11 · body: git show <sha>:docs/BOARD.md`.
 3. Run `docs/roles/state-check.sh --write-index`, then `docs/roles/state-check.sh`; it must end in `OK`. Check machine state fresh and mark each item verified or "as of <time>".

@@ -13,8 +13,8 @@ Pending decisions: D13 D16
 - V1 split into V1a (worker) and V1b (lead, after S3/S5). V2 depends on V1a, runs ∥ S3/S5 on isolated port/HOME. V2–V9 not started.
 
 ## In flight
-- S3 · worker-backend · .claude/worktrees/ag-s3-rule-fit · ag-s3-rule-fit · docs/spikes/S3-rule-fit.md
-- V1a · worker-docs · .claude/worktrees/ag-v1a-spec · ag-v1a-spec · docs/reports/V1a.md
+- S3 · worker-backend · .claude/worktrees/ag-s3-rule-fit · ag-s3-rule-fit · docs/spikes/S3-rule-fit.md · docs/briefs/S3.md
+- V1a · worker-docs · .claude/worktrees/ag-v1a-spec · ag-v1a-spec · docs/reports/V1a.md · docs/briefs/V1a.md
 
 ## Machine state (verified 2026-10-16 00:55 CEST unless marked)
 - /Library/Application Support/Cursor/hooks.json and /Library/Application Support/AgentFly/: absent (verified).
@@ -28,7 +28,7 @@ Pending decisions: D13 D16
 - For S5, global hooks must be installed again first: `/tmp/af-spike/s1.sh real` (user-level, moves repo hooks aside) or `s2.sh install` (sudo); then `s1.sh restore` or `s2.sh restore` after.
 
 ## Waiting on owner
-1. Start the S3 and V1a worker sessions (briefs given in chat 2026-10-16).
+1. Start the S3 and V1a worker sessions (briefs in docs/briefs/).
 2. D13 after S3, D16 after S5.
 3. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
 
@@ -51,7 +51,7 @@ Pending decisions: D13 D16
 - Python 3.13 is the system interpreter here; AGENTS.md "Hook facts" still say Cursor 3.5.17 (now 3.24.12); V1 rewrites it.
 
 ## Next 3 actions
-1. Verify V1a (diff --stat, check command, read SPEC/AGENTS), merge to main; then dispatch V2 (brief ready).
+1. Verify V1a (diff --stat, check command, read SPEC/AGENTS), merge to main; then dispatch V2 (docs/briefs/V2.md).
 2. Read S3's head; S5 after S3 (reinstall global hooks first; sudo re-run, hook dump, subagents).
 3. Then D13, D16, D9 revisit, V1b.
 
