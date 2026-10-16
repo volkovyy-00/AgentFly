@@ -67,11 +67,6 @@
   margin: 0;
   font-weight: 650;
 }
-.tr-view {
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: var(--raised);
-}
 .tr-health {
   display: flex;
   align-items: center;

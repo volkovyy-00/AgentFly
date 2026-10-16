@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
+import { IGNORE_KEY } from '../graph/ignoredSession'
 import { makeStep } from '../graph/testing'
 import type { Step } from '../graph/types'
 import { CARD_PREFS_KEY } from './cardPrefs'
@@ -67,6 +68,7 @@ const row = (order: number) => document.querySelector<HTMLElement>(`.tr-row[data
 beforeEach(() => {
   vi.useFakeTimers()
   window.localStorage.clear()
+  window.sessionStorage.clear()
   window.history.replaceState({}, '', '/')
 })
 
@@ -151,6 +153,23 @@ describe('polls that bring nothing new', () => {
     expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
     await advance(1000)
     expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+  })
+})
+
+describe('a session hidden by "New session" on the Graph tab', () => {
+  it('stays empty in the trail, and comes back as soon as another session appears', async () => {
+    const s = server()
+    stubFetch(s)
+    window.sessionStorage.setItem(IGNORE_KEY, 's')
+    renderReal()
+    await advance(0)
+    expect(rows()).toHaveLength(0)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+    expect(document.querySelector('.tr-rail')).toBeNull()
+    s.session = 'next'
+    s.markerSession = 'next'
+    await advance(1000)
+    expect(rows().length).toBeGreaterThan(0)
   })
 })
 
@@ -599,17 +618,41 @@ describe('layout and header', () => {
   })
 })
 
-describe('routing', () => {
-  it('shows the trail at ?view=trail and the lane graph otherwise', async () => {
+describe('routing: the trail is home, the lane graph is the Graph tab', () => {
+  async function open(url: string) {
+    window.history.replaceState({}, '', url)
+    const view = render(<App />)
+    await advance(0)
+    return view
+  }
+
+  it.each(['/', '/?view=trail', '/?view=unknown', '/?mock=1&len=20'])('shows the trail at %s', async (url) => {
     stubFetch(server())
-    window.history.replaceState({}, '', '/?view=trail')
-    const trail = render(<App />)
-    await advance(0)
+    await open(url)
     expect(document.querySelector('.tr')).not.toBeNull()
-    trail.unmount()
-    window.history.replaceState({}, '', '/')
-    render(<App />)
-    await advance(0)
+  })
+
+  it('shows the lane graph at ?view=graph, with the tabs above it', async () => {
+    stubFetch(server())
+    await open('/?view=graph')
     expect(document.querySelector('.tr')).toBeNull()
+    expect(document.querySelector('.react-flow')).not.toBeNull()
+    expect(screen.getByRole('link', { name: 'Graph' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Live Trail' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('has the same two tabs in the trail header, with Live Trail current', async () => {
+    stubFetch(server())
+    await open('/')
+    const nav = screen.getByRole('navigation', { name: 'Views' })
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Live Trail', 'Graph'])
+    expect(within(nav).getByRole('link', { name: 'Live Trail' }).getAttribute('aria-current')).toBe('page')
+    expect(within(nav).getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/?view=graph')
+  })
+
+  it('keeps the other query parameters when switching view', async () => {
+    stubFetch(server())
+    await open('/?mock=1&len=60&burst=10')
+    expect(screen.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/?mock=1&len=60&burst=10&view=graph')
   })
 })

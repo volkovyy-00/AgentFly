@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { readIgnored } from '../graph/ignoredSession'
 import { LONG_MARKED_ORDER, longSession } from '../graph/mock'
 import { parseSnapshot } from '../graph/snapshot'
 import type { Step } from '../graph/types'
@@ -100,7 +101,8 @@ function trailMock(len: number, rich: boolean): { steps: Step[]; markedOrder: nu
  * adds it to `?all=1` the marker needs its own request. It is used only when both
  * bodies name the same session. A failed or malformed steps request sets `offline`
  * (the last steps stay); a failed marker or `/health` request only hides what it
- * would have added. Steps never change once recorded, so a poll that brings no new
+ * would have added. A session the Graph tab's "New session" hid stays empty here too until another one
+ * appears. Steps never change once recorded, so a poll that brings no new
  * step keeps the previous array, so the step rows re-render nothing. Mock mode never
  * calls the server.
  */
@@ -142,7 +144,14 @@ export function useTrail(mock: boolean, len: number, burst: number, rich: boolea
         }
         setOffline(false)
         setHealth(parseHealth(healthBody))
-        const next = { steps: snapshot.steps, session: snapshot.session, markedOrder: lastMarker.current.order, loaded: true }
+        // The Graph tab's "New session" hides the session it was pressed on until another one appears; both tabs agree.
+        const hidden = snapshot.session !== null && snapshot.session === readIgnored()
+        const next = {
+          steps: hidden ? [] : snapshot.steps,
+          session: snapshot.session,
+          markedOrder: hidden ? null : lastMarker.current.order,
+          loaded: true,
+        }
         setState((prev) => {
           if (!prev.loaded || !sameSteps(prev, next)) return next
           return prev.markedOrder === next.markedOrder ? prev : { ...prev, markedOrder: next.markedOrder }

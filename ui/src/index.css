@@ -4,6 +4,7 @@
 @theme static {
   --color-canvas: #0e1116;
   --color-surface: #161b22;
+  --color-raised: #1c232c;
   --color-ink: #e6edf3;
   /* Muted text is for canvas and surface only; it fails 7:1 on the tinted fills. */
   --color-muted: #a8b3c5;
