@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import socket
+import subprocess
+import sys
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from neo4j import GraphDatabase
 
 import agentfly.recorder.app as app_module
 import agentfly.recorder.store as store_mod
+from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.paths import config_dir, credentials_path
 from agentfly.recorder.rules import Session
 from agentfly.recorder.store import (
@@ -24,26 +31,49 @@ from agentfly.recorder.store import (
 )
 from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
-# Read at collection, before the autouse fixture swaps HOME: the owner's real login (if any).
+# The owner's real login file. Collection runs under the real HOME (conftest swaps it per test).
+# Only the path is computed here: no test may read this file or open a connection with it.
 _REAL_CREDENTIALS = credentials_path()
-_HAS_CREDS: bool = _REAL_CREDENTIALS.is_file()
+TEST_ENV_VAR = "AGENTFLY_TEST_NEO4J_ENV"
 
 
-def _neo4j_reachable() -> bool:
-    if not _HAS_CREDS:
-        return False
+def neo4j_test_credentials(environ: Mapping[str, str], real: Path) -> Path | None:
+    """The credentials file the live tests may use: one the owner named for a test database.
+
+    None if the variable is unset, names a missing file, or names the real login file.
+    """
+    named: str = environ.get(TEST_ENV_VAR, "").strip()
+    if not named:
+        return None
+    path = Path(named).expanduser()
+    if not path.is_file() or path.resolve() == real.resolve():
+        return None
+    return path
+
+
+@pytest.fixture(scope="module")
+def neo4j_test_env() -> Path:
+    """Credentials for live tests, or a skip. Connects only here, so `-k 'not live'` never does."""
+    path = neo4j_test_credentials(os.environ, _REAL_CREDENTIALS)
+    if path is None:
+        pytest.skip(f"{TEST_ENV_VAR} does not name a separate test-database credentials file")
+    settings = neo4j_settings(path)
+    if settings is None:
+        pytest.skip(f"{TEST_ENV_VAR} file lacks NEO4J_URI, NEO4J_USERNAME or NEO4J_PASSWORD")
+    uri, user, password = settings
+    logging.getLogger("neo4j").setLevel(logging.CRITICAL)
     try:
-        from agentfly.recorder.check_db import main as check_main
+        driver = GraphDatabase.driver(
+            uri, auth=(user, password), connection_timeout=5, connection_acquisition_timeout=10
+        )
+        try:
+            driver.verify_connectivity()
+        finally:
+            driver.close()
+    except Exception as exc:  # noqa: BLE001 - the class name only, never the password
+        pytest.skip(f"test database unreachable ({type(exc).__name__})")
+    return path
 
-        return check_main() == 0  # reads the real login too
-    except Exception:  # noqa: BLE001
-        return False
-
-
-_live = pytest.mark.skipif(
-    not _neo4j_reachable(),
-    reason="Neo4j credentials missing or database unreachable",
-)
 
 _FORBIDDEN: tuple[str, ...] = (
     "demo-not-a-real-secret",
@@ -208,10 +238,9 @@ def test_hooks_stay_fast_when_store_write_fails(
         graph_store.enabled = previous_enabled
 
 
-@_live
-def test_live_step_appears_within_5s() -> None:
+def test_live_step_appears_within_5s(neo4j_test_env: Path) -> None:
     store = GraphStore()
-    store.start(_REAL_CREDENTIALS)
+    store.start(neo4j_test_env)
     assert store.enabled
     sid: str = f"appear-{uuid.uuid4()}"
     record = StepRecord(
@@ -241,10 +270,9 @@ def test_live_step_appears_within_5s() -> None:
     assert found
 
 
-@_live
-def test_live_merge_idempotent() -> None:
+def test_live_merge_idempotent(neo4j_test_env: Path) -> None:
     store = GraphStore()
-    store.start(_REAL_CREDENTIALS)
+    store.start(neo4j_test_env)
     assert store.enabled
     sid: str = f"idem-{uuid.uuid4()}"
     record = StepRecord(
@@ -282,10 +310,9 @@ def test_live_merge_idempotent() -> None:
     assert before >= 1
 
 
-@_live
-def test_live_two_sessions_share_file_and_rule_nodes() -> None:
+def test_live_two_sessions_share_file_and_rule_nodes(neo4j_test_env: Path) -> None:
     store = GraphStore()
-    store.start(_REAL_CREDENTIALS)
+    store.start(neo4j_test_env)
     assert store.enabled
     for _ in (1, 2):
         sid: str = f"share-{uuid.uuid4()}"
@@ -338,10 +365,9 @@ def test_live_two_sessions_share_file_and_rule_nodes() -> None:
     assert r1_n is not None and int(r1_n["c"]) == 1
 
 
-@_live
-def test_live_no_secret_properties_after_bearer_step() -> None:
+def test_live_no_secret_properties_after_bearer_step(neo4j_test_env: Path) -> None:
     store = GraphStore()
-    store.start(_REAL_CREDENTIALS)
+    store.start(neo4j_test_env)
     assert store.enabled
     session = Session(
         id=f"clean-{uuid.uuid4()}",
@@ -388,3 +414,102 @@ def test_builder_keeps_no_secret_in_any_stored_field(tmp_path: Path, raw: str) -
     }
     record: StepRecord = build_step_record(payload, session, "allow", None, order=1)
     assert SECRET not in repr(record)
+
+
+# ---------------------------------------------------------------- live tests and the real login
+
+
+def test_only_a_separate_named_file_counts_as_test_credentials(tmp_path: Path) -> None:
+    real = tmp_path / "home" / ".config" / "agentfly" / "neo4j.env"
+    real.parent.mkdir(parents=True)
+    real.write_text("NEO4J_URI=bolt://real\n", encoding="utf-8")
+    separate = tmp_path / "test-db.env"
+    separate.write_text("NEO4J_URI=bolt://test\n", encoding="utf-8")
+    link = tmp_path / "link.env"
+    link.symlink_to(real)
+
+    def pick(value: str | None) -> Path | None:
+        env = {} if value is None else {TEST_ENV_VAR: value}
+        return neo4j_test_credentials(env, real)
+
+    assert pick(None) is None and pick("") is None and pick("  ") is None
+    assert pick(str(tmp_path / "missing.env")) is None
+    assert pick(str(real)) is None  # the real login file is refused
+    assert pick(str(link)) is None  # also through a symlink
+    assert pick(str(separate)) == separate
+
+
+def run_live_tests(home: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Only the live tests, in a child pytest whose HOME holds a real-looking neo4j.env."""
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", **extra_env}
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_store.py",
+            "-k",
+            "live",
+            "-q",
+            "-rs",
+            "-p",
+            "no:cacheprovider",
+        ],  # fmt: skip
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(
+    "variant", ["unset", "names the real login file", "separate file, dead port"]
+)
+def test_database_tests_skip_and_never_touch_the_real_login(tmp_path: Path, variant: str) -> None:
+    # A listener stands in for the Neo4j named in the real login file: it must see no connection.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    listener.settimeout(0.2)
+    port = listener.getsockname()[1]
+    home = tmp_path / "home"
+    real = home / ".config" / "agentfly" / "neo4j.env"
+    real.parent.mkdir(parents=True)
+    real.write_text(
+        f"NEO4J_URI=bolt://127.0.0.1:{port}\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-real\n",
+        encoding="utf-8",
+    )
+    extra: dict[str, str] = {}
+    if variant == "names the real login file":
+        extra[TEST_ENV_VAR] = str(real)
+    if variant == "separate file, dead port":
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = probe.getsockname()[1]
+        separate = tmp_path / "test-db.env"
+        separate.write_text(
+            f"NEO4J_URI=bolt://127.0.0.1:{dead}\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw-test\n",
+            encoding="utf-8",
+        )
+        extra[TEST_ENV_VAR] = str(separate)
+    try:
+        result = run_live_tests(home, extra)
+        connections = 0
+        try:
+            while True:
+                listener.accept()[0].close()
+                connections += 1
+        except OSError:
+            pass
+    finally:
+        listener.close()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert " skipped" in result.stdout and "passed" not in result.stdout
+    assert connections == 0
+    assert "pw-real" not in result.stdout + result.stderr
+    if variant == "separate file, dead port":
+        assert "unreachable" in result.stdout
+    else:
+        assert TEST_ENV_VAR in result.stdout

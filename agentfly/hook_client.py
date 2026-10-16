@@ -48,6 +48,8 @@ _MCP_KEEP: tuple[str, ...] = (
     "cwd",
     "workspace_roots",
     "tool_use_id",
+    "parent_tool_call_id",  # a subagent's link to its parent's Task call (D21 A)
+    "parent_conversation_id",
     "tool_name",
     "mcp_server_name",
     "server",
@@ -59,7 +61,7 @@ _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell 
 # outbound, plus R0's guard paths. tests/test_offline_guard.py runs both over the same cases.
 _ALWAYS_OUTBOUND: frozenset[str] = frozenset({"gh", "aws"})
 _HOSTED_OUTBOUND: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
-_INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
+_PYTHON, _NODE = "python", "node"  # name prefixes: python3.12, nodejs
 _GUARD_PATHS: tuple[str, ...] = (
     ".config/agentfly",
     ".local/share/agentfly",
@@ -209,13 +211,38 @@ def _host_of_token(token: str) -> str | None:
     return None
 
 
+def _inline_code(argv: list[str], names: list[str]) -> bool:
+    """An inline one-liner: `python -c`, `node -e` (SPEC section 9 denies every one).
+
+    Looks at the words right after the interpreter, up to its script or `-m`, so the `-c` of
+    `bash -c 'python3 script.py'` or the `-c` of `python3 -m pytest -c cfg` is not taken for it.
+    """
+    for index, name in enumerate(names):
+        python, node = name.startswith(_PYTHON), name.startswith(_NODE)
+        if not (python or node):
+            continue
+        for arg in argv[index + 1 : index + 7]:
+            if arg in ("-m", "--") or arg.endswith((".py", ".js", ".mjs", ".cjs", ".ts")):
+                break
+            if node and arg in ("--eval", "--print"):
+                return True
+            letters: str = arg[1:] if arg.startswith("-") else ""
+            if letters.isalpha() and (
+                ("c" in letters and python) or (("e" in letters or "p" in letters) and node)
+            ):
+                return True
+    return False
+
+
 def _outbound_words(argv: list[str], text: str) -> bool:
     """`text` is the case-folded command, for the `http` test."""
     lower: list[str] = [a.lower() for a in argv]
     names: list[str] = [a.split("/")[-1].lower() for a in argv]
     if any(n in _ALWAYS_OUTBOUND for n in names) or ("git" in names and "push" in lower):
         return True
-    if any(n.startswith(_INTERPRETERS) for n in names) and "http" in text:
+    if _inline_code(argv, names) or (
+        any(n.startswith((_PYTHON, _NODE)) for n in names) and "http" in text
+    ):
         return True
     if any(n in _HOSTED_OUTBOUND for n in names):
         hosts = [h for h in (_host_of_token(a) for a in argv) if h]

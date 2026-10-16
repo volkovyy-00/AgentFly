@@ -1,9 +1,55 @@
 # V2b: Hardened hook client: never fails, fixed port, strips everything, offline guard
-Status: done (as of 2026-10-16 12:00)
-Result: All acceptance items work except 95 % of calls under 50 ms: measured median 74 ms, p95 122 ms with the recorder up; bare `python -I -S` is 41 / 61 ms in the same run. Wait budget stays 0.5 s (a silent recorder costs ~570 ms per call).
-Evidence: code 97a1633 (first commit 1916e0e) on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 503 passed (296 before); new tests in tests/test_hook_client.py, test_offline_guard.py, test_serve_port.py, test_install_docs.py.
-Needs owner: SPEC §9/D4 say the guard denies every inline `python -c`/`node -e`; the brief allows `python3 -c 'print(1)'`. I followed the brief (deny only if the text mentions http). Fix SPEC §9, or tell me to deny all one-liners.
-Details: see "## 2026-10-16 12:00" below.
+Status: done (as of 2026-10-16 14:30)
+Result: Addendum items 5-8 and the D21 test are done: a second serve fails and changes nothing, 401/403 get the guard, docs say `/` is the trail, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV, every inline one-liner is denied. Latency still misses 50 ms (median 53 ms, p95 69 ms).
+Evidence: commit cd465d8 on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 552 passed, 4 skipped (the live Neo4j tests); main merged twice (f2941b6, 51c8bff).
+Needs owner: none
+Details: see "## 2026-10-16 14:30" below.
+
+## 2026-10-16 14:30
+
+Commit cd465d8. Merged `main` into `ag-v2b-hook-client` first (f2941b6: V8 and the addendum; 51c8bff: D21 A and the updated brief; both clean). Files changed in this round: `agentfly/cli/serve.py`, `agentfly/hook_client.py`, `README.md`, `HOOKS.md`, `tests/test_serve_port.py`, `test_offline_guard.py`, `test_hook_client.py`, `test_install_docs.py`, `test_store.py` and this report (`agentfly/recorder/app.py` needed no change).
+
+### (5) `agentfly serve` and the token
+- Cause: uvicorn runs the app's startup, which writes the token, *before* it opens its socket (uvicorn docs: "Don't open socket until after application startup", 0.11.2; `Server.startup` in the installed 0.54). A second `serve` therefore overwrote the first one's token and only then failed to bind. Before the fix the new test failed on exactly that: the token differed.
+- Fix, in `agentfly/cli/serve.py` (not `app.py`; the app was not the problem): `bind_port` takes 127.0.0.1:PORT before anything else; if it is taken, `serve` prints "port N is already in use ... nothing was changed" and exits 1. The bound socket is handed to uvicorn (`Server.run(sockets=[sock])`), so nothing can take the port between the check and the start.
+- The client already sent every non-200 answer (a 401 or 403 included) to the offline guard. New cases pin it: 401 and 403 with and without an `{"permission": "allow"}` body give a deny for `curl https://x.com` and an allow for `ls`.
+- Test (`tests/test_serve_port.py::test_a_second_serve_on_a_taken_port_fails_and_changes_nothing`): temporary HOME and `AGENTFLY_PORT`; the first recorder gets a `.env` read; then a second `serve` exits non-zero and names the port; every file under HOME (size and mtime) and the token bytes are unchanged; the first recorder still denies `curl https://example.invalid` with R1.
+
+### (6) README.md and HOOKS.md
+- `/` is the Live Trail, the lane graph is the Graph tab at `/?view=graph` (`/?view=trail` also opens the trail); the mock is `/?mock=1` for the trail and `/?view=graph&mock=1` for the graph. README section 4 is rewritten; the `ui/` row, the GIF caption, HOOKS.md's page section, demo line and checkpoint table follow. Test: `tests/test_install_docs.py::test_readme_and_hooks_md_name_the_trail_as_home_and_the_graph_tab`.
+
+### (7) Live Neo4j tests
+- `tests/test_store.py` no longer reads `~/.config/agentfly/neo4j.env` and no longer connects at collection (the old `_neo4j_reachable()` ran `check_db.main()` with the real login at import). The live tests take a module fixture, `neo4j_test_env`, that returns the file named by `AGENTFLY_TEST_NEO4J_ENV` or skips (unset, missing file, the real login file even through a symlink, incomplete file, database unreachable). It connects only when a live test is selected, so `-k 'not live'` never does.
+- Tests: `test_only_a_separate_named_file_counts_as_test_credentials`, and `test_database_tests_skip_and_never_touch_the_real_login` in three variants (unset; names the real login file; separate file with a dead port). Each runs a child pytest of the live tests with a HOME whose `neo4j.env` points at a local listener, and asserts all 4 live tests skip and the listener sees zero connections.
+- Mistake worth knowing: my first version of that test had "live" in its name, so the child `pytest -k live` selected it and spawned more children (a fork loop). I killed it within minutes, renamed the test, and the processes are gone. Nothing else was affected.
+- The 4 live tests have never run against a real database here; they are skipped until the owner names a test-database file.
+
+### (8) One-liners (SPEC §9)
+- The offline guard now denies every inline `python -c` / `node -e` (also `-p`, `--eval`, `--print`, combined flags such as `-Sc`, versioned names such as `python3.12` and `nodejs`, bare and wrapped in `bash -c`, `env` or `sudo`), `python3 -c 'print(1)'` included. A one-liner is found by the words right after the interpreter, up to its script or `-m`, so `bash -c 'python3 script.py'`, `python3 -m pytest -p no:cacheprovider` and `node app.js` stay allowed. A command that merely mentions `http` next to an interpreter is still denied.
+- Known limit of a word-level scan: a script without a `.py`/`.js` suffix followed by `-c` counts as a one-liner.
+
+### D21 A: the subagent link
+- The client sends `parent_tool_call_id` (and `tool_use_id`, `conversation_id`) unchanged. It was only lost on MCP events: the MCP allowlist had no place for it, so a subagent's MCP call arrived without its parent link. Both ids (`parent_tool_call_id`, `parent_conversation_id`) are now in the allowlist.
+- Tests (`tests/test_hook_client.py`): `parent_tool_call_id` and the child's own `conversation_id` reach the recorder body unchanged for `beforeShellExecution`, `beforeReadFile`, `afterFileEdit`, `preToolUse` (Write and MCP) and `beforeMCPExecution`, with planted text still absent; the parent's `Task` `preToolUse` keeps `tool_use_id` and a `subagentStart` keeps `parent_conversation_id`, `tool_call_id` and `parent_tool_call_id`. What the recorder does with the link is V5's.
+
+### Measurements (this Mac, quieter than at 12:00; recorder up, real client file with `python -I -S`, interleaved, 200 calls)
+| | median | p95 |
+|---|---|---|
+| bare `python -I -S -c pass` | 29.6 ms | 45.1 ms |
+| client, recorder up | 53.4 ms | 69.2 ms |
+The 50 ms target is still missed; the owner accepted that until V3 (the bundled Python). The wait budget stays 0.5 s.
+
+### Check output
+```
+$ uv run ruff check . && uv run ruff format --check . && uv run pytest -q -rs     (AGENTFLY_TEST_NEO4J_ENV unset)
+552 passed, 4 skipped (the live Neo4j tests: "AGENTFLY_TEST_NEO4J_ENV does not name a separate test-database credentials file")
+```
+Not run: `npm --prefix ui ci && npm --prefix ui run check` and the stale-build check; this card changes no `ui/` file.
+
+### Gaps outside my files
+- `AGENTS.md` still says Neo4j live tests / `check_db` use the real login, still describes the client as failing open, and the "Hook facts" section lacks D21's `parent_tool_call_id` and the fixed port; the Testing section does not list the new test files. SPEC §8/§9 text for the 401/403 rule and the `offline-count` file is V1b's.
+- `.env.example` does not mention `AGENTFLY_TEST_NEO4J_ENV` (outside the touch list; README and HOOKS.md do).
+
 
 ## 2026-10-16 12:00
 

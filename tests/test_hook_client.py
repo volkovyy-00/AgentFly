@@ -527,3 +527,77 @@ def test_latency_with_the_recorder_up(client: Path, isolated_home: Path) -> None
 def test_wait_budget_is_half_a_second_and_the_hook_timeout_is_longer() -> None:
     assert client_module._BUDGET_S == 0.5
     assert re.search(r'"timeout": 1\b', (REPO / "install.sh").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------- D21 A: the subagent link
+
+PARENT_CALL = "toolu_parent_task_call_01"
+SUBAGENT_EVENTS: dict[str, dict[str, Any]] = {
+    "beforeShellExecution": {"command": "ls", "cwd": "/proj", "tool_use_id": "t1"},
+    "beforeReadFile": {"file_path": "/proj/a.txt", "content": PLANTED, "attachments": []},
+    "afterFileEdit": {"file_path": "/proj/a.txt", "edits": [{"new_string": PLANTED}]},
+    "preToolUse": {
+        "tool_name": "Write",
+        "tool_use_id": "t2",
+        "tool_input": {"file_path": "/proj/w.py", "content": PLANTED},
+    },
+    "preToolUse MCP": {
+        "hook_event_name": "preToolUse",
+        "tool_name": "MCP:search",
+        "tool_use_id": "t3",
+        "tool_input": {"query": PLANTED},
+    },
+    "beforeMCPExecution": {
+        "mcp_server_name": "linear",
+        "tool_name": "create_issue",
+        "tool_input": json.dumps({"title": PLANTED}),
+        "command": f"npx {PLANTED}",
+    },
+}
+
+
+@pytest.mark.parametrize("name", list(SUBAGENT_EVENTS))
+def test_a_subagents_parent_tool_call_id_reaches_the_recorder_unchanged(
+    client: Path, isolated_home: Path, name: str
+) -> None:
+    write_token(isolated_home)
+    event = {
+        "hook_event_name": name.split(" ")[0],
+        "conversation_id": "child-chat",  # a subagent has its own conversation id
+        "parent_tool_call_id": PARENT_CALL,
+        **SUBAGENT_EVENTS[name],
+    }
+    with StubRecorder() as stub:
+        result = run_hook(client, isolated_home, event, port=stub.port)
+    answer_of(result)
+    body = stub.bodies[0]
+    assert body["parent_tool_call_id"] == PARENT_CALL
+    assert body["conversation_id"] == "child-chat"
+    assert PLANTED not in stub.requests[0]["body"].decode() + result.stderr.decode()
+
+
+def test_the_parents_task_call_and_a_subagent_start_keep_the_ids_that_link_them(
+    client: Path, isolated_home: Path
+) -> None:
+    write_token(isolated_home)
+    task = {
+        "hook_event_name": "preToolUse",
+        "conversation_id": "parent-chat",
+        "tool_name": "Task",
+        "tool_use_id": PARENT_CALL,
+        "tool_input": {"prompt": PLANTED, "description": PLANTED},
+    }
+    start = {
+        "hook_event_name": "subagentStart",
+        "conversation_id": "child-chat",
+        "parent_conversation_id": "parent-chat",
+        "tool_call_id": PARENT_CALL,
+        "parent_tool_call_id": PARENT_CALL,
+    }
+    with StubRecorder() as stub:
+        answer_of(run_hook(client, isolated_home, task, port=stub.port))
+        answer_of(run_hook(client, isolated_home, start, port=stub.port))
+    task_body, start_body = stub.bodies
+    assert task_body["tool_use_id"] == PARENT_CALL and "tool_input" not in task_body
+    assert start_body["parent_conversation_id"] == "parent-chat"
+    assert start_body["tool_call_id"] == PARENT_CALL == start_body["parent_tool_call_id"]

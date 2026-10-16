@@ -66,10 +66,26 @@ GUARD_PATH_COMMANDS = [
     "echo '{}' > /Library/Application\\ Support/Cursor/hooks.json",
     "cat ~/.CONFIG/AgentFly/token",
 ]
+# SPEC section 9: every inline one-liner is denied, whether or not it mentions http.
+ONE_LINERS = [
+    "python3 -c 'print(1)'",
+    "python -c 'import os'",
+    "python3.12 -c 'print(1)'",
+    "python3 -Sc 'print(1)'",
+    "/usr/bin/python3 -c 'print(1)'",
+    "node -e 'console.log(1)'",
+    "node -p 1+1",
+    "node --eval 'console.log(1)'",
+    "nodejs -e 'console.log(1)'",
+]
 ALLOWED = [
+    "python3 script.py",
+    "python3 -m pytest -p no:cacheprovider -q",
+    "python3 -V",
+    "node app.js",
+    "npm test",
     "ls",
     "git status",
-    "python3 -c 'print(1)'",
     "curl localhost:8000/health",
     "curl http://127.0.0.1:8787/health",
     "curl http://192.168.1.10",
@@ -89,6 +105,18 @@ def test_outbound_commands_are_denied_bare_and_wrapped(command: str) -> None:
     assert answer["agent_message"].endswith(
         "Do not retry with another tool or language. Stop and tell the user."
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    ONE_LINERS
+    + [f"bash -c {shlex.quote(c)}" for c in ONE_LINERS]
+    + [f"sudo {c}" for c in ONE_LINERS],
+)
+def test_every_inline_one_liner_is_denied_even_without_http(command: str) -> None:
+    answer, reason = guard.offline_answer(command)
+    assert answer["permission"] == "deny" and reason == "outbound"
+    assert "agentfly start" in answer["user_message"]
 
 
 @pytest.mark.parametrize("command", GUARD_PATH_COMMANDS)
@@ -250,6 +278,9 @@ def test_a_slow_recorder_does_not_hide_a_deny_for_an_outbound_command(
     [
         {"mode": "status", "status": 500},
         {"mode": "status", "status": 401},
+        {"mode": "status", "status": 403},
+        {"mode": "status", "status": 401, "raw": b'{"permission": "allow"}'},
+        {"mode": "status", "status": 403, "raw": b'{"permission": "allow"}'},
         {"mode": "status", "status": 200, "raw": b"not json"},
         {"mode": "status", "status": 200, "raw": b'["allow"]'},
         {"mode": "status", "status": 200, "raw": b'{"permission": "maybe"}'},
@@ -281,7 +312,7 @@ def test_each_offline_allow_is_in_the_hook_log_without_the_command(
 ) -> None:
     write_token(isolated_home)
     for command in (
-        "python3 -c 'print(1)'",
+        "python3 script.py --flag",
         "curl localhost:8000/health",
         "curl http://192.168.1.10",
     ):
@@ -297,7 +328,7 @@ def test_each_offline_allow_is_in_the_hook_log_without_the_command(
         and entry["reason"] == "recorder_unreachable"
         for entry in lines
     )
-    assert "print" not in hook_log(isolated_home) and "192.168" not in hook_log(isolated_home)
+    assert "script.py" not in hook_log(isolated_home) and "192.168" not in hook_log(isolated_home)
 
 
 def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
@@ -332,3 +363,17 @@ def test_the_offline_count_file_is_never_followed_through_a_symlink(
     (logs / "offline-count").symlink_to(victim)
     answer_of(run_hook(client, isolated_home, event_for("beforeShellExecution"), port=free_port()))
     assert victim.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("command", ["python3 -c 'print(1)'", "node -e 'console.log(1)'"])
+def test_a_one_liner_is_denied_by_the_whole_client_with_no_recorder(
+    client: Path, isolated_home: Path, command: str
+) -> None:
+    write_token(isolated_home)
+    event = {**event_for("beforeShellExecution"), "command": command}
+    answer = answer_of(run_hook(client, isolated_home, event, port=free_port()))
+    assert answer["permission"] == "deny"
+    assert (
+        "agentfly start" in answer["user_message"] and "agentfly start" in answer["agent_message"]
+    )
+    assert command not in hook_log(isolated_home)

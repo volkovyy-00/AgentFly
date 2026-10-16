@@ -116,13 +116,15 @@ exit 0 and a warning on stderr.
    3.24.12). Only `beforeShellExecution` keeps its `command`, and only in the request body.
 3. `POST` the stripped payload to `http://127.0.0.1:8787/hook`, header `X-Recorder-Token`.
    The port is fixed (D25): the client reads no environment variable and no port file.
-   Wait budget 0.5 s in total (connect and answer).
+   Wait budget 0.5 s in total (connect and answer). Any answer other than a 200 with a
+   permission object (a 401 or 403 included) counts as "recorder did not answer": the
+   offline guard applies, never allow.
 4. Print **only** the permission JSON on stdout, and always exit 0.
 5. Append `{ts, event, decision}` to the hook log. The log keeps no command text.
 6. If the recorder is down, slow, or answers with an error: the **offline guard** (SPEC §9)
    answers. It denies outbound commands (`curl`, `wget`, `nc`, `scp`, `ssh`, `rsync` unless
-   the host is local or private; `gh`, `aws`, `git push`; a `python`/`python3`/`node` command
-   that mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
+   the host is local or private; `gh`, `aws`, `git push`; every inline `python -c` / `node -e`
+   one-liner, as SPEC §9 says, and any other `python`/`node` command that mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
    names an AgentFly folder or a `hooks.json`. The message says to run `agentfly start`. It
    allows everything else and logs the call with `offline: true`.
 
@@ -232,18 +234,25 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 - `uv run python -m agentfly.recorder.check_db` → `connected` (failures print the
   exception class name only, never the password).
 - Queue full → drop + warning. Write failures → warning with error class only.
-- Live tests in `tests/test_store.py` skip when Aura is unreachable.
+- Live tests (`test_live_*` in `tests/test_store.py`) never read `~/.config/agentfly/neo4j.env`.
+  They run only when `AGENTFLY_TEST_NEO4J_ENV` names a separate credentials file for a
+  test database (same `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` names), and skip
+  otherwise, also when that database is unreachable or the file is the real login file.
 - Creds file: `~/.config/agentfly/neo4j.env`. On this machine Aura needed
   `neo4j+ssc://` (not `neo4j+s://`) because of TLS cert verification; see
   `.env.example`. Restart the recorder after changing the URI.
 - Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
   land in Aura. Restart uvicorn so the running process reloads the env.
 
-## Live graph (`ui/` + memory API)
+## The page (`ui/` + memory API)
 
-- Page: the [`ui/`](ui/) build at `/` (Vite + React; a timeline of the 20 most
-  recent steps with, above them, a summary box and up to 5 flagged older steps;
-  `/?mock=1` replays a sample session without an agent).
+- Page: the [`ui/`](ui/) build (Vite + React). `/` is the **Live Trail**: a badge on
+  every step, routine allowed steps folded, a Why card for each block or warning.
+  The lane graph (a timeline of the 20 most recent steps with, above them, a
+  summary box and up to 5 flagged older steps) is the Graph tab at
+  `/?view=graph`; `/?view=trail` and any other `view` value open the trail.
+  `/?mock=1` replays a sample session in the trail without an agent
+  (`/?view=graph&mock=1` for the graph).
   Server memory: [`agentfly/recorder/memory.py`](agentfly/recorder/memory.py) (Part B).
 - `GET /` serves the committed `ui/dist` build (Host check only; no token); its
   assets are under `/assets/`. Both send `Cache-Control: no-cache`. If `ui/dist`
@@ -283,9 +292,10 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
   `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
   on server restart (lifespan).
 - Wrong Host → 403. No Cypher from the page.
-- Demo: start uvicorn → `uv run python fake_agent.py` → open
-  `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
-- UI-only rehearsal without an agent: `/?mock=1` (needs the recorder or `npm --prefix ui run dev`).
+- Demo: `uv run agentfly serve` → `uv run python fake_agent.py` → open
+  `http://127.0.0.1:8787/` (the trail) or `http://127.0.0.1:8787/?view=graph`
+  (the lane graph) — expect the `.env` read marked and the blocked step → R1.
+- UI-only rehearsal without an agent: `/?mock=1` for the trail, `/?view=graph&mock=1` for the graph (needs the recorder or `npm --prefix ui run dev`).
 - UI local dev: `npm --prefix ui run dev` proxies `/api` to
   `http://127.0.0.1:8787` with `changeOrigin` so the Host gate accepts it.
 
@@ -303,7 +313,7 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 | Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
 | Command cleaning (`agentfly/recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
 | Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
-| Live graph page + `/api/steps` | **Done** (memory; Host only) |
+| Page (trail at `/`, lane graph at `/?view=graph`) + `/api/steps` | **Done** (memory; Host only) |
 | R0 protect recorder | Not done |
 
 ---
