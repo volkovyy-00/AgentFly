@@ -25,6 +25,22 @@ describe('parseSnapshot', () => {
     expect(parseSnapshot({ session: null, steps: [] })).toEqual({ session: null, steps: [], ...NO_GROUP })
   })
 
+  it('knows the highlighted verdict (it is not turned into a warning)', () => {
+    const { steps } = parseSnapshot({ session: 's', steps: [{ ...good, verdict: 'highlighted' }] })!
+    expect(steps[0].verdict).toBe('highlighted')
+  })
+
+  it('reads rule_text and the two messages only when they are strings, and adds no keys otherwise', () => {
+    const rich = parseSnapshot({
+      session: 's',
+      steps: [{ ...good, rule_text: 'RT', user_message: 'UM', agent_message: 'AM' }],
+    })!.steps[0]
+    expect(rich).toMatchObject({ rule_text: 'RT', user_message: 'UM', agent_message: 'AM' })
+    const bad = parseSnapshot({ session: 's', steps: [{ ...good, rule_text: 5, user_message: null }] })!.steps[0]
+    expect(Object.keys(bad)).not.toContain('rule_text')
+    expect(Object.keys(bad)).not.toContain('user_message')
+  })
+
   it('rejects a body that is not an object', () => {
     expect(parseSnapshot(null)).toBeNull()
     expect(parseSnapshot('nope')).toBeNull()

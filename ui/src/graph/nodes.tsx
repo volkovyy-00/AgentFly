@@ -16,6 +16,8 @@ const VERDICT_UI: Record<Verdict, { tone: string; wipe: string; chip: string | n
   allowed: { tone: TONES.step.classes, wipe: '', chip: null, chipTone: '' },
   blocked: { tone: TONES.stepBlocked.classes, wipe: DECOR.wipeBlocked.classes, chip: 'BLOCKED', chipTone: TONES.chipBlocked.classes },
   warned: { tone: TONES.stepWarned.classes, wipe: DECOR.wipeWarned.classes, chip: 'WARN', chipTone: TONES.chipWarned.classes },
+  // Allowed with a mark (SPEC section 4): the lane graph draws it as a plain step with its own chip, no alarm border.
+  highlighted: { tone: TONES.step.classes, wipe: '', chip: 'HIGHLIGHT', chipTone: TONES.chipWarned.classes },
 }
 
 function stepDetail(step: Step): string {
@@ -42,7 +44,7 @@ export function StepBox({ id, data }: NodeProps<StepNode>) {
   const { tone, wipe, chip, chipTone } = VERDICT_UI[step.verdict]
   // An older flagged step names its rule in its chip instead of a rule box.
   const verdictChip = chip !== null && flagged && step.rule !== null ? `${chip} ${step.rule}` : chip
-  const alarm = step.verdict !== 'allowed'
+  const alarm = step.verdict === 'blocked' || step.verdict === 'warned'
   // Under reduced motion the border is static and always visible: no wipe at all.
   const staticBorder = step.quiet || reduced
   return (

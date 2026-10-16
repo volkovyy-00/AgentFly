@@ -1,4 +1,4 @@
-export type Verdict = 'allowed' | 'blocked' | 'warned'
+export type Verdict = 'allowed' | 'blocked' | 'warned' | 'highlighted'
 export type StepKind = 'read' | 'shell' | 'edit' | 'tool'
 
 /** One cleaned step, as `GET /api/steps` returns it (recorder/memory.py). */
@@ -12,6 +12,10 @@ export interface Step {
   command: string | null
   host: string | null
   rule: string | null
+  /** Sent by a later recorder card (V8 reads them when present); absent today. */
+  rule_text?: string
+  user_message?: string
+  agent_message?: string
 }
 
 /** A step plus where and how it first appeared on this page (window.ts sets these once). */
