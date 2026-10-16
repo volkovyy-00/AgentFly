@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
+import { IGNORE_KEY } from '../graph/ignoredSession'
 import { makeStep } from '../graph/testing'
 import type { Step } from '../graph/types'
 import { CARD_PREFS_KEY } from './cardPrefs'
@@ -67,6 +68,7 @@ const row = (order: number) => document.querySelector<HTMLElement>(`.tr-row[data
 beforeEach(() => {
   vi.useFakeTimers()
   window.localStorage.clear()
+  window.sessionStorage.clear()
   window.history.replaceState({}, '', '/')
 })
 
@@ -151,6 +153,23 @@ describe('polls that bring nothing new', () => {
     expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
     await advance(1000)
     expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+  })
+})
+
+describe('a session hidden by "New session" on the Graph tab', () => {
+  it('stays empty in the trail, and comes back as soon as another session appears', async () => {
+    const s = server()
+    stubFetch(s)
+    window.sessionStorage.setItem(IGNORE_KEY, 's')
+    renderReal()
+    await advance(0)
+    expect(rows()).toHaveLength(0)
+    expect(screen.getByText('Waiting for agent actions…')).toBeTruthy()
+    expect(document.querySelector('.tr-rail')).toBeNull()
+    s.session = 'next'
+    s.markerSession = 'next'
+    await advance(1000)
+    expect(rows().length).toBeGreaterThan(0)
   })
 })
 
