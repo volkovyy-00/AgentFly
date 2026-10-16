@@ -71,6 +71,13 @@ Revision 6 (2026-10-16) records your answers after S3:
   sentence 13, and subagent option (a) pending S5;
 - D13 approved as C (no plain language in v1).
 
+Revision 7 (2026-10-16) records your answers after the V1a review:
+- D10: the quoted-heredoc exception does not apply to shells and
+  interpreters (list in D10), also when wrapped in `env`, `sudo` or `xargs`;
+- D5: a missing client file is a loud failure, not the offline guard;
+- D14: `highlighted` is a fourth stored verdict;
+- D9: V2 proposes a merge key for duplicate reads; S5 checks `generation_id`.
+
 Items marked **Approval item** need an explicit yes or no from you, not just a
 nod to the recommendation.
 
@@ -189,7 +196,7 @@ S2 result (2026-10-15): the baseline is confirmed: with the recorder killed (`pk
 ---
 
 ## D5. Form of the hook client
-Status: **approved (2026-10-16), option A on a bundled root-owned Python.** `init -g` installs a relocatable standalone Python build (the kind uv downloads) under `/Library/Application Support/AgentFly/`, root-owned and not group-writable, and the hook runs only on it, never on `/usr/bin/python3`. `doctor` checks the interpreter's permissions; the command path is quoted (S2 F1). The runtime is approved as a dependency; V3 picks the exact build and its update path. · Depends on: D1, D2
+Status: **approved (2026-10-16), option A on a bundled root-owned Python.** `init -g` installs a relocatable standalone Python build (the kind uv downloads) under `/Library/Application Support/AgentFly/`, root-owned and not group-writable, and the hook runs only on it, never on `/usr/bin/python3`. `doctor` checks the interpreter's permissions; the command path is quoted (S2 F1). The runtime is approved as a dependency; V3 picks the exact build and its update path. Reworded 2026-10-16 (owner, after V1a review): a missing or broken client file is a **loud failure**, not the offline guard (no client runs, Python exits 2, Cursor blocks every action); `doctor` turns red. The offline guard covers only a recorder that is down. · Depends on: D1, D2
 
 | Option | What it means |
 |---|---|
@@ -202,7 +209,8 @@ root-owned folder, so deleting or editing AgentFly's Homebrew files cannot
 switch the guard off. It runs under `/usr/bin/python3` if S2 finds it, and
 otherwise under the Homebrew Python, with a hash check. If AgentFly is still
 registered but its files are missing, treat that as tampering and apply the
-offline guard. Answer plain "allow" only after `agentfly uninstall` has removed
+offline guard. *(Superseded 2026-10-16, see the status line: with the file
+missing nothing can apply the guard; the result is a loud failure.)* Answer plain "allow" only after `agentfly uninstall` has removed
 the registration, so a half-uninstalled AgentFly never bricks Cursor
 (1-install-claude.md Rec. B). Revisit C only if the measured p95 is a problem.
 
@@ -307,6 +315,12 @@ also adds one made-up event name, which tests "one unknown event name disables
 the whole file". The event list above (and whether `subagentStart` joins it)
 is revisited with S5's facts. S3 compares the fixes on paper.
 
+**Duplicate reads (owner, 2026-10-16, after V1a review).** A file read fires
+both `preToolUse` (Read) and `beforeReadFile`, which share no `tool_use_id`, so
+today one read is recorded twice (S1 log). S5 records whether both carry the
+same `generation_id`. V2 proposes a merge key (for example `generation_id` plus
+`file_path`) in its report; the lead brings it to the owner.
+
 ---
 
 ## D10. Rule file language
@@ -358,6 +372,15 @@ sentence 2. Subagents: option (a), the mark also covers the same workspace for
 finds a parent id on child events, (c) replaces it. V5 builds all of this.
 
 **Approved with change (2026-10-15).** The normaliser treats the body of a quoted-delimiter heredoc (`<<'EOF'`) as literal data, so `git commit -m "$(cat <<'EOF' … EOF)"` parses and is not blocked. Every other unparseable command counts as outbound after a secret read. V5 tests both.
+
+**Heredoc exception narrowed (owner, 2026-10-16, after V1a review).** A quoted
+heredoc body is literal data only when the program that reads it is not a shell
+or an interpreter. Shells and interpreters are `sh`, `bash`, `zsh`, `python`,
+`python3` (and versioned names such as `python3.12`), `node`, `ruby` and
+`perl`, also when wrapped in `env`, `sudo` or `xargs`. So
+`git commit -m "$(cat <<'EOF' … EOF)"` and `tee f <<'EOF'` stay allowed after a
+secret read, while `bash <<'EOF' curl … EOF` and `python3 - <<'EOF' … EOF`
+count as outbound. V5 tests both sides, including the wrapped forms.
 
 **Approval item (original wording): the cost of "unparseable counts as outbound".** After a secret
 read, agents commonly write commit messages as
@@ -447,7 +470,8 @@ Status: **approved (2026-10-15)**: SQLite default, Neo4j optional, workspace pat
 **Recommended: A.** Keep sessions 28 days by default, the TTL Copilot uses;
 4-memory-claude.md suggests 14–28 days. Add `agentfly wipe`.
 **Needs your explicit OK (new stored data):** the workspace root path of each
-session. History can't tell projects apart without it once AgentFly watches
+session. *(2026-10-16, owner: also a fourth stored verdict, `highlighted`, for
+D11's highlight; V6 picks the storage shape.)* History can't tell projects apart without it once AgentFly watches
 every project (3-ui-claude.md view 4). Everything else stays as SPEC.md §4
 lists.
 

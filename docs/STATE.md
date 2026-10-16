@@ -1,5 +1,5 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-16 10:38 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-16 11:21 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: Spikes S1 ✅ S2 ✅ S3 ✅ S4 ✅ (S1 app half only); V1a in flight; S5 after S3; V2 brief ready, dispatch after V1a merges.
 Pending decisions: D16
 
@@ -10,7 +10,7 @@ Pending decisions: D16
 - S4: owner chose the trail; D15 approved; V8 gained half-screen (~700 px), hide/resize Why card, separate rows for repeated blocks, and a live check before the lane graph moves to a tab · docs/spikes/S4-trail.md
 - S3 done 2026-10-16, merged (4d4bad2) · FAIL 7-8 band; owner accepted D10 extension (flag variants, path_scope, pipe_into; wget flags), D13 = C, subagent option (a) 30 min pending S5. V5 card gained bypass tests.
 - S5 not started · after S3; reuses /tmp/af-fresh; sudo re-run + passive dump hook on all events + 2 subagents + one made-up event · docs/spikes/S5-brief.md.
-- V1 split into V1a (worker) and V1b (lead, after S3/S5). V2 depends on V1a, runs ∥ S3/S5 on isolated port/HOME. V2–V9 not started.
+- V1a done 2026-10-16 12:00, verified by lead (checks 158 passed; files within May touch; cleaner leak reproduced) · branch ag-v1a-spec 1b3e9f3, on origin, not merged; lacks bedc870 so D13/S3 text is stale (→ V1b). V1b (lead) after S5. V2 depends on V1a, runs ∥ S3/S5 on isolated port/HOME. V2–V9 not started.
 
 ## In flight
 - V1a · worker-docs · .claude/worktrees/ag-v1a-spec · ag-v1a-spec · docs/reports/V1a.md · docs/briefs/V1a.md
@@ -18,6 +18,7 @@ Pending decisions: D16
 ## Machine state (verified 2026-10-16 00:55 CEST unless marked)
 - /Library/Application Support/Cursor/hooks.json and /Library/Application Support/AgentFly/: absent (verified).
 - ~/.cursor/hooks.json: absent (verified). Repo .cursor/hooks.json: present (verified).
+- Pushing: pre-push hook (absolute core.hooksPath to main's docs/roles/git-hooks) + Bash(git push) denies in .claude/settings.json (tested 2026-10-16; bypassable, see learnings).
 - Recorder: not running, nothing listens on 8787 (verified). Start: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`.
 - Worktrees: .claude/worktrees/ag-v1a-spec only (S3's removed after merge); nothing listens on 5173.
 - ~/.config/flightrecorder/sessions.json: 35 sessions, 18 marked, no `s2-forged` entries (verified).
@@ -27,11 +28,13 @@ Pending decisions: D16
 - For S5, global hooks must be installed again first: `/tmp/af-spike/s1.sh real` (user-level, moves repo hooks aside) or `s2.sh install` (sudo); then `s1.sh restore` or `s2.sh restore` after.
 
 ## Waiting on owner
-1. Be at the keyboard for S5 (Cursor app, sudo).
-2. D16 after S5; subagent option (a) confirmed or replaced after S5.
-3. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
+1. Resume AuraDB (paused; its host gave NXDOMAIN 2026-10-16); then the lead runs `python -m recorder.store --clear` (owner asked, test data only).
+2. Be at the keyboard for S5 (Cursor app, sudo).
+3. D16 after S5; subagent option (a) confirmed or replaced after S5.
+4. S1 CLI half: install `cursor-agent` and test, or accept "not tested".
 
 ## Decisions changed since last handoff (aa3e7f2)
+- Revision 7 (2026-10-16, V1a review): D10 heredoc exception excludes shells/interpreters; D5 missing client = loud failure; D14 `highlighted` verdict; D9 read-dedup key from V2.
 - D10 extended after S3 and D13 approved as C (2026-10-16, DECISIONS revision 6).
 - D2 D3 D6 D7 D8 D9 D12 D17 D18 D19 approved 2026-10-16 as recommended (DECISIONS revision 5); D19 turns /docs off; D3 reopens if the S5 sudo re-run fails.
 - D6: PyPI name `agentfly-recorder`, hatchling approved; PyPI `agentfly` 0.7.2 also installs an `agentfly` command (known conflict).
@@ -39,16 +42,15 @@ Pending decisions: D16
 - D5 approved 2026-10-16: one stdlib-only hook file on a bundled root-owned standalone Python under /Library/Application Support/AgentFly/; doctor checks interpreter permissions; quoted path (F1). V3 picks the build and update path.
 - D11 approved 2026-10-16 as revised: warn = `ask` on shell, allow + UI mark elsewhere; "Always Run" accepted; no other demo mode named.
 - D15 approved 2026-10-16 after S4: option A; S4's requests and the live check are in V8; repeated blocks stay separate rows.
-- D13 still proposed; S3 may use a cloud model (sentences + schema only).
 - D1: S2 sudo grace-period note marked unproven. DECISIONS revision 4 note lists these.
 
 ## Open risks and findings
+- Cleaner leak (today's code, reproduced 2026-10-16): attached short-option values (`-uuser:pw`, `-pX`, `-H'Authorization: …'`) are stored as is, in memory and Neo4j · docs/reports/V1a.md gap 21
+- File reads fire both preToolUse and beforeReadFile with no shared id → recorded twice (S1 log) · V1a gap 22
 - Subagents may run under a new conversation_id with no parent link, bypassing per-chat R1 taint (docs/forum report, untested on 3.24.12) · S3 paper, S5 test
 - F1 quoting: unquoted path with a space made python exit 2 and Cursor denied everything · docs/spikes/S2-tamper.md
 - F2 writable interpreter: /usr/bin/python3 launches an admin-writable python.org framework · S2-tamper.md; fix approved in D5, built in V3
 - (h) offline gap: recorder down + secret read, curl allowed; sandbox escalation · S2-tamper.md, D4
-- Hook messages on allow are invisible in Cursor · S1-global-hooks.md, D11
-- Python 3.13 is the system interpreter here; AGENTS.md "Hook facts" still say Cursor 3.5.17 (now 3.24.12); V1 rewrites it.
 
 ## Next 3 actions
 1. Verify V1a (diff --stat, check command, read SPEC/AGENTS), merge to main; then dispatch V2 (docs/briefs/V2.md).

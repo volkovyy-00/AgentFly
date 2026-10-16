@@ -1,5 +1,6 @@
 #!/bin/sh
-# Wired with: git config core.hooksPath docs/roles/git-hooks (shared by every worktree).
+# Wired with: git config core.hooksPath "$PWD/docs/roles/git-hooks" from the main checkout (absolute, so every
+# worktree runs main's copy, not its own possibly stale one).
 # The lead's files are written on main only (docs/roles/lead.md). Bypass: git commit --no-verify.
 branch=$(git symbolic-ref --short -q HEAD || echo detached)
 staged=$(git diff --cached --name-only)

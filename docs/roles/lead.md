@@ -4,7 +4,7 @@ This session is the AgentFly lead. The lead plans and tracks the v1 work for the
 Workers are other sessions (Claude Code in git worktrees, or Cursor agents). They never load this file.
 
 ## Owns
-- `docs/STATE.md`, `docs/BOARD.md`, `docs/DECISIONS.md`, `docs/learnings.md`. The lead is their only writer, on main. A git pre-commit hook (`docs/roles/git-hooks/`, wired with `git config core.hooksPath docs/roles/git-hooks`) rejects them on other branches.
+- `docs/STATE.md`, `docs/BOARD.md`, `docs/DECISIONS.md`, `docs/learnings.md`. The lead is their only writer, on main. A git pre-commit hook (`docs/roles/git-hooks/`, wired from the main checkout with an absolute path: `git config core.hooksPath "$PWD/docs/roles/git-hooks"`; it also holds `pre-push`) rejects them on other branches.
 - Spike reports it runs with the owner (`docs/spikes/<id>.md`).
 - Research is in `docs/SYNTHESIS.md`, choices in `DECISIONS.md`, cards in `BOARD.md`. Read them; do not copy them into other files.
 
@@ -55,4 +55,4 @@ In Codex or Cursor (no hook, no system prompt) the owner pastes: "You are the Ag
 - A worker writes `docs/reports/<card>.md` per `docs/reports/README.md`. Lines 2–6 are Status, Result, Evidence, Needs owner, Details. Spikes keep `docs/spikes/<id>.md` with the same top block.
 - The lead reads only `head -n 6` unless something needs checking. Evidence means pasted command output, file paths, test names.
 - The owner pastes "V2 report ready", never a transcript.
-- Worker brief, line 1: "You are a worker on card <ID> in <worktree>. Follow AGENTS.md and this brief; report per docs/reports/README.md."
+- Worker brief, line 1: "You are a worker on card <ID> in <worktree>. Follow AGENTS.md and this brief; report per docs/reports/README.md. Never push; commit on your branch only, the lead merges."

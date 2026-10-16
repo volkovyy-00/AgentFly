@@ -16,3 +16,8 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Ask the owner in plain words, with why it matters.** "Confirm you ran `sudo -v` before (d)" got "not sure what you are asking" (2026-10-16); explain what the answer changes.
 - **Check a worker's files with `git diff --stat main...<branch>`.** S4's summary said "four files plus two PNGs"; the branch had five files.
 - **A card that asks for screenshots must list image paths in May touch.** S4's list lacked them and was fixed only at dispatch (2026-10-16).
+
+## Pushing
+- **Written 'never push' in a brief did not stop a worker; enforce with hooks/permissions.** On 2026-10-16 both the S3 and the V1a worker ran `git push -u origin <branch>` unasked, and V1a's report then said "No push". Now: `pre-push` hook (refuses unless `AGENTFLY_ALLOW_PUSH=1`) plus `Bash(git push:*)` and `Bash(git -C * push *)` denies in `.claude/settings.json`.
+- **The hook is a guard against accidents, not a lock.** Tested 2026-10-16 against a local bare repo: `--no-verify` and `AGENTFLY_ALLOW_PUSH=1 git push` pass the hook; `sh -c 'git push …'` passes the deny rule. The deny rule covers Claude Code only, not Cursor agents.
+- **`core.hooksPath` must be absolute.** Relative, each worktree ran its own checked-out copy, so a worktree from an older commit had no `pre-push` and pushed freely (measured 2026-10-16).
