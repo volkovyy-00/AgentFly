@@ -28,10 +28,10 @@ hand; "approved" always means the owner's explicit yes):
 - D18 approved 2026-10-16 · Other agents (Claude Code later)
 - D19 approved 2026-10-16 · Recorder API surface (split API)
 - D20 approved 2026-10-15 · Per-project `agentfly init`
-- D21 proposed · How the "secret was read" mark reaches a subagent
-- D22 proposed · Cursor's sandbox is not a security control
-- D23 proposed · Only events the installed Cursor accepts are registered
-- D24 proposed · `~/.claude/settings.json` is a third hook source
+- D21 approved 2026-10-16 · How the "secret was read" mark reaches a subagent
+- D22 approved 2026-10-16 · Cursor's sandbox is not a security control
+- D23 approved 2026-10-16 · Only events the installed Cursor accepts are registered
+- D24 approved 2026-10-16 · `~/.claude/settings.json` is a third hook source
 - D25 approved 2026-10-16 · Hooks always use port 8787; no port file
 <!-- index:end -->
 
@@ -618,7 +618,7 @@ target flow in `docs/product-goals.md`. V1 makes the edit once you approve.
 ---
 
 ## D21. How the "secret was read" mark reaches a subagent
-Status: **proposed (2026-10-16)**, owner's leaning A · Cards: V2b (client keeps `parent_tool_call_id`), V5 (engine), V1b (SPEC §5 R1) · Tested by: S5 §4 · Replaces: S3 §5's provisional (a)
+Status: **approved (2026-10-16), option A** · Cards: V2b (client keeps `parent_tool_call_id`), V5 (engine), V1b (SPEC §5 R1) · Tested by: S5 §4 · Replaces: S3 §5's provisional (a)
 
 | Option | What it means |
 |---|---|
@@ -635,7 +635,7 @@ fired none in both runs. The fallback covers a Cursor version that drops the fie
 ---
 
 ## D22. Cursor's sandbox is not a security control
-Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V1b (SPEC §10 threat model), V3 (test) · Tested by: S5 §5
+Status: **approved (2026-10-16), as written** · Cards: V1b (SPEC §10 threat model), V3 (test) · Tested by: S5 §5
 
 **Rule.** Decisions never depend on the `sandbox` field. A command AgentFly
 denies is denied whether it runs inside or outside Cursor's sandbox; the field
@@ -648,7 +648,7 @@ unsandboxed run.
 ---
 
 ## D23. Only events the installed Cursor accepts are registered
-Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V3 (`init -g`, `doctor`) · Tested by: S5 §2 · Settles: D9's "unknown event name" report
+Status: **approved (2026-10-16), as written** · Cards: V3 (`init -g`, `doctor`) · Tested by: S5 §2 · Settles: D9's "unknown event name" report
 
 **Rule.** One unknown event name makes Cursor reject the whole hooks.json, with
 an error only in its Hooks log, and then no AgentFly hook runs (S5, 3.24.12).
@@ -662,7 +662,7 @@ that drops an event is caught by `doctor`, not prevented.
 ---
 
 ## D24. `~/.claude/settings.json` is a third hook source
-Status: **proposed (2026-10-16)**, owner's leaning as written · Cards: V1b (SPEC §8, §10), V3 (`doctor`) · Tested by: S5 §2
+Status: **approved (2026-10-16), as written** · Cards: V1b (SPEC §8, §10), V3 (`doctor`) · Tested by: S5 §2
 
 **Rule.** Cursor 3.24.12 also runs hooks from `~/.claude/settings.json`
 ("claude-plugin config"), next to user and project hooks.json; the agent can

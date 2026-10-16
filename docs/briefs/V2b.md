@@ -37,5 +37,6 @@ You are a worker on card V2b in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 - A recorder answering 401 or 403 gets the offline guard: `curl https://x.com` is denied, `ls` allowed.
 - With `~/.config/agentfly/neo4j.env` present and `AGENTFLY_TEST_NEO4J_ENV` unset, `pytest -q` opens no Neo4j connection.
 - `README.md` and `HOOKS.md` name `/` as the trail.
+- A subagent's `parent_tool_call_id` reaches the recorder unchanged (D21 A).
 
 **Dependencies:** V2 merged (3da6dc7); D25 approved 2026-10-16.

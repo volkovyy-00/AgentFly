@@ -130,6 +130,7 @@ V7 and V9 can run in parallel.
 - **Owner:** worker-backend
 - **Lane:** backend, ∥ V4, V5 and V6 after V2
 - **Depends on:** V2, V2b, S1, S2
+- Re-measure the hook client's latency with the bundled Python (V2b: p95 122 ms on the dev Python vs the 50 ms target; accepted by the owner 2026-10-16 until V3).
 - **May touch:** new `agentfly/cli/commands/{init,uninstall,doctor,start,stop,status}.py`
   (one module each); new `agentfly/install/{hooks_json,system_paths,service,integrity}.py`;
   `install.sh` (becomes a short dev wrapper or is deleted); README "Install"
