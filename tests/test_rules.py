@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-import recorder.rules as rules_mod
-from recorder.names import host_of, is_local_host, is_sensitive, words
-from recorder.rules import R1_MESSAGE, Session, decide, mark
-from recorder.sessions import SessionStore
+import agentfly.recorder.rules as rules_mod
+from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
+from agentfly.recorder.rules import R1_MESSAGE, Session, decide, mark
+from agentfly.recorder.sessions import SessionStore
 
 SENSITIVE = [
     ".env",

@@ -8,9 +8,14 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 
-import recorder.app as app_module
+import agentfly.recorder.app as app_module
+from agentfly.recorder.paths import config_dir
+from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
 _UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 requires_ui_dist = pytest.mark.skipif(
@@ -21,10 +26,9 @@ requires_ui_dist = pytest.mark.skipif(
 
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         # App tests must not race live Neo4j writes from the background worker.
-        from recorder.store import graph_store
+        from agentfly.recorder.store import graph_store
 
         graph_store.enabled = False
         yield test_client
@@ -32,13 +36,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 @pytest.fixture()
 def token(client: TestClient) -> str:
-    path: Path = app_module.config_dir / "token"
+    path: Path = config_dir() / "token"
     return path.read_text(encoding="utf-8").strip()
 
 
 @pytest.mark.parametrize("path", ["/health", "/", "/assets/index.js", "/v2", "/v2/"])
 def test_forbidden_host(path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "config_dir", tmp_path / "flightrecorder")
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
         response = bad.get(path)
     assert response.status_code == 403
@@ -83,7 +86,7 @@ def test_accepted_allow_and_no_body_in_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     body = b'{"hook_event_name":"beforeShellExecution","command":"echo MARKER123"}'
-    with caplog.at_level(logging.DEBUG, logger="flightrecorder"):
+    with caplog.at_level(logging.DEBUG, logger="agentfly"):
         response = client.post(
             "/hook",
             content=body,
@@ -99,7 +102,7 @@ def test_accepted_allow_and_no_body_in_logs(
 
 def test_r1_deny_after_env_read(client: TestClient, token: str) -> None:
     """Checkpoint B path: .env read then curl webhook → deny with R1 messages."""
-    from recorder.rules import R1_MESSAGE
+    from agentfly.recorder.rules import R1_MESSAGE
 
     headers = {
         "Content-Type": "application/json",
@@ -144,7 +147,6 @@ def test_api_steps_no_token_empty(client: TestClient) -> None:
 
 
 def test_api_steps_forbidden_host(tmp_path: Path) -> None:
-    app_module.config_dir = tmp_path / "flightrecorder"
     with TestClient(app_module.app, base_url="http://example.com:8787") as bad:
         response = bad.get("/api/steps")
     assert response.status_code == 403
@@ -312,7 +314,7 @@ def test_mount_ui_skips_incomplete_dist(
     if case == "no_index":
         (dist / "assets").mkdir()
     bare = FastAPI()
-    with caplog.at_level(logging.WARNING, logger="flightrecorder"):
+    with caplog.at_level(logging.WARNING, logger="agentfly"):
         app_module.mount_ui(bare, dist)
     assert not any(getattr(r, "path", None) in {"/", "/assets"} for r in bare.routes)
     # The build alone is not enough: the page is registered once, at start-up.
@@ -430,7 +432,7 @@ def test_empty_store_with_limit(client: TestClient) -> None:
 
 
 def test_after_a_restart_counts_and_marking_start_over(client: TestClient, token: str) -> None:
-    from recorder.memory import memory_steps
+    from agentfly.recorder.memory import memory_steps
 
     _post_shell(client, token, "r", "cat .env")
     _post_shell(client, token, "r", "echo a")
@@ -441,3 +443,86 @@ def test_after_a_restart_counts_and_marking_start_over(client: TestClient, token
     assert _orders(body["steps"]) == [4]
     assert body["marked_order"] is None
     assert body["hidden"]["total"] == 1
+
+
+# SPEC section 11 / D19: every (method, path) the app serves. A card that adds a route adds
+# its line here. `/` exists only when ui/dist is built, so the served set must be a subset.
+ROUTE_WHITELIST: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/hook"),
+        ("GET", "/health"),
+        ("GET", "/api/steps"),
+        ("GET", "/"),
+        ("GET", "/v2"),
+        ("GET", "/v2/"),
+        ("GET", "/v2/index.html"),
+    }
+)
+MOUNT_WHITELIST: frozenset[str] = frozenset({"/assets"})
+ALL_METHODS: tuple[str, ...] = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+
+
+def served_routes() -> tuple[set[tuple[str, str]], set[str]]:
+    served: set[tuple[str, str]] = set()
+    mounts: set[str] = set()
+    for route in app_module.app.routes:
+        if isinstance(route, Mount):
+            assert isinstance(route.app, StaticFiles), f"mount {route.path} is not static files"
+            mounts.add(route.path)
+        elif isinstance(route, APIRoute):
+            served.update((method, route.path) for method in route.methods)
+        else:
+            raise AssertionError(f"unexpected route type {type(route).__name__}: {route}")
+    return served, mounts
+
+
+def test_the_app_serves_only_whitelisted_routes() -> None:
+    served, mounts = served_routes()
+    assert served <= ROUTE_WHITELIST, sorted(served - ROUTE_WHITELIST)
+    assert mounts <= MOUNT_WHITELIST, sorted(mounts - MOUNT_WHITELIST)
+    assert {method for method, _ in served if method != "GET"} == {"POST"}
+    assert [path for method, path in served if method == "POST"] == ["/hook"]
+
+
+def test_every_other_method_on_a_served_route_is_405(client: TestClient) -> None:
+    served, _ = served_routes()
+    for path in sorted({path for _, path in served}):
+        allowed: set[str] = {method for method, p in served if p == path}
+        for method in ALL_METHODS:
+            if method in allowed:
+                continue
+            status = client.request(method, path, follow_redirects=False).status_code
+            assert status == 405, f"{method} {path} answered {status}"
+
+
+@pytest.mark.parametrize("path", ["/health", "/api/steps"])
+def test_head_on_an_api_route_is_405(client: TestClient, path: str) -> None:
+    assert client.head(path).status_code == 405
+
+
+@requires_ui_dist
+def test_assets_mount_is_read_only(client: TestClient) -> None:
+    # StaticFiles answers GET and HEAD for a file; it is a plain static GET, not an API route.
+    for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        assert client.request(method, "/assets/index.js").status_code == 405, method
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+def test_generated_docs_are_switched_off(client: TestClient, path: str) -> None:
+    assert client.get(path).status_code == 404
+
+
+def test_secrets_glued_to_options_never_reach_the_page(client: TestClient, token: str) -> None:
+    headers = {"Content-Type": "application/json", "X-Recorder-Token": token}
+    for index, command in enumerate(LEAKY_COMMANDS):
+        body = {
+            "hook_event_name": "beforeShellExecution",
+            "command": command,
+            "conversation_id": "leaks",
+            "workspace_roots": [],
+            "cwd": "",
+        }
+        assert client.post("/hook", json=body, headers=headers).status_code == 200, index
+    text: str = client.get("/api/steps?all=1").text
+    assert '"steps":' in text.replace(" ", "")
+    assert SECRET not in text

@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from recorder.rules import Session
+from agentfly.recorder.paths import private_dir
+from agentfly.recorder.rules import Session
 
 
 class SessionStore:
@@ -44,7 +45,7 @@ class SessionStore:
             )
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.path.parent)
         payload: list[dict[str, Any]] = [
             {
                 "id": s.id,

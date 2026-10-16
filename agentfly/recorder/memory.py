@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from recorder.store import StepRecord
+from agentfly.recorder.store import StepRecord
 
 Step = dict[str, Any]
 

@@ -29,7 +29,7 @@ saved to Neo4j and drawn as a graph.
 ## How it works
 
 ```
-Cursor agent → hooks/hook.py → local server (127.0.0.1:8787) → Neo4j (optional)
+Cursor agent → agentfly-hook → local server (127.0.0.1:8787) → Neo4j (optional)
   (acts)       (Cursor runs it   (marks the session, applies    (background copy)
                before each step)  rules, answers allow/deny)
 ```
@@ -66,6 +66,14 @@ uv sync          # creates .venv with the server dependencies
 ./install.sh     # writes .cursor/hooks.json (gitignored, machine-local)
 ```
 
+`uv sync` also installs the `agentfly` and `agentfly-hook` commands into `.venv`.
+To install the built package instead (the page is inside the wheel):
+
+```bash
+uv build
+uv tool install dist/*.whl   # puts agentfly and agentfly-hook on your PATH
+```
+
 Then open the folder in Cursor, mark it as **trusted**, and restart Cursor if
 the hooks do not show up under **Settings → Hooks**. Run `./install.sh` again
 after every clone and whenever `install.sh` changes.
@@ -76,9 +84,12 @@ after every clone and whenever `install.sh` changes.
 terminal), so the agent cannot reach its environment.
 
 ```bash
-uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
-# writes a random token to ~/.config/flightrecorder/token on start
+uv run agentfly serve          # 127.0.0.1:8787; --port N picks another port
+# writes a random token to ~/.config/agentfly/token on start
 ```
+
+The first start moves an old `~/.config/flightrecorder` folder (token, session
+marks, Neo4j login) into `~/.config/agentfly/` and `~/.local/share/agentfly/`.
 
 **2. Replay the demo without Cursor** to check that the rules work. This pipes
 a scripted session through the same hook helper that Cursor uses.
@@ -124,15 +135,15 @@ replays a long session). The old `/v2/` address redirects to `/`.
 
 ## Configuration
 
-The server reads Neo4j credentials from `~/.config/flightrecorder/.env`,
+The server reads Neo4j credentials from `~/.config/agentfly/neo4j.env`,
 **outside** the repo. The helper script never sees them. Key names are listed
 in [`.env.example`](.env.example).
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `NEO4J_URI` | `~/.config/flightrecorder/.env` | AuraDB address, for example `neo4j+s://<id>.databases.neo4j.io` |
-| `NEO4J_USERNAME` | `~/.config/flightrecorder/.env` | Database user (on Aura this may be the instance id) |
-| `NEO4J_PASSWORD` | `~/.config/flightrecorder/.env` | Database password |
+| `NEO4J_URI` | `~/.config/agentfly/neo4j.env` | AuraDB address, for example `neo4j+s://<id>.databases.neo4j.io` |
+| `NEO4J_USERNAME` | `~/.config/agentfly/neo4j.env` | Database user (on Aura this may be the instance id) |
+| `NEO4J_PASSWORD` | `~/.config/agentfly/neo4j.env` | Database password |
 | `CLEAN_COMMANDS` | Server process environment | `1` (default) cleans commands before saving; `0` / `false` / `off` saves raw commands (debugging only, may leak secrets into Neo4j) |
 
 To install the credentials file from a file you downloaded from Aura (it sets
@@ -140,7 +151,7 @@ folder mode 700 and file mode 600, and never prints values):
 
 ```bash
 scripts/setup_credentials.sh <downloaded-aura-file>
-uv run python -m recorder.check_db    # prints: connected
+uv run python -m agentfly.recorder.check_db    # prints: connected
 ```
 
 If `neo4j+s://` fails with `ServiceUnavailable` or `SSLCertVerificationError`
@@ -154,9 +165,9 @@ writes are skipped with a warning.
 
 | Path | Contents |
 |---|---|
-| `~/.config/flightrecorder/token` | Random token the helper sends with every request (mode 600) |
-| `~/.config/flightrecorder/sessions.json` | Per session: id, marked yes/no, start time, next step number |
-| `logs/events.jsonl` | Local debug log: time, event and decision (gitignored) |
+| `~/.config/agentfly/token` | Random token the helper sends with every request (mode 600) |
+| `~/.local/share/agentfly/sessions.json` | Per session: id, marked yes/no, start time, next step number |
+| `~/.local/share/agentfly/logs/events.jsonl` | Hook client's debug log: time, event and decision (folder 700, file 600) |
 
 ## Command cleaning
 
@@ -168,6 +179,7 @@ are kept, and everything else is replaced.
 |---|---|
 | `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1` | `curl -H <arg> x.com` |
 | `API_KEY=abc make` | `API_KEY=<removed> make` |
+| `mysql -pSECRET db` (a value stuck onto its option) | `mysql -p<arg> <arg>` |
 | A command with `$(...)`, backticks, `<<EOF` or an unbalanced quote | `<program> <unparsed>` |
 
 For tool calls only the tool name is kept, and for edits only the path.
@@ -181,9 +193,9 @@ blocked it.
 ![Recorded agent steps queried as a graph in Neo4j Aura](docs/media/neo4j.gif)
 
 ```bash
-uv run python -m recorder.check_db          # test the connection
-uv run python -m recorder.store --counts    # count nodes and links
-uv run python -m recorder.store --clear     # DELETE everything (the only delete path)
+uv run python -m agentfly.recorder.check_db          # test the connection
+uv run python -m agentfly.recorder.store --counts    # count nodes and links
+uv run python -m agentfly.recorder.store --clear     # DELETE everything (the only delete path)
 ```
 
 Every write is a `MERGE` on the step id (session id + step number), so running
@@ -206,7 +218,7 @@ AgentFly is a first layer of defence, not a sandbox.
   built yet.
 
 > [!WARNING]
-> Do not delete or move `hooks/hook.py` while `.cursor/hooks.json` still
+> Do not delete or move `hooks/hook.py` or `agentfly/hook_client.py` while `.cursor/hooks.json` still
 > points at it. Python exits with code 2 when the file is missing, and Cursor
 > treats exit code 2 as **deny**, which blocks every agent action. Run
 > `./install.sh` again after moving files.
@@ -224,8 +236,10 @@ the database is unreachable.
 
 | Path | Contents |
 |---|---|
-| `hooks/hook.py` | Hook helper Cursor runs: drops file contents, posts to the server, fails open |
-| `recorder/` | Server (`app.py`), rules (`rules.py`), sessions, command cleaner, Neo4j store |
+| `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, fails open |
+| `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it until `agentfly init` |
+| `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, Neo4j store, file locations (`paths.py`) |
+| `agentfly/cli/` | The `agentfly` command (`serve`) |
 | `ui/` | Live graph app (Vite + React); committed build at `ui/dist`, served at `/` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |

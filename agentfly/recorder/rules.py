@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
-from recorder.names import host_of, is_local_host, is_sensitive, words
+from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
 
 Action = dict[str, Any]
 

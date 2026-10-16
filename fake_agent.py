@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay scripted Cursor hook events through hooks/hook.py (no model calls).
+"""Replay scripted Cursor hook events through agentfly/hook_client.py (no model calls).
 
 Usage:
   uv run python fake_agent.py
@@ -43,7 +43,7 @@ from typing import Any
 
 _ROOT: Path = Path(__file__).resolve().parent
 _SCENARIO_PATH: Path = _ROOT / "demo" / "scenario.json"
-_HOOK_SCRIPT: Path = _ROOT / "hooks" / "hook.py"
+_HOOK_SCRIPT: Path = _ROOT / "agentfly" / "hook_client.py"
 _FAKE_SECRET: str = "FAKESECRET_drop_me_XYZ"
 
 
@@ -75,7 +75,7 @@ def permission_to_verdict(payload: dict[str, Any]) -> str:
 
 
 def run_hook(event: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
-    """Pipe event JSON to hooks/hook.py. Returns (parsed stdout, stdout, stderr)."""
+    """Pipe event JSON to agentfly/hook_client.py. Returns (parsed stdout, stdout, stderr)."""
     # Never send content to our own printers later; child still receives it so
     # the helper can prove it drops content.
     stdin_data: str = json.dumps(event)
@@ -118,7 +118,7 @@ def assert_no_secret(*chunks: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Replay demo/scenario.json through hooks/hook.py (simulation)."
+        description="Replay demo/scenario.json through agentfly/hook_client.py (simulation)."
     )
     parser.add_argument(
         "--scenario",

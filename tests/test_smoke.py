@@ -1,4 +1,4 @@
 def test_import() -> None:
-    import recorder
+    import agentfly.recorder
 
-    assert recorder.__name__ == "recorder"
+    assert agentfly.recorder.__name__ == "agentfly.recorder"

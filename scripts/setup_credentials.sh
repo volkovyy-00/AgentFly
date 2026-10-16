@@ -3,15 +3,15 @@
 #
 # Usage: scripts/setup_credentials.sh <downloaded-aura-file> [--force]
 #
-# - Copies the file to ~/.config/flightrecorder/.env (folder 700, file 600).
+# - Copies the file to ~/.config/agentfly/neo4j.env (folder 700, file 600).
 # - Never prints values. Only key names and permissions are shown.
 # - The original file is left where it is: delete it yourself when done.
 set -euo pipefail
 
 SRC="${1:-}"
 FORCE="${2:-}"
-DIR="$HOME/.config/flightrecorder"
-DEST="$DIR/.env"
+DIR="$HOME/.config/agentfly"
+DEST="$DIR/neo4j.env"
 REQUIRED=(NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD)
 
 if [[ -z "$SRC" || ! -f "$SRC" ]]; then

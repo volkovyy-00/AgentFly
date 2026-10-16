@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,11 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
 }
 
 _WEB_TOOLS: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
+
+# A long option name is kept only if it looks like a name; anything else may be a value.
+_LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
+# A program name made of anything else (spaces, quotes, `$`) may be part of a secret.
+_PROGRAM_NAME = re.compile(r"[\w./+-]+")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -75,17 +81,40 @@ def _is_env_assign(token: str) -> bool:
     return all(c.isalnum() or c == "_" for c in name)
 
 
+def _rough_tokens(cmd: str) -> list[str]:
+    """Split on whitespace, | ; & outside quotes. Tolerates unbalanced quotes; keeps quotes."""
+    tokens: list[str] = []
+    buf: list[str] = []
+    quote: str = ""
+    i: int = 0
+    while i < len(cmd):
+        ch: str = cmd[i]
+        if ch == "\\" and quote == '"' and i + 1 < len(cmd):
+            buf.append(cmd[i : i + 2])
+            i += 2
+            continue
+        if ch in {"'", '"'} and quote in {"", ch}:
+            quote = "" if quote else ch
+        elif not quote and (ch.isspace() or ch in "|;&"):
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
+
+
 def _first_program(cmd: str) -> str:
-    rough: list[str] = cmd.replace("|", " ").replace(";", " ").split()
-    for token in rough:
-        if token in {"&&", "||"}:
-            continue
-        if _is_env_assign(token):
-            continue
-        # Drop wrapping quotes if present
+    for token in _rough_tokens(cmd):
+        if _is_env_assign(token.split("=", 1)[0] + "=") and "=" in token:
+            continue  # a quoted value stays inside its token, so no part of it is read
         bare: str = token.strip("'\"")
-        if bare:
-            return Path(bare).name or bare
+        name: str = Path(bare).name or bare
+        return name if _PROGRAM_NAME.fullmatch(name) else "cmd"
     return "cmd"
 
 
@@ -167,12 +196,17 @@ def _clean_segment(segment: str, project_root: Path) -> str:
 
 
 def _classify_word(word: str, project_root: Path, *, web_tool: bool) -> str:
-    # (1) options
-    if word.startswith("--") and "=" in word:
-        opt: str = word.split("=", 1)[0]
-        return f"{opt}=<arg>"
+    # (1) options: keep names, drop values, also a value stuck onto its option (-pSECRET)
+    if word.startswith("--"):
+        name: str = word[2:].split("=", 1)[0]
+        if word == "--":
+            return word
+        if not _LONG_OPTION_NAME.fullmatch(name):
+            return "<arg>"
+        return f"--{name}=<arg>" if "=" in word else word
     if word.startswith("-") and word != "-":
-        return word
+        # -pX and -la look alike, so a cluster keeps only its first letter.
+        return word if len(word) == 2 else f"{word[:2]}<arg>"
 
     # (2) web address
     if "://" in word or web_tool:
@@ -199,7 +233,10 @@ def website_name(word: str) -> str | None:
 def _website_name(word: str) -> str | None:
     host: str | None = None
     if "://" in word:
-        host = urlparse(word).hostname
+        try:
+            host = urlparse(word).hostname
+        except ValueError:  # e.g. an unbalanced [ in the address
+            return None
     else:
         # scp/rsync user@host:path
         candidate: str = word

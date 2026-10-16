@@ -7,13 +7,13 @@ import sys
 
 from neo4j import GraphDatabase
 
-from recorder.config_env import CREDENTIALS_PATH, neo4j_settings
+from agentfly.recorder.config_env import neo4j_settings
 
 
 def main() -> int:
     # Keep driver chatter off the acceptance printout.
     logging.getLogger("neo4j").setLevel(logging.CRITICAL)
-    settings: tuple[str, str, str] | None = neo4j_settings(CREDENTIALS_PATH)
+    settings: tuple[str, str, str] | None = neo4j_settings()
     if settings is None:
         print("FileNotFoundError")
         return 1

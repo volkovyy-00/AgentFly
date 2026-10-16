@@ -14,12 +14,12 @@ from typing import Any
 
 from neo4j import Driver, GraphDatabase
 
-from recorder.clean import command_for_storage, website_name
-from recorder.config_env import CREDENTIALS_PATH, neo4j_settings
-from recorder.names import is_sensitive, words
-from recorder.rules import RULES, Session
+from agentfly.recorder.clean import command_for_storage, website_name
+from agentfly.recorder.config_env import neo4j_settings
+from agentfly.recorder.names import is_sensitive, words
+from agentfly.recorder.rules import RULES, Session
 
-logger = logging.getLogger("flightrecorder")
+logger = logging.getLogger("agentfly")
 
 _LABELS: tuple[str, ...] = ("Session", "Step", "File", "Command", "Host", "Rule")
 _QUEUE_MAX: int = 256
@@ -62,8 +62,7 @@ class GraphStore:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def start(self, credentials_path: Path | None = None) -> None:
-        path: Path = credentials_path if credentials_path is not None else CREDENTIALS_PATH
-        settings = neo4j_settings(path)
+        settings = neo4j_settings(credentials_path)
         if settings is None:
             logger.warning("Neo4j credentials missing; store disabled")
             self.enabled = False
@@ -368,7 +367,7 @@ graph_store: GraphStore = GraphStore()
 
 def _open_cli_store() -> GraphStore:
     store = GraphStore()
-    settings = neo4j_settings(CREDENTIALS_PATH)
+    settings = neo4j_settings()
     if settings is None:
         raise SystemExit("Neo4j credentials missing")
     uri, user, password = settings
