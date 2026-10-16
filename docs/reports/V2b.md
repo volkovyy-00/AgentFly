@@ -1,13 +1,13 @@
 # V2b: Hardened hook client: never fails, fixed port, strips everything, offline guard
 Status: done (as of 2026-10-16 14:30)
 Result: Addendum items 5-8 and the D21 test are done: a second serve fails and changes nothing, 401/403 get the guard, docs say `/` is the trail, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV, every inline one-liner is denied. Latency still misses 50 ms (median 53 ms, p95 69 ms).
-Evidence: commit cd465d8 on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 552 passed, 4 skipped (the live Neo4j tests); main merged twice (f2941b6, 51c8bff).
+Evidence: commit 96d3a11 on ag-v2b-hook-client; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 552 passed, 4 skipped (the live Neo4j tests); main merged twice (f2941b6, 51c8bff).
 Needs owner: none
 Details: see "## 2026-10-16 14:30" below.
 
 ## 2026-10-16 14:30
 
-Commit cd465d8. Merged `main` into `ag-v2b-hook-client` first (f2941b6: V8 and the addendum; 51c8bff: D21 A and the updated brief; both clean). Files changed in this round: `agentfly/cli/serve.py`, `agentfly/hook_client.py`, `README.md`, `HOOKS.md`, `tests/test_serve_port.py`, `test_offline_guard.py`, `test_hook_client.py`, `test_install_docs.py`, `test_store.py` and this report (`agentfly/recorder/app.py` needed no change).
+Commit 96d3a11. Merged `main` into `ag-v2b-hook-client` first (f2941b6: V8 and the addendum; 51c8bff: D21 A and the updated brief; both clean). Files changed in this round: `agentfly/cli/serve.py`, `agentfly/hook_client.py`, `README.md`, `HOOKS.md`, `tests/test_serve_port.py`, `test_offline_guard.py`, `test_hook_client.py`, `test_install_docs.py`, `test_store.py` and this report (`agentfly/recorder/app.py` needed no change).
 
 ### (5) `agentfly serve` and the token
 - Cause: uvicorn runs the app's startup, which writes the token, *before* it opens its socket (uvicorn docs: "Don't open socket until after application startup", 0.11.2; `Server.startup` in the installed 0.54). A second `serve` therefore overwrote the first one's token and only then failed to bind. Before the fix the new test failed on exactly that: the token differed.
