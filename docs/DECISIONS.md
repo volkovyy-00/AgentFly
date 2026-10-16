@@ -20,7 +20,7 @@ hand; "approved" always means the owner's explicit yes):
 - D10 approved 2026-10-15 · Rule file language
 - D11 approved 2026-10-16 · What block, warn and highlight do in Cursor
 - D12 approved 2026-10-16 · Rule change flow (v1)
-- D13 proposed · Plain-language drafting: which model, and when
+- D13 approved 2026-10-16 · Plain-language drafting: which model, and when
 - D14 approved 2026-10-15 · Local store for past sessions; what happens to Neo4j
 - D15 approved 2026-10-16 · UI structure
 - D16 proposed · G4 direction
@@ -65,6 +65,11 @@ Revision 5 (2026-10-16) records your answers:
 - D6: PyPI name `agentfly-recorder`, hatchling approved, the `agentfly`
   command clash with PyPI `agentfly` noted as a known conflict;
 - D9: revisit after S5 (subagents may start a new `conversation_id`).
+
+Revision 6 (2026-10-16) records your answers after S3:
+- D10 extended with three small additions, wget flags, the `.env` family for
+  sentence 13, and subagent option (a) pending S5;
+- D13 approved as C (no plain language in v1).
 
 Items marked **Approval item** need an explicit yes or no from you, not just a
 nod to the recommendation.
@@ -305,7 +310,7 @@ is revisited with S5's facts. S3 compares the fixes on paper.
 ---
 
 ## D10. Rule file language
-Status: **approved (2026-10-15) with a change** (quoted-heredoc rule, see the approval item) · Tested by: S3 · Changes: AGENTS.md "Working rules"
+Status: **approved (2026-10-15) with a change** (quoted-heredoc rule, see the approval item); extended 2026-10-16 after S3 (three small additions, see the S3 note) · Tested by: S3 · Changes: AGENTS.md "Working rules"
 
 | Option | What it means |
 |---|---|
@@ -333,6 +338,24 @@ Also:
   - the same tools when they sit inside a wrapper.
 
   This changes the R1 definition in SPEC.md §5, so V1 updates SPEC.
+
+**S3 result and extension (approved by the owner 2026-10-16).** S3 failed in the
+7–8 band: 7 of 10 sentences fit (misfits 5, 8, 14), drafts 7 of 10 exact, 0
+invented fields (`docs/spikes/S3-rule-fit.md`). Instead of one new kind, the
+schema gains three small additions, each one named pure function:
+- `command` patterns match flag variants: a trailing `*` (`--data*`), `=`
+  forms and clustered short flags (`-sd`, `-d@f`), via the normaliser;
+- `path_scope = "outside_workspace"` on `match` and trigger tables, computed
+  from `workspace_roots` and the resolved path (symlinks and `..` handled by
+  the engine);
+- `pipe_into = <list>` on `match`: true when a command in the line feeds a
+  program in the list (covers `| sh`, `sh -c "$(curl …)"`, `bash <(curl …)`).
+
+Sentence 5's wget half uses `--post-data`, `--post-file`, `--body-data` and
+`--body-file`. "Reads .env" (sentence 13) means the whole `.env` family, as in
+sentence 2. Subagents: option (a), the mark also covers the same workspace for
+30 minutes (`scope`, `window` on `after_then`), is accepted pending S5; if S5
+finds a parent id on child events, (c) replaces it. V5 builds all of this.
 
 **Approved with change (2026-10-15).** The normaliser treats the body of a quoted-delimiter heredoc (`<<'EOF'`) as literal data, so `git commit -m "$(cat <<'EOF' … EOF)"` parses and is not blocked. Every other unparseable command counts as outbound after a secret read. V5 tests both.
 
@@ -396,7 +419,7 @@ what needs extra machinery. For a "shadow" trial, add a new rule as
 ---
 
 ## D13. Plain-language drafting: which model, and when
-Status: proposed · Tested by: S3 · S3 may use a cloud model (owner OK 2026-10-16, for S3 only; it gets the sentences and the rule schema, never session data)
+Status: **approved (2026-10-16), option C** after S3: no plain language in v1. After V5, re-run S3's 10 sentences on the candidate models (A and B) before choosing; any cloud model needs the owner's OK again · Tested by: S3
 
 | Option | What it means |
 |---|---|

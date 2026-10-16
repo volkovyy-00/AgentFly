@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1, S2 and S4 are done; S3 and S5 may start. All decisions
-but D13 (after S3) and D16 (after S5) are approved (2026-10-16); v1 cards
+Status: **spikes S1–S4 are done; S5 may start. All decisions but D16
+(after S5) are approved (2026-10-16); v1 cards
 (V1–V9) wait for V1a.** V1 is split (owner, 2026-10-16): V1a rewrites SPEC.md and
 AGENTS.md for the approved decisions now; V1b fills in what S3 and S5 change. After approval, any card whose plan depends on a
 decision you changed is rewritten before it starts.
@@ -80,33 +80,9 @@ in parallel.
 - S1 ✅ 2026-10-15 · docs/spikes/S1-global-hooks.md · changed D9 D11 · body: git show 5b41ac1:docs/BOARD.md
 - S2 ✅ 2026-10-15 · docs/spikes/S2-tamper.md · changed D1 D2 D3 D4 D5 D8 D19 · body: git show 5b41ac1:docs/BOARD.md
 - S4 ✅ 2026-10-16 · docs/spikes/S4-trail.md · changed D15, V8 · body: git show 5b41ac1:docs/BOARD.md (before the 2026-10-16 screenshot edit)
+- S3 ✅ 2026-10-16 · docs/spikes/S3-rule-fit.md · changed D10 D13, V5 · body: git show d0f403b:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
-
-### S3 · G2 · Do your rules fit the fixed kinds; drafting accuracy
-- **Owner:** worker-backend (input: your 10 sentences)
-- **Lane:** backend, ∥ S1 and S2
-- **Time box:** 45 min (30 + 15 for the subagent question). Cloud-model
-  drafting is OK for S3 only (owner, 2026-10-16); D13 itself stays open.
-- **Sentences (owner, 2026-10-16):** candidates 1, 2, 3, 4, 7, 10, 13 (expected
-  to fit) and 5, 8, 14 (stretch), text in the dispatch brief.
-- **May touch:** new `docs/spikes/S3-rule-fit.md` and new
-  `docs/spikes/S3-rules.toml` (paper format only, never loaded by code).
-- **Done when** `docs/spikes/S3-rule-fit.md` has:
-  - the 10 sentences beside their hand-written TOML;
-  - a list of misfits, each with what's missing;
-  - the model's drafts beside the hand-written versions, as an exact-match
-    count out of 10 and an invented-field count;
-  - pass or fail, with the resulting choices for D10 and D13;
-  - **subagents (added 2026-10-16):** a docs/forum report, untested, says
-    Cursor subagents fire hooks under a new `conversation_id` with no parent
-    link, so "rest of the chat" taint (sentences 3, 4, 13) can be bypassed by
-    delegating the send to a subagent. On paper, compare (a) taint per
-    workspace with a time window (as in D16-A's cross-session option) and
-    (b) denying `subagentStart` after a secret read, plus (c) a parent link if
-    one exists. For each: how sentences 3, 4 and 13 are written, what new kind
-    or field it needs, false positives, and which S5 fact would decide it.
-    Recommend one, marked "provisional until S5".
 
 ### S5 · G4 · Smoke test: does a brief reach the agent at all (n = 2)
 - **Owner:** lead (you at the keyboard)
@@ -303,7 +279,7 @@ in parallel.
 ### V5 · Rules file, rule kinds, command normalisation, R0
 - **Owner:** worker-backend
 - **Lane:** backend, ∥ V3, V4 and V6 after V2
-- **Depends on:** V2, S3
+- **Depends on:** V2, S3 ✅
 - **May touch:** `agentfly/recorder/rules.py`, `agentfly/recorder/names.py`; new
   `agentfly/recorder/rulefile.py`, new `agentfly/recorder/normalize.py`; a
   packaged default `agentfly/rules/default.toml`; new
@@ -336,8 +312,17 @@ in parallel.
     It is case-folded and goes through the same normalisation. It also checks
     the raw, case-folded text, so an unparseable command can't hide a guard
     name. A rules file that tries to remove or weaken R0 is rejected (tests).
-  - Your S3 rules load, and their inline tests pass with `agentfly rules test`
+  - **S3 additions (D10, 2026-10-16):** flag-variant patterns (`--data*`, `=`
+    forms, clustered short flags), `path_scope = "outside_workspace"`,
+    `pipe_into`, and `scope`/`window` on `after_then` (subagent option (a),
+    pending S5). The 10 S3 rules in `docs/spikes/S3-rules.toml` (v0.1 form of
+    5, 8 and 14) load, and their inline tests pass with `agentfly rules test`
     (output pasted).
+  - **Every rule ships with bypass tests**, not only its own positive tests
+    (owner, 2026-10-16): spellings that mean the same action must also match.
+    For example, for an upload rule: `curl --data=@f`, `--data-binary @f`,
+    `-d@f`, `-sd @f`, long, short and `=` forms, and the same inside
+    `bash -c`, `env` and `sudo`. Each bundled rule and each S3 rule has them.
   - "Block npm publish after reading .env" is added by editing only the rules
     file: a test, plus a PR diff that touches no `.py` file for it.
   - block, warn and highlight produce the D11 answers (tests).
@@ -443,6 +428,6 @@ in parallel.
   on each release. It is outward-facing.
 - **G4 pre-registered A/B (4-memory-claude.md):** added only if S5 passes and
   V6 exists. It also needs `afterShellExecution` exit codes (D9).
-- **Plain-language rule drafting:** added after S3's numbers and an approved
-  D13.
+- **Plain-language rule drafting:** not in v1 (D13 = C). After V5, S3's 10
+  sentences are re-run on the candidate models before a card is added.
 - **Per-project `agentfly init`:** deferred (D20).
