@@ -17,6 +17,9 @@ The hackathon version of this document is kept in
 `docs/archive/SPEC-hackathon.md`. HOOKS.md and README.md still describe the
 code as it is today.
 
+Sections 7, 8 and 11 are technical reference for the people building it; the
+rest is written for the owner.
+
 Two markers appear below:
 
 - **Pending S3** and **Pending S5** mark what the spikes S3 (rule kinds and
@@ -153,10 +156,11 @@ Only *facts about actions*. Never the contents of files.
 | Host | website name only | `ntfy.sh` |
 | Rule | id, short description | R1 |
 
-The workspace root path is the one new item compared with the hackathon
-version (D14). It is stored so History can tell projects apart once AgentFly
-watches every project. It is stored locally, and in Neo4j only if you turn that
-on.
+Compared with the hackathon version, v1 adds the workspace root path (the one
+item D14 asked the owner to approve), a session end time, and the *highlighted*
+verdict below. The workspace path lets History tell projects apart once AgentFly
+watches every project. It is stored in the local store, and also in Neo4j if you
+turn that copy on.
 
 Verdict can be: allowed, blocked, warned or highlighted (allowed, with a mark
 in the page). The *Why* card (section 6) shows the message that was sent for a
@@ -184,7 +188,9 @@ even a secret packed into a web address. So we keep almost nothing:
 
 1. Split the command at `|`, `&&`, `||` and `;`.
 2. For each part keep only: the program name, option names without their values
-   (like `-H`, `-d`), and file paths inside the workspace (relative).
+   (like `-H`, `-d`; a value stuck onto its option, as in `-uadmin:pw` or
+   `-pSECRET`, is a value and is dropped too), and file paths inside the
+   workspace (relative).
 3. Replace everything else with `<arg>`. A variable set in front of a command
    is saved as `NAME=<removed>`.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
@@ -253,7 +259,8 @@ weaken it:
 
 - touching AgentFly's config, data and system folders, any `hooks.json` (user,
   system or project), the rules file or the token;
-- commands that stop or unload the recorder (`kill`, `pkill`, `launchctl`) or
+- commands that stop, unload or remove the recorder (`kill`, `pkill`,
+  `launchctl`, `agentfly stop` and `agentfly uninstall`, `brew services`) or
   that name its port;
 - a Write or edit whose target path is one of those guard paths.
 
@@ -287,7 +294,7 @@ could slip past the mark. S5 tests it; S3 compares fixes on paper.
 **Command normalisation.** Before any rule looks at a shell command, it is
 normalised: `bash -c`, `sh -c`, `env` and `sudo` are unwrapped, `$(…)` and
 backticks are looked into, and paths are case-folded. This applies to every
-rule, R1 included (D10). It extends what the command cleaner already does.
+rule, R1 included (D10). It is new work: today's command cleaner unwraps nothing.
 
 **Blocking.** Once a session is marked, any command that sends data to another
 computer is blocked. After normalisation that covers:
@@ -300,7 +307,10 @@ computer is blocked. After normalisation that covers:
 One exception keeps normal work possible: the body of a *quoted-delimiter*
 heredoc (`<<'EOF'`) is treated as plain text, so
 `git commit -m "$(cat <<'EOF' … EOF)"` is parsed and not blocked. Every other
-unparseable command counts as outbound after a secret read. The cost, accepted
+unparseable command counts as outbound after a secret read. **Open hole, sent to
+the owner:** a heredoc body can also be code that something runs
+(`bash <<'EOF' … EOF`, `python3 - <<'EOF' … EOF`), and as D10 is worded such a
+command passes. See section 10. The cost, accepted
 by the owner: a commit message written with an unquoted `<<EOF` is blocked in a
 marked session, so the agent must commit another way (for example
 `git commit -F file`) or you start a new chat.
@@ -415,8 +425,10 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `PATH` is ours.
 - **Uninstall (D8).** Run `agentfly uninstall` *before* `brew uninstall`:
   Homebrew leaves the service file behind. Uninstall removes AgentFly's hook
-  entries and the service. Only after that does the hook client stop guarding,
-  so a half-uninstalled AgentFly never leaves Cursor broken.
+  entries and the service. Only after that does the hook client stop guarding. If
+  you run `brew uninstall` first, the system-owned hook client stays behind,
+  keeps denying outbound commands, and tells you to run `agentfly start`, which no
+  longer exists; remove the entries by hand or reinstall and uninstall properly.
 - **Publishing.** Pushing to PyPI or a Homebrew tap is outward-facing; the owner
   approves each release, and the PyPI name is re-checked first.
 - **Developers** can still run the recorder from a clone; AGENTS.md has the
@@ -478,15 +490,18 @@ The client throws away content before it logs or sends:
 ### Duplicates
 
 `preToolUse` and the specific gates can both fire for one action. When they
-carry the same `tool_use_id` they make one step. Cursor sends `tool_use_id`
-only on `preToolUse` and `beforeShellExecution`, so only shell and tool calls
-can be merged this way.
+carry the same `tool_use_id` they make one step. Spike S1 saw `tool_use_id` only
+on `preToolUse` and `beforeShellExecution` (Cursor's own docs list it for
+`preToolUse`, not for shell events), so only shell and tool calls can be merged
+this way. **Open:** a file read fires both `preToolUse` and `beforeReadFile`, and
+`beforeReadFile` has no `tool_use_id`, so reads would show twice. How to merge
+them is decided in the hook-client card.
 
 ### The answers
 
 - **Block:** `{"permission":"deny","user_message":"…","agent_message":"…"}`. The
-  rule text goes in both messages, because one of them has been reported ignored
-  in some Cursor versions. `agent_message` adds: "Do not retry with another tool
+  rule text goes in both messages (where the event accepts both), because one of
+  them has been reported ignored in some Cursor versions. `agent_message` adds: "Do not retry with another tool
   or language. Stop and tell the user."
 - **Warn on a shell command:** `{"permission":"ask","user_message":"…"}`.
 - **Allow, warn on other events, and highlight:** plain allow; the page carries
@@ -505,8 +520,9 @@ the **offline guard**, a fixed, simple subset of the rules:
   one-liners, and the same commands wrapped in `bash -c`, `env` or `sudo`.
   Sending to your own computer (`localhost`, private addresses) is allowed;
 - it **denies** commands that touch AgentFly's guard paths (R0);
-- it **allows** everything else, writes down that it did so, and says
-  "AgentFly offline" in the message;
+- it **allows** everything else and writes down that it did so. Cursor shows
+  nothing for an allow with a message (S1), so the visible signals are the
+  health strip and the log, not a message in the chat;
 - a command it cannot parse is denied only if its raw text names one of those
   tools;
 - every deny message tells you to run `agentfly start`.
@@ -516,9 +532,15 @@ the same cases.
 
 **The accepted cost:** whenever the recorder is down (not started, crashed or
 killed), in every project and even with no secret read, the agent cannot run
-those commands. launchd `KeepAlive` restarts a killed recorder, so this should
-be brief. If AgentFly is still registered but its files are missing, that is
-treated as tampering and the offline guard applies.
+those commands. launchd `KeepAlive` restarts a recorder that was killed, so this should be
+brief; it does not help when the service was deliberately stopped (`agentfly
+stop`, `brew services stop`), which is why R0 blocks those commands. While the
+recorder is down your own rules do not run, only the fixed subset above.
+
+If AgentFly is registered but its hook client file is missing, no guard can
+run: Python exits with code 2 and Cursor blocks every action (this happened in
+spike S2 with an unquoted path). That is loud rather than silent, and `doctor`
+reports it, but it is not the offline guard D5 describes. Flagged to the owner.
 
 Not built in v1 (a possible v1.1): a per-chat marker kept by the hook client
 itself, so a mark survives a recorder outage.
@@ -578,6 +600,16 @@ Other measures:
   agent may re-run it outside the sandbox, which AgentFly does see.
 - "Always Run" on a warned shell command removes that warning (section 5).
 - The agent can read the token (above).
+- R0 matches names, so a deliberately obscured command can still reach
+  `agentfly stop`, `brew services stop` or the session-notes file. Stopping the
+  recorder this way means your own rules stop running (only the offline subset
+  applies, section 9), and deleting the session notes makes marks forgotten.
+  The result is detected by `doctor` and the health strip, not prevented.
+- The hash check is run by AgentFly's own code, so code that has been tampered
+  with could hide the tampering. Where the recorded hashes live and what checks
+  them is for the install card to decide.
+- A quoted heredoc body that is run as code is not caught (section 5, open).
+  Neither is "write a script file, then run it": only inline one-liners count.
 
 ---
 
@@ -616,7 +648,7 @@ adds its line to the whitelist.
   One idea is an option on R1 where a secret read in this workspace in the last
   24 hours still counts, loaded into memory at start and never queried live.
   Another is a short brief given to the agent at session start; S5 tests only
-  whether such a brief reaches the agent. Neither is a v1 feature.
+  whether such a brief reaches the agent. D16 is still proposed; as proposed, neither is a v1 feature.
 - **A per-project `agentfly init`** (D20): deferred. The global install already
   covers every project. If you later want only some projects watched, a
   system-owned watch list is the safe shape and needs no change to the hooks.
@@ -659,5 +691,17 @@ adds its line to the whitelist.
 - **SQLite:** a small database stored in one file; the default local store.
 - **Neo4j:** a graph database; an optional extra copy in v1.
 - **curl / wget / nc / scp:** programs that send or fetch data over a network.
+- **Token:** a random secret string kept in a file; the hook client sends it so
+  the recorder knows the request is from AgentFly.
+- **Port:** the numbered door on your machine the recorder listens at (8787).
+- **Hash:** a short fingerprint of a file; if the file changes, the fingerprint
+  changes.
+- **Heredoc:** a way to write a block of text inside a shell command
+  (`<<EOF … EOF`).
+- **MCP:** Cursor's way of giving the agent add-on tools.
+- **Normalisation:** rewriting a command into a plain, comparable form (for
+  example, looking inside `bash -c '…'`) before a rule reads it.
+- **Backtest:** replaying a rule change over your stored sessions to see what it
+  would have done.
 - **Trusted folder:** Cursor only runs project-level hooks in folders you marked
   trusted.

@@ -2,7 +2,7 @@
 Status: done (as of 2026-10-16 12:00)
 Result: SPEC.md is now the v1 spec (sections 0–13, §4 still "what is stored and how commands are cleaned"). AGENTS.md, G1 flow, HOOKS/README references updated. Hackathon spec archived. D13 and D16 are marked pending. No code touched.
 Evidence: branch ag-v1a-spec, commit 863b3e8 (report fix on top). Check command: ruff check clean, ruff format 72 files clean, pytest 158 passed, 4 skipped. Decision table and 20 code gaps below.
-Needs owner: none. Five judgement calls (e.g. a 'highlighted' verdict in §4) are listed in the report for you to confirm.
+Needs owner: 3 items (see 'Second-opinion review'): quoted-heredoc hole in D10, cleaner leaks `-pSECRET`, D5 'missing files → guard' can't work. Recommend: tighten D10, fix cleaner before V6.
 Details: see "## 2026-10-16 12:00" below.
 
 ## 2026-10-16 12:00
@@ -85,6 +85,26 @@ Page and docs
 - Command names `agentfly rules draft/check/apply`, `wipe`, `doctor`, `serve` come from D3/D6/D8/D12/D14 and the card texts. `rules test` is not named in SPEC (V5 names it).
 - The R0 guard list in §5 is today's list widened by what D1–D3, D9 and D19 protect (config/data/system folders, any `hooks.json`, rules file, token, `launchctl`, a Write target). The card (V5) fixes the exact list; SPEC says so.
 - §10 and §9 cite S2 only through DECISIONS.md. I did not read `docs/spikes/S1/S2` beyond what DECISIONS.md and BOARD.md quote.
+
+### Second-opinion review (2026-10-16, after the commit)
+A fresh reviewer (web + docs access) and I checked the SPEC independently. I re-ran the key findings.
+Fixed in SPEC.md (wording, nothing new decided):
+- §4 now says the new items are workspace path, end time and the *highlighted* verdict; the path is also in Neo4j when enabled. Step 2 names attached values (`-uadmin:pw`, `-pSECRET`) as values.
+- §5 no longer says normalisation "extends the cleaner" (the cleaner unwraps nothing, checked). R0 list adds `agentfly stop/uninstall` and `brew services`.
+- §8: file reads fire both `preToolUse` and `beforeReadFile` with no shared id, so they would show twice (S1 log: 3 vs 2). Marked open. `tool_use_id` on shell events is marked as seen in S1, not in Cursor's docs.
+- §9: an offline allow shows nothing in Cursor (S1), so signals are the page and log. `KeepAlive` does not help after a deliberate stop. A missing hook file makes Python exit 2 and Cursor blocks everything; this is not the guard D5 describes.
+- §7: `brew uninstall` before `agentfly uninstall` leaves a client that keeps denying and names a command that no longer exists.
+- §10 known gaps: R0 is name-matching (stop, notes file); hash check is run by code that could be tampered; heredoc and "write a script then run it" are not caught.
+- §12: D16 stays proposed. §0 says §§7, 8, 11 are technical. Glossary gains token, port, hash, heredoc, MCP, normalisation, backtest.
+
+Needs the owner (not mine to decide):
+1. **D10 heredoc hole.** By reading the rule: `bash <<'EOF' curl … EOF` and `python3 - <<'EOF' …` are executed code, yet pass R1 after a secret read. Recommend: the quoted-heredoc exception applies only when the command is not a shell or interpreter (`cat`, `git commit -m`, `tee`…); otherwise the body counts as outbound.
+2. **Cleaner leak (code, not docs).** Verified by running it: `curl -uadmin:hunter2 https://x.com` is stored as `curl -uadmin:hunter2 x.com`; `mysql -pSECRET db` as `mysql -pSECRET <arg>`; `curl -H'Authorization: Bearer abc' x.com` keeps the bearer token. Cause: `recorder/clean.py::_classify_word` returns any `-x…` word as is. This breaks "no secrets stored" today, in Neo4j too. Recommend: keep only the first two characters of a short option (or the part before `=` for long ones), with tests; schedule before V6 stores anything.
+3. **D5 "files missing → offline guard"** cannot work (no client runs). Recommend rewording D5 to "loud failure, `doctor` red".
+
+Not changed (low): cleaner keeps a path only if the file exists; a two-part long host becomes `<arg>`; `beforeReadFile` documents only `user_message`; LAN addresses count as "your own computer"; D6's clash is unproven for uv/pipx/brew; whether `brew uninstall` leaves the plist is unconfirmed.
+
+Gap 21 (code): the cleaner leak above. Gap 22 (code): reads are recorded twice (`preToolUse` + `beforeReadFile`).
 
 ### Check output
 ```
