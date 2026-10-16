@@ -5,8 +5,9 @@ import { parseBurst, parseLen } from './graph/mock'
 import { useMs } from './graph/motionPolicy'
 import { BUTTON_CLASSES, DECOR, TONES } from './graph/tones'
 import { useRecorder } from './graph/useRecorder'
+import { TrailView } from './trail/TrailView'
 
-function App() {
+function GraphApp() {
   const params = new URLSearchParams(window.location.search)
   const mock = params.get('mock') === '1'
   const burst = mock ? parseBurst(params.get('burst')) : 1
@@ -57,6 +58,21 @@ function App() {
       )}
     </main>
   )
+}
+
+/** `?mock=1&len=N&burst=B`: N steps (1 to 2000, default 500), B per tick (default all at once); `rich=1` adds the optional fields. */
+function TrailApp() {
+  const params = new URLSearchParams(window.location.search)
+  const mock = params.get('mock') === '1'
+  const len = parseLen(params.get('len')) ?? 500
+  const burstRaw = Number(params.get('burst'))
+  const burst = Number.isInteger(burstRaw) && burstRaw >= 1 && burstRaw <= len ? burstRaw : len
+  return <TrailView mock={mock} len={len} burst={burst} rich={params.get('rich') === '1'} />
+}
+
+/** The lane graph is home until the owner's yes; the trail lives at `/?view=trail`. */
+function App() {
+  return new URLSearchParams(window.location.search).get('view') === 'trail' ? <TrailApp /> : <GraphApp />
 }
 
 export default App

@@ -1,6 +1,6 @@
 import { HIDDEN_KEYS, type Hidden, type Snapshot, type Step, type StepKind, type Verdict } from './types'
 
-const VERDICTS: readonly string[] = ['allowed', 'blocked', 'warned']
+const VERDICTS: readonly string[] = ['allowed', 'blocked', 'warned', 'highlighted']
 
 function text(value: unknown): string | null {
   return typeof value === 'string' ? value : null
@@ -14,6 +14,10 @@ function parseStep(raw: unknown): Step | null {
   // A newer server may send a kind or verdict this page does not know. Show the
   // step anyway (a flight recorder must not hide events): the kind as text, an
   // unknown verdict as WARN.
+  const extras: Pick<Step, 'rule_text' | 'user_message' | 'agent_message'> = {}
+  if (typeof r.rule_text === 'string') extras.rule_text = r.rule_text
+  if (typeof r.user_message === 'string') extras.user_message = r.user_message
+  if (typeof r.agent_message === 'string') extras.agent_message = r.agent_message
   return {
     order: r.order,
     kind: r.kind as StepKind,
@@ -24,6 +28,7 @@ function parseStep(raw: unknown): Step | null {
     command: text(r.command),
     host: text(r.host),
     rule: text(r.rule),
+    ...extras,
   }
 }
 
