@@ -139,7 +139,8 @@ without any database); past sessions come from the local store. Section 6.
 `neo4j.env`, mode 600): `~/.config/agentfly/`. Data (session notes, the store,
 logs): `~/.local/share/agentfly/`. System-owned parts (hooks file, hook client,
 bundled Python, active rules): `/Library/Application Support/AgentFly/`. The
-hackathon folder `~/.config/flightrecorder` is migrated once.
+hackathon folder `~/.config/flightrecorder` is migrated once, by the recorder's
+first start (so `agentfly serve` and `init -g` both find it moved).
 
 ---
 
@@ -412,7 +413,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `agentfly` on `PATH` is ours.
 - **`init -g`** writes the system hooks file, installs the hook client and its
   bundled Python, and sets up the system-owned rules file, with one `sudo`
-  (D1, D2, D5). It also migrates `~/.config/flightrecorder` once (D7). Running
+  (D1, D2, D5). The move from `~/.config/flightrecorder` (D7) has already happened at the
+  recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
   every event arrives twice.

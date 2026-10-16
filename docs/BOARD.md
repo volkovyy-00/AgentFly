@@ -1,10 +1,10 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S4 are done; S5 may start. All decisions but D16
-(after S5) are approved (2026-10-16); v1 cards
-(V1–V9) wait for V1a.** V1 is split (owner, 2026-10-16): V1a rewrites SPEC.md and
-AGENTS.md for the approved decisions now; V1b fills in what S3 and S5 change. After approval, any card whose plan depends on a
-decision you changed is rewritten before it starts.
+Status: **spikes S1–S4 and V1a are done; S5 and V2 may start (2026-10-16).
+All decisions but D16 (after S5) are approved.** V2 is split into V2 and V2b.
+Cards with a file in `docs/briefs/` take that brief as authoritative. After
+approval, any card whose plan depends on a decision you changed is rewritten
+before it starts.
 
 Revision 3 (2026-10-15) applies your Rev 2 review: spikes unblocked; S1's
 send-out target is non-receiving; the UI draft form is dropped for v1; the API
@@ -62,17 +62,17 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5
 
               ─────────── you approve DECISIONS.md ───────────
 
-v1            Docs:     V1a (worker, ∥ S3) ──► Lead: V1b (after S3, S5)
-              Backend:  V2 ──┬──► V3  CLI install commands ──┐
-                             ├──► V4  formula + release      │ (V4's last check needs V3)
-                             ├──► V5  rules + R0 ──────┬─────┼──► V7  rule change flow
-                             └──► V6  local store ─────┤     │
-              UI:       V8  trail + Why + health  (starts after V1a, merges after V2)
+v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
+              Backend:  V2 ──┬──► V2b ──┬──► V3  CLI install commands ──┐
+                             │          └──► V5  rules + R0 ──────┐     │ (V4's last check needs V3)
+                             ├──► V4  formula + release           ├─────┼──► V7  rule change flow
+                             └──► V6  local store ────────────────┘     │
+              UI:       V8  trail + Why + health  (starts now, merges after V2)
                              └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
 ```
 
-V3, V4, V5 and V6 can all run in parallel once V2 has merged. V7 and V9 can run
-in parallel.
+V2b, V4 and V6 run in parallel once V2 has merged; V3 and V5 once V2b has.
+V7 and V9 can run in parallel.
 
 ---
 
@@ -81,6 +81,7 @@ in parallel.
 - S2 ✅ 2026-10-15 · docs/spikes/S2-tamper.md · changed D1 D2 D3 D4 D5 D8 D19 · body: git show 5b41ac1:docs/BOARD.md
 - S4 ✅ 2026-10-16 · docs/spikes/S4-trail.md · changed D15, V8 · body: git show 5b41ac1:docs/BOARD.md (before the 2026-10-16 screenshot edit)
 - S3 ✅ 2026-10-16 · docs/spikes/S3-rule-fit.md · changed D10 D13, V5 · body: git show d0f403b:docs/BOARD.md
+- V1a ✅ 2026-10-16 · docs/reports/V1a.md · merged b7f7192 · changed D5 D9 D10 D14 (review answers) · body: git show b7f7192:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -117,34 +118,6 @@ in parallel.
 
 ## v1 cards
 
-### V1a · Rewrite SPEC.md and AGENTS.md for the decisions approved so far
-- **Owner:** worker-docs (owner, 2026-10-16); the lead verifies and merges
-- **Lane:** docs, ∥ S3
-- **Depends on:** D1–D12, D14, D15, D17–D20 approved (2026-10-16)
-- **May touch:** `SPEC.md`, `AGENTS.md`; `HOOKS.md` and `README.md` (SPEC
-  references only); `docs/product-goals.md` (G1 target flow only, per D6 and
-  D20); new `docs/archive/SPEC-hackathon.md` (`git mv` of today's SPEC); new
-  `docs/reports/V1a.md`. Not `docs/DECISIONS.md`, `BOARD.md`, `STATE.md`, and
-  no code or tests.
-- **Done when:**
-  - SPEC.md is the v1 spec, built only from approved decisions. What S3 and S5
-    can still change (rule kinds and fields, plain-language drafting, G4,
-    subagent taint, the sudo grace-period note, the event list) is marked
-    "Pending S3" or "Pending S5" with one line on what is open.
-  - Section 4 is still "what is stored and how commands are cleaned", so
-    HOOKS.md's "SPEC §4" references stay true.
-  - AGENTS.md says SPEC.md is the v1 target and the code is moving there card
-    by card: inside your card, follow SPEC and the card; outside it, leave the
-    code and note the gap in your report; if SPEC and your card disagree, stop
-    and ask. It keeps today's commands (V2 changes them), adds hatchling and the
-    bundled Python runtime (D5) to approved dependencies, rewords the rule
-    shape per D10, replaces the hook-helper "unreachable → allow" rule with the
-    D4 offline guard, and its Testing list names only tests that exist (no R0
-    line, no "helper drops content" line: V5 and V2 add them).
-  - The report has a table mapping each approved decision to its SPEC section,
-    and lists every place where today's code differs from the new SPEC.
-  - The AGENTS.md check command passes.
-
 ### V1b · Fill in what S3 and S5 decided
 - **Owner:** lead
 - **Lane:** lead
@@ -160,76 +133,26 @@ in parallel.
     definition (D10) and API surface (D19) match the decisions.
   - You approve the PR.
 
-### V2 · Installable `agentfly` package, hardened hook client, API surface
-- **Owner:** worker-backend
-- **Lane:** backend, first. It moves files, so V3–V6 wait for it to merge.
-  Runs ∥ S3 and S5 (owner, 2026-10-16).
-- **Depends on:** V1a
-- **May touch:** `pyproject.toml`, `uv.lock`; AGENTS.md "Commands" section and
-  README commands (only to keep them true after the move); `recorder/**` → `agentfly/recorder/**`
-  (routes split into `agentfly/recorder/api/*.py`, with an explicit router list
-  in `app.py`); `hooks/hook.py` → `agentfly/hook_client.py`;
-  `recorder/hook_passthrough.py`; new `agentfly/cli/__init__.py` (dispatcher
-  that discovers `agentfly/cli/commands/*.py`); new
-  `agentfly/cli/commands/serve.py`; `fake_agent.py`; `tests/**`. Not `ui/**`,
-  and not `install.sh`.
-- **Isolation (machine is shared with S5):** tests and manual runs never use
-  port 8787 or the real home folder: a temporary HOME and a free port (for
-  example 8797) for every recorder V2 starts. Never touch
-  `~/.config/flightrecorder`, `~/.cursor`, `/Library/Application Support/` or
-  `/tmp/af-*`.
-- **Done when:**
-  - **Package.** Distribution name `agentfly-recorder`, build backend
-    hatchling (D6). `uv build` makes a wheel that contains `ui/dist`. Installing it
-    with `uv tool install` under a temporary HOME puts `agentfly` and
-    `agentfly-hook` on PATH. `agentfly serve` runs the recorder (terminal output
-    pasted).
-  - **Agent argument (D18).** The client is called as
-    `agentfly-hook <agent> <event>`; only `cursor` is implemented, and a small
-    step normalizes its input. An unknown agent prints allow JSON, exits 0 and
-    warns on stderr (test).
-  - **Stripping, with new tests in `tests/test_hook_client.py`.** No content
-    leaves the client, to the log or to the server:
-    - `content` from `beforeReadFile`;
-    - `edits` from `afterFileEdit`;
-    - `output` from `afterShellExecution`;
-    - **`tool_input` contents from `preToolUse`** (a Write payload carrying file
-      text is the test case);
-    - **`tool_input` from `beforeMCPExecution`.**
+### V2 · Installable `agentfly-recorder` package, v1 paths, API surface, cleaner leak
+- **Owner:** worker-backend · **Brief (authoritative):** `docs/briefs/V2.md`
+- **Lane:** backend, first; ∥ S5 on a temporary HOME and a port other than 8787.
+  It moves files, so V2b–V6 wait for it to merge.
+- **Depends on:** V1a ✅
+- Split 2026-10-16: the old V2 card did not fit one brief (agent-ready-tickets
+  budget), so the hook-client half is V2b. Old card text: `git show b7f7192:docs/BOARD.md`.
+- Includes the cleaner leak fix (V1a gap 21) with every secret shape the owner
+  listed and a "no dummy secret survives" test.
 
-    From `tool_input`, the client keeps only the target path of file tools,
-    using the key names S1 found (`file_path` for Read, Write and Grep; never
-    `content`, `pattern` or `command`), so R0 can deny a Write to a guard file. MCP
-    keeps only the server and tool names. The tests assert that a marker string
-    planted in each content field never appears in the log line or in the POST
-    body.
-  - **Kill test.** With the recorder stopped, 100 calls per event all print
-    valid JSON and exit 0. The offline guard (D4) denies `curl https://x.com`,
-    `bash -c 'curl x.com'` and an R0 command. It allows `ls` and
-    `curl localhost:8000/health`. Every offline deny message says to run
-    `agentfly start` (D4). Each offline-guard decision is appended to
-    `~/.local/share/agentfly/offline.jsonl`, and `GET /health` reports their
-    count since start.
-  - **Latency.** p95 hook round trip is under 50 ms over 200 calls with the
-    recorder up (script output pasted).
-  - **Duplicates.** A `preToolUse` call and a matching specific gate with the
-    same `tool_use_id` make one step (fixture test).
-  - **API surface (D19).** `tests/test_api_surface.py` lists every
-    `(method, path)` the app serves. It fails if a route is missing from the
-    explicit whitelist, or if any method other than GET exists besides
-    `POST /hook`. HEAD is allowed only on the `StaticFiles` mount and plain
-    Starlette routes, if any; a test asserts HEAD on each API GET route is 405
-    (true on fastapi 0.142.2 / starlette 1.7.0 in `uv.lock`; re-confirm if the
-    lock changes). FastAPI's built-in `/docs`, `/redoc` and `/openapi.json`
-    are switched off.
-  - **Paths.** D7 paths, with a one-time migration from
-    `~/.config/flightrecorder` (test with a temporary HOME).
-  - All existing tests still pass.
+### V2b · Hardened hook client: agent argument, stripping, offline guard, duplicates
+- **Owner:** worker-backend · **Brief (authoritative):** `docs/briefs/V2b.md`
+- **Lane:** backend, after V2 merges; ∥ V4 and V6.
+- **Depends on:** V2
+- Proposes (does not build) the merge key for duplicate file reads (D9 note).
 
 ### V3 · CLI install commands: `init -g`, `uninstall`, `doctor`, `start`, `stop`, `status`
 - **Owner:** worker-backend
 - **Lane:** backend, ∥ V4, V5 and V6 after V2
-- **Depends on:** V2, S1, S2
+- **Depends on:** V2, V2b, S1, S2
 - **May touch:** new `agentfly/cli/commands/{init,uninstall,doctor,start,stop,status}.py`
   (one module each); new `agentfly/install/{hooks_json,system_paths,service,integrity}.py`;
   `install.sh` (becomes a short dev wrapper or is deleted); README "Install"
@@ -279,7 +202,7 @@ in parallel.
 ### V5 · Rules file, rule kinds, command normalisation, R0
 - **Owner:** worker-backend
 - **Lane:** backend, ∥ V3, V4 and V6 after V2
-- **Depends on:** V2, S3 ✅
+- **Depends on:** V2, V2b (Write target path for R0), S3 ✅
 - **May touch:** `agentfly/recorder/rules.py`, `agentfly/recorder/names.py`; new
   `agentfly/recorder/rulefile.py`, new `agentfly/recorder/normalize.py`; a
   packaged default `agentfly/rules/default.toml`; new
@@ -318,6 +241,8 @@ in parallel.
     pending S5). The 10 S3 rules in `docs/spikes/S3-rules.toml` (v0.1 form of
     5, 8 and 14) load, and their inline tests pass with `agentfly rules test`
     (output pasted).
+  - The hook client's offline guard (V2b) is run against the same
+    normalisation cases and must agree on every outbound one (SPEC § 9).
   - **Every rule ships with bypass tests**, not only its own positive tests
     (owner, 2026-10-16): spellings that mean the same action must also match.
     For example, for an upload rule: `curl --data=@f`, `--data-binary @f`,

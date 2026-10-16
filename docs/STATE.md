@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
 Updated: 2026-10-16 11:21 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: Spikes S1 ✅ S2 ✅ S3 ✅ S4 ✅ (S1 app half only); V1a in flight; S5 after S3; V2 brief ready, dispatch after V1a merges.
+Phase: S1 ✅ S2 ✅ S3 ✅ S4 ✅ V1a ✅ (merged b7f7192); V2 brief in review (verify + oracle passes); V2 split into V2 and V2b; S5 next with the owner.
 Pending decisions: D16
 
 ## Spikes and cards
@@ -10,17 +10,18 @@ Pending decisions: D16
 - S4: owner chose the trail; D15 approved; V8 gained half-screen (~700 px), hide/resize Why card, separate rows for repeated blocks, and a live check before the lane graph moves to a tab · docs/spikes/S4-trail.md
 - S3 done 2026-10-16, merged (4d4bad2) · FAIL 7-8 band; owner accepted D10 extension (flag variants, path_scope, pipe_into; wget flags), D13 = C, subagent option (a) 30 min pending S5. V5 card gained bypass tests.
 - S5 not started · after S3; reuses /tmp/af-fresh; sudo re-run + passive dump hook on all events + 2 subagents + one made-up event · docs/spikes/S5-brief.md.
-- V1a done 2026-10-16 12:00, verified by lead (checks 158 passed; files within May touch; cleaner leak reproduced) · branch ag-v1a-spec 1b3e9f3, on origin, not merged; lacks bedc870 so D13/S3 text is stale (→ V1b). V1b (lead) after S5. V2 depends on V1a, runs ∥ S3/S5 on isolated port/HOME. V2–V9 not started.
+- V1a merged b7f7192 (checks: 162 passed on main). Stale in SPEC: D13/S3 additions and the revision 7 answers → V1b (lead, after S5).
+- V2 (package, paths, API, cleaner leak) and V2b (hook client) briefs: docs/briefs/V2.md, V2b.md; worktree for V2 created after the passes.
 
 ## In flight
-- V1a · worker-docs · .claude/worktrees/ag-v1a-spec · ag-v1a-spec · docs/reports/V1a.md · docs/briefs/V1a.md
+none
 
 ## Machine state (verified 2026-10-16 00:55 CEST unless marked)
 - /Library/Application Support/Cursor/hooks.json and /Library/Application Support/AgentFly/: absent (verified).
 - ~/.cursor/hooks.json: absent (verified). Repo .cursor/hooks.json: present (verified).
 - Pushing: pre-push hook (absolute core.hooksPath to main's docs/roles/git-hooks) + Bash(git push) denies in .claude/settings.json (tested 2026-10-16; bypassable, see learnings).
 - Recorder: not running, nothing listens on 8787 (verified). Start: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`.
-- Worktrees: .claude/worktrees/ag-v1a-spec only (S3's removed after merge); nothing listens on 5173.
+- Worktrees: none besides main (S3, V1a removed after merge). origin still has ag-s3-rule-fit and ag-v1a-spec (worker pushes); owner deletes them.
 - ~/.config/flightrecorder/sessions.json: 35 sessions, 18 marked, no `s2-forged` entries (verified).
 - /tmp/af-spike: throwaway scripts, logs and sessions.json.bak (present, verified; never commit). Copy in logs/spike/ (gitignored); after a reboot run `cp -Rp logs/spike/. /tmp/af-spike/`.
 - /tmp/af-fresh: .env (fake demo value) and test.txt only; no .cursor/ (verified).
@@ -42,7 +43,6 @@ Pending decisions: D16
 - D5 approved 2026-10-16: one stdlib-only hook file on a bundled root-owned standalone Python under /Library/Application Support/AgentFly/; doctor checks interpreter permissions; quoted path (F1). V3 picks the build and update path.
 - D11 approved 2026-10-16 as revised: warn = `ask` on shell, allow + UI mark elsewhere; "Always Run" accepted; no other demo mode named.
 - D15 approved 2026-10-16 after S4: option A; S4's requests and the live check are in V8; repeated blocks stay separate rows.
-- D1: S2 sudo grace-period note marked unproven. DECISIONS revision 4 note lists these.
 
 ## Open risks and findings
 - Cleaner leak (today's code, reproduced 2026-10-16): attached short-option values (`-uuser:pw`, `-pX`, `-H'Authorization: …'`) are stored as is, in memory and Neo4j · docs/reports/V1a.md gap 21
@@ -53,7 +53,7 @@ Pending decisions: D16
 - (h) offline gap: recorder down + secret read, curl allowed; sandbox escalation · S2-tamper.md, D4
 
 ## Next 3 actions
-1. Verify V1a (diff --stat, check command, read SPEC/AGENTS), merge to main; then dispatch V2 (docs/briefs/V2.md).
+1. Finish V2 brief passes, commit, create .claude/worktrees/ag-v2-package; owner starts V2 in plan mode.
 2. S5 with the owner (reinstall global hooks first; sudo re-run, hook dump, subagents; check workspace_roots and parent ids for S3 §5).
 3. Then D13, D16, D9 revisit, V1b.
 
