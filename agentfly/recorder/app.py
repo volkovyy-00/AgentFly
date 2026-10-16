@@ -15,26 +15,34 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from recorder.memory import memory_steps, parse_limit
-from recorder.rules import Session, decide, deny_messages, mark
-from recorder.sessions import SessionStore
-from recorder.store import StepRecord, build_step_record, graph_store
+from agentfly.recorder.memory import memory_steps, parse_limit
+from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
+from agentfly.recorder.rules import Session, decide, deny_messages, mark
+from agentfly.recorder.sessions import SessionStore
+from agentfly.recorder.store import StepRecord, build_step_record, graph_store
 
-logger = logging.getLogger("flightrecorder")
+logger = logging.getLogger("agentfly")
 
-ALLOWED_HOSTS: frozenset[str] = frozenset({"localhost:8787", "127.0.0.1:8787"})
 TOKEN_HEADER: str = "X-Recorder-Token"
-_UI_DIST: Path = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
-# Overridable for tests (pytest sets a temp dir before lifespan runs).
-config_dir: Path = Path.home() / ".config" / "flightrecorder"
+
+def find_ui_dist() -> Path:
+    """The page inside the wheel, else the repo build (a checkout or an editable install)."""
+    package: Path = Path(__file__).resolve().parent.parent
+    for candidate in (package / "ui_dist", package.parent / "ui" / "dist"):
+        if (candidate / "index.html").is_file():
+            return candidate
+    return package.parent / "ui" / "dist"
+
+
+_UI_DIST: Path = find_ui_dist()
 _token: str = ""
 _store: SessionStore | None = None
 
 
 def write_token(directory: Path) -> str:
     """Create config dir and write a fresh token file (mode 600). Return token."""
-    directory.mkdir(parents=True, exist_ok=True)
+    private_dir(directory)
     token: str = secrets.token_urlsafe(32)
     path: Path = directory / "token"
     path.write_text(token, encoding="utf-8")
@@ -43,8 +51,13 @@ def write_token(directory: Path) -> str:
 
 
 def host_allowed(request: Request) -> bool:
+    """Host must be a localhost name on the port this server is bound to (any `--port`)."""
+    server: Any = request.scope.get("server")
+    if not server:
+        return False
+    port: int = server[1]
     host: str = request.headers.get("host", "")
-    return host in ALLOWED_HOSTS
+    return host in {f"localhost:{port}", f"127.0.0.1:{port}"}
 
 
 def content_type_is_json(request: Request) -> bool:
@@ -67,16 +80,18 @@ def get_store() -> SessionStore:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _token, _store
-    _token = write_token(config_dir)
-    _store = SessionStore(config_dir / "sessions.json")
+    migrate_legacy()
+    _token = write_token(config_dir())
+    _store = SessionStore(data_dir() / "sessions.json")
     memory_steps.clear()
     graph_store.start()
-    logger.info("recorder listening; token written under %s", config_dir)
+    logger.info("recorder listening; token written under %s", config_dir())
     yield
     graph_store.stop()
 
 
-app = FastAPI(lifespan=lifespan)
+# D19: no generated docs or schema; every served route is listed in tests/test_app.py.
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.middleware("http")

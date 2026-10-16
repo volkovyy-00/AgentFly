@@ -1,10 +1,10 @@
-"""Parse ~/.config/flightrecorder/.env by hand (stdlib only). Never log values."""
+"""Parse ~/.config/agentfly/neo4j.env by hand (stdlib only). Never log values."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-CREDENTIALS_PATH: Path = Path.home() / ".config" / "flightrecorder" / ".env"
+from agentfly.recorder.paths import credentials_path
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -33,7 +33,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 def neo4j_settings(path: Path | None = None) -> tuple[str, str, str] | None:
     """Return (uri, username, password) or None if incomplete."""
-    env: dict[str, str] = parse_env_file(path if path is not None else CREDENTIALS_PATH)
+    env: dict[str, str] = parse_env_file(path if path is not None else credentials_path())
     uri: str = env.get("NEO4J_URI", "").strip()
     user: str = env.get("NEO4J_USERNAME", "").strip()
     password: str = env.get("NEO4J_PASSWORD", "").strip()

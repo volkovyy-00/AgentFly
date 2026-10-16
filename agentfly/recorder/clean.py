@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,16 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
 }
 
 _WEB_TOOLS: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
+
+# A long option name is kept only if it looks like a name; anything else may be a value.
+_LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
+# A program name made of anything else (spaces, quotes, `$`) may be part of a secret.
+_PROGRAM_NAME = re.compile(r"[\w./+~-]+")
+# `NAME=`, `NAME+=` and `NAME[i]=` set a variable; the index is dropped, it is not a name.
+_ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
+# What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
+# is not one.
+_HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -66,26 +77,52 @@ def _quotes_balanced(cmd: str) -> bool:
     return not in_single and not in_double
 
 
+def _assign_name(token: str) -> str | None:
+    """The variable name if the token is an assignment (`K=v`, `K+=v`, `K[i]=v`), else None."""
+    if "=" not in token:
+        return None
+    match = _ASSIGN_NAME.fullmatch(token.split("=", 1)[0])
+    return match.group(1) if match else None
+
+
 def _is_env_assign(token: str) -> bool:
-    if "=" not in token or token.startswith("-"):
-        return False
-    name: str = token.split("=", 1)[0]
-    if not name or not name[0].isalpha() and name[0] != "_":
-        return False
-    return all(c.isalnum() or c == "_" for c in name)
+    return _assign_name(token) is not None
+
+
+def _rough_tokens(cmd: str) -> list[str]:
+    """Split on whitespace, | ; & outside quotes. Tolerates unbalanced quotes; keeps quotes."""
+    tokens: list[str] = []
+    buf: list[str] = []
+    quote: str = ""
+    i: int = 0
+    while i < len(cmd):
+        ch: str = cmd[i]
+        if ch == "\\" and quote == '"' and i + 1 < len(cmd):
+            buf.append(cmd[i : i + 2])
+            i += 2
+            continue
+        if ch in {"'", '"'} and quote in {"", ch}:
+            quote = "" if quote else ch
+        elif not quote and (ch.isspace() or ch in "|;&"):
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
 
 
 def _first_program(cmd: str) -> str:
-    rough: list[str] = cmd.replace("|", " ").replace(";", " ").split()
-    for token in rough:
-        if token in {"&&", "||"}:
-            continue
+    for token in _rough_tokens(cmd):
         if _is_env_assign(token):
-            continue
-        # Drop wrapping quotes if present
+            continue  # a quoted value stays inside its token, so no part of it is read
         bare: str = token.strip("'\"")
-        if bare:
-            return Path(bare).name or bare
+        name: str = Path(bare).name or bare
+        return name if _PROGRAM_NAME.fullmatch(name) else "cmd"
     return "cmd"
 
 
@@ -144,8 +181,7 @@ def _clean_segment(segment: str, project_root: Path) -> str:
 
     out: list[str] = []
     idx: int = 0
-    while idx < len(tokens) and _is_env_assign(tokens[idx]):
-        name: str = tokens[idx].split("=", 1)[0]
+    while idx < len(tokens) and (name := _assign_name(tokens[idx])) is not None:
         out.append(f"{name}=<removed>")
         idx += 1
 
@@ -153,7 +189,7 @@ def _clean_segment(segment: str, project_root: Path) -> str:
         return " ".join(out)
 
     program: str = tokens[idx]
-    out.append(program)
+    out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
     prog_base: str = Path(program).name.lower()
     web_tool: bool = prog_base in _WEB_TOOLS
     idx += 1
@@ -167,12 +203,17 @@ def _clean_segment(segment: str, project_root: Path) -> str:
 
 
 def _classify_word(word: str, project_root: Path, *, web_tool: bool) -> str:
-    # (1) options
-    if word.startswith("--") and "=" in word:
-        opt: str = word.split("=", 1)[0]
-        return f"{opt}=<arg>"
-    if word.startswith("-") and word != "-":
+    # (1) options: keep names, drop values, also a value stuck onto its option (-pSECRET)
+    if word == "--":
         return word
+    if word.startswith("--"):
+        name: str = word[2:].split("=", 1)[0]
+        if not _LONG_OPTION_NAME.fullmatch(name):
+            return "<arg>"
+        return f"--{name}=<arg>" if "=" in word else word
+    if word.startswith("-") and word != "-":
+        # -pX and -la look alike, so a cluster keeps only its first letter.
+        return word if len(word) == 2 else f"{word[:2]}<arg>"
 
     # (2) web address
     if "://" in word or web_tool:
@@ -199,8 +240,13 @@ def website_name(word: str) -> str | None:
 def _website_name(word: str) -> str | None:
     host: str | None = None
     if "://" in word:
-        host = urlparse(word).hostname
+        try:
+            host = urlparse(word).hostname
+        except ValueError:  # e.g. an unbalanced [ in the address
+            return None
     else:
+        if word.startswith("@"):  # curl -d @file is a file, not a host
+            return None
         # scp/rsync user@host:path
         candidate: str = word
         if "@" in candidate:
@@ -212,7 +258,7 @@ def _website_name(word: str) -> str | None:
                 candidate = left
         # strip path-like suffix
         candidate = candidate.split("/")[0]
-        if candidate and ("." in candidate or candidate == "localhost"):
+        if _HOST_WORD.fullmatch(candidate) and ("." in candidate or candidate == "localhost"):
             host = candidate
 
     if host is None or host == "":

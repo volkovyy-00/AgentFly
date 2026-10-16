@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from recorder.memory import MAX_LIMIT, MemorySteps, parse_limit, pick_flagged
-from recorder.store import StepRecord
+from agentfly.recorder.memory import MAX_LIMIT, MemorySteps, parse_limit, pick_flagged
+from agentfly.recorder.store import StepRecord
 
 FIXTURE: Path = Path(__file__).parent / "fixtures" / "window_golden.json"
 ZERO_HIDDEN: dict[str, int] = dict.fromkeys(

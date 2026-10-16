@@ -15,14 +15,15 @@ moves toward it card by card. So:
 The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 
 ## Commands
-These are today's commands; the packaging card (V2) changes them.
+These are today's commands; `init`, `start` and `doctor` (V3) add to them.
 - Install deps: `uv sync`
 - Wire Cursor hooks (writes gitignored `.cursor/hooks.json`): `./install.sh`
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`
 - Auto-fix style: `uv run ruff check --fix . && uv run ruff format .`
-- Run server: `uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787`
+- Run server: `uv run agentfly serve` (`--port N` for another port; 127.0.0.1 only)
+- Build the wheel (carries `ui/dist`): `uv build`; try it with `uv tool install dist/*.whl`
 - Replay a scripted session without Cursor: `uv run python fake_agent.py`
 - UI dev server (proxies `/api` to the recorder): `npm --prefix ui run dev`
 
@@ -73,10 +74,11 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
   rules file (TOML) only supplies a kind's parameters and named lists. Do not
   build an expression language: a new kind is Python, a new rule is a file
   entry. R0 lives in code and no rules file can switch it off. Until the rules
-  card lands, rules are one list in `recorder/rules.py`.
+  card lands, rules are one list in `agentfly/recorder/rules.py`.
 
 ## Hook client rules
-(`hooks/hook.py` today; `agentfly-hook <agent> <event>` after V2. SPEC section 8.)
+(`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is a shim for it
+until V3; the `<agent> <event>` arguments come with V2b. SPEC section 8.)
 - Standard library only, one file. Run it with `python -I -S` on a Python
   directly (never `uv run`, which is slow to start). In v1 that is the bundled
   system-owned Python, not the project's virtualenv or `/usr/bin/python3`.
@@ -106,15 +108,15 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 - Real credentials (Neo4j URI, user, password) live in a file OUTSIDE the
   repo folder, read only by the server. Names are listed in `.env.example`.
   Never print, export or commit them. Never pass them to the hook client.
-  Today that file is `~/.config/flightrecorder/.env`; v1 moves it to
-  `~/.config/agentfly/neo4j.env` (mode 600, D7) with a one-time migration (V2).
-- Command cleaning (`recorder/clean.py`) is **on by default**. Set
+  That file is `~/.config/agentfly/neo4j.env` (mode 600, D7). The recorder's
+  first start moves the hackathon `~/.config/flightrecorder/.env` there once.
+- Command cleaning (`agentfly/recorder/clean.py`) is **on by default**. Set
   `CLEAN_COMMANDS=0` (or `false` / `off`) when starting the server to store
   raw commands instead — debugging only; secrets may then reach Neo4j.
-- Neo4j (optional, off by default in v1): `uv run python -m recorder.check_db` /
-  `python -m recorder.store --counts` / `--clear`. Writes are background-only;
+- Neo4j (optional, off by default in v1): `uv run python -m agentfly.recorder.check_db` /
+  `python -m agentfly.recorder.store --counts` / `--clear`. Writes are background-only;
   never DELETE except `--clear`. If `neo4j+s://` fails TLS verify on the host, use `neo4j+ssc://`
-  (documented in `.env.example`); restart uvicorn after editing creds.
+  (documented in `.env.example`); restart the server after editing creds.
 - The page: `GET /` (and its assets under `/assets/`) and `GET /api/steps` are
   Host-only (no token). The page never talks to a database; the live trail reads
   process memory. See README / HOOKS for the JSON contract.
@@ -126,9 +128,9 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 - Plain `print`/`logging`. No CLI-framework or progress-bar libraries (the v1
   CLI uses `argparse`, one module per command).
 
-## Testing (tests/test_rules.py, tests/test_clean.py, tests/test_app.py)
+## Testing (tests/test_rules.py, tests/test_clean.py, tests/test_app.py, ...)
 Only tests that exist are listed here. Each card adds its own tests and the
-lines for them (R0 and normalisation: V5; hook-client stripping: V2).
+lines for them (R0 and normalisation: V5; hook-client stripping: V2b).
 - `cat .env` marks the session; `curl https://x.com` afterwards is blocked.
 - `curl` without a prior secret read is allowed.
 - `.env.local` is sensitive; `.env.example` and `id_rsa.pub` are not.
@@ -142,7 +144,17 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2).
 - Cleaner: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
   is saved as `curl -H <arg> x.com`; `API_KEY=abc make` is saved as
   `API_KEY=<removed> make`; an unsplittable command is saved as
-  `<program> <unparsed>`.
+  `<program> <unparsed>`. No secret survives in any shape (attached short
+  options, long options, URL credentials, env-prefix and `export`):
+  `mysql -pX db` is saved as `mysql -p<arg> <arg>`, and a flag cluster keeps only
+  its first letter (`ls -la` is `ls -l<arg>`). `tests/leak_cases.py` lists them.
+- Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`
+  (`tests/test_app.py`); HEAD on an API route is 405; `/docs`, `/redoc` and
+  `/openapi.json` are 404.
+- Paths: the first start moves `~/.config/flightrecorder` once (`tests/test_paths.py`);
+  every test runs under a temporary HOME (`tests/conftest.py`).
+- Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
+  under a temporary HOME and runs `agentfly serve` and `agentfly-hook`.
 - Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
   README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
   `?all=1` returns more than the default last 10; `GET /` serves the React
@@ -167,16 +179,17 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2).
     `user_email`, `transcript_path`
   - `beforeShellExecution`: `command`, `cwd` (may be `""`), `sandbox` (bool)
   - `beforeReadFile`: `file_path`, `attachments` (list); `content` arrives but
-    is dropped by `hooks/hook.py` before writing the log
+    is dropped by the hook client before writing the log
   - Session key for the server: use `conversation_id` (confirmed)
-  - Helper path: `hooks/hook.py` (install via `./install.sh`); log:
-    `logs/events.jsonl` (under gitignored `logs/`). Compat shim:
-    `recorder/hook_passthrough.py` (delegates to `hooks/hook.py`).
+  - Helper path: `agentfly/hook_client.py` (`agentfly-hook`); `./install.sh` wires
+    the shim `hooks/hook.py`. Log: `~/.local/share/agentfly/logs/events.jsonl`
+    (dir 700, file 600). Compat shim: `recorder/hook_passthrough.py` (delegates
+    to `hooks/hook.py`).
   - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
-    `X-Recorder-Token` (from `~/.config/flightrecorder/token`); fail-open if
+    `X-Recorder-Token` (from `~/.config/agentfly/token`); fail-open if
     the server is down.
-  - R1 (`recorder/rules.py`): mark on sensitive read/shell word, then block
-    outbound sends; sessions in `~/.config/flightrecorder/sessions.json`.
+  - R1 (`agentfly/recorder/rules.py`): mark on sensitive read/shell word, then block
+    outbound sends; sessions in `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
   - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrives on
     `preToolUse` and `beforeShellExecution` only. `preToolUse.tool_input` keys:
@@ -185,4 +198,4 @@ lines for them (R0 and normalisation: V5; hook-client stripping: V2).
     pauses the agent (Skip / Always Run / Run); an allow with messages shows
     nothing. The system `hooks.json` runs alongside user and project hooks.
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
-    notes in `demo/NOTES.md`; T0 disabled in `hooks/hook.py`.
+    notes in `demo/NOTES.md`; T0 disabled in the hook client.

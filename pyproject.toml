@@ -1,6 +1,14 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
 [project]
-name = "agentfly"
+name = "agentfly-recorder"
 version = "0.1.0"
+description = "AgentFly: watches and guards what AI coding agents do on your machine"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.142.2",
@@ -9,11 +17,25 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.scripts]
+agentfly = "agentfly.cli:main"
+agentfly-hook = "agentfly.hook_client:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentfly"]
+
+# The built page travels inside the wheel (D6); agentfly/recorder/app.py finds it there.
+[tool.hatch.build.targets.wheel.force-include]
+"ui/dist" = "agentfly/ui_dist"
+
+[tool.hatch.build.targets.sdist]
+include = ["/agentfly", "/ui/dist", "/README.md", "/LICENSE", "/pyproject.toml"]
 
 [tool.ruff]
 target-version = "py312"
@@ -25,4 +47,3 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-

@@ -12,27 +12,30 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import recorder.app as app_module
-import recorder.store as store_mod
-from recorder.config_env import CREDENTIALS_PATH
-from recorder.rules import Session
-from recorder.store import (
+import agentfly.recorder.app as app_module
+import agentfly.recorder.store as store_mod
+from agentfly.recorder.paths import config_dir, credentials_path
+from agentfly.recorder.rules import Session
+from agentfly.recorder.store import (
     GraphStore,
     StepRecord,
     build_step_record,
     graph_store,
 )
+from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
-_HAS_CREDS: bool = CREDENTIALS_PATH.is_file()
+# Read at collection, before the autouse fixture swaps HOME: the owner's real login (if any).
+_REAL_CREDENTIALS = credentials_path()
+_HAS_CREDS: bool = _REAL_CREDENTIALS.is_file()
 
 
 def _neo4j_reachable() -> bool:
     if not _HAS_CREDS:
         return False
     try:
-        from recorder.check_db import main as check_main
+        from agentfly.recorder.check_db import main as check_main
 
-        return check_main() == 0
+        return check_main() == 0  # reads the real login too
     except Exception:  # noqa: BLE001
         return False
 
@@ -51,8 +54,7 @@ _FORBIDDEN: tuple[str, ...] = (
 
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    app_module.config_dir = tmp_path / "flightrecorder"
+def client() -> TestClient:
     # Keep Neo4j off during ordinary gate tests unless a live test re-enables it.
     previous_enabled: bool = graph_store.enabled
     graph_store.enabled = False
@@ -64,12 +66,13 @@ def client(tmp_path: Path) -> TestClient:
 
 @pytest.fixture()
 def token(client: TestClient) -> str:
-    path: Path = app_module.config_dir / "token"
+    path: Path = config_dir() / "token"
     return path.read_text(encoding="utf-8").strip()
 
 
 def test_delete_only_in_clear_path() -> None:
-    root: Path = Path(__file__).resolve().parents[1] / "recorder"
+    root: Path = Path(__file__).resolve().parents[1] / "agentfly" / "recorder"
+    assert list(root.glob("*.py")), "no recorder sources found"
     for path in root.glob("*.py"):
         text: str = path.read_text(encoding="utf-8")
         if not re.search(r"\bDELETE\b", text):
@@ -173,7 +176,7 @@ def test_hooks_stay_fast_when_store_write_fails(
 
     headers = {"Content-Type": "application/json", "X-Recorder-Token": token}
     try:
-        with caplog.at_level(logging.WARNING, logger="flightrecorder"):
+        with caplog.at_level(logging.WARNING, logger="agentfly"):
             for i in range(20):
                 t0: float = time.perf_counter()
                 response = client.post(
@@ -208,7 +211,7 @@ def test_hooks_stay_fast_when_store_write_fails(
 @_live
 def test_live_step_appears_within_5s() -> None:
     store = GraphStore()
-    store.start(CREDENTIALS_PATH)
+    store.start(_REAL_CREDENTIALS)
     assert store.enabled
     sid: str = f"appear-{uuid.uuid4()}"
     record = StepRecord(
@@ -241,7 +244,7 @@ def test_live_step_appears_within_5s() -> None:
 @_live
 def test_live_merge_idempotent() -> None:
     store = GraphStore()
-    store.start(CREDENTIALS_PATH)
+    store.start(_REAL_CREDENTIALS)
     assert store.enabled
     sid: str = f"idem-{uuid.uuid4()}"
     record = StepRecord(
@@ -282,7 +285,7 @@ def test_live_merge_idempotent() -> None:
 @_live
 def test_live_two_sessions_share_file_and_rule_nodes() -> None:
     store = GraphStore()
-    store.start(CREDENTIALS_PATH)
+    store.start(_REAL_CREDENTIALS)
     assert store.enabled
     for _ in (1, 2):
         sid: str = f"share-{uuid.uuid4()}"
@@ -338,7 +341,7 @@ def test_live_two_sessions_share_file_and_rule_nodes() -> None:
 @_live
 def test_live_no_secret_properties_after_bearer_step() -> None:
     store = GraphStore()
-    store.start(CREDENTIALS_PATH)
+    store.start(_REAL_CREDENTIALS)
     assert store.enabled
     session = Session(
         id=f"clean-{uuid.uuid4()}",
@@ -371,3 +374,17 @@ def test_live_no_secret_properties_after_bearer_step() -> None:
         ).data()
     store.stop()
     assert rows == []
+
+
+@pytest.mark.parametrize("raw", LEAKY_COMMANDS)
+def test_builder_keeps_no_secret_in_any_stored_field(tmp_path: Path, raw: str) -> None:
+    (tmp_path / ".env").write_text("API_KEY=demo\n", encoding="utf-8")
+    session = Session(id="leaks", marked=False, start_time="2026-01-01T00:00:00+00:00", next_step=1)
+    payload: dict[str, Any] = {
+        "hook_event_name": "beforeShellExecution",
+        "command": raw,
+        "conversation_id": "leaks",
+        "workspace_roots": [str(tmp_path)],
+    }
+    record: StepRecord = build_step_record(payload, session, "allow", None, order=1)
+    assert SECRET not in repr(record)
