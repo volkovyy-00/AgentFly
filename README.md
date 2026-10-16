@@ -2,7 +2,7 @@
 
 > See what your AI coding agent is doing, and stop the next step before it does something you would regret.
 
-![Live graph: the agent reads .env, then its curl to ntfy.sh is blocked by rule R1](docs/media/same-command.gif)
+![The lane graph (Graph tab): the agent reads .env, then its curl to ntfy.sh is blocked by rule R1](docs/media/same-command.gif)
 
 AgentFly is a local black box for the Cursor agent. Cursor
 [hooks](https://cursor.com/docs/hooks) send every agent action (file reads,
@@ -122,15 +122,18 @@ Blocked by rule R1: a secret was read earlier in this session, and now data is b
 The `.env` in this repo holds only a fake demo value (bait for the rule).
 Never put a real credential in it.
 
-**4. Watch the live graph.** With the recorder running, open
-<http://127.0.0.1:8787/>. The page (`ui/`, Vite + React) polls `GET /api/steps`
-about once a second from the server's memory, so it works without Neo4j. It is
-a timeline with steps on the left, files in the middle and hosts and rules on
-the right, drawing the 20 most recent steps. In a long session a summary box
-above them counts the earlier steps, with up to 5 flagged ones (the step that
-made R1 mark the session, and the newest blocks and warnings) one pan upward.
-The page needs no token; only `POST /hook` does. To preview it with sample
-data and no agent, open <http://127.0.0.1:8787/?mock=1> (`&len=500&burst=10`
+**4. Watch the session live.** With the recorder running, open
+<http://127.0.0.1:8787/>. That is the **Live Trail** (`ui/`, Vite + React), the
+home page: every step with an allow, warn or block badge, routine runs of allowed
+steps folded into one row, blocks, warnings and secret reads never folded, and a
+Why card for each block or warning (the rule, the step that triggered it, the
+step that was blocked). The page polls the server's memory about once a second,
+so it works without Neo4j, and it needs no token; only `POST /hook` does. The
+lane graph, with steps on the left, files in the middle and hosts and rules on
+the right, is the **Graph** tab at <http://127.0.0.1:8787/?view=graph>
+(`/?view=trail` also opens the trail). To preview the page with sample data and no
+agent, open <http://127.0.0.1:8787/?mock=1> for the trail or
+<http://127.0.0.1:8787/?view=graph&mock=1> for the graph (`&len=500&burst=10`
 replays a long session). The old `/v2/` address redirects to `/`.
 
 ## Configuration
@@ -229,8 +232,10 @@ AgentFly is a first layer of defence, not a sandbox.
 uv run ruff check . && uv run ruff format --check . && uv run pytest -q
 ```
 
-The tests need no Cursor and no network. Live Neo4j tests are skipped when
-the database is unreachable.
+The tests need no Cursor and no network. The live Neo4j tests never read
+`~/.config/agentfly/neo4j.env`: they run only when `AGENTFLY_TEST_NEO4J_ENV` names
+a separate credentials file for a test database, and are skipped otherwise.
+`agentfly serve` refuses to start (and changes nothing) if its port is taken.
 
 ## Project layout
 
@@ -240,7 +245,7 @@ the database is unreachable.
 | `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it until `agentfly init` |
 | `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, Neo4j store, file locations (`paths.py`) |
 | `agentfly/cli/` | The `agentfly` command (`serve`) |
-| `ui/` | Live graph app (Vite + React); committed build at `ui/dist`, served at `/` |
+| `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
 

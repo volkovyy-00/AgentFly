@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import stat
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -107,9 +108,21 @@ async def host_gate(request: Request, call_next: Any) -> Response:
     return response  # type: ignore[no-any-return]
 
 
+def offline_guard_count() -> int:
+    """Calls the hook client's offline guard answered (one byte each in the count file).
+
+    Advisory: the file sits in the user's data folder. It is never deleted here.
+    """
+    try:
+        info = (data_dir() / "logs" / "offline-count").lstat()
+    except OSError:
+        return 0
+    return info.st_size if stat.S_ISREG(info.st_mode) else 0
+
+
 @app.get("/health")
-async def health() -> dict[str, bool]:
-    return {"ok": True}
+async def health() -> dict[str, Any]:
+    return {"ok": True, "offline_guard_count": offline_guard_count()}
 
 
 @app.get("/api/steps")

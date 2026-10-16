@@ -23,7 +23,7 @@ if [[ ! -f "$HOOK_SCRIPT" ]]; then
 fi
 chmod +x "$HOOK_SCRIPT"
 
-mkdir -p "$ROOT/.cursor" "$ROOT/logs"
+mkdir -p "$ROOT/.cursor"
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   CMD=".venv/bin/python hooks/hook.py"
@@ -54,15 +54,12 @@ cat > "$ROOT/.cursor/hooks.json" <<EOF
 }
 EOF
 
-mkdir -p "$HOME/.config/flightrecorder"
-chmod 700 "$HOME/.config/flightrecorder" 2>/dev/null || true
-
 echo "Installed Cursor hooks -> $ROOT/.cursor/hooks.json"
 echo "  command: $CMD"
-echo "  log file: $ROOT/logs/events.jsonl"
+echo "  hook log: ~/.local/share/agentfly/logs/events.jsonl (made by the first hook call)"
 echo ""
 echo "Next:"
 echo "  1. Trust this folder in Cursor (if prompted)."
 echo "  2. Restart Cursor or reload if hooks do not appear."
 echo "  3. Open the Hooks output panel; trigger a file read and a shell command."
-echo "  4. Inspect logs/events.jsonl"
+echo "  4. Inspect ~/.local/share/agentfly/logs/events.jsonl"

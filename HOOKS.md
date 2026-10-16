@@ -14,11 +14,11 @@ Logic does **not** live under `.cursor/`.
 
 ```
 Cursor agent  (or fake_agent.py)
-    → python3 hooks/hook.py   (thin adapter)
-        → drop unsafe fields, POST http://127.0.0.1:8787/hook
-           (header X-Recorder-Token from ~/.config/flightrecorder/token)
-        → print server JSON, or {"permission":"allow"} if unreachable
-            → recorder/app.py: mark session, R1 decide, allow/deny
+    → python3 hooks/hook.py   (thin shim for agentfly/hook_client.py)
+        → strip content, POST http://127.0.0.1:8787/hook
+           (header X-Recorder-Token from ~/.config/agentfly/token)
+        → print server JSON, or the offline guard's answer if the recorder is down
+            → agentfly/recorder/app.py: mark session, R1 decide, allow/deny
 ```
 
 Do **not** use a Unix socket — HTTP matches the local server + web UI on port 8787.
@@ -26,21 +26,23 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Piece | Path | Role |
 |---|---|---|
 | Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
-| Adapter | `hooks/hook.py` | Stdlib only; sanitize, POST `/hook`, fail-open |
-| Server | `recorder/app.py` | Host + token gates; mark/decide; R1 deny |
-| Rules | `recorder/rules.py` | `Rule` list; `mark` then `decide`; `WATCH_ONLY` |
-| Sessions | `recorder/sessions.py` | Memory + `~/.config/flightrecorder/sessions.json` |
-| Names | `recorder/names.py` | Sensitive paths + local hosts (pure) |
-| Clean | `recorder/clean.py` | SPEC §4 command cleaner; `CLEAN_COMMANDS` (default on) |
-| Memory | `recorder/memory.py` | In-memory steps for `GET /api/steps` (page) |
-| Neo4j | `recorder/store.py` | Background MERGE writer; `--counts` / `--clear` |
-| Creds | `recorder/config_env.py` | Hand-parse `~/.config/flightrecorder/.env` |
-| Check DB | `recorder/check_db.py` | `verify_connectivity` → `connected` |
+| Hook client | `agentfly/hook_client.py` | Stdlib only; strip, POST `/hook`, offline guard when the recorder is down |
+| Shim | `hooks/hook.py` | What `./install.sh` wires; runs the hook client (goes away with V3) |
+| Server | `agentfly/recorder/app.py` | Host + token gates; mark/decide; R1 deny |
+| Rules | `agentfly/recorder/rules.py` | `Rule` list; `mark` then `decide`; `WATCH_ONLY` |
+| Sessions | `agentfly/recorder/sessions.py` | Memory + `~/.local/share/agentfly/sessions.json` |
+| Names | `agentfly/recorder/names.py` | Sensitive paths + local hosts (pure) |
+| Clean | `agentfly/recorder/clean.py` | SPEC §4 command cleaner; `CLEAN_COMMANDS` (default on) |
+| Memory | `agentfly/recorder/memory.py` | In-memory steps for `GET /api/steps` (page) |
+| Neo4j | `agentfly/recorder/store.py` | Background MERGE writer; `--counts` / `--clear` |
+| Creds | `agentfly/recorder/config_env.py` | Hand-parse `~/.config/agentfly/neo4j.env` |
+| Check DB | `agentfly/recorder/check_db.py` | `verify_connectivity` → `connected` |
 | Replay | `fake_agent.py` + `demo/scenario.json` | Pipe events through the helper (no Cursor) |
-| Compat shim | `recorder/hook_passthrough.py` | Delegates to `hooks/hook.py` if an old config still points here |
+| Compat shim | `recorder/` folder at the repo top | A one-file forwarder for a stale `hooks.json`; it delegates to the shim above |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
-| Log | `logs/events.jsonl` | Under gitignored `logs/` (local debug copy) |
-| Token | `~/.config/flightrecorder/token` | Mode 600; written on server start |
+| Log | `~/.local/share/agentfly/logs/events.jsonl` | Hook log (folder 700, file 600); no commands, no file text |
+| Offline count | `~/.local/share/agentfly/logs/offline-count` | One byte per call the offline guard answered; `/health` shows the size |
+| Token | `~/.config/agentfly/token` | Mode 600; written on server start |
 
 The whole `.cursor/` directory is in `.gitignore`. Do not commit `hooks.json` —
 paths and Python choice are machine-local. After clone (or after pulling
@@ -48,10 +50,10 @@ install changes), run `./install.sh` so Cursor has a fresh config.
 
 **Footgun:** never delete the hook script while `hooks.json` still points at it.
 Python exit code **2** (file missing) is treated as **deny** and can lock the agent.
-Keep the compat shim so an outdated `hooks.json` that still names
-`recorder/hook_passthrough.py` does not exit 2.
+Keep the compat shim so an outdated `hooks.json` that still names the old forwarder
+does not exit 2.
 
-Project layout (uv skeleton): `hooks/`, `recorder/`, `ui/`, `tests/`,
+Project layout: `agentfly/` (hook client, recorder, CLI), `hooks/`, `ui/`, `tests/`,
 `demo/`.
 
 ---
@@ -68,7 +70,7 @@ Then:
 1. Trust this project folder in Cursor if prompted.
 2. Restart Cursor (or reload) if hooks do not appear.
 3. Check **Settings → Hooks** and the **Hooks** output channel.
-4. Trigger a file read and a shell command; inspect `logs/events.jsonl`.
+4. Trigger a file read and a shell command; inspect `~/.local/share/agentfly/logs/events.jsonl`.
 
 Hook command after install (prefer project venv when present):
 
@@ -99,33 +101,48 @@ style prompts **OFF** (hackathon demo setup,
 
 ---
 
-## Helper behaviour
+## Hook client behaviour
 
-1. Read JSON from stdin.
-2. **Immediately drop** `content` (SPEC §8: `beforeReadFile` includes full file text).
-3. Replace `afterFileEdit.edits` with a count placeholder; omit `tool_input`.
-4. `POST` the sanitized payload to `http://127.0.0.1:8787/hook` (0.5 s timeout,
-   header `X-Recorder-Token`).
-5. Print **only** the server permission JSON on stdout.
-6. If the server is down or any error occurs: print `{"permission":"allow"}` and
-   a warning on stderr (fail-open).
-7. Optionally append `{ "ts", "event", "decision" }` to `logs/events.jsonl`.
+Called as `agentfly-hook <agent> <event>`; with no arguments (today's `hooks.json`) it acts as
+`cursor` and reads the event from the payload. If the `<event>` argument and the payload's
+`hook_event_name` differ, the argument wins and stderr says so. An unknown agent gets allow,
+exit 0 and a warning on stderr.
 
-Checkpoint A test rule T0 (`_T0_ENABLED` in `hooks/hook.py`) denied shell
-commands containing `curl`. It is **disabled** after the decision in
-`demo/NOTES.md`.
+1. Read stdin as bytes. Anything that is not a JSON object (empty, malformed, non-UTF-8,
+   a 5000-digit number, JSON nested 100,000 deep) goes to the offline guard on its raw text.
+2. Strip, at every depth: `content`, `output` and `edits` (`afterFileEdit.edits` becomes a
+   count). `tool_input` is dropped; only a file tool's `file_path` is kept. An MCP call keeps
+   only the server and tool names (`mcp_server_name`, `tool_name`; unverified on Cursor
+   3.24.12). Only `beforeShellExecution` keeps its `command`, and only in the request body.
+3. `POST` the stripped payload to `http://127.0.0.1:8787/hook`, header `X-Recorder-Token`.
+   The port is fixed (D25): the client reads no environment variable and no port file.
+   Wait budget 0.5 s in total (connect and answer). Any answer other than a 200 with a
+   permission object (a 401 or 403 included) counts as "recorder did not answer": the
+   offline guard applies, never allow.
+4. Print **only** the permission JSON on stdout, and always exit 0.
+5. Append `{ts, event, decision}` to the hook log. The log keeps no command text.
+6. If the recorder is down, slow, or answers with an error: the **offline guard** (SPEC §9)
+   answers. It denies outbound commands (`curl`, `wget`, `nc`, `scp`, `ssh`, `rsync` unless
+   the host is local or private; `gh`, `aws`, `git push`; every inline `python -c` / `node -e`
+   one-liner, as SPEC §9 says, and any other `python`/`node` command that mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
+   names an AgentFly folder or a `hooks.json`. The message says to run `agentfly start`. It
+   allows everything else and logs the call with `offline: true`.
+
+Checkpoint A's temporary test rule T0 (a hard-coded `curl` deny) was removed from the hook
+client after the decision in `demo/NOTES.md`.
 
 ---
 
 ## Server (this stage)
 
 ```bash
-uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
+uv run agentfly serve              # or: AGENTFLY_PORT=N uv run agentfly serve (--port wins)
 ```
 
-- `GET /health` → `{"ok": true}` (Host check only).
+- `GET /health` → `{"ok": true, "offline_guard_count": N}` (Host check only). `N` is how many
+  calls the hook client's offline guard answered (advisory; read from the count file).
 - `POST /hook` → Host → token → Content-Type → JSON → mark session → R1 decide →
-  allow or deny. Sessions persist in `~/.config/flightrecorder/sessions.json`.
+  allow or deny. Sessions persist in `~/.local/share/agentfly/sessions.json`.
 - Listens on `127.0.0.1` only; token file mode `600`.
 - R1 message (exact): `Blocked by rule R1: a secret was read earlier in this
   session, and now data is being sent out.` `WATCH_ONLY` turns blocks into
@@ -136,11 +153,11 @@ uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787
 
 ## Replay without Cursor (`fake_agent.py`)
 
-Pipes events from `demo/scenario.json` into `hooks/hook.py` the same way Cursor
+Pipes events from `demo/scenario.json` into `agentfly/hook_client.py` the same way Cursor
 would. First stdout line is `SIMULATION (not a real agent)`.
 
 ```bash
-uv run uvicorn recorder.app:app --host 127.0.0.1 --port 8787   # separate terminal
+uv run agentfly serve   # separate terminal
 uv run python fake_agent.py
 uv run python fake_agent.py --scenario demo --session my-id
 uv run python fake_agent.py --scenario clean_sample
@@ -155,8 +172,8 @@ uv run python fake_agent.py --scenario clean_sample
 (allowed; content must be dropped before log/POST) → `curl` to ntfy (blocked by R1).
 Exit 0 only if every step matches its `expect`.
 
-**Server down:** helper fail-opens to allow; last step expect is `blocked` →
-exit non-zero and stderr `WARNING: recorder unreachable` (no traceback).
+**Server down:** the offline guard answers (a `curl` is denied), so the last step may still
+match; `fake_agent.py` prints `WARNING: recorder unreachable` on stderr and exits non-zero.
 
 **`clean_sample`:** holds the cleaning fixture command
 `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1` (expect allowed;
@@ -197,7 +214,7 @@ for policy.
 
 ## Command cleaning (SPEC §4)
 
-`recorder/clean.py` redacts shell commands before they are stored (options kept,
+`agentfly/recorder/clean.py` redacts shell commands before they are stored (options kept,
 values → `<arg>`, project-relative paths kept, hosts reduced to website names,
 env assigns → `NAME=<removed>`, hard-to-parse → `<program> <unparsed>`).
 
@@ -210,26 +227,33 @@ env assigns → `NAME=<removed>`, hard-to-parse → `<program> <unparsed>`).
 ## Neo4j background store
 
 After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
-(`recorder/store.py`). The decision path never waits on the driver.
+(`agentfly/recorder/store.py`). The decision path never waits on the driver.
 
 - Constraints + `MERGE` on `id` for Session/Step/File/Command/Host/Rule.
-- `DELETE` only via `uv run python -m recorder.store --clear`.
-- `uv run python -m recorder.check_db` → `connected` (failures print the
+- `DELETE` only via `uv run python -m agentfly.recorder.store --clear`.
+- `uv run python -m agentfly.recorder.check_db` → `connected` (failures print the
   exception class name only, never the password).
 - Queue full → drop + warning. Write failures → warning with error class only.
-- Live tests in `tests/test_store.py` skip when Aura is unreachable.
-- Creds file: `~/.config/flightrecorder/.env`. On this machine Aura needed
+- Live tests (`test_live_*` in `tests/test_store.py`) never read `~/.config/agentfly/neo4j.env`.
+  They run only when `AGENTFLY_TEST_NEO4J_ENV` names a separate credentials file for a
+  test database (same `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` names), and skip
+  otherwise, also when that database is unreachable or the file is the real login file.
+- Creds file: `~/.config/agentfly/neo4j.env`. On this machine Aura needed
   `neo4j+ssc://` (not `neo4j+s://`) because of TLS cert verification; see
   `.env.example`. Restart the recorder after changing the URI.
 - Verified: `check_db` → `connected` with `neo4j+ssc://`; background writes
   land in Aura. Restart uvicorn so the running process reloads the env.
 
-## Live graph (`ui/` + memory API)
+## The page (`ui/` + memory API)
 
-- Page: the [`ui/`](ui/) build at `/` (Vite + React; a timeline of the 20 most
-  recent steps with, above them, a summary box and up to 5 flagged older steps;
-  `/?mock=1` replays a sample session without an agent).
-  Server memory: [`recorder/memory.py`](recorder/memory.py) (Part B).
+- Page: the [`ui/`](ui/) build (Vite + React). `/` is the **Live Trail**: a badge on
+  every step, routine allowed steps folded, a Why card for each block or warning.
+  The lane graph (a timeline of the 20 most recent steps with, above them, a
+  summary box and up to 5 flagged older steps) is the Graph tab at
+  `/?view=graph`; `/?view=trail` and any other `view` value open the trail.
+  `/?mock=1` replays a sample session in the trail without an agent
+  (`/?view=graph&mock=1` for the graph).
+  Server memory: [`agentfly/recorder/memory.py`](agentfly/recorder/memory.py) (Part B).
 - `GET /` serves the committed `ui/dist` build (Host check only; no token); its
   assets are under `/assets/`. Both send `Cache-Control: no-cache`. If `ui/dist`
   is missing the server logs a warning and `/` is a plain 404: run
@@ -268,9 +292,10 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
   `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
   on server restart (lifespan).
 - Wrong Host → 403. No Cypher from the page.
-- Demo: start uvicorn → `uv run python fake_agent.py` → open
-  `http://127.0.0.1:8787/` — expect `.env` amber and blocked step → R1.
-- UI-only rehearsal without an agent: `/?mock=1` (needs the recorder or `npm --prefix ui run dev`).
+- Demo: `uv run agentfly serve` → `uv run python fake_agent.py` → open
+  `http://127.0.0.1:8787/` (the trail) or `http://127.0.0.1:8787/?view=graph`
+  (the lane graph) — expect the `.env` read marked and the blocked step → R1.
+- UI-only rehearsal without an agent: `/?mock=1` for the trail, `/?view=graph&mock=1` for the graph (needs the recorder or `npm --prefix ui run dev`).
 - UI local dev: `npm --prefix ui run dev` proxies `/api` to
   `http://127.0.0.1:8787` with `changeOrigin` so the Host gate accepts it.
 
@@ -286,9 +311,9 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 | R1 secret-then-network | **Done** |
 | Replay script `fake_agent.py` | **Done** |
 | Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
-| Command cleaning (`recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
+| Command cleaning (`agentfly/recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
 | Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
-| Live graph page + `/api/steps` | **Done** (memory; Host only) |
+| Page (trail at `/`, lane graph at `/?view=graph`) + `/api/steps` | **Done** (memory; Host only) |
 | R0 protect recorder | Not done |
 
 ---
@@ -297,5 +322,5 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 
 - Cursor built-in web tools may bypass these events.
 - Tab completions use `beforeTabFileRead` / `afterTabFileEdit` (not wired).
-- When the recorder is down, the adapter fails open (`allow` + stderr warning).
-  `fake_agent.py` then exits non-zero if a step expected `blocked`.
+- When the recorder is down, the offline guard answers (see "Hook client behaviour"): outbound
+  and guard-path commands are denied, everything else is allowed and logged.
