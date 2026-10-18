@@ -20,11 +20,11 @@ code as it is today.
 Sections 7, 8 and 11 are technical reference for the people building it; the
 rest is written for the owner.
 
-Two markers appear below:
+Two kinds of marker appear below:
 
-- **Pending S3** and **Pending S5** mark what the spikes S3 (rule kinds and
-  plain-language drafting) and S5 (subagents, the sudo grace period, the memory
-  brief) can still change. Each has one line on what is open.
+- **Pending D16** marks the one open question: memory across sessions (goal 4,
+  section 12). The spikes S3 and S5 are done and their results are written into
+  the sections they affect.
 - Numbers like (D5) point to the owner's decisions in `docs/DECISIONS.md`.
 
 ---
@@ -100,15 +100,22 @@ something. Cursor hands it a description of the action; it answers "allow",
 using only what ships with Python (D5, D18). It runs on a Python that AgentFly
 installs for itself (a relocatable standalone build, owned by the system, not
 your user), never on your own Python. It strips the action down to safe facts,
-asks the recorder, and prints the answer. If the recorder does not answer, it
-applies the offline guard (section 9). Details in section 8.
+asks the recorder, and prints the answer. If the recorder does not answer, or
+answers with a 401 or 403, or the input cannot be read, it applies the offline
+guard (section 9). It always posts to `127.0.0.1:8787`: there is no port file
+and no environment variable it reads (D25). A port kept in a file the agent can
+write would let the agent point the client at its own server that always
+answers "allow". If a configurable port is ever needed, it goes in the
+system-owned config, not in `~/.config`. Details in section 8.
 
 **System hooks file.** `agentfly init -g` writes the hook entries once into
 Cursor's system-wide file, `/Library/Application Support/Cursor/hooks.json`,
 owned by the system user (root). Every project you open in Cursor uses it, so
 there is no per-project setup, and the agent cannot edit it without your
 password (D2). The hook client and its Python live in
-`/Library/Application Support/AgentFly/`, also system-owned.
+`/Library/Application Support/AgentFly/`, also system-owned. It lists only
+events that the installed Cursor version is known to accept; when the version
+or an event is unknown, `init -g` writes nothing and says so (D23, section 8).
 
 **Recorder service.** A small program on your machine, `agentfly serve`, that
 listens on `127.0.0.1:8787` only. It receives each action, checks the rules and
@@ -128,15 +135,19 @@ off. Section 5.
 the step in the background into a SQLite database on your machine (D14). That
 store feeds the History tab. Saving never delays the answer. **Neo4j is an
 optional extra copy, off by default**; if you turn it on, the same cleaned
-steps are also written there, using a login file only you can read. Steps
-older than 28 days are deleted. `agentfly wipe` deletes everything now.
+steps are also written there, using a login file only you can read. Neo4j
+receives steps only when `~/.config/agentfly/config.toml` says `neo4j = true`;
+a login file that is merely present does not turn it on (D14). Steps older than
+28 days are deleted. `agentfly wipe` deletes the saved sessions and steps from
+the local store now. It never clears the "secret was read" marks (section 5),
+and the Neo4j copy is removed only by the store's own `--clear`.
 
 **The page.** A web page served by the recorder at `http://localhost:8787`,
 a read-only view. The live trail reads the recorder's memory (so it works
 without any database); past sessions come from the local store. Section 6.
 
-**Where files live (D7).** Config (token, settings, rule drafts, the optional
-`neo4j.env`, mode 600): `~/.config/agentfly/`. Data (session notes, the store,
+**Where files live (D7).** Config (token, `config.toml`, rule drafts, the
+optional `neo4j.env`, mode 600): `~/.config/agentfly/`. Data (session notes, the store,
 logs): `~/.local/share/agentfly/`. System-owned parts (hooks file, hook client,
 bundled Python, active rules): `/Library/Application Support/AgentFly/`. The
 hackathon folder `~/.config/flightrecorder` is migrated once, by the recorder's
@@ -250,8 +261,20 @@ Each kind is one named pure check; the file fills in parameters and named lists
 (sensitive file names, outbound tools, local hosts). Each rule carries inline
 tests. A `count` kind can come later.
 
-**Pending S3:** the final list of kinds, their field names, and the shape of the
-inline tests. S3 checks that the owner's real rules fit.
+Spike S3 tried ten of the owner's real rules on these two kinds. Seven fit as
+they were. The other three needed small additions, and the owner approved those
+instead of a third kind. Each is one named pure check in Python:
+
+- `command` patterns also match flag variants: a trailing `*` (`--data*`),
+  `=` forms, and clustered short flags (`-sd`, `-d@f`), through the normaliser;
+- `path_scope = "outside_workspace"` on `match` and on the trigger tables,
+  worked out from the workspace folders Cursor reports and the resolved path
+  (symlinks and `..` are the engine's job);
+- `pipe_into = <list>` on `match`: true when a command in the line feeds a
+  program in the list (covers `| sh`, `sh -c "$(curl …)"`, `bash <(curl …)`).
+
+"After reading `.env`" means the whole `.env` family, as in the sensitive-file
+list below. The field names beyond these are fixed when the rules card is built.
 
 ### R0: protect AgentFly itself (in code only)
 
@@ -263,6 +286,8 @@ weaken it:
 - commands that stop, unload or remove the recorder (`kill`, `pkill`,
   `launchctl`, `agentfly stop` and `agentfly uninstall`, `brew services`) or
   that name its port;
+- `agentfly serve` (a second recorder once rotated the token) and
+  `agentfly wipe` (deleting the history is for you, not the agent);
 - a Write or edit whose target path is one of those guard paths.
 
 R0 sees commands after the normalisation below, case-folded, and also checks
@@ -277,7 +302,8 @@ The exact guard list is fixed when the R0 card is built.
 - any file ending in `.pem` or `.key`;
 - any file whose name starts with `id_rsa` (but not `.pub`) or `credentials`.
 
-These lists move into the rules file (G2). **Pending S3:** exact field names.
+These lists move into the rules file (G2); their exact field names are fixed
+when the rules card is built.
 
 **Marking a session** ("has seen a secret"):
 - when the file-read tool opens a sensitive file; or
@@ -286,11 +312,22 @@ These lists move into the rules file (G2). **Pending S3:** exact field names.
   is harmless.
 
 **Scope of the mark.** It belongs to one chat (Cursor's conversation id). A
-secret read in one chat does not affect another. It is saved to a small file so
+secret read in one chat does not affect another, except for the chat's own
+subagents (below). It is saved to a small file so
 that a restart of the recorder does not forget it, and it clears only when a
-new chat starts. **Pending S5:** a report says subagents run under a new
-conversation id with no link to their parent, so a send delegated to a subagent
-could slip past the mark. S5 tests it; S3 compares fixes on paper.
+new chat starts.
+
+**Subagents (D21, D9).** When the agent starts a helper (a subagent), Cursor
+gives it its own chat id. Spike S5 found that every event inside a subagent
+still carries `parent_tool_call_id`, which equals the id of the parent chat's
+`Task` call. So the mark follows that id in both directions: a subagent of a
+marked chat is marked, and a mark set inside a subagent also marks its parent.
+Without that, a send handed to a subagent could slip past the mark. The
+`subagentStart` event is registered too, record-only, as a second source of the
+same link. Nothing depends on `subagentStop`: a background subagent never fires
+it. As a fallback for a Cursor version that drops the field: if a marked chat
+starts a `Task` and no event with that id ever arrives, new chats in the same
+workspace inherit the mark for 30 minutes.
 
 **Command normalisation.** Before any rule looks at a shell command, it is
 normalised: `bash -c`, `sh -c`, `env` and `sudo` are unwrapped, `$(…)` and
@@ -307,13 +344,15 @@ computer is blocked. After normalisation that covers:
 
 One exception keeps normal work possible: the body of a *quoted-delimiter*
 heredoc (`<<'EOF'`) is treated as plain text, so
-`git commit -m "$(cat <<'EOF' … EOF)"` is parsed and not blocked. Every other
-unparseable command counts as outbound after a secret read. **Open hole, sent to
-the owner:** a heredoc body can also be code that something runs
-(`bash <<'EOF' … EOF`, `python3 - <<'EOF' … EOF`), and as D10 is worded such a
-command passes. See section 10. The cost, accepted
-by the owner: a commit message written with an unquoted `<<EOF` is blocked in a
-marked session, so the agent must commit another way (for example
+`git commit -m "$(cat <<'EOF' … EOF)"` and `tee f <<'EOF'` are parsed and not
+blocked. The exception does not apply when the program that reads the heredoc
+is a shell or an interpreter: `sh`, `bash`, `zsh`, `python`, `python3` (also
+versioned names such as `python3.12`), `node`, `ruby` and `perl`, also when
+wrapped in `env`, `sudo` or `xargs`. There the body is code that runs, so
+`bash <<'EOF' … EOF` and `python3 - <<'EOF' … EOF` count as outbound after a
+secret read. Every other unparseable command counts as outbound too. The cost,
+accepted by the owner: a commit message written with an unquoted `<<EOF` is
+blocked in a marked session, so the agent must commit another way (for example
 `git commit -F file`) or you start a new chat.
 
 **Order matters:** if one command both reads a secret and sends it
@@ -352,11 +391,15 @@ signing's job. To trial a rule safely, add it as `highlight` first.
 
 ### Drafting in plain language (D13)
 
-**Pending S3:** whether `agentfly rules draft` accepts a plain sentence ("block
-npm publish after reading .env"), and if so whether a cloud or a local model
-writes the draft. A model would only draft; it is never in the decision path,
-and it sees your sentence and the rule schema, never session data. Until the
-owner decides, drafts are made from command-line flags. No form in the page.
+Not in v1. `agentfly rules draft` fills in a rule kind, its lists and a
+severity from command-line flags, and writes a draft file. There is no form in
+the page. Spike S3 showed that a model can draft the rules that fit the kinds
+accurately, but also that it can silently write a wrong rule that looks right,
+so every draft is reviewed with its inline tests and the backtest. Once the
+rules card is done, S3's ten sentences are tried again on the candidate models
+before plain language is added; any cloud model needs the owner's approval
+again. A model would only draft; it is never in the decision path, and it would
+see your sentence and the rule schema, never session data.
 
 ---
 
@@ -413,7 +456,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `agentfly` on `PATH` is ours.
 - **`init -g`** writes the system hooks file, installs the hook client and its
   bundled Python, and sets up the system-owned rules file, with one `sudo`
-  (D1, D2, D5). The move from `~/.config/flightrecorder` (D7) has already happened at the
+  (D1, D2, D5). It writes only events from a known list for the installed
+  Cursor version, and writes nothing when the version or an event is unknown
+  (D23). The move from `~/.config/flightrecorder` (D7) has already happened at the
   recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
@@ -424,7 +469,11 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
 - **`agentfly doctor`** checks everything installed: the hooks file and hook
   client are intact and match their recorded hashes (D1), the bundled Python is
   not writable by your user (D5), `KeepAlive` is set (D4), and `agentfly` on
-  `PATH` is ours.
+  `PATH` is ours. It also compares the registered events with the known list,
+  and reads Cursor's Hooks log for "Invalid … config" or "Failed to parse"
+  lines about AgentFly's file; either finding is a failure, not a warning
+  (D23). A missing hook client file turns it red (D5). It warns when
+  `~/.claude/settings.json` holds hooks on a gate event (D24, section 8).
 - **Uninstall (D8).** Run `agentfly uninstall` *before* `brew uninstall`:
   Homebrew leaves the service file behind. Uninstall removes AgentFly's hook
   entries and the service. Only after that does the hook client stop guarding. If
@@ -442,23 +491,35 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
 
 ### Events (D9)
 
-Pending S5's facts, the list is:
+The registered events are:
 
 | Kind | Events |
 |---|---|
 | Gates (can deny) | `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`, `preToolUse` |
-| Record only | `afterFileEdit` (edit text dropped), `sessionStart`, `sessionEnd` |
+| Record only | `afterFileEdit` (edit text dropped), `sessionStart`, `sessionEnd`, `subagentStart` (its only job is the parent link, section 5) |
 | Never registered | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought` (they carry prompts and replies) |
 
 `preToolUse` is the only gate for the agent's Write and Grep tools, so it is
 needed. `afterShellExecution` is registered only if the memory experiment goes
 ahead, and then only its exit code is kept.
 
-**Pending S5:** this event list is revisited after S5, which dumps every
-documented event and tests subagents; `subagentStart` may join it. S5 also tests
-the report that one unknown event name disables the whole hooks file; whether
-`init` must pick events by Cursor version depends on it. MCP events are
-untested.
+**Only events Cursor accepts (D23).** Spike S5 (Cursor 3.24.12) confirmed that
+one unknown event name makes Cursor reject the whole hooks file, with an error
+only in its Hooks log, and then no AgentFly hook runs. So `init -g` writes only
+events on a known list for the installed Cursor version, and `doctor` checks
+the registered events against that list and reads the Hooks log (section 7). A
+Cursor update that drops an event is caught by `doctor`, not prevented. MCP
+events are untested.
+
+**Where hooks come from (D24).** Cursor runs hooks from several places side by
+side: the system file, the user and project `hooks.json`, and also
+`~/.claude/settings.json`, which the agent can write. In spike S2 an allow-all
+shell hook in the user or project `hooks.json` did not cancel AgentFly's deny.
+No spike tested `~/.claude/settings.json` that way, and how Cursor combines an
+allow from any other source with AgentFly's deny on the other events is
+untested. `doctor` warns when
+`~/.claude/settings.json` holds hooks on a gate event; that becomes a failure
+if an allow turns out to override.
 
 ### The hook client (D5, D18)
 
@@ -467,15 +528,19 @@ untested.
   "allow", exit 0 and a warning on stderr.
 - One file, standard library only, run with `python -I -S` on the bundled Python.
   Target: 95 % of calls under 50 milliseconds. It never starts the full command
-  line program.
+  line program. The packaging card (V3a) re-measures the target on the bundled
+  Python.
 - It **always prints valid JSON and exits 0**. Exit code 2 would block the
   action, so every path is wrapped. Stdout holds only the JSON answer; all
   logging goes to stderr.
 - The path to the client in `hooks.json` is quoted (an unquoted path with a
   space made Python exit 2, and Cursor denied every action).
 - It sends the token in a header and uses `conversation_id` as the session key.
-- Each hook entry has an explicit timeout. The wait for the recorder is about
-  half a second today; the packaging card settles the budget from measurements.
+  Subagent events keep their `parent_tool_call_id` (section 5).
+- It always posts to port 8787 and reads no port file or environment variable
+  (D25). Tests set the client's port inside their own harness.
+- Each hook entry has an explicit timeout. The wait for the recorder is half a
+  second (0.5 s).
 
 ### Stripping, before anything else
 
@@ -496,8 +561,9 @@ carry the same `tool_use_id` they make one step. Spike S1 saw `tool_use_id` only
 on `preToolUse` and `beforeShellExecution` (Cursor's own docs list it for
 `preToolUse`, not for shell events), so only shell and tool calls can be merged
 this way. **Open:** a file read fires both `preToolUse` and `beforeReadFile`, and
-`beforeReadFile` has no `tool_use_id`, so reads would show twice. How to merge
-them is decided in the hook-client card.
+`beforeReadFile` has no `tool_use_id`, so reads would show twice. Spike S5
+found no field that links the two (`generation_id` is one value for a whole
+turn). The merge key is proposed in the hook-client card and goes to the owner.
 
 ### The answers
 
@@ -514,13 +580,16 @@ them is decided in the hook-client card.
 ## 9. When the recorder is down
 
 Cursor must never be left without protection just because the recorder was
-stopped (D4). If the recorder does not answer in time, the hook client applies
-the **offline guard**, a fixed, simple subset of the rules:
+stopped (D4). If the recorder does not answer in time, or answers with a 401 or
+403 (the wrong token), or the client cannot read its own input, the hook client
+applies the **offline guard**, a fixed, simple subset of the rules. A wrong
+token is never treated as an allow.
 
 - it **denies** outbound commands: `curl`, `wget`, `nc`, `scp`, `ssh`,
-  `rsync`, `git push`, `gh`, `aws`, inline `python -c` / `node -e`
-  one-liners, and the same commands wrapped in `bash -c`, `env` or `sudo`.
-  Sending to your own computer (`localhost`, private addresses) is allowed;
+  `rsync`, `git push`, `gh`, `aws`, every inline `python -c` / `node -e`
+  one-liner (whatever it contains), and the same commands wrapped in `bash -c`,
+  `env` or `sudo`. Sending to your own computer (`localhost`, private
+  addresses) is allowed;
 - it **denies** commands that touch AgentFly's guard paths (R0);
 - it **allows** everything else and writes down that it did so. Cursor shows
   nothing for an allow with a message (S1), so the visible signals are the
@@ -539,10 +608,13 @@ brief; it does not help when the service was deliberately stopped (`agentfly
 stop`, `brew services stop`), which is why R0 blocks those commands. While the
 recorder is down your own rules do not run, only the fixed subset above.
 
-If AgentFly is registered but its hook client file is missing, no guard can
-run: Python exits with code 2 and Cursor blocks every action (this happened in
-spike S2 with an unquoted path). That is loud rather than silent, and `doctor`
-reports it, but it is not the offline guard D5 describes. Flagged to the owner.
+**A missing client file is a loud failure, not the offline guard (D5).** If
+AgentFly is registered but its hook client file is missing or broken, no client
+runs and so no guard can: Python exits with code 2 and Cursor blocks every
+action (this happened in spike S2 with an unquoted path). That is loud rather
+than silent, and `doctor` turns red. The offline guard covers only a recorder
+that is down. A plain "allow" is answered only after `agentfly uninstall` has
+removed the registration.
 
 Not built in v1 (a possible v1.1): a per-chat marker kept by the hook client
 itself, so a mark survives a recorder outage.
@@ -568,10 +640,17 @@ AgentFly's own installed code under the Homebrew folder, which your user can
 write to. `agentfly doctor` and each session start compare file hashes with the
 ones recorded at install, and a mismatch raises a red banner.
 
-**Pending S5:** whether a fresh `sudo` password entered in your own Terminal can
-be reused from the agent's terminal is not proven (S2 could not tell). S5
-re-runs the check. If the agent can reuse your `sudo`, the rule-change flow is
-reopened.
+**Your `sudo` does not reach the agent (D3).** Spike S2 could not tell whether a
+`sudo` password entered in your own Terminal could be reused from the agent's
+terminal, so S5 re-ran the check. After the owner ran `sudo -v` in Terminal,
+`sudo -n true` in the agent's shell failed with "a password is required" (exit
+1). The rule-change flow therefore stands.
+
+**The sandbox is not a control (D22).** Decisions never depend on Cursor's
+`sandbox` field; it is only recorded. A command AgentFly denies is denied
+whether it runs inside Cursor's sandbox or outside it. The agent can leave the
+sandbox on its own: in S5, after `sudo` failed inside the sandbox, the agent
+re-ran it outside and Cursor asked nothing.
 
 Other measures:
 - The recorder listens on `127.0.0.1` only, never on the network.
@@ -599,7 +678,11 @@ Other measures:
   may not pass through the hooks). This is a first layer, not a sandbox.
 - Cursor Cloud Agents are not covered by a local hooks file.
 - Cursor's own sandbox proxy may stop a command before AgentFly sees it, and the
-  agent may re-run it outside the sandbox, which AgentFly does see.
+  agent may re-run it outside the sandbox on its own, which AgentFly does see.
+  The sandbox is not relied on for anything (above).
+- Cursor also runs hooks from `~/.claude/settings.json`, a file the agent can
+  write. How an allow from there combines with AgentFly's deny is untested
+  (section 8).
 - "Always Run" on a warned shell command removes that warning (section 5).
 - The agent can read the token (above).
 - R0 matches names, so a deliberately obscured command can still reach
@@ -610,8 +693,8 @@ Other measures:
 - The hash check is run by AgentFly's own code, so code that has been tampered
   with could hide the tampering. Where the recorded hashes live and what checks
   them is for the install card to decide.
-- A quoted heredoc body that is run as code is not caught (section 5, open).
-  Neither is "write a script file, then run it": only inline one-liners count.
+- "Write a script file, then run it" is not caught: only inline one-liners and
+  heredocs fed to the shells and interpreters listed in section 5 count.
 
 ---
 
@@ -631,8 +714,8 @@ The recorder on port 8787 serves exactly two kinds of route (D19):
 There is **no** endpoint that edits, adds or removes rules, allows an action
 once, adds an exception, resets a session's "secret was read" mark, or deletes
 data. Those happen only on the command line: rule changes through
-`sudo agentfly rules apply`, deletion through `agentfly wipe`, and a mark clears
-only with a new chat. FastAPI's own `/docs`, `/redoc` and `/openapi.json` are
+`sudo agentfly rules apply`, deletion through `agentfly wipe` (which keeps the
+marks), and a mark clears only with a new chat. FastAPI's own `/docs`, `/redoc` and `/openapi.json` are
 switched off.
 
 A test lists every `(method, path)` the app serves against this whitelist and
@@ -644,13 +727,16 @@ adds its line to the whitelist.
 
 ## 12. Not in v1, and still pending
 
-- **Plain-language drafting** (D13): **Pending S3**, section 5.
-- **Memory across sessions** (D16, goal 4): **Pending S5.** Experiments only,
+- **Plain-language drafting** (D13): not in v1; drafts come from flags
+  (section 5).
+- **Memory across sessions** (D16, goal 4): **Pending D16.** Experiments only,
   and the answer to "does it help" is a yes, partly or no with one small test.
   One idea is an option on R1 where a secret read in this workspace in the last
   24 hours still counts, loaded into memory at start and never queried live.
-  Another is a short brief given to the agent at session start; S5 tests only
-  whether such a brief reaches the agent. D16 is still proposed; as proposed, neither is a v1 feature.
+  Another is a short brief given to the agent at session start. Spike S5 was a
+  smoke test of that brief (two chats per arm): it reached the agent, which
+  used it. That says nothing about value; it only unlocks the pre-registered
+  A/B test. D16 is still proposed; as proposed, neither is a v1 feature.
 - **A per-project `agentfly init`** (D20): deferred. The global install already
   covers every project. If you later want only some projects watched, a
   system-owned watch list is the safe shape and needs no change to the hooks.
@@ -675,6 +761,11 @@ adds its line to the whitelist.
   messages, decides and keeps the notes.
 - **localhost:** "this machine". A page at localhost is not on the internet.
 - **Session:** one chat with the agent.
+- **Subagent:** a helper the agent starts for a part of the job. Cursor gives it
+  its own chat id; its events point back to the parent through
+  `parent_tool_call_id`.
+- **Hooks log:** the log in Cursor where it reports a hooks file it could not
+  load.
 - **Step:** one action the agent took.
 - **Workspace:** the project folder open in Cursor.
 - **Rule:** a written condition that decides allow, warn or block.

@@ -12,7 +12,7 @@ _ENV_SAFE_SUFFIXES = (".example", ".sample", ".template")
 
 def is_sensitive(path: str) -> bool:
     """Return True if the file name alone looks like a secret-bearing file."""
-    name = Path(path).name
+    name = Path(path).name.casefold()  # macOS reads `.ENV` as `.env`
     if name == ".env" or name.startswith(".env."):
         return not name.endswith(_ENV_SAFE_SUFFIXES)
     if name.endswith((".pem", ".key")):
@@ -25,8 +25,11 @@ def is_sensitive(path: str) -> bool:
 
 
 def host_of(url: str) -> str | None:
-    """Return the hostname from a URL, or None if missing."""
-    return urlparse(url).hostname
+    """Return the hostname from a URL, or None if missing or malformed."""
+    try:
+        return urlparse(url).hostname
+    except ValueError:
+        return None
 
 
 def is_local_host(host: str) -> bool:
