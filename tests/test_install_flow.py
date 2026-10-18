@@ -6,20 +6,21 @@ import json
 import os
 import shutil
 import stat
-import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from agentfly.install import InstallError, cursor, hooks_file, installer, pythons, records
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
-from tests.helpers import client_env
 from tests.install_helpers import (
     OTHER_TOOL_ENTRY,
     FsOps,
     fake_python_tar,
     make_layout,
+    run_hook_command,
     stop_at,
     write_archive,
 )
@@ -104,14 +105,7 @@ def test_every_registered_command_runs_through_sh_and_answers_json(
     for event, group in hooks.items():
         command = group[0]["command"]
         assert command.startswith(f'"{layout.interpreter}" -I -S "{layout.client}" cursor ')
-        result = subprocess.run(
-            ["/bin/sh", "-c", command],
-            input=json.dumps({"hook_event_name": event}),
-            capture_output=True,
-            text=True,
-            env=client_env(isolated_home),
-            check=False,
-        )
+        result = run_hook_command(command, isolated_home, event)
         assert result.returncode == 0, result.stderr
         assert isinstance(json.loads(result.stdout), dict)
 
@@ -270,7 +264,7 @@ def test_a_failure_after_the_hooks_are_live_takes_the_entries_out_before_the_fol
     layout.cursor_dir.mkdir(parents=True)
     layout.hooks_file.write_text(OTHER_FILE)
     real = installer._apply_hooks
-    armed: list[bool] = []
+    armed = False
     mark = installer.prefix(layout)
     touched: list[tuple[str, tuple[object, ...], bool]] = []  # call, args, ours still live
 
@@ -282,9 +276,10 @@ def test_a_failure_after_the_hooks_are_live_takes_the_entries_out_before_the_fol
             text = layout.hooks_file.read_text()
             touched.append((name, args, bool(hooks_file.our_entries(text, mark))))
 
-    def apply_then_interrupt(*args: object, **kwargs: object) -> bool:
-        real(*args, **kwargs)  # type: ignore[arg-type]
-        armed.append(True)
+    def apply_then_interrupt(*args: Any, **kwargs: Any) -> bool:
+        nonlocal armed
+        real(*args, **kwargs)
+        armed = True
         raise KeyboardInterrupt
 
     monkeypatch.setattr(installer, "_apply_hooks", apply_then_interrupt)
@@ -310,21 +305,13 @@ def registered_command(layout: Layout) -> str:
 
 
 def run_registered(command: str) -> int:
-    result = subprocess.run(
-        ["/bin/sh", "-c", command],
-        input=json.dumps({"hook_event_name": "beforeShellExecution", "command": "ls"}),
-        capture_output=True,
-        text=True,
-        env=client_env(Path(os.environ["HOME"])),
-        check=False,
-    )
-    return result.returncode
+    return run_hook_command(command, Path(os.environ["HOME"])).returncode
 
 
 def sweep(
     layout: Layout,
     tmp_path: Path,
-    action: object,
+    action: Callable[[], object],
     error: type[BaseException],
 ) -> int:
     """Run `action` once per file-system call, stopping at that call, and check what is left.
@@ -337,7 +324,7 @@ def sweep(
     shutil.copytree(library, template, symlinks=True)
     command = registered_command(layout)
     with FsOps() as dry:
-        action()  # type: ignore[operator]
+        action()
     total = len(dry.calls)
     assert total > 5, total
     for number in range(1, total + 1):
@@ -345,12 +332,12 @@ def sweep(
         shutil.copytree(template, library, symlinks=True)
         with FsOps(stop_at(number, error("stopped"))) as ops:
             with pytest.raises((error, InstallError)):
-                action()  # type: ignore[operator]
+                action()
         assert len(ops.calls) >= number, f"call {number} never happened"  # cleanup may add more
         code = run_registered(command)
         stopped = ops.calls[number - 1][0]
         assert code in (0, 127), f"stopped at call {number} ({stopped}): exit {code}"
-        action()  # type: ignore[operator]
+        action()
         assert not layout.system_root.exists() and not installer._leftovers(layout)
     return total
 
@@ -372,7 +359,9 @@ def test_the_cleanup_of_a_failed_first_install_stopped_at_any_step_is_safe_too(
     layout.cursor_dir.mkdir(parents=True)
     layout.hooks_file.write_text(OTHER_FILE)
     do_install(layout, archive)
-    info = records.read(layout)["hooks_file"]  # type: ignore[index]
+    record = records.read(layout)
+    assert record is not None
+    info = record["hooks_file"]
 
     def cleanup() -> None:
         installer._undo_first_install(layout, created_hooks=False, hooks_info=info)
@@ -383,6 +372,11 @@ def test_the_cleanup_of_a_failed_first_install_stopped_at_any_step_is_safe_too(
 # ---------------------------------------------------------------- foreign entries, refusals
 
 
+def write_hooks(layout: Layout, text: str, *, escaped: bool) -> None:
+    """Write `text`, with every slash JSON-escaped (`\\/`) when asked: valid, but not greppable."""
+    layout.hooks_file.write_text(text.replace("/", "\\/") if escaped else text)
+
+
 def install_with_foreign_entry(
     layout: Layout, archive: tuple[Path, PythonBuild], *, escaped: bool
 ) -> None:
@@ -390,8 +384,7 @@ def install_with_foreign_entry(
     data = json.loads(layout.hooks_file.read_text())
     # Not the exact quoted interpreter, so it is not ours; it still runs our client.
     data["hooks"]["stop"] = [{"command": f'env X=1 "{layout.client}"', "timeout": 1}]
-    text = json.dumps(data)
-    layout.hooks_file.write_text(text.replace("/", "\\/") if escaped else text)
+    write_hooks(layout, json.dumps(data), escaped=escaped)
 
 
 @pytest.mark.parametrize("escaped", [False, True])
@@ -410,8 +403,7 @@ def test_an_unparseable_file_naming_our_folder_makes_uninstall_refuse_and_change
     layout: Layout, archive: tuple[Path, PythonBuild], escaped: bool
 ) -> None:
     do_install(layout, archive)
-    text = layout.hooks_file.read_text() + " garbage"
-    layout.hooks_file.write_text(text.replace("/", "\\/") if escaped else text)
+    write_hooks(layout, layout.hooks_file.read_text() + " garbage", escaped=escaped)
     before = snapshot(layout)
     assert installer.is_installed(layout)
     with pytest.raises(InstallError, match="not valid JSON"):
@@ -534,21 +526,33 @@ def break_the_new_install(layout: Layout, archive: tuple[Path, PythonBuild]) -> 
     return helper
 
 
-def fail_rename(match: object) -> object:
+def fail_rename(match: Callable[[Path, Path], bool]) -> Callable[..., None]:
     def before(count: int, name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
-        if name == "rename" and match(Path(str(args[0])), Path(str(args[1]))):  # type: ignore[operator]
+        if name == "rename" and match(Path(str(args[0])), Path(str(args[1]))):
             raise OSError(5, "rename refused", str(args[0]))
 
     return before
 
 
-@pytest.mark.parametrize("which", ["new tree steps aside", "old tree comes back"])
+def new_tree_steps_aside(src: Path, dst: Path) -> bool:
+    return dst.name == "failed-python"
+
+
+def old_tree_comes_back(src: Path, dst: Path) -> bool:
+    return src.name == "python" and src.parent.name.startswith(".old-")
+
+
+def second_rename_of_the_swap(src: Path, dst: Path) -> bool:
+    return src.name == "python" and src.parent.name.startswith(".staging-")
+
+
+@pytest.mark.parametrize("match", [new_tree_steps_aside, old_tree_comes_back])
 def test_a_restore_that_fails_keeps_the_old_python(
     layout: Layout,
     archive: tuple[Path, PythonBuild],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    which: str,
+    match: Callable[[Path, Path], bool],
 ) -> None:
     helper = break_the_new_install(layout, archive)
     command = registered_command(layout)
@@ -557,11 +561,7 @@ def test_a_restore_that_fails_keeps_the_old_python(
         raise InstallError("locked check failed")
 
     monkeypatch.setattr(installer, "assert_locked", fail)
-    if which == "new tree steps aside":
-        match = lambda src, dst: dst.name == "failed-python"  # noqa: E731
-    else:
-        match = lambda src, dst: src.name == "python" and src.parent.name.startswith(".old-")  # noqa: E731
-    with FsOps(fail_rename(match)):  # type: ignore[arg-type]
+    with FsOps(fail_rename(match)):
         with pytest.raises(InstallError, match="locked check failed") as caught:
             do_install(layout, archive)
     (kept,) = layout.system_root.glob(".old-*")
@@ -576,10 +576,7 @@ def test_a_repair_that_stops_halfway_through_the_swap_gets_the_old_python_back(
 ) -> None:
     helper = break_the_new_install(layout, archive)
 
-    def second_rename_of_the_swap(src: Path, dst: Path) -> bool:
-        return src.name == "python" and src.parent.name.startswith(".staging-")
-
-    with FsOps(fail_rename(second_rename_of_the_swap)):  # type: ignore[arg-type]
+    with FsOps(fail_rename(second_rename_of_the_swap)):
         with pytest.raises(OSError, match="rename refused"):
             do_install(layout, archive)
     # The live Python was already moved to the graveyard when the swap stopped.

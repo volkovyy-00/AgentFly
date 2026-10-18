@@ -7,10 +7,13 @@ path); the system file here is `<tmp>/Library/Application Support/Cursor/hooks.j
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
+import json
 import os
 import plistlib
+import subprocess
 import sys
 import tarfile
 from collections.abc import Callable
@@ -21,6 +24,7 @@ from unittest import mock
 
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
+from tests.helpers import client_env
 
 OTHER_TOOL_ENTRY = '{"command": "/opt/other/audit.sh", "timeout": 5}'
 
@@ -114,13 +118,13 @@ class FsOps:
     ) -> None:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self._before = before
-        self._patches: list[Any] = []
+        self._stack = contextlib.ExitStack()
 
     def __enter__(self) -> FsOps:
         for name in self.NAMES:
-            self._patches.append(mock.patch.object(os, name, self._wrap(name, getattr(os, name))))
-        for patch in self._patches:
-            patch.start()
+            self._stack.enter_context(
+                mock.patch.object(os, name, self._wrap(name, getattr(os, name)))
+            )
         return self
 
     def __exit__(
@@ -129,9 +133,7 @@ class FsOps:
         value: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        for patch in reversed(self._patches):
-            patch.stop()
-        self._patches.clear()
+        self._stack.close()
 
     def _wrap(self, name: str, real: Callable[..., Any]) -> Callable[..., Any]:
         def call(*args: Any, **kwargs: Any) -> Any:
@@ -151,3 +153,15 @@ def stop_at(number: int, error: BaseException) -> Callable[..., None]:
             raise error
 
     return before
+
+
+def run_hook_command(command: str, home: Path, event: str = "beforeShellExecution") -> Any:
+    """Run a registered hooks.json command as Cursor does: through `sh -c`, event on stdin."""
+    return subprocess.run(
+        ["/bin/sh", "-c", command],
+        input=json.dumps({"hook_event_name": event}),
+        capture_output=True,
+        text=True,
+        env=client_env(home),
+        check=False,
+    )

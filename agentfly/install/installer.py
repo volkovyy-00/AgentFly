@@ -305,16 +305,16 @@ def _hooks_info(
         old = (previous or {}).get("hooks_file", {})
         keys = ("original_backup", "original_sha256", "written_sha256")
         return {key: old[key] for key in keys if key in old}
-    pristine = (
-        backup is not None
-        and existing is not None
-        and not hooks_file.our_entries(existing, prefix(layout))
-    )
-    return {
-        "original_backup": backup.name if pristine and backup is not None else None,
-        "original_sha256": _sha256(existing) if pristine and existing is not None else None,
+    info: dict[str, Any] = {
+        "original_backup": None,
+        "original_sha256": None,
         "written_sha256": _sha256(merged),
     }
+    if backup is not None and existing is not None:
+        if not hooks_file.our_entries(existing, prefix(layout)):  # the file as the user had it
+            info["original_backup"] = backup.name
+            info["original_sha256"] = _sha256(existing)
+    return info
 
 
 def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -> str | None:
@@ -323,15 +323,16 @@ def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -
     Anything else (another tool edited it since, a backup that is gone or changed) gives None and
     the caller keeps the spliced text.
     """
+    if not info:
+        return None
     try:
-        name = info["original_backup"] if info else None
+        name = info["original_backup"]
         if not isinstance(name, str) or Path(name).name != name:
             return None
-        data = (layout.backups / name).read_bytes()
-        original = data.decode("utf-8")
-        if _sha256(original) != info["original_sha256"]:  # type: ignore[index]
+        original = (layout.backups / name).read_bytes().decode("utf-8")
+        if _sha256(original) != info["original_sha256"]:
             return None
-        if _sha256(current) != info["written_sha256"]:  # type: ignore[index]
+        if _sha256(current) != info["written_sha256"]:
             return None
         return original
     except (KeyError, TypeError, OSError, UnicodeDecodeError):
@@ -507,9 +508,7 @@ def install(
 # ---------------------------------------------------------------- uninstall
 
 
-def _strip_hooks(
-    layout: Layout, *, created: bool, hooks_info: dict[str, Any] | None = None
-) -> list[str]:
+def _strip_hooks(layout: Layout, *, created: bool, hooks_info: dict[str, Any] | None) -> list[str]:
     """Take our entries out of the system hooks file; delete the file if it was ours alone.
 
     Refuses (changing nothing, not even a backup) when the file is not valid JSON but mentions
@@ -547,8 +546,9 @@ def _strip_hooks(
     return [f"removed AgentFly's {len(ours)} entries from {layout.hooks_file}"]
 
 
-def _why(exc: OSError) -> str:
-    return f"{exc.strerror or exc}" + (f": {exc.filename}" if exc.filename else "")
+def describe_oserror(exc: OSError) -> str:
+    """One line for the user: the system's reason, and the file it was about."""
+    return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
 
 
 def uninstall(layout: Layout) -> Outcome:
@@ -562,7 +562,8 @@ def uninstall(layout: Layout) -> Outcome:
             raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
         messages += _remove_folder(layout)
     except OSError as exc:
+        reason = describe_oserror(exc)
         raise InstallError(
-            f"cannot finish removing AgentFly ({_why(exc)}); run `agentfly uninstall` again"
+            f"cannot finish removing AgentFly ({reason}); run `agentfly uninstall` again"
         ) from exc
     return Outcome(bool(messages), messages or ["nothing of AgentFly's was installed"])
