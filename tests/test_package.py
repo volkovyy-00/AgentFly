@@ -91,6 +91,8 @@ def test_wheel_carries_the_page_and_nothing_private(installed: Installed) -> Non
         "agentfly/ui_dist/index.html",
         "agentfly/hook_client.py",
         "agentfly/cli/serve.py",
+        "agentfly/cli/__main__.py",
+        "agentfly/install/installer.py",
         "agentfly/recorder/app.py",
     ):
         assert needed in names, needed
@@ -118,6 +120,30 @@ def test_both_commands_are_on_the_tool_bin_dir(installed: Installed) -> None:
         check=False,
     )
     assert result.returncode == 0 and "--port" in result.stdout and "--host" not in result.stdout
+
+
+def test_the_installed_tool_offers_init_g_and_uninstall_and_runs_as_a_module(
+    installed: Installed,
+) -> None:
+    for tail in (["init", "--help"], ["uninstall", "--help"]):
+        result = subprocess.run(
+            [str(installed.bin / "agentfly"), *tail],
+            env=installed.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+    # What sudo runs: the tool's own Python, isolated, as a module.
+    python = next(installed.home.glob(".local/share/uv/tools/*/bin/python"))
+    result = subprocess.run(
+        [str(python), "-I", "-B", "-m", "agentfly.cli", "init", "--help"],
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0 and "--global" in result.stdout, result.stderr
 
 
 def fetch(port: int, path: str) -> tuple[int, bytes]:

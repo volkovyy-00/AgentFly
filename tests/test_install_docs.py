@@ -68,3 +68,31 @@ def test_readme_and_hooks_md_name_the_trail_as_home_and_the_graph_tab() -> None:
         text = (REPO / name).read_text(encoding="utf-8")
         assert "Live Trail" in text and "/?view=graph" in text, name
         assert "Watch the live graph" not in text, name
+
+
+def test_readme_installation_names_the_system_install_and_its_removal() -> None:
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    installation = text.split("## Installation")[1].split("\n## ")[0]
+    assert "agentfly init -g" in installation and "agentfly uninstall" in installation
+    assert "/Library/Application Support/AgentFly" in installation
+    assert "development only" in installation
+
+
+def test_install_sh_says_it_is_development_only_and_warns_about_duplicates(
+    tmp_path: Path, isolated_home: Path
+) -> None:
+    script = (REPO / "install.sh").read_text(encoding="utf-8")
+    assert "DEVELOPMENT ONLY" in script and "agentfly init -g" in script
+    work = tmp_path / "work"
+    (work / "hooks").mkdir(parents=True)
+    shutil.copy(REPO / "install.sh", work / "install.sh")
+    shutil.copy(REPO / "hooks" / "hook.py", work / "hooks" / "hook.py")
+    result = subprocess.run(
+        ["/bin/bash", str(work / "install.sh")],
+        cwd=work,
+        env=client_env(isolated_home),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0 and "twice" in result.stderr

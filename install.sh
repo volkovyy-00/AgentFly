@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Wire Cursor project hooks to hooks/hook.py.
+# DEVELOPMENT ONLY: wire this clone's Cursor project hooks to hooks/hook.py (no sudo, no bundled
+# Python, user-writable). The real install is `agentfly init -g` (SPEC section 7). If both are
+# present every event arrives twice, so remove .cursor/hooks.json after running `init -g`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -54,6 +56,8 @@ cat > "$ROOT/.cursor/hooks.json" <<EOF
 }
 EOF
 
+echo "warning: development wiring only. After 'agentfly init -g', delete $ROOT/.cursor/hooks.json" >&2
+echo "         or every event reaches the recorder twice." >&2
 echo "Installed Cursor hooks -> $ROOT/.cursor/hooks.json"
 echo "  command: $CMD"
 echo "  hook log: ~/.local/share/agentfly/logs/events.jsonl (made by the first hook call)"
