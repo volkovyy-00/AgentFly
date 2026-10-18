@@ -1,0 +1,44 @@
+# V5a: Command normalisation, subagent mark, R0
+Status: done (as of 2026-10-18 18:41)
+Result: Rules now see through wrappers, substitutions, heredocs and one-liners; R0 runs first and cannot be softened; a mark follows a chat into its subagents and survives a restart. R0 and R1 stay in Python. One owner question: should the workspace fallback mark expire (built) or stay for good?
+Evidence: code commit 954e766 on ag-v5a-r0-normalize; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1805 passed, 4 skipped (650 before). Live smoke over HTTP with a real `serve`: 17/17.
+Needs owner: Should a chat marked by the 30-minute workspace fallback stay marked for good once granted? Built: the mark ends 30 minutes after the Task ("and no longer"). Recommend keeping that; permanent would block unrelated chats.
+Details: see "## 2026-10-18 18:41" below.
+
+## 2026-10-18 18:41
+
+Commit 954e766 (report added in a second commit). Written against b8ca2b1 as the brief says; branch was at 459487c.
+
+### What was built
+- `agentfly/recorder/normalize.py` (new, pure, no I/O, never raises, cached): a hand-written scanner (shlex cannot do heredocs or unbalanced input). It flattens every simple command and reports `unparsed`, `unquoted_heredoc`, `code_heredoc` and inline `python -c` / `node -e`. It looks into `$(..)`, backticks, `<(..)`, `bash -c` (also `-lc`, `-o pipefail -c`, `--rcfile f -c`), `eval`, `$'\x63url'`, quote concatenation, and shell-read heredoc bodies. `env`, `sudo`, `xargs`, `timeout` need no list: every word of every simple command is kept.
+- Heredocs follow D10 as narrowed 2026-10-16: a quoted body is data unless the simple command that owns the redirect is `sh bash zsh dash ksh python* node* ruby perl` (wrappers count). `<<-` strips tabs; `\EOF`, `E"O"F` count as quoted; the terminator may be `EOF)` inside `$(`; an unquoted delimiter or a missing terminator is unparseable.
+- `rules.py`: `is_outbound_send` is built on the normaliser (same word rules as before, plus unparsed, code heredoc, inline code). Host detection now finds a URL glued to a flag (`--url=https://h`, `-d@https://h`): the recorder had the hole the guard already closed in V2b. `mark()` marks on words of parsed commands, not on literal heredoc data.
+- R0 (`check_r0`, first in `RULES`, message `R0_MESSAGE`): guard paths `.config/agentfly`, `.local/share/agentfly`, `/library/application support/agentfly`, `hooks.json`; commands `agentfly serve|stop|uninstall|wipe` (any flag position, `uv run`, `python -m`), `brew services` for agentfly or `--all`, `launchctl` naming agentfly, `pkill`/`killall` naming agentfly/uvicorn/recorder, `kill` of the recorder's PID or its parent, port 8787. Case-folded, `~`/`$HOME` kept as text, `//` `/./` `..` resolved, raw text checked as well. Inputs: shell `command` and `cwd`, `file_path`, `tool_input.file_path`, attachment paths of any event. `decide` exempts R0 from `WATCH_ONLY`.
+- `sessions.py` / `app.py`: `SessionStore.observe` records Task calls (`preToolUse` Task, `subagentStart`) and child links (`parent_tool_call_id`), resolves the tree lazily, and re-propagates marks whenever a link appears (so a child that marked first still marks its parent once the link is known). `effective()` gives the rules a marked view when a parent chat is marked. Fallback: a Task started by a marked chat that no child event names gives a new same-workspace chat `inherited_until = Task start + 30 min`. `apply_rules` has the one merge point with V6 (the lines that build the record, `store.put`, `memory_steps` and `graph_store` are unchanged).
+- `hook_client.py`: only change is `guard_reason` resolving `/./` and `..` in guard paths, so the offline guard keeps up with R0 on those forms. All the brief's offline cases already passed unchanged.
+
+### Acceptance, mapped to tests
+- Marked, denied (bare and wrapped in `bash -c`, `sh -c`, `bash -o pipefail -c`, `env`, `sudo`, `sudo env .. sh -c`, `xargs`, `eval`): `tests/cases.py` `NAMED_OUTBOUND` + `RECORDER_ONLY`, run by `test_rules.py`, `test_normalize.py`. Includes the brief's unbalanced quote, unquoted `<<EOF`, `bash <<'EOF'`, `python3 - <<'EOF'`.
+- Marked, allowed: `MARKED_ALLOWED` (`bash -c 'ls'`, `curl localhost:8000/health`, `python3 -m pytest`, the heredoc commit in both `EOF\n)` and `EOF)` forms, `tee f <<'EOF'`).
+- Offline: `test_offline_guard.py` runs `NAMED_OUTBOUND` bare and wrapped, and checks that tool-less unparseable text and `python3 - <<'EOF'` stay allowed (SPEC §9).
+- Unmarked R0: `tests/test_r0.py`: 25 path forms x 15 shell templates, Read, Write/Edit, after-edit and attachment targets, every R0 command bare, wrapped and unparseable; kill own PID/PPID denied, other PID, `cat README.md`, `ls ~/.config`, `pkill node` allowed; one `/hook` test with both messages and the "Do not retry" suffix.
+- Subagent: `tests/test_subagent_mark.py` (33 tests): child denied; child marks parent; link first on a child event, on `subagentStart`, or after the child's mark; nested; siblings; restart; fake-clock fallback (inside, outside, other workspace, linked, started before the mark); cycle; `sandbox` true == false; `open` and `socket` patched around `mark` + `decide`.
+
+### Choices that go past, or read, the brief
+1. Fallback mark expires 30 minutes after the Task (reading "marked for 30 minutes and no longer"). A chat that reads a secret itself is marked for good. Owner question above.
+2. R0 extras beyond the brief's wording: `kill` of the parent PID, pid `0` / `-1`, and `kill` with a process lookup (`pgrep`, `pidof`, `lsof`, `ps`, `fuser`); `brew services .. --all`. `pkill python` is NOT denied although the recorder is a Python process (gap below).
+3. The raw-text check means `grep 8787 f` or a commit message that spells a guard path is denied. The loose word scan is used only for text that cannot be parsed, so `git commit -m "implement agentfly wipe"` is allowed. Keep commit messages free of guard paths.
+4. The scanner treats an unquoted heredoc as unparseable (D10), but still parses `$(..)` in its body.
+5. `tests/cases.py` is a new shared-cases file (like `leak_cases.py`), not in the Touches list. AGENTS.md was not edited (also not in the list); proposed "Testing" lines for the lead: "Normaliser (`tests/test_normalize.py`, `tests/cases.py`): wrappers, substitutions, heredocs and one-liners; R0 (`tests/test_r0.py`): guard paths and commands, unmarked, bare/wrapped/unparseable; Subagent mark (`tests/test_subagent_mark.py`): parent link either order, restart, 30-minute fallback."
+6. Links persist in a new `links.json` next to `sessions.json` (calls + pending Tasks, workspace paths). `sessions.json` is still a JSON list with three extra keys. `save()` and its fsync are untouched. For V6: `wipe` must treat `links.json` as mark state (D14: wipe never clears marks).
+
+### Gaps (not fixed, for the lead)
+- `ruby -e` / `perl -e` are not counted as inline code (SPEC §9 lists python and node only). Piping text into a shell (`echo 'curl x' | sh`) is V5b's `pipe_into`.
+- `cd ~/.config && cat agentfly/token` (a relative path after `cd`), `rm -rf .cursor`, globs such as `~/.con*/agentfly`, brace expansion `{curl,x.com}` and variables are not seen. `~/.claude/settings.json` (D24) is not in the R0 list.
+- `pkill python` / `killall python3` can still kill the recorder.
+- The hook client keeps only `tool_input.file_path`; tools that use `path` or `target_directory` reach R0 as nothing. It also lets `subagentStart.task` (the subagent's prompt text) through to the server and the hook log, because `task` is not in `_STRIP_KEYS`. The server does not store it. V3 registers `subagentStart`; strip `task` before then.
+- An empty `conversation_id` maps to a shared "unknown" chat (`app.py`); such events never join a tree.
+- `parent_tool_call_id` is not in Cursor's docs (S5, 3.24.12 only). A Cursor forum report says 3.7.x child events had no parent link, so the fallback carries real weight there.
+- SPEC §5 "Pending S5" and the heredoc "Open hole" text, and §10's matching gap, still predate D21 and D10's narrowing (V1b).
+- Performance: three parses per shell event are now one (cached). A 1 MB command parses in about 0.4 s; the hook client's 0.5 s wait then falls back to the offline guard.
+- Review: a second-opinion pass on the plan (fresh reviewer plus my own checks) found six defects before any code; all are fixed in this commit.
