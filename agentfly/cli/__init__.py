@@ -6,13 +6,14 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from agentfly.cli import serve
+from agentfly.cli import serve, wipe
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentfly", description="AgentFly for AI coding agents")
     commands = parser.add_subparsers(dest="command", metavar="<command>", required=True)
     serve.add_parser(commands)
+    wipe.add_parser(commands)
     return parser
 
 

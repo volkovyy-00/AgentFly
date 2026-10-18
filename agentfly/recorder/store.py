@@ -7,6 +7,7 @@ import logging
 import queue
 import sys
 import threading
+import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from neo4j import Driver, GraphDatabase
 from agentfly.recorder.clean import command_for_storage, website_name
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
+from agentfly.recorder.paths import config_dir
 from agentfly.recorder.rules import RULES, Session
 
 logger = logging.getLogger("agentfly")
@@ -42,6 +44,7 @@ class StepRecord:
     rule_id: str | None = None
     rule_description: str | None = None
     prev_step_id: str | None = None
+    workspace_root: str | None = None
 
     @property
     def step_id(self) -> str:
@@ -238,6 +241,31 @@ def _merge_step(tx: Any, record: StepRecord) -> None:
         )
 
 
+def neo4j_opt_in(config_path: Path | None = None) -> bool:
+    """True only when config.toml says `neo4j = true` (owner, 2026-10-18; D14).
+
+    A present neo4j.env alone does not turn Neo4j on. A missing or broken file means off.
+    """
+    path: Path = config_path if config_path is not None else config_dir() / "config.toml"
+    try:
+        with path.open("rb") as handle:
+            settings: dict[str, Any] = tomllib.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+        logger.warning("config.toml not read (%s); Neo4j stays off", type(exc).__name__)
+        return False
+    return settings.get("neo4j") is True
+
+
+def first_workspace_root(payload: dict[str, Any]) -> str | None:
+    """The workspace root Cursor reports, or None. Never the recorder's own folder."""
+    roots: Any = payload.get("workspace_roots")
+    if isinstance(roots, list) and roots and isinstance(roots[0], str) and roots[0]:
+        return roots[0]
+    return None
+
+
 def project_root_from_payload(payload: dict[str, Any]) -> Path:
     roots: Any = payload.get("workspace_roots")
     if isinstance(roots, list) and roots:
@@ -318,14 +346,21 @@ def build_step_record(
         raw_cmd: str = str(payload.get("command", "") or "")
         command = command_for_storage(raw_cmd, root)
         hosts = hosts_from_cleaned(command)
-        # Paths that survived cleaning (e.g. .env) as File touch
+        # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in words(command):
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:
                 continue
-            if is_sensitive(token) or (root / token).exists():
-                if file_path is None:
-                    file_path = relative_file_path(token, root)
-                    file_sensitive = is_sensitive(token)
+            if is_sensitive(token):
+                file_path = relative_file_path(token, root)
+                file_sensitive = True
+                break
+            if file_path is None and (root / token).exists():
+                file_path = relative_file_path(token, root)
+        # mark() reacts to any sensitive word in the raw command, and the cleaner may have
+        # hidden it. The step still records that a sensitive file was touched, without a path.
+        if not file_sensitive and any(is_sensitive(word) for word in words(raw_cmd)):
+            file_path = None
+            file_sensitive = True
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
 
@@ -358,6 +393,7 @@ def build_step_record(
         rule_id=rule_id,
         rule_description=rule_description,
         prev_step_id=prev_step_id,
+        workspace_root=first_workspace_root(payload),
     )
 
 

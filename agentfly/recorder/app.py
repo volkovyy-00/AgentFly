@@ -16,11 +16,13 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from agentfly.recorder.api import sessions as sessions_api
+from agentfly.recorder.localstore import DB_NAME, local_store
 from agentfly.recorder.memory import memory_steps, parse_limit
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
 from agentfly.recorder.rules import Session, decide, deny_messages, mark
 from agentfly.recorder.sessions import SessionStore
-from agentfly.recorder.store import StepRecord, build_step_record, graph_store
+from agentfly.recorder.store import StepRecord, build_step_record, graph_store, neo4j_opt_in
 
 logger = logging.getLogger("agentfly")
 
@@ -85,10 +87,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _token = write_token(config_dir())
     _store = SessionStore(data_dir() / "sessions.json")
     memory_steps.clear()
-    graph_store.start()
+    local_store.start(data_dir() / DB_NAME)
+    if neo4j_opt_in():  # D14: neo4j.env alone does not turn Neo4j on
+        graph_store.start()
     logger.info("recorder listening; token written under %s", config_dir())
     yield
     graph_store.stop()
+    local_store.stop()
 
 
 # D19: no generated docs or schema; every served route is listed in tests/test_app.py.
@@ -170,6 +175,7 @@ def mount_v2_redirects(application: FastAPI) -> None:
         application.add_api_route(path, v2_redirect, methods=["GET"], include_in_schema=False)
 
 
+sessions_api.add_routes(app)
 mount_ui(app, _UI_DIST)
 mount_v2_redirects(app)
 
@@ -196,6 +202,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     store.put(session)
     memory_steps.append_from_record(record, marks=marks)
     graph_store.enqueue(record)
+    local_store.enqueue(record)
 
     permission: dict[str, str]
     if verdict == "blocked" and rule_id is not None:
@@ -227,6 +234,9 @@ async def hook(request: Request) -> Response:
 
     if not isinstance(payload, dict):
         return JSONResponse({"detail": "malformed json"}, status_code=400)
+
+    if local_store.record_session_event(payload):  # updates the session; not a step
+        return JSONResponse({"permission": "allow"})
 
     permission, verdict = apply_rules(payload)
     event: str = str(payload.get("hook_event_name", ""))
