@@ -2,18 +2,23 @@
 
 Order matters. Install: check everything, stage the Python and the client, run the exact
 registered commands once, move them into place, write the hash record, and only then add the
-hook entries. Uninstall: take the hook entries out first, then the folder. A hooks entry that
-points at a missing client makes Python exit 2, and Cursor then denies every action (S2 F1).
+hook entries. Uninstall: take the hook entries out first, then move the folder out of the way
+(one rename, so the registered interpreter path is gone at once) and delete it. A hooks entry
+that points at a missing client makes Python exit 2, and Cursor then denies every action
+(S2 F1); a missing interpreter exits 127 and Cursor lets the action through. So no step may
+leave the interpreter in place while the client is gone.
 """
 
 from __future__ import annotations
 
-import contextlib
+import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
@@ -153,14 +158,25 @@ def status(layout: Layout, build: PythonBuild, source: Path) -> set[str]:
     return bad
 
 
+def _unescaped(text: str) -> str:
+    """JSON text with `\\/` and `\\uXXXX` decoded, so a path matches however it was escaped."""
+    text = text.replace("\\/", "/")
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+
+
 def _mentions_ours(text: str, layout: Layout) -> bool:
-    """Raw-text test for a file that may not parse: the quotes of `prefix` are escaped there."""
-    return f"{layout.system_root}/" in text
+    """Raw-text test for a file that may not parse: our folder, with plain or escaped slashes."""
+    return f"{layout.system_root}/" in _unescaped(text)
+
+
+def _leftovers(layout: Layout) -> list[Path]:
+    """Folders an uninstall moved aside and did not finish deleting."""
+    return sorted(layout.system_root.parent.glob(f".{layout.system_root.name}-removing-*"))
 
 
 def is_installed(layout: Layout) -> bool:
-    """Anything of ours on disk: the folder, or a hook entry (even in a file we cannot parse)."""
-    if layout.system_root.exists() or layout.system_root.is_symlink():
+    """Anything of ours on disk: the folder, a leftover, or a hook entry (even in a bad file)."""
+    if layout.system_root.exists() or layout.system_root.is_symlink() or _leftovers(layout):
         return True
     try:
         text = _read_hooks(layout)
@@ -238,14 +254,16 @@ def _backup(layout: Layout, text: str) -> Path:
     return target
 
 
-def _apply_hooks(layout: Layout, entries: list[HookEntry]) -> bool:
-    """Merge our entries into the system hooks file; True when the file changed."""
-    existing = _read_hooks(layout)
-    merged = hooks_file.merge(existing, entries, prefix(layout))
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _apply_hooks(
+    layout: Layout, entries: list[HookEntry], existing: str | None, merged: str
+) -> bool:
+    """Write the merged hooks file (its backup is already taken); True when the file changed."""
     if merged == existing:
         return False
-    if existing is not None:
-        _backup(layout, existing)
     _make_dir(layout.cursor_dir, layout)
     _write_atomic(layout.hooks_file, merged.encode("utf-8"), layout)
     try:
@@ -256,12 +274,94 @@ def _apply_hooks(layout: Layout, entries: list[HookEntry]) -> bool:
     except InstallError:
         ok = False
     if not ok:
+        # Straight back, with no second backup that could itself fail: the first one is on disk.
         if existing is None:
             layout.hooks_file.unlink(missing_ok=True)
         else:
             _write_atomic(layout.hooks_file, existing.encode("utf-8"), layout)
         raise InstallError("the hooks file did not read back as written; the old one is restored")
     return True
+
+
+def _rewrite_hooks(layout: Layout, new_text: str, old_text: str) -> None:
+    """Replace the hooks file; the text it holds now is backed up first, always."""
+    _backup(layout, old_text)
+    _write_atomic(layout.hooks_file, new_text.encode("utf-8"), layout)
+
+
+def _recorded_original(layout: Layout, info: dict[str, Any] | None) -> str | None:
+    """The hooks file as it was before install: the backup the record names, if it still matches."""
+    if not info:
+        return None
+    try:
+        name = info["original_backup"]
+        if not isinstance(name, str) or Path(name).name != name:
+            return None
+        original = (layout.backups / name).read_bytes().decode("utf-8")
+    except (KeyError, TypeError, OSError, UnicodeDecodeError):
+        return None
+    return original if _sha256(original) == info.get("original_sha256") else None
+
+
+def _only_ours_differs(
+    layout: Layout, entries: list[HookEntry], current: str, original: str
+) -> bool:
+    """Whether `current` and `original` differ in nothing but our entries (spliced forms equal)."""
+    mark = prefix(layout)
+    try:
+        with_ours = hooks_file.merge(original, entries, mark)
+        return hooks_file.remove_ours(current, mark) == hooks_file.remove_ours(with_ours, mark)
+    except InstallError:
+        return False
+
+
+def _hooks_info(
+    layout: Layout,
+    previous: dict[str, Any] | None,
+    existing: str | None,
+    merged: str,
+    backup: Path | None,
+    entries: list[HookEntry],
+) -> dict[str, Any]:
+    """What uninstall needs to give the original hooks file back byte for byte.
+
+    The splice cannot tell "no hooks key" from an empty one, so install records the backup of
+    the file as it was and the hash of what it wrote. A file we did not touch keeps the old values.
+    """
+    old = (previous or {}).get("hooks_file", {})
+    if existing is not None and merged == existing:
+        keys = ("original_backup", "original_sha256", "written_sha256")
+        return {key: old[key] for key in keys if key in old}
+    info: dict[str, Any] = {
+        "original_backup": None,
+        "original_sha256": None,
+        "written_sha256": _sha256(merged),
+    }
+    mark = prefix(layout)
+    if existing is None or backup is None:
+        return info
+    if not existing.strip() or not hooks_file.our_entries(existing, mark):
+        info["original_backup"], info["original_sha256"] = backup.name, _sha256(existing)
+    else:  # a repair or upgrade: the earlier original still holds if nothing but ours changed
+        kept = _recorded_original(layout, old)
+        if kept is not None and _only_ours_differs(layout, entries, existing, kept):
+            info["original_backup"], info["original_sha256"] = (
+                old["original_backup"],
+                old["original_sha256"],
+            )
+    return info
+
+
+def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -> str | None:
+    """The original hooks file, when the file is still exactly what install wrote.
+
+    Anything else (another tool edited it since, a backup that is gone or changed) gives None and
+    the caller keeps the spliced text.
+    """
+    original = _recorded_original(layout, info)
+    if original is None or info is None or _sha256(current) != info.get("written_sha256"):
+        return None
+    return original
 
 
 def _swap_in(new: Path, target: Path, graveyard: Path) -> None:
@@ -271,13 +371,56 @@ def _swap_in(new: Path, target: Path, graveyard: Path) -> None:
 
 
 def _restore(layout: Layout, graveyard: Path) -> None:
-    """Put back what a failed repair replaced, so the live entries still point at a good tree."""
+    """Put back what a failed repair replaced, so the live entries still point at a good tree.
+
+    Nothing is deleted: the new tree steps aside into the graveyard, then the old one comes back.
+    If the second rename fails the first is undone, and the old tree stays in the graveyard.
+    """
     old_python, old_client = graveyard / "python", graveyard / "hook_client.py"
     if old_python.exists():
-        shutil.rmtree(layout.python_dir, ignore_errors=True)
-        os.rename(old_python, layout.python_dir)
+        failed = graveyard / "failed-python"
+        stepped_aside = layout.python_dir.exists() or layout.python_dir.is_symlink()
+        if stepped_aside:  # it is missing when the swap itself stopped halfway
+            os.rename(layout.python_dir, failed)
+        try:
+            os.rename(old_python, layout.python_dir)
+        except BaseException:
+            if stepped_aside:
+                os.rename(failed, layout.python_dir)
+            raise
     if old_client.exists():
         os.replace(old_client, layout.client)
+
+
+def _remove_folder(layout: Layout) -> list[str]:
+    """Delete the system folder so that no step leaves the interpreter next to a missing client.
+
+    The folder is renamed away first: one atomic step after which the registered interpreter path
+    is gone and a command Cursor cached exits 127 (allowed), whatever happens to the deletion.
+    Leftovers of an earlier interrupted run go after that, so a leftover that will not delete
+    can never hold up the rename.
+    """
+    messages: list[str] = []
+    earlier = _leftovers(layout)
+    if layout.system_root.exists():
+        aside = layout.system_root.with_name(
+            f".{layout.system_root.name}-removing-{time.time_ns()}"
+        )
+        os.rename(layout.system_root, aside)
+        shutil.rmtree(aside)
+        messages.append(f"removed {layout.system_root}")
+    for old in earlier:
+        shutil.rmtree(old)
+        messages.append(f"removed leftover {old}")
+    return messages
+
+
+def _undo_first_install(
+    layout: Layout, *, created_hooks: bool, hooks_info: dict[str, Any] | None
+) -> None:
+    """A hook entry must never outlive the files it runs: entries first, then the folder."""
+    _strip_hooks(layout, created=created_hooks, hooks_info=hooks_info)
+    _remove_folder(layout)
 
 
 def install(
@@ -302,13 +445,19 @@ def install(
     )
     created_root = not layout.system_root.exists()
     _make_dir(layout.system_root, layout)
-    for stale in [*layout.system_root.glob(".staging-*"), *layout.system_root.glob(".old-*")]:
+    for stale in [
+        *layout.system_root.glob(".staging-*"),
+        *layout.system_root.glob(".old-*"),
+        *_leftovers(layout),  # what an interrupted uninstall moved aside
+    ]:
         shutil.rmtree(stale, ignore_errors=True)
     staging = layout.system_root / f".staging-{os.getpid()}"
     graveyard = layout.system_root / f".old-{os.getpid()}"
     staging.mkdir()
     os.chmod(staging, 0o755)  # the umask may be 077; the user must be able to run what is in here
     messages: list[str] = []
+    keep_graveyard = False
+    hooks_info: dict[str, Any] | None = None
     try:
         new_python: Path | None = None
         if "python" in bad:
@@ -344,6 +493,12 @@ def install(
             smoke(command_for(layout.interpreter, layout.client, event), event, run_as)
 
         entries = desired_entries(layout)
+        existing = _read_hooks(layout)
+        merged = hooks_file.merge(
+            existing, entries, prefix(layout)
+        )  # a bad file fails here, before the record and the hooks are written
+        backup = _backup(layout, existing) if existing is not None and merged != existing else None
+        hooks_info = _hooks_info(layout, previous, existing, merged, backup, entries)
         record = records.build(
             agentfly_version=agentfly_version(),
             cursor_version=cursor_version,
@@ -356,34 +511,51 @@ def install(
             created_hooks_file=created_hooks,
             layout=layout,
         )
+        record["hooks_file"].update(hooks_info)
         _write_atomic(layout.record, records.dumps(record).encode(), layout)
-        if _apply_hooks(layout, entries):
+        if _apply_hooks(layout, entries, existing, merged):
             messages.append(f"registered {len(entries)} hooks in {layout.hooks_file}")
         return Outcome(True, messages or ["repaired"])
-    except BaseException:
+    except BaseException as failure:
         # A hook entry must never outlive the files it runs (S2 F1): entries go before the folder,
         # and a repair puts the old Python and client back. If this cleanup itself fails, the
         # folder stays, which is the safe side; the original error is still the one raised.
-        with contextlib.suppress(Exception):
+        try:
             if created_root:
-                _strip_hooks(layout, created=created_hooks)
-                shutil.rmtree(layout.system_root, ignore_errors=True)
+                _undo_first_install(layout, created_hooks=created_hooks, hooks_info=hooks_info)
             else:
                 _restore(layout, graveyard)
+        except Exception:
+            if created_root:
+                note = (
+                    "cleaning up the failed install did not finish; "
+                    f"run `agentfly uninstall` to remove what is left of {layout.system_root}"
+                )
+            else:  # the previous files are kept, never deleted by the lines below
+                keep_graveyard = True
+                note = (
+                    f"restoring the previous files failed; they are kept in {graveyard} "
+                    "(the next `agentfly init -g` removes that folder)"
+                )
+            print(f"agentfly init: {note}", file=sys.stderr)
+            failure.add_note(note)
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(graveyard, ignore_errors=True)
+        if not keep_graveyard:
+            shutil.rmtree(graveyard, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- uninstall
 
 
-def _strip_hooks(layout: Layout, *, created: bool) -> list[str]:
+def _strip_hooks(layout: Layout, *, created: bool, hooks_info: dict[str, Any] | None) -> list[str]:
     """Take our entries out of the system hooks file; delete the file if it was ours alone.
 
-    Refuses (changing nothing) when the file is not valid JSON but mentions us, or when entries
-    that are not ours still point into our folder: removing the folder would break them.
+    Refuses (changing nothing, not even a backup) when the file is not valid JSON but mentions
+    us, or when entries that are not ours still point into our folder: removing the folder would
+    break them. "Points into" is decided on the parsed command strings, so JSON escapes such as
+    `\\/` do not hide an entry. `hooks_info` is the record's `hooks_file` section.
     """
     text = _read_hooks(layout)
     if text is None:
@@ -399,7 +571,7 @@ def _strip_hooks(layout: Layout, *, created: bool) -> list[str]:
             ) from None
         return []  # not parseable and not ours: Cursor ignores it too
     result = hooks_file.remove_ours(text, mark) if ours else text
-    if f"{layout.system_root}/" in result:
+    if any(f"{layout.system_root}/" in command for command in hooks_file.commands(result)):
         raise InstallError(
             f"{layout.hooks_file} has entries that point into {layout.system_root} but are not "
             "the ones AgentFly wrote; remove them by hand, then run uninstall again. "
@@ -410,20 +582,49 @@ def _strip_hooks(layout: Layout, *, created: bool) -> list[str]:
     if created and hooks_file.holds_nothing_else(result):
         layout.hooks_file.unlink()
         return [f"removed {layout.hooks_file} (AgentFly created it)"]
-    _write_atomic(layout.hooks_file, result.encode("utf-8"), layout)
+    exact = _exact_original(layout, hooks_info, text)
+    _rewrite_hooks(layout, exact if exact is not None else result, text)
     return [f"removed AgentFly's {len(ours)} entries from {layout.hooks_file}"]
+
+
+def _keep_old_backups(layout: Layout) -> list[str]:
+    """Earlier versions kept backups inside the system folder: move them out before it goes."""
+    old = layout.system_root / "backups"
+    if old.is_symlink() or not old.is_dir():
+        return []
+    moved = 0
+    for item in sorted(old.iterdir()):
+        if item.is_symlink() or not item.is_file():
+            continue
+        _make_dir(layout.backups, layout)
+        target, counter = layout.backups / item.name, 0
+        while target.exists():
+            counter += 1
+            target = layout.backups / f"{item.name}-{counter}"
+        os.rename(item, target)
+        moved += 1
+    return [f"kept {moved} earlier backup(s) in {layout.backups}"] if moved else []
+
+
+def describe_oserror(exc: OSError) -> str:
+    """One line for the user: the system's reason, and the file it was about."""
+    return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
 
 
 def uninstall(layout: Layout) -> Outcome:
     """Our hook entries first, then the system folder. Needs neither Cursor nor a version."""
     _check_paths(layout)
     record = records.read(layout)
-    messages = _strip_hooks(
-        layout, created=bool(record and record.get("hooks_file", {}).get("created"))
-    )
-    if layout.system_root.is_symlink():
-        raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
-    if layout.system_root.exists():
-        shutil.rmtree(layout.system_root)
-        messages.append(f"removed {layout.system_root}")
+    info = record.get("hooks_file") if record else None
+    try:
+        messages = _strip_hooks(layout, created=bool(info and info.get("created")), hooks_info=info)
+        if layout.system_root.is_symlink():
+            raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
+        messages += _keep_old_backups(layout)
+        messages += _remove_folder(layout)
+    except OSError as exc:
+        reason = describe_oserror(exc)
+        raise InstallError(
+            f"cannot finish removing AgentFly ({reason}); run `agentfly uninstall` again"
+        ) from exc
     return Outcome(bool(messages), messages or ["nothing of AgentFly's was installed"])

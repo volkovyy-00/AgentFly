@@ -157,3 +157,14 @@ def test_random_whitespace_never_changes_what_is_not_ours() -> None:
         merged = hooks_file.merge(text, ENTRIES, PREFIX)
         assert json.loads(merged)["hooks"].keys() >= set(hooks)
         assert hooks_file.remove_ours(merged, PREFIX) == text
+
+
+def test_commands_are_read_parsed_so_escaped_slashes_are_decoded() -> None:
+    text = (
+        '{"hooks": {"stop": [{"command": "\\/opt\\/a b\\/run.sh"}, 3, {"timeout": 1}],'
+        ' "preToolUse": [{"command": "x"}]}}'
+    )
+    assert hooks_file.commands(text) == ["/opt/a b/run.sh", "x"]
+    assert hooks_file.commands('{"version": 1}') == []
+    with pytest.raises(InstallError):
+        hooks_file.commands("not json")

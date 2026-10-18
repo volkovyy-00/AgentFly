@@ -33,7 +33,8 @@ class Layout:
 
     @property
     def backups(self) -> Path:
-        return self.system_root / "backups"
+        """Next to hooks.json, outside the system folder, so a backup outlives uninstall."""
+        return self.cursor_dir / "agentfly-backups"
 
     @property
     def hooks_file(self) -> Path:

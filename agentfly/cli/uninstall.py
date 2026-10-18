@@ -45,3 +45,7 @@ def run(args: argparse.Namespace) -> int:
     except InstallError as exc:
         print(f"agentfly uninstall: {exc}", file=sys.stderr)
         return 1
+    except OSError as exc:  # a filesystem error outside the installer: one line, not a traceback
+        reason = installer.describe_oserror(exc)
+        print(f"agentfly uninstall: {reason}; run `agentfly uninstall` again", file=sys.stderr)
+        return 1

@@ -122,6 +122,17 @@ def our_entries(text: str, prefix: str) -> list[HookEntry]:
     return found
 
 
+def commands(text: str) -> list[str]:
+    """Every entry's `command`, parsed (so escapes such as `\\/` are already decoded)."""
+    found: list[str] = []
+    for elements in _parse(text.removeprefix(_BOM)).get("hooks", {}).values():
+        for element in elements:
+            command = element.get("command") if isinstance(element, dict) else None
+            if isinstance(command, str):
+                found.append(command)
+    return found
+
+
 def same_entries(a: list[HookEntry], b: list[HookEntry]) -> bool:
     """Whether two lists hold the same entries, whatever their order."""
     return sorted(a, key=astuple) == sorted(b, key=astuple)

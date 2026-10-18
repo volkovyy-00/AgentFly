@@ -105,15 +105,24 @@ def test_a_failed_download_is_an_install_error(tmp_path: Path, web: str) -> None
 
 
 @pytest.mark.parametrize(
-    "kind", ["traversal", "absolute", "outside-link", "absolute-link", "other-root"]
+    ("kind", "message"),
+    [
+        ("traversal", "unsafe path"),
+        ("absolute", "unsafe path"),
+        ("outside-link", "unsafe link"),
+        ("absolute-link", "unsafe link"),
+        ("other-root", "unsafe path"),
+    ],
 )
 def test_an_unsafe_archive_is_refused_before_anything_is_unpacked(
-    tmp_path: Path, kind: str
+    tmp_path: Path, kind: str, message: str
 ) -> None:
     archive, _ = write_archive(tmp_path / "in", evil_tar(kind))
     out = tmp_path / "out"
     out.mkdir()
-    with pytest.raises(InstallError, match="unsafe|unpack"):
+    # Our own member check must be the one that refuses: Python's `data` filter alone lets some
+    # of these through or stops only after it has created folders.
+    with pytest.raises(InstallError, match=message):
         pythons.extract(archive, out)
     assert list(out.iterdir()) == []
     assert not (tmp_path / "escape.txt").exists()
