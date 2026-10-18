@@ -395,6 +395,7 @@ def test_a_child_stays_denied_after_2500_task_calls_from_other_chats(rec: Record
     rec.task("P", "T1")
     assert rec.child_curl("C", "T1") == "deny"
     flood_with_tasks(rec)
+    assert len(rec.store.calls) <= 2000  # the memory of calls stays bounded
     assert rec.child_curl("C", "T1") == "deny"
     rec.restart()
     assert rec.child_curl("C", "T1") == "deny"
@@ -415,11 +416,6 @@ def test_a_task_no_child_has_named_yet_is_not_forgotten(rec: Recorder) -> None:
     flood_with_tasks(rec)
     rec.restart()
     assert rec.child_curl("C", "T1") == "deny"
-
-
-def test_the_remembered_calls_stay_bounded(rec: Recorder) -> None:
-    flood_with_tasks(rec, 2500)
-    assert len(rec.store.calls) <= 2000
 
 
 def test_naming_a_pending_call_from_another_link_leaves_the_workspace_fallback(

@@ -265,13 +265,18 @@ class SessionStore:
 
     def forget_old_calls(self, keep: str) -> None:
         """Drop the oldest calls over `_MAX_CALLS`, never `keep`, a linked or a pending one."""
-        if len(self.calls) <= _MAX_CALLS:
+        excess: int = len(self.calls) - _MAX_CALLS
+        if excess <= 0:
             return
         held: set[str] = {s.parent_call for s in self._sessions.values()}
         held |= {keep, *self.pending}
-        for call in [c for c in self.calls if c not in held]:
-            if len(self.calls) <= _MAX_CALLS:
+        victims: list[str] = []
+        for call in self.calls:  # oldest first; usually the first one goes
+            if len(victims) == excess:
                 break
+            if call not in held:
+                victims.append(call)
+        for call in victims:
             del self.calls[call]
 
     def prune_pending(self) -> bool:

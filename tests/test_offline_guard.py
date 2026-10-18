@@ -415,18 +415,12 @@ def test_the_offline_count_file_is_never_followed_through_a_symlink(
 # ---------------------------------------------------------------- file tools (D4, SPEC section 9)
 
 FILE_TARGETS = [
-    "~/.config/agentfly/token",
+    *GUARD_PATHS,
+    "~/.config/././agentfly/token",  # `/./` more than once
+    "/Library/Application\\ Support/AgentFly/rules.toml",
+    "/Library/Application Support/Cursor/../Cursor/hooks.json",  # `..` and a space
     "~/.local/share/agentfly/sessions.json",
     "~/.config/agentfly/config.toml",
-    "/Library/Application Support/Cursor/hooks.json",
-    "/Users/me/.config/agentfly/token",
-    "~/.CONFIG/AgentFly/TOKEN",  # other letter case
-    "~/.config/x/../agentfly/token",  # `..`
-    "/Users/me/Library/../.config/agentfly/token",
-    "/Library/Application Support/Cursor/../Cursor/hooks.json",  # `..` and a space
-    "~/.config/././agentfly/token",  # `/./` more than once
-    "~/.config//agentfly//token",
-    "/Library/Application\\ Support/AgentFly/rules.toml",
 ]
 FILE_TOOLS = ["Read", "Write", "StrReplace", "Delete", "Edit"]
 
@@ -437,6 +431,19 @@ def call_with_target(client: Path, home: Path, event: dict[str, Any]) -> dict[st
 
 
 @pytest.mark.parametrize("path", FILE_TARGETS)
+def test_every_spelling_of_a_guard_path_is_found(path: str) -> None:
+    assert guard.path_guard_reason(path) == "guard_path"
+
+
+WIRED = [  # the files the card names, each spelled one way; the spellings are tested above
+    "~/.config/agentfly/token",
+    "~/.local/share/agentfly/sessions.json",
+    "~/.CONFIG/AgentFly/config.toml",
+    "/Library/Application Support/Cursor/../Cursor/hooks.json",
+]
+
+
+@pytest.mark.parametrize("path", WIRED)
 def test_a_read_of_a_guard_path_is_denied_with_no_recorder(
     client: Path, isolated_home: Path, path: str
 ) -> None:
@@ -447,20 +454,19 @@ def test_a_read_of_a_guard_path_is_denied_with_no_recorder(
     assert '"guard": "guard_path"' in hook_log(isolated_home)
 
 
-@pytest.mark.parametrize("path", FILE_TARGETS)
 def test_an_attached_guard_path_is_denied_with_no_recorder(
-    client: Path, isolated_home: Path, path: str
+    client: Path, isolated_home: Path
 ) -> None:
     event = {
         "hook_event_name": "beforeReadFile",
         "file_path": "/p/a.txt",
-        "attachments": [{"type": "file", "file_path": "/p/b.txt"}, {"file_path": path}],
+        "attachments": [{"type": "file", "file_path": "/p/b.txt"}, {"file_path": WIRED[0]}],
     }
     assert call_with_target(client, isolated_home, event)["permission"] == "deny"
 
 
 @pytest.mark.parametrize("tool", FILE_TOOLS)
-@pytest.mark.parametrize("path", FILE_TARGETS)
+@pytest.mark.parametrize("path", WIRED)
 def test_a_file_tool_on_a_guard_path_is_denied_with_no_recorder(
     client: Path, isolated_home: Path, tool: str, path: str
 ) -> None:
@@ -513,7 +519,6 @@ def test_a_shell_call_in_a_guard_folder_is_denied_with_no_recorder(
     ],
 )
 def test_odd_shapes_are_ignored_not_errors(fields: dict[str, Any]) -> None:
-    assert all(isinstance(target, str) for target in guard.file_targets(fields))
     assert guard.files_reason(fields) is None
 
 

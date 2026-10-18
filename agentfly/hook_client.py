@@ -558,7 +558,8 @@ def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str,
         if shell:  # a missing or odd event name, or a command that is not a string, still counts
             text = command if isinstance(command, str) else json.dumps(command, default=str)
         answer, guard = offline_answer(text)
-        if guard is None and (guard := files_reason(payload)) is not None:
+        guard = guard or files_reason(payload)
+        if guard:
             answer = deny_answer(guard)
         count_offline_answer()
         record.update(
