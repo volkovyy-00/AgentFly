@@ -33,8 +33,8 @@ _S5_VALID: frozenset[str] = frozenset(
 
 KNOWN_VERSIONS: dict[str, frozenset[str]] = {
     "3.24.12": _S5_VALID,  # verified by spike S5
-    # UNVERIFIED (pending the V3a manual check): the owner's Mac runs 3.25.9. Remove this line
-    # if AgentFly's hooks do not fire there.
+    # V3a manual check (2026-10-18): Cursor logged "Loaded 8 enterprise hook(s)" for all eight
+    # events and ran them on real actions. docs/reports/V3a.md has the log lines.
     "3.25.9": _S5_VALID,
 }
 

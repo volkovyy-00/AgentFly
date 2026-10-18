@@ -67,7 +67,7 @@ def _as_root(version: str, build: pythons.PythonBuild) -> int:
     for line in outcome.messages:
         print(line)
     if outcome.changed:
-        print("Restart Cursor if its Hooks panel does not show AgentFly's hooks.")
+        print("Quit and reopen Cursor so it loads the hooks (its Hooks panel does not list them).")
         print("Next: `agentfly start` (or `agentfly serve` in a terminal) runs the recorder.")
     return 0
 

@@ -74,7 +74,8 @@ record there, and adds AgentFly's hooks to Cursor's system-wide
 they are, and a backup of the old file is kept. It writes nothing and exits with an error if the
 installed Cursor version, or any hook event, is not one AgentFly has verified, or if the download
 fails its checksum. Running it twice changes nothing and needs no password the second time.
-Restart Cursor if its Hooks panel does not list AgentFly afterwards.
+Quit and reopen Cursor afterwards so it loads the hooks. Its Settings → Hooks panel does not list
+system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s)`.
 
 `init -g` and `uninstall` run the installed AgentFly package as root, so they are only as
 trustworthy as that package and the Python it was installed with, which your user (and so the
@@ -88,7 +89,9 @@ agentfly uninstall                  # asks for your password once
 ```
 
 It removes AgentFly's hook entries first and then its system folder, and leaves other tools'
-entries alone. Until you run it, the installed hook client keeps guarding Cursor.
+entries alone. Until you run it, the installed hook client keeps guarding Cursor. **Quit and
+reopen Cursor afterwards:** it keeps its old hook list until it restarts, and in the meantime
+its calls to the removed client fail (exit 127), which lets every action through.
 
 **From a clone (developers).** `uv sync` makes `.venv` with the server dependencies and the
 `agentfly` and `agentfly-hook` commands. `./install.sh` writes a project-level

@@ -1,9 +1,37 @@
 # V3a: System install: `agentfly init -g` and `agentfly uninstall`
-Status: blocked on the owner's manual checks (they need the owner's password and Cursor) (as of 2026-10-18 19:10)
-Result: Code and tests done. Install, repair, idempotence, merge, uninstall and the checksum/version refusals work against a temporary root with the real pinned Python. Not run: anything needing sudo or Cursor (4 acceptance items).
-Evidence: code commit 0d69408; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 723 passed, 4 skipped; tests/test_install_{cursor,hooks_file,python,flow,cli}.py; docs/reports/V3a.md "Manual checks".
-Needs owner: Run the manual checks below. Cursor 3.25.9 is on the known list as UNVERIFIED (your Mac runs it): if AgentFly hooks do not fire after `init -g`, remove that one line in agentfly/install/cursor.py before merge.
-Details: see "## 2026-10-18 19:10" below.
+Status: done (as of 2026-10-18 20:30)
+Result: init -g, repair, idempotence, merge and uninstall work for real on the owner's Intel Mac, Cursor 3.25.9: hooks load and fire, R1 denies 11/11 sandboxed and 10/10 unsandboxed, files are locked, uninstall asks for the password. Latency p95 49-51 ms quiet, 76-79 ms under load.
+Evidence: commits 0d69408 and later on ag-v3a-install; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 723 passed, 4 skipped; logs: ~/.local/share/agentfly/logs/events.jsonl and Cursor's Hooks log.
+Needs owner: none. For the lead: R1 can miss "read then curl" when the agent sends both in one step; a missing interpreter fails open (exit 127), not deny-all. Details below.
+Details: see "## 2026-10-18 20:30" below.
+
+
+## 2026-10-18 20:30
+
+### Manual checks (owner's Intel Mac, Cursor 3.25.9; the owner ran the steps, I read the logs)
+1. **Cursor loads it.** Cursor's Hooks log: `Enterprise config path: file:///Library/Application%20Support/Cursor/hooks.json` and `Loaded 8 enterprise hook(s) for steps: beforeShellExecution, beforeReadFile, beforeMCPExecution, preToolUse, afterFileEdit, sessionStart, sessionEnd, subagentStart`. On a real `echo hello`, `...hook_client.py cursor preToolUse` and `... beforeShellExecution` ran with `exit code: 0`; events.jsonl recorded `cursor_version: 3.25.9`. The Settings → Hooks panel does **not** list system-level hooks (the owner first read that as a failure and removed the 3.25.9 line; restored). `doctor` should read the Hooks log lines `Loaded N enterprise hook(s)` / `No enterprise hooks configuration found` instead. The 3.25.9 line is now marked verified.
+2. **Locked.** Without sudo: `touch .../AgentFly/hook_client.py` Permission denied; `echo x >> .../python/bin/python3.12` permission denied; `echo x >> .../Cursor/hooks.json` permission denied. All installed files are `root:wheel`, none group/other-writable (`find` check).
+3. **Password.** After `sudo -k`, `agentfly uninstall` asked for the password (three wrong attempts typed, then accepted). Earlier `init -g` and `uninstall` ran inside sudo's 5-minute cache and asked for nothing, so the message now reads "may ask". Not observed manually: a second `init -g` saying "already installed" (covered by `tests/test_install_flow.py` and the temp-root smoke test).
+4. **R1 deny, D22.** Recorder up (no `offline` rows). Sandbox on (`sandbox=true`): 11 chats, each `.env` read followed by a curl: **11 of 11 denied**. Sandbox off: first run 10 chats, only 4 had the curl after the read (all denied); a second run with the read and the curl as two separate messages gave **6 of 6 denied**, so **10 of 10** valid trials denied.
+   **Gap for R1 (V5):** when the agent sends the read and the curl in the same step, Cursor may check the curl first (log: `beforeShellExecution` allow, then `beforeReadFile .env`, same `generation_id`). 6 of 10 unsandboxed chats in the first run had only that early shell call and nothing after the read. A curl checked before the read cannot carry the file's content, but "read, then curl is denied" is not reliable when both are issued together.
+5. **D24.** With a Claude-format `PreToolUse` allow hook for matcher `Shell` in `~/.claude/settings.json` (Cursor log: `Executing hook 2/2 from claude-user config`, output `permissionDecision: allow`), AgentFly's `beforeShellExecution` still returned `deny` ("Blocked by rule R1...") and Cursor logged `Merged 1 valid response for step beforeShellExecution`. So an allow did not override the R1 deny on the shell gate. One trial. Claude's format has no `beforeShellExecution` event, so this is the closest test. Untested: a foreign allow against an AgentFly `preToolUse` deny. I recommend `doctor` keeps the D24 warning.
+6. **Latency** (installed in `/Library`, recorder up, 200 interleaved calls): load average 15, bare bundled Python 31 / 44 ms (median / p95), installed client 60-61 / 76-79 ms (two runs). Quiet machine, temporary root, read-only tree: bare 24 / 28, client 45 / 49-51. Target p95 50 ms met only in the quiet runs. Without stdlib bytecode: 104 / 114.
+7. **Uninstall.** Removed `hooks.json` (AgentFly had created it) and then the folder; the empty `/Library/Application Support/Cursor` folder stays (harmless). **Without a Cursor restart** Cursor kept its old hook list and kept calling the removed interpreter: `exit code: 127`, which fails open (the shell command ran, nothing was blocked). After the owner quit and reopened Cursor: `No enterprise hooks configuration found`, no AgentFly mention in the Hooks log, no hook step for the shell command, events.jsonl unchanged. `uninstall`, `init -g` and the README now say to quit and reopen Cursor.
+
+### Findings for the lead
+- **Failure modes differ (SPEC §7, D5):** a missing interpreter gives shell exit 127, which Cursor treats as fail-open (observed). A missing client with the interpreter present gives Python exit 2, which denies everything (S2 F1). The install removes entries before files so neither state is left; a plain `brew uninstall`/`uv tool uninstall` leaves the system folder, so it stays guarded.
+- **Cursor reads the system file only at start-up** (restart needed after install and uninstall). Hooks log lines to use in `doctor`/D23: `Loaded 8 enterprise hook(s) for steps: ...`, `No enterprise hooks configuration found`.
+- Cursor passes Claude-format hooks from `~/.claude/settings.json` as `claude-user config` (plugins as `claude-plugin config`) and merges their responses with ours.
+- `sessionEnd` at window close logged `Error: MainThreadShellExec not initialized` once (Cursor shutting down; the command line was correct). Not seen on normal actions.
+- A repo-level `.cursor/hooks.json` doubles every event on this Mac (observed: two `preToolUse` rows per action in the AgentFly repo).
+- Hardware detection on this Intel Mac: `sysctl -n hw.optional.arm64` = "unknown oid" (exit 1), so the x86_64 archive is chosen; the installed `python3.12` is `Mach-O 64-bit executable x86_64`.
+
+### Final check
+`uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 723 passed, 4 skipped (after the restart-hint change, the 3.25.9 comment update and the Intel-detection test).
+
+### Not run
+aarch64 build (Intel Mac); failure paths of `init -g` against the real Cursor; a second `init -g` manually. The sudo hand-off itself was exercised for real (install, repair-free first run, uninstall).
+
 
 ## 2026-10-18 19:10
 

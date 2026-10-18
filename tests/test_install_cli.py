@@ -149,7 +149,10 @@ def test_uninstall_with_nothing_installed_asks_for_no_password(
 
 
 def test_uninstall_as_a_user_runs_itself_under_sudo(
-    system: Layout, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     path, build = write_archive(tmp_path / "dl", fake_python_tar())
     installer.install(
@@ -159,6 +162,7 @@ def test_uninstall_as_a_user_runs_itself_under_sudo(
     monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: calls.append(tail) or 0)
     assert main(["uninstall"]) == 0
     assert calls == [["uninstall"]]
+    assert uninstall.RESTART_HINT in capsys.readouterr().out
 
 
 def test_init_repairing_only_the_client_does_not_download_the_python_again(
