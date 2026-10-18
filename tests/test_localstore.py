@@ -437,19 +437,15 @@ class SqlSpy:
         self._seen = seen
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._conn, name)
+        attr = getattr(self._conn, name)
+        if name not in {"execute", "executemany", "executescript"}:
+            return attr
 
-    def execute(self, sql: str, *rest: Any) -> sqlite3.Cursor:
-        self._seen.append(sql)
-        return self._conn.execute(sql, *rest)
+        def record(sql: str, *rest: Any) -> Any:
+            self._seen.append(sql)
+            return attr(sql, *rest)
 
-    def executemany(self, sql: str, *rest: Any) -> sqlite3.Cursor:
-        self._seen.append(sql)
-        return self._conn.executemany(sql, *rest)
-
-    def executescript(self, sql: str) -> sqlite3.Cursor:
-        self._seen.append(sql)
-        return self._conn.executescript(sql)
+        return record
 
 
 def test_no_value_is_formatted_into_any_sql_statement(

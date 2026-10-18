@@ -106,6 +106,9 @@ class StoreUnavailable(Exception):
     """The history cannot be read right now (cannot open, or the time limit ran out)."""
 
 
+_IN_USE: str = "the history file is in use; old pages may remain"
+
+
 class WipeIncomplete(Exception):
     """Rows are deleted but the file still holds old pages (a reader kept the log busy)."""
 
@@ -173,22 +176,15 @@ def purge_rows(conn: sqlite3.Connection, cutoff: str) -> bool:
     return _truncate_wal(conn)
 
 
-def _wait_ms(conn: sqlite3.Connection, deadline: float) -> None:
-    """Let the next blocking step wait only for what is left of the wipe budget."""
-    left = max(0, int((deadline - time.monotonic()) * 1000))
-    conn.execute(f"PRAGMA busy_timeout={left}")
-
-
 def _checkpoint(conn: sqlite3.Connection, deadline: float) -> None:
     """Fold the log into the file and cut it. A busy answer is not an error, so look at it.
 
     Quick tries with a pause between them: a checkpoint that waits for a reader would hold the
     write lock the whole time and starve the recorder's own writer.
     """
-    conn.execute("PRAGMA busy_timeout=0")
-    while conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+    while not _truncate_wal(conn):
         if time.monotonic() >= deadline:
-            raise WipeIncomplete("the history file is in use; old pages may remain")
+            raise WipeIncomplete(_IN_USE)
         time.sleep(0.2)
 
 
@@ -213,11 +209,12 @@ def wipe_file(path: Path) -> tuple[int, int]:
             return 0, 0  # the recorder made the file but was stopped before the tables
         try:
             _checkpoint(conn, deadline)
-            _wait_ms(conn, deadline)
+            left = max(0, int((deadline - time.monotonic()) * 1000))
+            conn.execute(f"PRAGMA busy_timeout={left}")  # VACUUM may wait, but only this long
             conn.execute("VACUUM")
             _checkpoint(conn, deadline)
         except sqlite3.Error as exc:
-            raise WipeIncomplete("the history file is in use; old pages may remain") from exc
+            raise WipeIncomplete(_IN_USE) from exc
     finally:
         conn.close()
     return sessions, steps
@@ -351,19 +348,16 @@ class LocalStore:
             self._close()
 
     def _tick(self) -> None:
-        """Finish a cut of the log that was blocked, then run the retention sweep at start and
-        once per PURGE_EVERY."""
-        if self._wal_dirty:
-            try:
-                self._wal_dirty = not _truncate_wal(self._connection())
-            except Exception as exc:  # noqa: BLE001
-                self._failed(exc)
+        """Run the retention sweep at start and once per PURGE_EVERY. Between sweeps, finish a
+        cut of the log that a reader blocked."""
         now = self.clock()
-        if self._last_purge is not None and now - self._last_purge < PURGE_EVERY:
-            return
-        self._last_purge = now
+        due = self._last_purge is None or now - self._last_purge >= PURGE_EVERY
         try:
-            self._wal_dirty = not purge_rows(self._connection(), (now - RETENTION).isoformat())
+            if due:
+                self._last_purge = now
+                self._wal_dirty = not purge_rows(self._connection(), (now - RETENTION).isoformat())
+            elif self._wal_dirty:
+                self._wal_dirty = not _truncate_wal(self._connection())
         except Exception as exc:  # noqa: BLE001
             self._failed(exc)
 

@@ -15,7 +15,8 @@ from typing import Any
 
 from neo4j import Driver, GraphDatabase
 
-from agentfly.recorder.clean import clean_command, command_for_storage, website_name
+from agentfly.recorder import clean as clean_settings
+from agentfly.recorder.clean import clean_command, website_name
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
@@ -349,7 +350,7 @@ def build_step_record(
     elif kind == "shell":
         raw_cmd: str = str(payload.get("command", "") or "")
         command = clean_command(raw_cmd, root)
-        if command_for_storage(raw_cmd, root) != command:
+        if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
         hosts = hosts_from_cleaned(command)
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
@@ -365,13 +366,12 @@ def build_step_record(
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
 
-    if kind in {"read", "shell"} and not file_sensitive:
+    if kind == "shell" and not file_sensitive:
         # The rule engine's own test, whatever this chat's mark is: the history and R1 agree.
-        file_sensitive = mark(payload, replace(session, marked=False)).marked
-        if file_sensitive and kind == "shell":
-            file_path = (
-                None  # the cleaner hid the name; do not show another file as the one touched
-            )
+        # (A read step already used it above: `mark()` tests the same file name.)
+        if mark(payload, replace(session, marked=False)).marked:
+            file_sensitive = True
+            file_path = None  # the cleaner hid the name; do not show another file as touched
 
     rule_description: str | None = None
     if rule_id is not None:
