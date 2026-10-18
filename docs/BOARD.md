@@ -65,7 +65,7 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
 
               ─────────── you approve DECISIONS.md ───────────
 
-v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
+v1            Docs:     V1a ✅ ──► V1b SPEC catch-up (worker, ∥ wave 3)
               Backend:  V2 ✅ ┬──► V2b ✅ ┬──► V3a install ──► V3b service + doctor ─┐ (V4's last check needs V3b)
                              │          └──► V5a normalise + R0 ──► V5b rules file ─┼──► V7  rule change flow
                              ├──► V4  formula + release                         │
@@ -76,7 +76,7 @@ v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
                              └──────────────────────► V9  History + Rules tabs (after V5b, V6, V8)
 ```
 
-Wave 3 (owner, 2026-10-18): V3a, V5a and V6 in parallel. Then V3b and V5b; V2c and
+Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel. Then V3b and V5b; V2c and
 V8b after V6 (they share the step record, `memory.py` and `store.py`).
 V7 and V9 can run in parallel.
 
@@ -92,6 +92,8 @@ V7 and V9 can run in parallel.
 - V2 ✅ 2026-10-16 · docs/reports/V2.md · merged 3da6dc7 · accepted edits outside Touches (setup_credentials.sh, .env.example, AGENTS.md paths); `ls -la` → `ls -l<arg>` per SPEC § 4 · body: git show ba74ffe:docs/BOARD.md
 - V8 ✅ 2026-10-16 · docs/reports/V8.md · merged 92e7fdc (part 1) and 4af8125 (home switch: trail at /, lane graph at /?view=graph) · GIF dropped by the owner; real Cursor chat check passed · body: git show f786847:docs/BOARD.md
 - V2b ✅ 2026-10-16 · docs/reports/V2b.md · merged 79a46a7 · changed D25 (new); owner addendum: serve port check, 401/403 → guard, all one-liners denied offline, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV; p95 69 ms accepted until V3 · body: git show 7f7cd70:docs/BOARD.md
+- V1b ✅ 2026-10-18 · docs/reports/V1b.md · merged 65936a1 · SPEC catch-up; leaves §8 Duplicates (V2c) · body: git show 8b1258a:docs/BOARD.md
+- V5a ✅ 2026-10-18 · docs/reports/V5a.md · merged 75c7c0e · fallback mark expires after 30 min (owner, D21) · body: git show 8b1258a:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -100,21 +102,6 @@ V7 and V9 can run in parallel.
 ---
 
 ## v1 cards
-
-### V1b · Fill in what S3 and S5 decided
-- **Owner:** lead
-- **Lane:** lead
-- **Depends on:** S3, S5, D13 and D16 answered
-- **May touch:** `SPEC.md`, `AGENTS.md`, `HOOKS.md`, `README.md`,
-  `docs/product-goals.md` (G1 flow wording only, per D6 and D20),
-  `docs/DECISIONS.md` (status lines), new `docs/archive/SPEC-hackathon.md`.
-- **Done when:**
-  - The PR contains a table mapping each approved decision to its SPEC section.
-  - AGENTS.md's Testing list names only tests that exist. The R0 line moves to
-    V5. "The helper drops `content`" moves to V2, which writes that test.
-  - The approved dependencies, paths, commands, rule shape, R1 outbound
-    definition (D10) and API surface (D19) match the decisions.
-  - You approve the PR.
 
 ### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
 - **Owner:** worker-backend · brief to write after V2b and the D9 review
@@ -149,6 +136,9 @@ V7 and V9 can run in parallel.
     during the gap, `doctor` is red, the offline guard denies `curl`, and the message
     says `agentfly start`. After `agentfly uninstall`, `launchctl list | grep agentfly`
     prints nothing.
+  - Before asking for `sudo`, `init -g` and `uninstall` check that the AgentFly package
+    about to run as root matches its release hashes, and `doctor` checks the same (owner,
+    2026-10-18: root runs user-writable code during `sudo`).
 
 ### V4 · Homebrew formula and release workflow
 - **Owner:** worker-backend
@@ -169,15 +159,10 @@ V7 and V9 can run in parallel.
   - The release workflow builds the UI once and makes the wheel and sdist. It
     has no publish step until you approve publishing.
 
-### V5a · Command normalisation, subagent mark, R0
-- **Brief:** `docs/briefs/V5a.md` (authoritative). Split from V5 (owner, 2026-10-18);
-  R0 also blocks `agentfly wipe` (owner, 2026-10-18).
-- **Lane:** backend, ∥ V3a and V6 · **Depends on:** V2b ✅, S3 ✅
-
 ### V5b · Rules file, rule kinds, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
 - **Owner:** worker-backend · brief to write after V5a merges
 - **Lane:** backend, after V5a; ∥ V3b
-- **Depends on:** V5a; V3a (`init -g` installs the active rules file)
+- **Depends on:** V5a ✅; V3a (`init -g` installs the active rules file)
 - **May touch:** `agentfly/recorder/rules.py`; new `agentfly/recorder/rulefile.py`;
   packaged `agentfly/rules/default.toml`; new `agentfly/cli/{rules_check,rules_test}.py`;
   new `agentfly/recorder/api/rules.py`; the rules step in `agentfly/install/`;
@@ -195,6 +180,9 @@ V7 and V9 can run in parallel.
     a test, plus a diff that touches no `.py` file for it.
   - block, warn and highlight produce the D11 answers (tests). `GET /api/rules` is
     read-only and in the whitelist.
+  - R0 also guards AgentFly's own install folder (uv tool / pipx environment and the
+    Homebrew keg), so the agent cannot change code that later runs under `sudo` (owner,
+    2026-10-18).
 
 ### V6 · Local session store, history API, Neo4j opt-in, `agentfly wipe`
 - **Brief:** `docs/briefs/V6.md` (authoritative). Neo4j only with `neo4j = true` in

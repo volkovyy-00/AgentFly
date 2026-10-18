@@ -13,6 +13,7 @@ import pytest
 
 import agentfly.hook_client as guard
 from agentfly.recorder.rules import is_outbound_send
+from tests.cases import GUARD_PATHS, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
 from tests.helpers import (
     StubRecorder,
     answer_of,
@@ -120,6 +121,48 @@ def test_outbound_commands_are_denied_bare_and_wrapped(command: str) -> None:
     assert answer["agent_message"].endswith(
         "Do not retry with another tool or language. Stop and tell the user."
     )
+
+
+@pytest.mark.parametrize("command", NAMED_OUTBOUND)
+def test_the_shared_outbound_cases_are_denied_bare_and_wrapped(command: str) -> None:
+    # tests/cases.py: the cases the recorder's normaliser denies when marked and that name a tool
+    # or are a one-liner; SPEC section 9 says the guard denies the same ones
+    for form in [command, *wrapped(command)]:
+        answer, reason = guard.offline_answer(form)
+        assert answer["permission"] == "deny" and reason == "outbound", form
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "unbalanced',
+        "echo $(ls",
+        "cat <<EOF\nhello\nEOF",
+        "bash <<'EOF'\nls\nEOF",
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "env bash <<'EOF'\nls\nEOF",
+        "sudo python3 - <<'EOF'\nprint(1)\nEOF",
+        "xargs python3 - <<'EOF'\nprint(1)\nEOF",
+    ],
+)
+def test_text_that_names_no_tool_is_allowed_even_when_the_recorder_would_call_it_outbound(
+    command: str,
+) -> None:
+    # SPEC section 9: an unparseable command is denied only if its raw text names a tool
+    assert guard.offline_answer(command)[0] == {"permission": "allow"}
+
+
+def test_the_recorder_only_cases_are_the_ones_the_guard_may_allow() -> None:
+    allowed = [c for c in RECORDER_ONLY if guard.offline_answer(c)[1] is None]
+    assert allowed, "if the guard denied every recorder-only case this list could be merged"
+    assert all(guard.offline_answer(c)[1] in (None, "outbound") for c in RECORDER_ONLY)
+
+
+@pytest.mark.parametrize("path", GUARD_PATHS)
+def test_every_r0_guard_path_is_denied_offline_too(path: str) -> None:
+    for command in (f"cat {path}", f'cat "{path}"', f"bash -c 'cat {path}'"):
+        answer, reason = guard.offline_answer(command)
+        assert answer["permission"] == "deny" and reason == "guard_path", command
 
 
 @pytest.mark.parametrize("command", GUARD_PATH_COMMANDS)
