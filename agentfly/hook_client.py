@@ -294,6 +294,9 @@ def guard_reason(text: str) -> str | None:
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
         plain = plain.replace("//", "/")
+    plain = plain.replace("/./", "/")
+    if "/.." in plain:  # `~/.config/x/../agentfly`: resolve each word that has a `..`
+        plain += " " + " ".join(os.path.normpath(w) for w in plain.split() if "/.." in w)
     if any(path in plain for path in _GUARD_PATHS):
         return "guard_path"
     return "outbound" if _outbound_words(words(text), folded) else None
