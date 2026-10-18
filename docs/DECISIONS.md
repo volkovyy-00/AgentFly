@@ -337,6 +337,9 @@ before. Record and display only: rules still check every event, and the step's v
 is the stricter one among gate events. V2c builds it; MCP gets a made-up test case,
 no live test. The owner captures edits, parallel reads and one @-attached file on
 3.25.9 first.
+Capture (2026-10-18, `docs/spikes/V2c-capture.md`): one id covers an edit's Read and
+Write, so an edit is one step; `afterFileEdit` has no id. **Owner 2026-10-18:** an id-less
+`afterFileEdit` joins the latest `preToolUse` Write of the same chat and path within 5 s.
 
 ---
 
