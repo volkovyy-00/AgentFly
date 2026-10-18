@@ -1,7 +1,7 @@
 # V3a: System install: `agentfly init -g` and `agentfly uninstall`
 Status: blocked on the owner's manual checks (they need the owner's password and Cursor) (as of 2026-10-18 19:10)
 Result: Code and tests done. Install, repair, idempotence, merge, uninstall and the checksum/version refusals work against a temporary root with the real pinned Python. Not run: anything needing sudo or Cursor (4 acceptance items).
-Evidence: code commit 0d69408; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 722 passed, 4 skipped; tests/test_install_{cursor,hooks_file,python,flow,cli}.py; docs/reports/V3a.md "Manual checks".
+Evidence: code commit 0d69408; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 723 passed, 4 skipped; tests/test_install_{cursor,hooks_file,python,flow,cli}.py; docs/reports/V3a.md "Manual checks".
 Needs owner: Run the manual checks below. Cursor 3.25.9 is on the known list as UNVERIFIED (your Mac runs it): if AgentFly hooks do not fire after `init -g`, remove that one line in agentfly/install/cursor.py before merge.
 Details: see "## 2026-10-18 19:10" below.
 
@@ -49,6 +49,7 @@ agentfly init -g                                        # one password prompt
 ### Not run
 - Anything as root (chown to root:wheel, the `SUDO_UID` smoke path, the sudo re-exec itself): the tests run as a normal user and mock the sudo call. The command line is tested; `python -I -B -m agentfly.cli` is tested for real.
 - The aarch64 build (this Mac is Intel). Cursor itself.
+- Build choice on this Mac (the lead's note): `uname -m` = x86_64, `sysctl -n hw.optional.arm64` = "unknown oid" (exit 1), so `select_build()` returns the x86_64 archive (`d09998f8…c3335`) and the installed `python3.12` is `Mach-O 64-bit executable x86_64`. `tests/test_install_python.py` covers the Intel and Apple-silicon answers of the detection.
 
 ### Final verification (skill run before the commit)
 - Smoke: real download into a temporary root with a space in the path: install, hashes match the files, 8 of 8 registered commands exit 0 with a JSON object through `sh -c`, second run changes nothing, another tool's entry survives with a byte-identical backup, uninstall restores the original file byte for byte.

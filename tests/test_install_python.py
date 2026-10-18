@@ -6,6 +6,7 @@ import http.server
 import os
 import re
 import stat
+import subprocess
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -59,6 +60,24 @@ def test_the_pins_match_the_release_and_name_a_python_312_build() -> None:
 def test_the_build_follows_the_hardware() -> None:
     assert "aarch64" in pythons.select_build(True).name
     assert "x86_64" in pythons.select_build(False).name
+
+
+def test_hardware_detection_says_intel_when_the_sysctl_key_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An Intel Mac answers `sysctl -n hw.optional.arm64` with "unknown oid", exit 1.
+    def sysctl(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, "", "unknown oid")
+
+    monkeypatch.setattr(subprocess, "run", sysctl)
+    assert not pythons.has_apple_silicon()
+    assert pythons.select_build() is pythons.BUILDS["x86_64"]
+
+    def apple(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "1\n", "")
+
+    monkeypatch.setattr(subprocess, "run", apple)
+    assert pythons.select_build() is pythons.BUILDS["aarch64"]
 
 
 def test_download_follows_the_redirect_and_checks_the_sum(tmp_path: Path, web: str) -> None:
