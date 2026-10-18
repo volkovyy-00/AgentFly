@@ -325,6 +325,48 @@ def test_live_merge_idempotent(neo4j_test_env: Path) -> None:
     assert before >= 1
 
 
+def test_live_two_halves_of_one_action_are_one_step_node(neo4j_test_env: Path) -> None:
+    store = GraphStore()
+    store.start(neo4j_test_env)
+    assert store.enabled
+    sid: str = f"merged-{uuid.uuid4()}"
+    common: dict[str, Any] = {
+        "session_id": sid,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "order": 1,
+        "time": "2026-01-01T00:00:01+00:00",
+    }
+    store.write_record_sync(
+        StepRecord(
+            **common, kind="tool", verdict="warned", tool="Read", rule_id="R9", rule_description="d"
+        )
+    )
+    store.write_record_sync(
+        StepRecord(**common, kind="read", verdict="warned", file_path="README.md", rule_id="R9")
+    )
+    assert store._driver is not None
+    with store._driver.session() as neo:
+        row = neo.run(
+            """
+            MATCH (:Session {id: $sid})-[:HAS_STEP]->(st:Step)
+            OPTIONAL MATCH (st)-[:TOUCHED]->(f:File)
+            OPTIONAL MATCH (st)-[:BLOCKED_BY]->(r:Rule)
+            RETURN count(DISTINCT st) AS steps, st.kind AS kind, st.tool AS tool,
+                   count(DISTINCT f) AS files, count(DISTINCT r) AS rules
+            """,
+            sid=sid,
+        ).single()
+    store.stop()
+    assert row is not None
+    assert (row["steps"], row["kind"], row["tool"], row["files"], row["rules"]) == (
+        1,
+        "read",
+        None,
+        1,
+        1,
+    )
+
+
 def test_live_two_sessions_share_file_and_rule_nodes(neo4j_test_env: Path) -> None:
     store = GraphStore()
     store.start(neo4j_test_env)

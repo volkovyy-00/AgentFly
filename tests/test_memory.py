@@ -206,3 +206,65 @@ def test_golden_scenarios(scenario: dict[str, Any]) -> None:
         assert got["hidden"] == want["hidden"], case
         assert orders(got["flagged"]) == want["flagged"], case
         assert got["marked_order"] == want["marked_order"], case
+
+
+# ---------------------------------------------------------------- replace (V2c: a merged step)
+
+
+def rec(order: int, kind: str = "tool", verdict: str = "allowed", **fields: Any) -> StepRecord:
+    return StepRecord(
+        session_id="s", started_at="t", order=order, time="t", kind=kind, verdict=verdict, **fields
+    )
+
+
+def window(memory: MemorySteps, limit: int = 50) -> dict[str, Any]:
+    return memory.snapshot(limit=limit)
+
+
+def test_replace_swaps_the_step_and_moves_the_counts() -> None:
+    memory = MemorySteps()
+    memory.append_from_record(rec(1, tool="Shell"))
+    memory.append_from_record(rec(2, "read"))
+    memory.replace_from_record(rec(1, tool="Shell"), rec(1, "shell", "blocked", command="ls"))
+    body = window(memory, 1)
+    assert [s["order"] for s in body["steps"]] == [2]
+    assert body["hidden"] == {**ZERO_HIDDEN, "total": 1, "shell": 1, "blocked": 1}
+    assert [s["kind"] for s in memory.snapshot(all_steps=True)["steps"]] == ["shell", "read"]
+
+
+def test_replace_follows_the_marking_step() -> None:
+    memory = MemorySteps()
+    memory.append_from_record(rec(1), marks=True)
+    memory.replace_from_record(rec(1), rec(1, "read", file_path="a"))
+    assert window(memory)["marked_order"] == 1
+    memory.append_from_record(rec(2))
+    memory.replace_from_record(rec(2), rec(2, "read"), marks=True)  # the chat was marked before
+    assert window(memory)["marked_order"] == 1
+
+
+def test_replace_marks_when_the_second_half_is_the_marking_one() -> None:
+    memory = MemorySteps()
+    memory.append_from_record(rec(1))
+    memory.replace_from_record(rec(1), rec(1, "read"), marks=True)
+    assert window(memory)["marked_order"] == 1
+
+
+def test_replace_of_an_evicted_step_only_moves_the_counts() -> None:
+    memory = MemorySteps(cap=2)
+    for order in (1, 2, 3):
+        memory.append_from_record(rec(order))
+    memory.replace_from_record(rec(1), rec(1, "edit"))
+    body = window(memory, 1)
+    assert [s["order"] for s in body["steps"]] == [3]
+    assert (body["hidden"]["total"], body["hidden"]["edit"], body["hidden"]["tool"]) == (
+        2,
+        1,
+        1,
+    )  # steps 1 (now edit) and 2 are out of the window
+    assert [s["order"] for s in memory.snapshot(all_steps=True)["steps"]] == [2, 3]
+
+
+def test_replace_of_an_unknown_step_is_added() -> None:
+    memory = MemorySteps()
+    memory.replace_from_record(rec(4), rec(4, "read"))
+    assert [s["order"] for s in memory.snapshot(all_steps=True)["steps"]] == [4]

@@ -318,6 +318,7 @@ def test_a_second_secret_read_in_a_marked_chat_is_still_flagged_sensitive(
 ) -> None:
     post(client, hook_shell("cat .env", "again"))
     post(client, hook_shell("cat ~/.aws/credentials", "again"))
+    assert local_store.flush()  # the writer saves in the background; read after it has
     steps = client.get("/api/sessions/again/steps").json()["steps"]
     assert [s["sensitive"] for s in steps] == [True, True]
 
