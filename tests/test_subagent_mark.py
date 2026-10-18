@@ -328,6 +328,118 @@ def test_the_fallback_survives_a_restart(rec: Recorder, clock: Clock) -> None:
     assert rec.curl("NEW") == "allow"
 
 
+# ---------------------------------------------------------------- marks only get stricter (F5)
+
+
+def flood_with_tasks(rec: Recorder, count: int = 2500) -> None:
+    """Other chats start `count` Task calls; disk writes are skipped, only memory matters."""
+    store = rec.store
+    store.save = lambda: None  # type: ignore[method-assign]
+    store.save_links = lambda: None  # type: ignore[method-assign]
+    try:
+        for number in range(count):
+            rec.task("OTHER", f"flood-{number}", workspace_roots=["/elsewhere"])
+    finally:
+        del store.save, store.save_links
+    store.save()
+    store.save_links()
+
+
+def test_an_unknown_parent_call_does_not_release_a_chat_inside_its_fallback(
+    rec: Recorder, clock: Clock
+) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    assert rec.curl("NEW") == "deny"
+    assert rec.curl("NEW", parent_tool_call_id="BOGUS") == "deny"
+    clock.advance(FALLBACK_SECONDS - MINUTE)
+    assert rec.curl("NEW", parent_tool_call_id="OTHER-BOGUS") == "deny"
+    clock.advance(2 * MINUTE)
+    assert rec.curl("NEW") == "allow"  # the 30 minutes (D21) still end it
+
+
+def test_a_marked_chat_stays_marked_after_it_names_a_parent_call(rec: Recorder) -> None:
+    rec.read_env("A")
+    assert rec.curl("A", parent_tool_call_id="BOGUS") == "deny"
+    assert rec.curl("A") == "deny"
+
+
+def test_a_child_keeps_its_first_parent_when_it_names_another_call(rec: Recorder) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    assert rec.child_curl("C", "T1") == "deny"
+    assert rec.child_curl("C", "T9") == "deny"
+    assert rec.child_curl("C", "T1") == "deny"
+
+
+def test_a_child_that_names_a_different_call_first_is_not_freed_by_the_real_one(
+    rec: Recorder,
+) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    rec.task("Q", "T2", workspace_roots=["/elsewhere"])  # an unmarked chat elsewhere
+    assert rec.child_curl("C", "T2") == "allow"  # its first link: a child of Q
+    assert rec.child_curl("C", "T1") == "allow"  # a later, different link does not move it
+
+
+def test_a_second_task_with_the_same_call_id_does_not_move_the_link(rec: Recorder) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    rec.task("Q", "T1", workspace_roots=["/elsewhere"])  # the same id again, from an unmarked chat
+    assert rec.child_curl("C", "T1") == "deny"
+    assert rec.store.calls["T1"] == "P"
+
+
+def test_a_child_stays_denied_after_2500_task_calls_from_other_chats(rec: Recorder) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    assert rec.child_curl("C", "T1") == "deny"
+    flood_with_tasks(rec)
+    assert len(rec.store.calls) <= 2000  # the memory of calls stays bounded
+    assert rec.child_curl("C", "T1") == "deny"
+    rec.restart()
+    assert rec.child_curl("C", "T1") == "deny"
+
+
+def test_a_call_a_child_named_before_the_task_is_not_forgotten(rec: Recorder) -> None:
+    rec.read_env("P")
+    assert rec.child_curl("C", "T1") == "allow"  # nothing says whose child it is yet
+    rec.started("P", "T1")
+    flood_with_tasks(rec)
+    rec.restart()
+    assert rec.child_curl("C", "T1") == "deny"
+
+
+def test_a_task_no_child_has_named_yet_is_not_forgotten(rec: Recorder) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    flood_with_tasks(rec)
+    rec.restart()
+    assert rec.child_curl("C", "T1") == "deny"
+
+
+def test_naming_a_pending_call_from_another_link_leaves_the_workspace_fallback(
+    rec: Recorder,
+) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")  # pending: no child has named it
+    rec.curl("Y", parent_tool_call_id="T9", workspace_roots=["/elsewhere"])  # Y's own link
+    rec.curl("Y", parent_tool_call_id="T1", workspace_roots=["/elsewhere"])
+    assert rec.curl("NEW") == "deny"
+
+
+def test_a_stale_copy_of_a_session_never_clears_a_mark_or_a_link(rec: Recorder) -> None:
+    rec.read_env("P")
+    rec.task("P", "T1")
+    rec.child_curl("C", "T1")
+    stale = Session(id="C", marked=False, start_time="t", next_step=9)
+    rec.store.put(stale)
+    kept = rec.store.get("C")
+    assert kept is not None and kept.parent_call == "T1" and kept.parent_id == "P"
+    rec.store.put(Session(id="P", marked=False, start_time="t", next_step=9))
+    assert rec.curl("P") == "deny"
+
+
 # ---------------------------------------------------------------- what the rules may use
 
 

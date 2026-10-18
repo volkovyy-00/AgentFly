@@ -126,6 +126,11 @@ FUZZ: dict[str, bytes] = {
     "nested 100000 objects": b'{"a":' * 100_000 + b"1" + b"}" * 100_000,
     "random bytes": _RANDOM,
     "nul bytes": b"\x00" * 1000,
+    # file targets of every wrong type: the path check must ignore them, not fail
+    "odd file_path": b'{"hook_event_name":"beforeReadFile","file_path":[1,{"a":null}],"cwd":5}',
+    "odd attachments": b'{"hook_event_name":"beforeReadFile","attachments":[1,{"file_path":9}]}',
+    "odd tool_input": b'{"hook_event_name":"preToolUse","tool_input":{"file_path":{},"path":7}}',
+    "nul in file_path": b'{"hook_event_name":"beforeReadFile","file_path":"/p/a\\u0000b"}',
 }
 
 

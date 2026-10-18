@@ -309,7 +309,8 @@ def guard_reason(text: str) -> str | None:
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
         plain = plain.replace("//", "/")
-    plain = plain.replace("/./", "/")
+    while "/./" in plain:  # `/././` needs more than one pass
+        plain = plain.replace("/./", "/")
     if "/.." in plain:  # `~/.config/x/../agentfly`: resolve each word that has a `..`
         plain += " " + " ".join(os.path.normpath(w) for w in plain.split() if "/.." in w)
     if any(path in plain for path in _GUARD_PATHS):
@@ -317,12 +318,70 @@ def guard_reason(text: str) -> str | None:
     return "outbound" if _outbound_words(words(text), folded) else None
 
 
+# What a file tool names: `tool_input` of `preToolUse`, `file_path` and attachments of
+# `beforeReadFile`, and the folder a call runs in (R0 checks `cwd` too). Values are a string or a
+# list of strings; a relative target is also tried under each folder.
+_PATH_KEYS: tuple[str, ...] = (
+    "file_path",
+    "path",
+    "paths",
+    "target_file",
+    "target_directory",
+    "target_directories",
+    "target_notebook",
+)
+_DIR_KEYS: tuple[str, ...] = ("cwd", "working_directory")
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def file_targets(payload: dict[str, Any]) -> list[str]:
+    """Paths the action names, whatever the event. Only strings; other shapes are ignored."""
+    tool_input: Any = payload.get("tool_input")
+    sources: list[Any] = [payload, tool_input]
+    found: list[str] = []
+    attachments: Any = payload.get("attachments")
+    if isinstance(attachments, list):
+        for item in attachments:
+            if isinstance(item, str):
+                found.append(item)
+            else:
+                sources.append(item)
+    folders: list[str] = []
+    for source in sources:
+        if isinstance(source, dict):
+            for key in _PATH_KEYS:
+                found += _strings(source.get(key))
+            for key in _DIR_KEYS:
+                folders += _strings(source.get(key))
+    found += [os.path.join(f, t) for f in folders for t in found if not t.startswith("/")]
+    return found + folders
+
+
+def path_guard_reason(path: str) -> str | None:
+    """'guard_path' if the path, with case, `\\`, `//`, `/./` and `..` resolved, is a guard path."""
+    plain: str = path.casefold().replace("\\", "")
+    try:
+        forms: list[str] = [plain, os.path.normpath(plain)]
+    except ValueError:  # a NUL byte
+        forms = [plain]
+    return "guard_path" if any(g in form for g in _GUARD_PATHS for form in forms) else None
+
+
+def files_reason(payload: dict[str, Any]) -> str | None:
+    return next((r for r in map(path_guard_reason, file_targets(payload)) if r), None)
+
+
 def deny_answer(reason: str) -> dict[str, str]:
     what: str = (
         "touches AgentFly's own files" if reason == "guard_path" else "sends data off this computer"
     )
     message: str = (
-        f"AgentFly's recorder is not running, so this command, which {what}, is blocked. "
+        f"AgentFly's recorder is not running, so this action, which {what}, is blocked. "
         "Run `agentfly start`, then try again."
     )
     return {
@@ -511,6 +570,9 @@ def ask_recorder(payload: dict[str, Any], event: str, start: float) -> dict[str,
         if shell:  # a missing or odd event name, or a command that is not a string, still counts
             text = command if isinstance(command, str) else json.dumps(command, default=str)
         answer, guard = offline_answer(text)
+        guard = guard or files_reason(payload)
+        if guard:
+            answer = deny_answer(guard)
         count_offline_answer()
         record.update(
             decision=answer["permission"], offline=True, reason="recorder_unreachable", guard=guard

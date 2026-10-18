@@ -590,7 +590,10 @@ token is never treated as an allow.
   one-liner (whatever it contains), and the same commands wrapped in `bash -c`,
   `env` or `sudo`. Sending to your own computer (`localhost`, private
   addresses) is allowed;
-- it **denies** commands that touch AgentFly's guard paths (R0);
+- it **denies** commands that touch AgentFly's guard paths (R0), and any Read, Write
+  or Edit (every file tool, `StrReplace` and `Delete` included) whose target is a
+  guard path: the `file_path` of a read, an attachment or a tool's input, with case,
+  `~`, `//`, `/./` and `..` resolved (D4);
 - it **allows** everything else and writes down that it did so. Cursor shows
   nothing for an allow with a message (S1), so the visible signals are the
   health strip and the log, not a message in the chat;

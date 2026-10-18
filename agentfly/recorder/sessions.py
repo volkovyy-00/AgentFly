@@ -19,7 +19,9 @@ from agentfly.recorder.rules import Session, mark
 # D21 A fallback: a marked chat starts a Task and no child event names it, so a new chat in the
 # same workspace inherits the mark for this long (counted from the Task).
 FALLBACK_SECONDS: float = 30 * 60
-_MAX_CALLS: int = 2000  # remembered Task calls; the oldest are forgotten first
+# Remembered Task calls; the oldest are forgotten first, except calls a chat points to or that no
+# child has named yet (forgetting those would free a subagent from its parent's mark).
+_MAX_CALLS: int = 2000
 _MAX_DEPTH: int = 32  # parent links followed when asking whether a chat is marked
 _UNKNOWN: str = "unknown"  # `apply_rules` maps a missing conversation id to this shared name
 
@@ -165,7 +167,20 @@ class SessionStore:
         return created
 
     def put(self, session: Session) -> None:
-        """Replace session and persist (call when marked/next_step change)."""
+        """Replace session and persist (call when marked/next_step change).
+
+        Marks only get stricter: a stale copy never clears a mark, shortens a fallback or
+        replaces a parent link that is already set.
+        """
+        old: Session | None = self._sessions.get(session.id)
+        if old is not None:
+            session = replace(
+                session,
+                marked=session.marked or old.marked,
+                inherited_until=max(session.inherited_until, old.inherited_until),
+                parent_call=old.parent_call or session.parent_call,
+                parent_id=old.parent_id or session.parent_id,
+            )
         self._sessions[session.id] = session
         self.save()
 
@@ -198,16 +213,19 @@ class SessionStore:
             )
             self._sessions[sid] = session
             changed = True
-        elif call and session.parent_call != call:
-            session = replace(session, parent_call=call, inherited_until=0.0)
+        elif call and not session.parent_call:
+            # The first link sticks and a fallback mark is never cut short: no later event, whatever
+            # call id it names, may move the link or release the chat.
+            session = replace(session, parent_call=call)
             self._sessions[sid] = session
             changed = True
-        if call and self.pending.pop(call, None) is not None:
+        link: str = session.parent_call
+        if call and call == link and self.pending.pop(call, None) is not None:
             links_changed = True  # a child event linked this Task: no fallback needed
         if linkable:
             links_changed |= self.register_task(payload, sid)
-        if call in self.calls and not session.parent_id:
-            self._sessions[sid] = session = replace(session, parent_id=self.calls[call])
+        if link in self.calls and not session.parent_id:
+            self._sessions[sid] = session = replace(session, parent_id=self.calls[link])
             changed = True
         if changed or links_changed:
             self.propagate()
@@ -230,11 +248,10 @@ class SessionStore:
             return False
         if not call or parent == _UNKNOWN:
             return False
-        changed: bool = self.calls.get(call) != parent
+        changed: bool = call not in self.calls  # the first parent named stays (never moved)
         if changed:
             self.calls[call] = parent
-            while len(self.calls) > _MAX_CALLS:
-                del self.calls[next(iter(self.calls))]
+            self.forget_old_calls(keep=call)
         started: Session | None = self._sessions.get(parent)
         linked: bool = any(s.parent_call == call for s in self._sessions.values())
         if call not in self.pending and not linked and started and self.effective_marked(started):
@@ -245,6 +262,22 @@ class SessionStore:
             }
             changed = True
         return self.prune_pending() or changed
+
+    def forget_old_calls(self, keep: str) -> None:
+        """Drop the oldest calls over `_MAX_CALLS`, never `keep`, a linked or a pending one."""
+        excess: int = len(self.calls) - _MAX_CALLS
+        if excess <= 0:
+            return
+        held: set[str] = {s.parent_call for s in self._sessions.values()}
+        held |= {keep, *self.pending}
+        victims: list[str] = []
+        for call in self.calls:  # oldest first; usually the first one goes
+            if len(victims) == excess:
+                break
+            if call not in held:
+                victims.append(call)
+        for call in victims:
+            del self.calls[call]
 
     def prune_pending(self) -> bool:
         now: float = self.clock()
