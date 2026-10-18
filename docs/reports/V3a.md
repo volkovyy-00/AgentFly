@@ -1,11 +1,20 @@
 # V3a: System install: `agentfly init -g` and `agentfly uninstall`
-Status: done (as of 2026-10-18 21:10)
-Result: init -g, repair, idempotence, merge, uninstall work on the owner's Intel Mac (Cursor 3.25.9). Follow-up done: main merged; the hook client now strips subagentStart `task` (and keeps only ids and names on session events). Manual results unchanged.
-Evidence: merge d22f803 plus the follow-up commit on ag-v3a-install; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1903 passed, 4 skipped; test_a_planted_task_text_in_a_session_event_never_leaves_the_client (3 events).
+Status: done (as of 2026-10-18 21:40)
+Result: init -g, repair, idempotence, merge, uninstall work on the owner's Intel Mac (Cursor 3.25.9). main (V1b, V5a, V6) merged; `agentfly --help` lists serve, wipe, init, uninstall; hook client strips subagentStart `task`. Manual results unchanged.
+Evidence: second merge of main (V6 4d31e3d) on ag-v3a-install; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1978 passed, 4 skipped; conflict only in agentfly/cli/__init__.py (all four commands kept).
 Needs owner: none. For the lead: R1 can miss "read then curl" when the agent sends both in one step; a missing interpreter fails open (exit 127), not deny-all. Details below.
-Details: see "## 2026-10-18 21:10" below.
+Details: see "## 2026-10-18 21:40" below.
 
 
+
+
+## 2026-10-18 21:40
+
+### Follow-up 2: merge of V6
+- `git merge main` (V6 merged, 4d31e3d). One conflict, `agentfly/cli/__init__.py`: resolved with `from agentfly.cli import init, serve, uninstall, wipe` and the four `add_parser` lines (serve, wipe, init, uninstall).
+- README.md merged without conflict: the Installation section (init -g, uninstall, restart Cursor, developer note) and V6's "Local history", "Local state" and Neo4j text are all present.
+- `uv run agentfly --help` lists `serve`, `wipe`, `init`, `uninstall`.
+- `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1978 passed, 4 skipped.
 
 ## 2026-10-18 21:10
 
