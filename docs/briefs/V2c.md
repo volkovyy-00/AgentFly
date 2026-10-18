@@ -4,7 +4,7 @@ You are a worker on card V2c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 
 **Summary.** One agent action often fires two Cursor hooks (a general `preToolUse` and a specific one such as `beforeShellExecution` or `beforeReadFile`), so the live trail and the history show it twice. Make each action one step, without changing what any hook answers.
 
-**Written against:** a3d1abd (2026-10-18), plus F6 once merged.
+**Written against:** 83f8e7b (2026-10-18, F3, F5 and F6 merged).
 
 **What was observed (2026-10-18, owner's hook log, Cursor 3.25.9 unless noted; counts only)**
 - `beforeShellExecution` carried the same `tool_use_id` as its `preToolUse` Shell in 34 of 34 pairs (one on 3.24.12), and `beforeReadFile` matched its `preToolUse` Read in 28 of 28; all 59 read paths were absolute.
@@ -22,6 +22,7 @@ You are a worker on card V2c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 - Events of one chat (`conversation_id`) with the same `tool_use_id` form one step, for every event kind, however many there are. Id-less fallback, same chat and normalised (`posixpath.normpath`) absolute path, within 5 s: a `beforeReadFile` joins the oldest unpaired `preToolUse` Read; an `afterFileEdit` joins the latest `preToolUse` Write. The waiting list is in memory only, expires and holds at most 32 per chat (oldest dropped). No pair: separate steps, as today.
 - The second half updates the existing step (same order number, same step id); nothing is renumbered or re-linked. The merged step takes file and command from the specific event and is kind `edit` if any half writes (`preToolUse` Write or `afterFileEdit`), else the specific event's kind; its verdict is the strictest among gate events only (blocked > warned > highlighted > allowed; `afterFileEdit` never raises it), and it is marked when either half marked.
 - Rules still decide every event on its own; hook answers and their timing do not change.
+- Also fix the flaky `tests/test_localstore.py` § `test_a_second_secret_read_in_a_marked_chat_is_still_flagged_sensitive`: it reads history before the background writer has saved (no `local_store.flush()`), and failed once in a full run on 2026-10-18.
 - Touches: `agentfly/recorder/` (app, memory, store, localstore), their tests, SPEC.md § 8 "Duplicates", AGENTS.md "Hook facts" and "Testing".
 - Not included: a path fallback for MCP, a live MCP test, saving the waiting list across a restart, re-merging duplicate steps already saved, the page's UI code.
 
@@ -31,5 +32,6 @@ You are a worker on card V2c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 - A merged step shows the specific event's kind and file or command, the strictest gate verdict and its read's marked state on the page and in history; page counts count it once; an `afterFileEdit` never turns an allowed edit into blocked.
 - Every hook answer for a replayed session is byte-identical with and without the merge, and a made-up MCP pair with one `tool_use_id` gives one step.
 - The capture in `docs/spikes/V2c-capture.md`, replayed as a fixture, gives its five expected steps, the create and the edit each one `edit` step; SPEC § 8 "Duplicates" and AGENTS.md "Hook facts" state the 3.25.9 findings.
+- No history test reads `/api/sessions` or its steps before the background writer has saved; the full check passes in three runs in a row.
 
-**Dependencies:** F6 merged.
+**Dependencies:** F6 ✅ (merged 61bb9a3).

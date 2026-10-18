@@ -96,6 +96,9 @@ V7 and V9 can run in parallel.
 - V5a ✅ 2026-10-18 · docs/reports/V5a.md · merged 75c7c0e · fallback mark expires after 30 min (owner, D21) · body: git show 8b1258a:docs/BOARD.md
 - V6 ✅ 2026-10-18 · docs/reports/V6.md · merged 4d31e3d · Neo4j opt-in (config.toml); session events reach the D21 link (follow-up 1bc5aa3) · body: git show 8b1258a:docs/BOARD.md
 - V3a ✅ 2026-10-18 · docs/reports/V3a.md · merged 3fdf2f1 · Intel x86_64 build; Cursor 3.24.12 and 3.25.9 (exact list); R1 10/10 sandboxed and not; hook client strips subagentStart.task · body: git show 8b1258a:docs/BOARD.md
+- F5 ✅ 2026-10-18 · docs/reports/F5.md · merged 4310f97 · offline guard covers file targets (D4 note); marks only get stricter · body: git show 2ad871e:docs/BOARD.md
+- F6 ✅ 2026-10-18 · docs/reports/F6.md · merged 61bb9a3 · history marked = R1; wipe bounded 10 s; purge cuts WAL; flaky test (no flush) in test_localstore folded into V2c (owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
+- F3 ✅ 2026-10-18 · docs/reports/F3.md · merged 83f8e7b · uninstall stop points exit 0 or 127; failed restore keeps old Python in `.old-*`, path printed (accepted by the owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -106,25 +109,13 @@ V7 and V9 can run in parallel.
 ## v1 cards
 
 ### V2c · One step per action: merge by `tool_use_id`, path fallback for id-less reads
-- **Brief:** `docs/briefs/V2c.md` (authoritative, once written). Scope per the D9 merge-rule note (owner 2026-10-18).
-- **Lane:** backend, after F6 (both change `localstore.py`) · **Depends on:** V2b ✅, V6 ✅, F6, the owner's 3.25.9 edit capture
-
-### F3 · Install fixes from the V3a review (safe uninstall order, foreign entries, backups)
-- **Brief:** `docs/briefs/F3.md` (authoritative). From the post-merge review, 2026-10-18.
-- **Lane:** backend, ∥ F5 and F6; before V3b · **Depends on:** V3a ✅
-
-### F5 · Offline guard on file targets; marks only get stricter
-- **Brief:** `docs/briefs/F5.md` (authoritative). Owner 2026-10-18: guard denies Read/Write/Edit of guard paths (D4 note).
-- **Lane:** backend, ∥ F3 and F6; before V5b · **Depends on:** V5a ✅
-
-### F6 · History fixes from the V6 review (true "marked", wipe, retention, tests)
-- **Brief:** `docs/briefs/F6.md` (authoritative). From the post-merge review, 2026-10-18.
-- **Lane:** backend, ∥ F3 and F5 · **Depends on:** V6 ✅
+- **Brief:** `docs/briefs/V2c.md` (authoritative). Scope per the D9 merge-rule note (owner 2026-10-18).
+- **Lane:** backend, after F6 (both change `localstore.py`) · **Depends on:** V2b ✅, V6 ✅, F6 ✅, the owner's 3.25.9 edit capture ✅ (`docs/spikes/V2c-capture.md`)
 
 ### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
 - **Owner:** worker-backend · brief to write after V3a merges
 - **Lane:** backend, after V3a; ∥ V5b
-- **Depends on:** V3a ✅, F3
+- **Depends on:** V3a ✅, F3 ✅
 - **May touch:** new `agentfly/cli/{start,stop,status,doctor}.py`; `agentfly/install/`;
   `agentfly/cli/uninstall.py` (also removes the service); README "Install";
   `tests/test_install_*.py`; the `agentfly/cli/__init__.py` merge point.
@@ -168,7 +159,7 @@ V7 and V9 can run in parallel.
 ### V5b · Rules file, rule kinds, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
 - **Owner:** worker-backend · brief to write after V5a merges
 - **Lane:** backend, after V5a; ∥ V3b
-- **Depends on:** V5a ✅, V3a ✅ (`init -g` installs the active rules file), F5
+- **Depends on:** V5a ✅, V3a ✅ (`init -g` installs the active rules file), F5 ✅
 - **May touch:** `agentfly/recorder/rules.py`; new `agentfly/recorder/rulefile.py`;
   packaged `agentfly/rules/default.toml`; new `agentfly/cli/{rules_check,rules_test}.py`;
   new `agentfly/recorder/api/rules.py`; the rules step in `agentfly/install/`;
