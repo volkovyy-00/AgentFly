@@ -55,6 +55,18 @@ _MCP_KEEP: tuple[str, ...] = (
     "server",
     "server_name",
 )
+# Session events (the subagent's `task` is its prompt text): only the common fields, ids and names.
+_SESSION_EVENTS: frozenset[str] = frozenset({"sessionStart", "sessionEnd", "subagentStart"})
+_SESSION_KEEP: tuple[str, ...] = (
+    *_MCP_KEEP,
+    "cursor_version",
+    "user_email",
+    "transcript_path",
+    "tool_call_id",
+    "subagent_id",
+    "subagent_type",
+    "is_parallel_worker",
+)
 _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell the user."
 
 # Offline guard (SPEC section 9): a word-level copy of what agentfly/recorder/rules.py treats as
@@ -141,7 +153,10 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
     out: dict[str, Any] = dict(payload)
     tool_input: Any = out.pop("tool_input", None)
     tool_name: str = str(out.get("tool_name", "")).lower()
-    if event == "beforeMCPExecution" or (event == "preToolUse" and tool_name.startswith("mcp")):
+    if event in _SESSION_EVENTS:
+        out = {key: out[key] for key in _SESSION_KEEP if key in out}
+        out["hook_event_name"] = event
+    elif event == "beforeMCPExecution" or (event == "preToolUse" and tool_name.startswith("mcp")):
         out = {key: out[key] for key in _MCP_KEEP if key in out}
         out["hook_event_name"] = event
     else:

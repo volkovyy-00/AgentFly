@@ -1,10 +1,25 @@
 # V3a: System install: `agentfly init -g` and `agentfly uninstall`
-Status: done (as of 2026-10-18 20:30)
-Result: init -g, repair, idempotence, merge and uninstall work for real on the owner's Intel Mac, Cursor 3.25.9: hooks load and fire, R1 denies 11/11 sandboxed and 10/10 unsandboxed, files are locked, uninstall asks for the password. Latency p95 49-51 ms quiet, 76-79 ms under load.
-Evidence: commits 0d69408 and later on ag-v3a-install; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 723 passed, 4 skipped; logs: ~/.local/share/agentfly/logs/events.jsonl and Cursor's Hooks log.
+Status: done (as of 2026-10-18 21:10)
+Result: init -g, repair, idempotence, merge, uninstall work on the owner's Intel Mac (Cursor 3.25.9). Follow-up done: main merged; the hook client now strips subagentStart `task` (and keeps only ids and names on session events). Manual results unchanged.
+Evidence: merge d22f803 plus the follow-up commit on ag-v3a-install; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1903 passed, 4 skipped; test_a_planted_task_text_in_a_session_event_never_leaves_the_client (3 events).
 Needs owner: none. For the lead: R1 can miss "read then curl" when the agent sends both in one step; a missing interpreter fails open (exit 127), not deny-all. Details below.
-Details: see "## 2026-10-18 20:30" below.
+Details: see "## 2026-10-18 21:10" below.
 
+
+
+## 2026-10-18 21:10
+
+### Follow-up from the lead
+1. **Merge.** `git merge main` into ag-v3a-install (merge commit d22f803), no conflicts. The one-line conflict in `agentfly/cli/__init__.py` is expected only when V6 lands.
+2. **`task` stripped.** `agentfly/hook_client.py` `sanitize`: for `sessionStart`, `sessionEnd` and `subagentStart` the copy sent to the recorder (and logged) is an allowlist, `_SESSION_KEEP`: the common fields (`hook_event_name`, `conversation_id`, `session_id`, `generation_id`, `model`, `cwd`, `workspace_roots`, `cursor_version`, `user_email`, `transcript_path`, `tool_use_id`, `parent_tool_call_id`, `parent_conversation_id`) plus `tool_call_id`, `subagent_id`, `subagent_type`, `is_parallel_worker`. So `task`, and any other free-text field on those events (`additional_context`, `error_message`, nested copies), never leaves the client. An allowlist was chosen over adding `task` to `_STRIP_KEYS`: `task` is too common a key name to drop at every depth in other events, and the allowlist also covers fields Cursor adds later. Side effect: `sessionEnd` fields such as `reason` and `duration_ms` are no longer forwarded; the recorder uses none of them today.
+3. **Test.** `tests/test_hook_client.py::test_a_planted_task_text_in_a_session_event_never_leaves_the_client` (for each of the three events): a marker in `task`, `additional_context`, `error_message` and a nested `task` is absent from the request body, the hook log, stderr and stdout; `parent_conversation_id`, `tool_call_id`, `subagent_id`, `subagent_type` and `is_parallel_worker` still reach the recorder.
+4. **Check.** `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1903 passed, 4 skipped.
+
+### Lines AGENTS.md should change (not edited, per the lead)
+- "Commands": add `agentfly init -g` (one sudo; installs the bundled Python and hook client in `/Library/Application Support/AgentFly/` and merges tagged entries into `/Library/Application Support/Cursor/hooks.json`) and `agentfly uninstall` (our entries first, then the folder). Say that `./install.sh` is development only and makes events arrive twice when `init -g` is also installed. Add: quit and reopen Cursor after `init -g` and after `uninstall`; Cursor reads the system file only at start-up and its Settings → Hooks panel does not list system hooks.
+- "Hook client rules": say that session events (`sessionStart`, `sessionEnd`, `subagentStart`) are reduced to an allowlist of ids and names (`task` never leaves the client).
+- "Testing": add `tests/test_install_*.py` (hooks-file splice with fuzz, pinned Python download/extract, Cursor version check, install/repair/uninstall flow on a temporary root, CLI and sudo command line) and the session-event strip test above. `tests/test_install_docs.py` also covers README and `install.sh`.
+- "Hook facts": the Cursor 3.25.9 facts from the manual check (the 8 enterprise hooks load; the Hooks log lines `Loaded N enterprise hook(s)` / `No enterprise hooks configuration found`; a missing interpreter makes the command exit 127 and Cursor lets the action through).
 
 ## 2026-10-18 20:30
 
