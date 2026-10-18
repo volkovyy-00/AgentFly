@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import plistlib
 import sys
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
+from types import TracebackType
+from typing import Any
+from unittest import mock
 
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
@@ -92,3 +97,57 @@ def write_archive(folder: Path, data: bytes) -> tuple[Path, PythonBuild]:
     path = folder / "fake-python.tar.gz"
     path.write_bytes(data)
     return path, build_for(data)
+
+
+class FsOps:
+    """Count the file-system calls that change a tree, and optionally stop at one of them.
+
+    `before(number, name, args, kwargs)` runs ahead of every call (1-based); raise from it to
+    stop there. Only `os.rename/replace/unlink/rmdir/remove` are wrapped, which is all that
+    `shutil.rmtree`, `Path.unlink` and our atomic writes use. Keep the `with` block tight.
+    """
+
+    NAMES = ("rename", "replace", "unlink", "rmdir", "remove")
+
+    def __init__(
+        self, before: Callable[[int, str, tuple[Any, ...], dict[str, Any]], None] | None = None
+    ) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        self._before = before
+        self._patches: list[Any] = []
+
+    def __enter__(self) -> FsOps:
+        for name in self.NAMES:
+            self._patches.append(mock.patch.object(os, name, self._wrap(name, getattr(os, name))))
+        for patch in self._patches:
+            patch.start()
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        value: BaseException | None,
+        trace: TracebackType | None,
+    ) -> None:
+        for patch in reversed(self._patches):
+            patch.stop()
+        self._patches.clear()
+
+    def _wrap(self, name: str, real: Callable[..., Any]) -> Callable[..., Any]:
+        def call(*args: Any, **kwargs: Any) -> Any:
+            self.calls.append((name, args, kwargs))
+            if self._before is not None:
+                self._before(len(self.calls), name, args, kwargs)
+            return real(*args, **kwargs)
+
+        return call
+
+
+def stop_at(number: int, error: BaseException) -> Callable[..., None]:
+    """A `before` hook that raises `error` ahead of call `number`."""
+
+    def before(count: int, name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        if count == number:
+            raise error
+
+    return before

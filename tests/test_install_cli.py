@@ -181,3 +181,37 @@ def test_init_repairing_only_the_client_does_not_download_the_python_again(
     )
     assert main(["init", "-g"]) == 0
     assert calls == [(["init", "-g"], subprocess.DEVNULL)]
+
+
+def test_a_filesystem_error_during_uninstall_is_one_line_and_a_failure(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path, build = write_archive(tmp_path / "dl", fake_python_tar())
+    installer.install(
+        system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+    )
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise PermissionError(1, "Operation not permitted", str(system.system_root))
+
+    monkeypatch.setattr(uninstall.os, "geteuid", lambda: 0)  # take the root branch, no sudo
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+    assert main(["uninstall"]) == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and err.startswith("agentfly uninstall:")
+    assert "Operation not permitted" in err and "Traceback" not in err
+
+
+def test_an_oserror_that_escapes_the_installer_is_still_one_line(
+    system: Layout, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(layout: Layout) -> bool:
+        raise OSError(13, "Permission denied", "/Library/Application Support/AgentFly")
+
+    monkeypatch.setattr(installer, "is_installed", broken)
+    assert main(["uninstall"]) == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and "Permission denied" in err and "Traceback" not in err

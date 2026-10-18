@@ -76,7 +76,9 @@ agentfly init -g                          # asks for your password once
 `/Library/Application Support/AgentFly/` (root-owned, not writable by your user), writes a hash
 record there, and adds AgentFly's hooks to Cursor's system-wide
 `/Library/Application Support/Cursor/hooks.json`. Other tools' entries in that file are left as
-they are, and a backup of the old file is kept. It writes nothing and exits with an error if the
+they are, and a timestamped backup of the old file is kept beside it, in
+`/Library/Application Support/Cursor/agentfly-backups/` (every rewrite of that file takes one
+first, and `uninstall` leaves them). It writes nothing and exits with an error if the
 installed Cursor version, or any hook event, is not one AgentFly has verified, or if the download
 fails its checksum. Running it twice changes nothing and needs no password the second time.
 Quit and reopen Cursor afterwards so it loads the hooks. Its Settings → Hooks panel does not list
@@ -93,8 +95,13 @@ To remove everything, run this **before** `uv tool uninstall`:
 agentfly uninstall                  # asks for your password once
 ```
 
-It removes AgentFly's hook entries first and then its system folder, and leaves other tools'
-entries alone. Until you run it, the installed hook client keeps guarding Cursor. **Quit and
+It removes AgentFly's hook entries first, then moves its system folder out of the way and
+deletes it, so an interrupted run never leaves Cursor denying every action. Other tools' entries
+are left alone, and if the file is unchanged since `init -g` it is given back byte for byte. It
+refuses, and changes nothing, if another entry still runs files from AgentFly's folder or the
+hooks file cannot be read as JSON but names that folder. A file-system error ends with a
+one-line message; run `agentfly uninstall` again. Until you run it, the installed hook client
+keeps guarding Cursor. **Quit and
 reopen Cursor afterwards:** it keeps its old hook list until it restarts, and in the meantime
 its calls to the removed client fail (exit 127), which lets every action through.
 
