@@ -13,7 +13,7 @@ Pending decisions: D16
 - V4 not started: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 needs a tap (not a bare .rb path). Revisit V4's checks before briefing.
 
 ## In flight
-- V3a · worker (follow-up done 1d622f5; now: merge main again for V6's cli/__init__.py) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
+- V3a · worker, last merge-main step · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
 
 ## Machine state (verified 2026-10-18 17:53 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`). V3a's manual checks move it aside and restore it.
