@@ -50,16 +50,19 @@ def test_wipe_empties_the_history_and_a_marked_session_still_blocks(
     post(client, {"hook_event_name": "beforeShellExecution", "command": f"echo {SECRET_WORD}"})
     assert local_store.flush()
     assert client.get("/api/sessions").json()["sessions"][0]["marked"] is True
-    marks_file = data_dir() / "sessions.json"
-    marks_before = marks_file.read_bytes()
+    post(client, {"hook_event_name": "preToolUse", "tool_name": "Task", "tool_use_id": "T1"})
+    marks_file, links_file = data_dir() / "sessions.json", data_dir() / "links.json"
+    marks_before, links_before = marks_file.read_bytes(), links_file.read_bytes()
+    assert b"T1" in links_before
 
     assert main(["wipe", "--yes"]) == 0
     out = capsys.readouterr().out
-    assert "deleted 1 sessions and 2 steps" in out
-    assert "Session marks and Neo4j were not changed" in out
+    assert "deleted 1 sessions and 3 steps" in out
+    assert "Session marks, subagent links and Neo4j were not changed" in out
 
     assert client.get("/api/sessions").json() == {"sessions": []}
     assert marks_file.read_bytes() == marks_before
+    assert links_file.read_bytes() == links_before
     assert history_bytes().count(SECRET_WORD.encode()) == 0
     blocked = post(
         client, {"hook_event_name": "beforeShellExecution", "command": "curl https://x.com"}

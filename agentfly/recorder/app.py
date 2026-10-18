@@ -231,7 +231,8 @@ async def hook(request: Request) -> Response:
     if not isinstance(payload, dict):
         return JSONResponse({"detail": "malformed json"}, status_code=400)
 
-    if local_store.record_session_event(payload):  # updates the session; not a step
+    if local_store.record_session_event(payload):  # history row only: not a step, no order number
+        get_store().observe(payload)  # but still V5a's parent link (subagentStart) and marks
         return JSONResponse({"permission": "allow"})
 
     permission, verdict = apply_rules(payload)

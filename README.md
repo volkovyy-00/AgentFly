@@ -8,8 +8,8 @@ AgentFly is a local black box for the Cursor agent. Cursor
 [hooks](https://cursor.com/docs/hooks) send every agent action (file reads,
 shell commands, tool calls, edits) to a small server on your laptop. The
 server checks each action against a few rules and answers allow or deny before
-the action runs. It also keeps a cleaned record of each step, which can be
-saved to Neo4j and drawn as a graph.
+the action runs. It also keeps a cleaned record of each step on your Mac, in a
+local history file, and can copy it to Neo4j if you turn that on.
 
 ## Features
 
@@ -23,14 +23,19 @@ saved to Neo4j and drawn as a graph.
   [Command cleaning](#command-cleaning)).
 - **Fast, local decisions.** The block decision uses in-memory state only and
   never waits for the network or the database.
-- **Graph history (optional).** Steps are written to Neo4j in the background,
-  so you can query them across sessions.
+- **Local history.** Steps are written in the background to a SQLite file on
+  your Mac (`history.db`, kept 28 days), so past sessions survive a restart.
+  `GET /api/sessions` and `GET /api/sessions/{id}/steps` list them; `agentfly
+  wipe` deletes them.
+- **Graph history (optional, off by default).** With `neo4j = true` in
+  `~/.config/agentfly/config.toml`, steps are also written to Neo4j, so you can
+  query them across sessions.
 
 ## How it works
 
 ```
-Cursor agent → agentfly-hook → local server (127.0.0.1:8787) → Neo4j (optional)
-  (acts)       (Cursor runs it   (marks the session, applies    (background copy)
+Cursor agent → agentfly-hook → local server (127.0.0.1:8787) → history.db, Neo4j (optional)
+  (acts)       (Cursor runs it   (marks the session, applies    (background copies)
                before each step)  rules, answers allow/deny)
 ```
 
@@ -55,7 +60,7 @@ These files count as sensitive (decided by file name only):
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - [Cursor](https://cursor.com) with hooks support (verified on Cursor 3.5.17)
 - Optional: a [Neo4j AuraDB](https://neo4j.com/cloud/aura/) Free instance for
-  the graph copy
+  the graph copy (also needs `neo4j = true`, see [Configuration](#configuration))
 
 ## Installation
 
@@ -128,7 +133,8 @@ home page: every step with an allow, warn or block badge, routine runs of allowe
 steps folded into one row, blocks, warnings and secret reads never folded, and a
 Why card for each block or warning (the rule, the step that triggered it, the
 step that was blocked). The page polls the server's memory about once a second,
-so it works without Neo4j, and it needs no token; only `POST /hook` does. The
+so it works without Neo4j or the history file, and it needs no token; only
+`POST /hook` does. The
 lane graph, with steps on the left, files in the middle and hosts and rules on
 the right, is the **Graph** tab at <http://127.0.0.1:8787/?view=graph>
 (`/?view=trail` also opens the trail). To preview the page with sample data and no
@@ -138,7 +144,15 @@ replays a long session). The old `/v2/` address redirects to `/`.
 
 ## Configuration
 
-The server reads Neo4j credentials from `~/.config/agentfly/neo4j.env`,
+Neo4j is **off** unless you turn it on. The login file alone does not do it:
+put this in `~/.config/agentfly/config.toml` (anything else, a missing file or
+a broken one means off) and restart the server:
+
+```toml
+neo4j = true
+```
+
+The server then reads the Neo4j credentials from `~/.config/agentfly/neo4j.env`,
 **outside** the repo. The helper script never sees them. Key names are listed
 in [`.env.example`](.env.example).
 
@@ -162,7 +176,22 @@ while the network works, use `neo4j+ssc://` with the same host. Restart the
 server after editing the credentials file.
 
 Neo4j is optional. Without it the server still answers every hook, and the
-writes are skipped with a warning.
+writes are skipped with a warning. The local history does not depend on it.
+
+### Local history
+
+Every step is also saved to `~/.local/share/agentfly/history.db` (SQLite, mode
+600): the same cleaned facts as Neo4j, never file contents or secret values.
+Entries older than 28 days are deleted. A failing or full disk never changes or
+delays a hook answer.
+
+```bash
+uv run agentfly wipe          # asks first; --yes skips the question
+```
+
+`agentfly wipe` deletes the whole history. It does not clear session marks
+(`sessions.json`, `links.json`), so a session that read a secret is still
+blocked afterwards, and it does not touch Neo4j.
 
 ### Local state
 
@@ -170,6 +199,9 @@ writes are skipped with a warning.
 |---|---|
 | `~/.config/agentfly/token` | Random token the helper sends with every request (mode 600) |
 | `~/.local/share/agentfly/sessions.json` | Per session: id, marked yes/no, start time, next step number |
+| `~/.local/share/agentfly/links.json` | Which chat started which subagent call, so a secret mark follows into subagents |
+| `~/.local/share/agentfly/history.db` | Past sessions and steps, 28 days (SQLite, mode 600, plus `-wal` and `-shm` files); `agentfly wipe` deletes it |
+| `~/.config/agentfly/config.toml` | Optional. `neo4j = true` turns the Neo4j copy on |
 | `~/.local/share/agentfly/logs/events.jsonl` | Hook client's debug log: time, event and decision (folder 700, file 600) |
 
 ## Command cleaning
@@ -243,8 +275,8 @@ a separate credentials file for a test database, and are skipped otherwise.
 |---|---|
 | `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, fails open |
 | `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it until `agentfly init` |
-| `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, Neo4j store, file locations (`paths.py`) |
-| `agentfly/cli/` | The `agentfly` command (`serve`) |
+| `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, local history (`localstore.py`, `api/`), Neo4j store, file locations (`paths.py`) |
+| `agentfly/cli/` | The `agentfly` command (`serve`, `wipe`) |
 | `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |

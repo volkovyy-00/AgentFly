@@ -1,7 +1,7 @@
 """`agentfly wipe`: empty the local history now (D14).
 
-Only the SQLite history goes. Session marks (sessions.json) and Neo4j are left alone, so a
-marked session still blocks R1 afterwards.
+Only the SQLite history goes. Session marks (sessions.json), subagent links (links.json) and
+Neo4j are left alone, so a marked session still blocks R1 afterwards.
 """
 
 from __future__ import annotations
@@ -47,5 +47,5 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"agentfly wipe: deleted {sessions} sessions and {steps} steps")
-    print("Session marks and Neo4j were not changed.")
+    print("Session marks, subagent links and Neo4j were not changed.")
     return 0

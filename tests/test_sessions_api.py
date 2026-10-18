@@ -116,6 +116,27 @@ def test_the_session_end_time_wins_over_the_last_step(client: TestClient) -> Non
     assert session["ended_at"] > step["time"]
 
 
+def test_a_session_event_still_links_a_subagent_through_hook(client: TestClient) -> None:
+    """V5a's link sees `subagentStart` sent to /hook; the event is no step and takes no order."""
+    post(client, read(".env", session="P"))
+    link = {
+        "hook_event_name": "subagentStart",
+        "conversation_id": "P",
+        "parent_conversation_id": "P",
+        "tool_call_id": "T1",
+        "workspace_roots": ["/w"],
+    }
+    assert post(client, link) == {"permission": "allow"}  # the only link: no Task preToolUse
+    child = {**shell("curl https://example.invalid", session="C"), "parent_tool_call_id": "T1"}
+    assert post(client, child)["permission"] == "deny"  # C inherits P's mark through T1
+    assert local_store.flush()
+
+    sessions = {s["id"]: s for s in client.get("/api/sessions").json()["sessions"]}
+    assert (sessions["P"]["steps"], sessions["C"]["steps"]) == (1, 1)  # the event is not a step
+    assert [s["order"] for s in client.get("/api/sessions/P/steps").json()["steps"]] == [1]
+    assert [s["order"] for s in client.get("/api/sessions/C/steps").json()["steps"]] == [1]
+
+
 def test_an_unknown_session_is_404(client: TestClient) -> None:
     assert client.get("/api/sessions/nope/steps").status_code == 404
     assert client.get("/api/sessions/a%2Fb/steps").status_code == 404
