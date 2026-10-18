@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
 Updated: 2026-10-18 17:55 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: wave-3. S1–S5 ✅, V1a ✅, V2 ✅ (3da6dc7), V8 ✅ (92e7fdc, 4af8125), V2b ✅ (79a46a7). Wave 3 briefed and worktrees created 2026-10-18: V3a ∥ V5a ∥ V6.
+Phase: wave-3. S1–S5 ✅, V1a ✅, V2 ✅ (3da6dc7), V8 ✅ (92e7fdc, 4af8125), V2b ✅ (79a46a7). Wave 3 briefed and worktrees created 2026-10-18: V3a ∥ V5a ∥ V6 ∥ V1b (docs).
 Pending decisions: D16
 
 ## Spikes and cards
@@ -9,13 +9,14 @@ Pending decisions: D16
 - Briefs: docs/briefs/V3a.md, V5a.md, V6.md (agent-ready-tickets, pass 2 done by fresh subagents). V3b and V5b briefs are written after V3a and V5a merge (their BOARD cards carry the remaining criteria).
 - Merge points (BOARD rules): `agentfly/cli/__init__.py` (no discovery; one import + one registration line per command), app.py routes and `apply_rules` (V5a owns; V6 adds one store line), `ROUTE_WHITELIST` in tests/test_app.py. CLI modules live in `agentfly/cli/` next to serve.py.
 - After V6: V2c (`tool_use_id` merge + duplicate-read proposal, after the lead's D9 review) and V8b (recorder fields; V2b already reports `offline_guard_count`, check before briefing).
-- V1b (lead): SPEC lacks D13 = C, S3/S5 facts, D21–D25, R0 `agentfly serve` and `wipe`, 401/403 → guard, all one-liners denied offline, V2b's 0.5 s wait, the §7 rules-file step moved to V5b, Neo4j opt-in; D16 still open.
-- V4 (Homebrew + release) not started; its last check needs V3b.
+- V1b moved to a worker (owner 2026-10-18), brief docs/briefs/V1b.md. It leaves SPEC §8 "Duplicates" as is (no approved merge key; V2c) and §7 (init -g still installs the rules file in the v1 target; only the card order moved it to V5b).
+- V4 not started: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 needs a tap (not a bare .rb path). Revisit V4's checks before briefing.
 
 ## In flight
 - V3a · worker (owner starts) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
 - V5a · worker (owner starts) · .claude/worktrees/ag-v5a-r0-normalize · ag-v5a-r0-normalize · docs/reports/V5a.md
 - V6 · worker (owner starts) · .claude/worktrees/ag-v6-localstore · ag-v6-localstore · docs/reports/V6.md
+- V1b · worker (owner starts) · .claude/worktrees/ag-v1b-spec · ag-v1b-spec · docs/reports/V1b.md
 
 ## Machine state (verified 2026-10-18 17:53 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`). V3a's manual checks move it aside and restore it.
@@ -28,11 +29,11 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Start the three workers (first messages given in chat 2026-10-18; each is line 1 of its brief).
-2. R0 cost to confirm: SPEC has R0 check the raw command text too, so in an unmarked chat a commit message mentioning `hooks.json`, `.config/agentfly` or 8787 is denied. Lead recommends keeping SPEC as is for V5a and revisiting after real use.
+1. Start the three workers (commands given in chat 2026-10-18: `uv sync`, then `claude --permission-mode plan` with line 1 of the brief).
 
 ## Decisions changed since last handoff (b8ca2b1)
 - D14 status amended (owner 2026-10-18): Neo4j opt-in via config.toml; R0 denies `wipe`; wipe never clears marks.
+- Owner 2026-10-18: R0 keeps the raw-text check as SPEC says, accepting that a commit message naming `hooks.json`, `.config/agentfly` or 8787 is denied; revisit after real use.
 
 ## Open risks and findings
 - Recorder down ⇒ outbound commands denied in this repo (by design, D4).

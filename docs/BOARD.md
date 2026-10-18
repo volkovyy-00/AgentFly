@@ -65,7 +65,7 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
 
               ─────────── you approve DECISIONS.md ───────────
 
-v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
+v1            Docs:     V1a ✅ ──► V1b SPEC catch-up (worker, ∥ wave 3)
               Backend:  V2 ✅ ┬──► V2b ✅ ┬──► V3a install ──► V3b service + doctor ─┐ (V4's last check needs V3b)
                              │          └──► V5a normalise + R0 ──► V5b rules file ─┼──► V7  rule change flow
                              ├──► V4  formula + release                         │
@@ -76,7 +76,7 @@ v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
                              └──────────────────────► V9  History + Rules tabs (after V5b, V6, V8)
 ```
 
-Wave 3 (owner, 2026-10-18): V3a, V5a and V6 in parallel. Then V3b and V5b; V2c and
+Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel. Then V3b and V5b; V2c and
 V8b after V6 (they share the step record, `memory.py` and `store.py`).
 V7 and V9 can run in parallel.
 
@@ -101,20 +101,9 @@ V7 and V9 can run in parallel.
 
 ## v1 cards
 
-### V1b · Fill in what S3 and S5 decided
-- **Owner:** lead
-- **Lane:** lead
-- **Depends on:** S3, S5, D13 and D16 answered
-- **May touch:** `SPEC.md`, `AGENTS.md`, `HOOKS.md`, `README.md`,
-  `docs/product-goals.md` (G1 flow wording only, per D6 and D20),
-  `docs/DECISIONS.md` (status lines), new `docs/archive/SPEC-hackathon.md`.
-- **Done when:**
-  - The PR contains a table mapping each approved decision to its SPEC section.
-  - AGENTS.md's Testing list names only tests that exist. The R0 line moves to
-    V5. "The helper drops `content`" moves to V2, which writes that test.
-  - The approved dependencies, paths, commands, rule shape, R1 outbound
-    definition (D10) and API surface (D19) match the decisions.
-  - You approve the PR.
+### V1b · SPEC catch-up: S3, S5 and the owner's 2026-10-16 to 10-18 answers
+- **Brief:** `docs/briefs/V1b.md` (authoritative). Moved from the lead to a worker (owner, 2026-10-18).
+- **Lane:** docs, ∥ V3a, V5a and V6 · **Depends on:** S3 ✅, S5 ✅ (D16 stays open)
 
 ### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
 - **Owner:** worker-backend · brief to write after V2b and the D9 review
