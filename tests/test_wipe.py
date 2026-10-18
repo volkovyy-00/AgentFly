@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -13,7 +16,6 @@ from fastapi.testclient import TestClient
 import agentfly.recorder.app as app_module
 import agentfly.recorder.localstore as ls
 from agentfly.cli import main
-from agentfly.cli import wipe as wipe_cli
 from agentfly.recorder.localstore import local_store
 from agentfly.recorder.paths import config_dir, data_dir
 
@@ -103,18 +105,68 @@ def test_wipe_asks_first_on_a_terminal(
     assert len(client.get("/api/sessions").json()["sessions"]) == left
 
 
-def test_wipe_says_so_when_old_pages_could_not_be_cleared(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
+    client: TestClient,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (data_dir()).mkdir(parents=True)
-    (data_dir() / ls.DB_NAME).write_bytes(b"")
+    post(client, {"hook_event_name": "beforeShellExecution", "command": f"echo {SECRET_WORD}"})
+    assert local_store.flush()
+    assert ls.WIPE_BUDGET_S <= 10.0  # the promise in the card
+    monkeypatch.setattr(ls, "WIPE_BUDGET_S", 1.0)  # same code path, a shorter wait for the test
+    reader = sqlite3.connect(data_dir() / ls.DB_NAME, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM steps").fetchall()  # a snapshot the log cannot pass
+    try:
+        started = time.monotonic()
+        assert main(["wipe", "--yes"]) == 1
+        elapsed = time.monotonic() - started
+    finally:
+        reader.execute("ROLLBACK")
+        reader.close()
+    err = capsys.readouterr().err
+    assert elapsed < 3.0
+    assert "in use" in err and "run it again" in err
+    assert "nothing else was changed" not in err  # the rows are gone; do not claim otherwise
 
-    def busy(_path: Path) -> tuple[int, int]:
-        raise ls.WipeIncomplete("the history file is in use; old pages may remain")
+    assert main(["wipe", "--yes"]) == 0  # the reader is gone: the second run finishes the job
+    assert history_bytes().count(SECRET_WORD.encode()) == 0
 
-    monkeypatch.setattr(wipe_cli, "wipe_file", busy)
-    assert main(["wipe", "--yes"]) == 1
-    assert "run it again" in capsys.readouterr().err
+
+def test_wipe_does_not_hold_the_write_lock_while_it_waits_for_a_reader(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    post(client, {"hook_event_name": "beforeShellExecution", "command": "ls"})
+    assert local_store.flush()
+    monkeypatch.setattr(ls, "WIPE_BUDGET_S", 2.0)
+    path = data_dir() / ls.DB_NAME
+    reader = sqlite3.connect(path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM steps").fetchall()
+    outcome: list[object] = []
+    wiper = threading.Thread(target=lambda: outcome.append(_wipe_result(path)), daemon=True)
+    try:
+        wiper.start()
+        time.sleep(0.8)  # the wipe is now waiting for the reader
+        writer = sqlite3.connect(path, timeout=0, isolation_level=None)
+        try:
+            writer.execute("BEGIN IMMEDIATE")  # the recorder's own writer must still get in
+            writer.execute("ROLLBACK")
+        finally:
+            writer.close()
+    finally:
+        wiper.join(5.0)
+        reader.execute("ROLLBACK")
+        reader.close()
+    assert outcome == ["incomplete"]
+
+
+def _wipe_result(path: Path) -> str:
+    try:
+        ls.wipe_file(path)
+    except ls.WipeIncomplete:
+        return "incomplete"
+    return "done"
 
 
 def test_wipe_of_an_empty_file_with_no_tables_is_a_clean_no_op(
