@@ -28,8 +28,9 @@ from agentfly.recorder.store import (
     StepRecord,
     build_step_record,
     graph_store,
+    neo4j_opt_in,
 )
-from tests.helpers import REPO, client_env, free_port
+from tests.helpers import NEO4J_ENV, REPO, client_env, free_port
 from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
 # The owner's real login file. Collection runs under the real HOME (conftest swaps it per test).
@@ -101,14 +102,23 @@ def token(client: TestClient) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+# Where DELETE may appear: Neo4j only in clear_all (--clear); the local SQLite history only in
+# retention (purge_rows) and `agentfly wipe` (wipe_file).
+_DELETE_ALLOWED: dict[str, frozenset[str]] = {
+    "store.py": frozenset({"def clear_all"}),
+    "localstore.py": frozenset({"def purge_rows", "def wipe_file"}),
+}
+
+
 def test_delete_only_in_clear_path() -> None:
     root: Path = Path(__file__).resolve().parents[1] / "agentfly" / "recorder"
     assert list(root.glob("*.py")), "no recorder sources found"
-    for path in root.glob("*.py"):
+    for path in root.glob("**/*.py"):
         text: str = path.read_text(encoding="utf-8")
         if not re.search(r"\bDELETE\b", text):
             continue
-        assert path.name == "store.py", f"{path.name} must not contain DELETE"
+        allowed = _DELETE_ALLOWED.get(path.name)
+        assert allowed is not None and path.parent == root, f"{path.name} must not contain DELETE"
         for match in re.finditer(r"\bDELETE\b", text):
             line_start: int = text.rfind("\n", 0, match.start()) + 1
             line_end: int = text.find("\n", match.start())
@@ -117,12 +127,16 @@ def test_delete_only_in_clear_path() -> None:
             if "help=" in line or line.lstrip().startswith('"""') or line.lstrip().startswith("#"):
                 continue
             before: str = text[: match.start()]
-            assert "def clear_all" in before, f"DELETE outside clear_all: {line.strip()}"
             last_def: int = before.rfind("def ")
-            assert last_def != -1
-            assert before[last_def:].startswith("def clear_all")
+            assert last_def != -1, f"DELETE outside a function: {line.strip()}"
+            assert any(before[last_def:].startswith(name) for name in allowed), (
+                f"DELETE outside {sorted(allowed)}: {line.strip()}"
+            )
     store_text: str = (root / "store.py").read_text(encoding="utf-8")
     assert "DETACH DELETE" in store_text
+    # The commands and the page code never carry a delete of their own.
+    for other in (root.parent / "cli").glob("*.py"):
+        assert not re.search(r"\bDELETE\b", other.read_text(encoding="utf-8")), other.name
 
 
 def test_builder_bearer_command_has_no_secrets(tmp_path: Path) -> None:
@@ -415,6 +429,83 @@ def test_builder_keeps_no_secret_in_any_stored_field(tmp_path: Path, raw: str) -
     }
     record: StepRecord = build_step_record(payload, session, "allow", None, order=1)
     assert SECRET not in repr(record)
+
+
+# ---------------------------------------------------------------- Neo4j is opt-in (D14)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("neo4j = true\n", True),
+        ("# comment\nneo4j = true  # yes\n", True),
+        ("neo4j = false\n", False),
+        ('neo4j = "true"\n', False),
+        ("neo4j = 1\n", False),
+        ("other = true\n", False),
+        ("neo4j = \n", False),  # broken TOML
+        ("[neo4j]\nenabled = true\n", False),
+        ("", False),
+    ],
+)
+def test_only_neo4j_true_in_config_toml_turns_it_on(text: str, expected: bool) -> None:
+    path = config_dir() / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(text, encoding="utf-8")
+    assert neo4j_opt_in() is expected
+
+
+def test_a_missing_config_toml_means_off() -> None:
+    assert neo4j_opt_in() is False
+    assert neo4j_opt_in(config_dir() / "nowhere.toml") is False
+
+
+class _Calls:
+    """Stands in for GraphDatabase.driver: counts calls and fails them, so nothing connects."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.count += 1
+        raise RuntimeError("no network in tests")
+
+
+def start_recorder_with(
+    monkeypatch: pytest.MonkeyPatch, *, env_file: bool, config: str | None
+) -> int:
+    calls = _Calls()
+    monkeypatch.setattr(store_mod.GraphDatabase, "driver", calls)
+    if env_file:
+        credentials_path().parent.mkdir(parents=True, exist_ok=True)
+        credentials_path().write_text(NEO4J_ENV, encoding="utf-8")
+    if config is not None:
+        (config_dir() / "config.toml").write_text(config, encoding="utf-8")
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as started:
+        assert started.get("/health").status_code == 200
+    return calls.count
+
+
+def test_neo4j_env_alone_opens_no_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert start_recorder_with(monkeypatch, env_file=True, config=None) == 0
+
+
+@pytest.mark.parametrize("config", ["neo4j = false\n", 'neo4j = "true"\n', "neo4j = \n"])
+def test_a_config_that_does_not_say_true_opens_no_connection(
+    config: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir().mkdir(parents=True)
+    assert start_recorder_with(monkeypatch, env_file=True, config=config) == 0
+
+
+def test_neo4j_true_with_credentials_connects(monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir().mkdir(parents=True)
+    assert start_recorder_with(monkeypatch, env_file=True, config="neo4j = true\n") == 1
+
+
+def test_neo4j_true_without_credentials_stays_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir().mkdir(parents=True)
+    assert start_recorder_with(monkeypatch, env_file=False, config="neo4j = true\n") == 0
 
 
 # ---------------------------------------------------------------- live tests and the real login
