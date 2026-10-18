@@ -1,6 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5, V1a and V2 are done; V8 and V2b are done (2026-10-16).
+Status: **spikes S1–S5, V1a, V2, V8 and V2b are done (2026-10-16). Wave 3
+(V3a, V5a, V6) briefed 2026-10-18; V3 and V5 were split into a/b halves.
 D16 is the only open decision.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
@@ -36,14 +37,16 @@ first request's cap of 12.
   apart from the declared merge points below.
 - **Declared merge points.** These are expected one-line conflicts; whichever
   PR merges second resolves them:
-  - the router list in `agentfly/recorder/app.py`;
-  - the route whitelist in `tests/test_api_surface.py`.
+  - route registration in `agentfly/recorder/app.py` (and one store line in
+    § `apply_rules`, owned by V5a, for V6);
+  - `ROUTE_WHITELIST` in `tests/test_app.py`;
+  - command registration in `agentfly/cli/__init__.py`.
 
   Both are shared on purpose: every new route has to be added consciously
   (D19).
-- **CLI.** Each subcommand is its own module in `agentfly/cli/commands/`. The
-  dispatcher from V2 discovers them, so adding a command never edits a shared
-  file.
+- **CLI.** Each subcommand is its own module in `agentfly/cli/`, next to
+  `serve.py`. V2's dispatcher does not discover modules: each command adds one
+  import and one registration line to `agentfly/cli/__init__.py` (a merge point).
 - Code cards are done only when the AGENTS.md check command passes, plus the web
   check and the stale-build check when `ui/` changed. Evidence goes in the PR
   description.
@@ -63,17 +66,18 @@ Spikes        Lead (your machine): S1 ──► S2 ──► S5 ✅
               ─────────── you approve DECISIONS.md ───────────
 
 v1            Docs:     V1a ✅ (worker) ──► Lead: V1b (after S5)
-              Backend:  V2 ✅ ┬──► V2b ✅ ┬──► V3  CLI install commands ──┐
-                             │          └──► V5  rules + R0 ──────┐     │ (V4's last check needs V3)
-                             ├──► V4  formula + release           ├─────┼──► V7  rule change flow
-                             └──► V6  local store ────────────────┘     │
-                                        V2b ──► V2c  step merge + read-dedup proposal (∥ V3, V5)
+              Backend:  V2 ✅ ┬──► V2b ✅ ┬──► V3a install ──► V3b service + doctor ─┐ (V4's last check needs V3b)
+                             │          └──► V5a normalise + R0 ──► V5b rules file ─┼──► V7  rule change flow
+                             ├──► V4  formula + release                         │
+                             └──► V6  local store ──┬──────────────────────────┘
+                                                    ├──► V2c  step merge + read-dedup proposal
+                                                    └──► V8b  recorder fields for V8
               UI:       V8 ✅ trail + Why + health
-                             ├──► V8b recorder fields for V8 (backend, after V2b)
-                             └──────────────────────► V9  History + Rules tabs (after V5, V6, V8)
+                             └──────────────────────► V9  History + Rules tabs (after V5b, V6, V8)
 ```
 
-V2b, V4 and V6 run in parallel once V2 has merged; V3, V5 and V2c once V2b has.
+Wave 3 (owner, 2026-10-18): V3a, V5a and V6 in parallel. Then V3b and V5b; V2c and
+V8b after V6 (they share the step record, `memory.py` and `store.py`).
 V7 and V9 can run in parallel.
 
 ---
@@ -114,51 +118,45 @@ V7 and V9 can run in parallel.
 
 ### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
 - **Owner:** worker-backend · brief to write after V2b and the D9 review
-- **Lane:** backend, after V2b; ∥ V3, V5.
-- **Depends on:** V2b
+- **Lane:** backend, after V6 (same recorder files).
+- **Depends on:** V2b, V6
 - Split from V2b 2026-10-16 (brief budget). A `preToolUse` and a `beforeShellExecution`
   call with the same `tool_use_id` show as one step in `/api/steps`; the report proposes
   (does not build) the merge key for duplicate file reads (D9 note), with fixture evidence.
 
-### V3 · CLI install commands: `init -g`, `uninstall`, `doctor`, `start`, `stop`, `status`
-- **Owner:** worker-backend
-- **Lane:** backend, ∥ V4, V5 and V6 after V2
-- **Depends on:** V2, V2b, S1, S2
-- Re-measure the hook client's latency with the bundled Python (V2b: p95 122 ms on the dev Python vs the 50 ms target; accepted by the owner 2026-10-16 until V3).
-- **May touch:** new `agentfly/cli/commands/{init,uninstall,doctor,start,stop,status}.py`
-  (one module each); new `agentfly/install/{hooks_json,system_paths,service,integrity}.py`;
-  `install.sh` (becomes a short dev wrapper or is deleted); README "Install"
-  section; new `tests/test_install_*.py`.
-- **Out of scope:** per-project `agentfly init` is deferred (D20).
-- **First step, on your Mac (skip if S5's dump settled it):** add one made-up event name to `hooks.json` and
-  check whether the other hooks still fire. This reproduces, or rules out, the
-  "unknown event disables the file" report, and decides whether `init` must
-  gate events by Cursor version.
-- **Done when:**
-  - Unit tests: merging into a `hooks.json` that holds another tool's entries
-    leaves theirs byte-identical, tags ours, and writes a backup. Running `init`
-    twice changes nothing. `uninstall` removes only our entries.
-  - On your Mac (terminal log and screenshots in the PR):
-    1. Install from the local wheel, run `agentfly init -g` (one `sudo`, per D2
-       and D3), then `agentfly start`.
-    2. Open a never-opened folder in Cursor and trigger the R1 deny **10
-       times**: 10 of 10 must be denied. This reproduces, or rules out, the
-       deny race on your machine.
-    3. `agentfly doctor` is all green, including the integrity hash (D1).
-    4. Kill the recorder: launchd `KeepAlive` restarts it (D4/D8; check both
-       the brew-services and own-LaunchAgent plists). With KeepAlive off, or
-       during the restart gap, `doctor` turns red, the offline guard denies
-       `curl`, and the deny message says `agentfly start`.
-    5. `agentfly uninstall`: no AgentFly hook entries remain, and
-       `launchctl list | grep agentfly` prints nothing.
+### V3a · System install: `init -g` and `uninstall`
+- **Brief:** `docs/briefs/V3a.md` (authoritative). Split from V3 (owner, 2026-10-18).
+- **Lane:** backend, ∥ V5a and V6 · **Depends on:** V2b ✅
+
+### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
+- **Owner:** worker-backend · brief to write after V3a merges
+- **Lane:** backend, after V3a; ∥ V5b
+- **Depends on:** V3a
+- **May touch:** new `agentfly/cli/{start,stop,status,doctor}.py`; `agentfly/install/`;
+  `agentfly/cli/uninstall.py` (also removes the service); README "Install";
+  `tests/test_install_*.py`; the `agentfly/cli/__init__.py` merge point.
+- **Done when** (carried from V3):
+  - `start`, `stop` and `status` use `brew services` for a Homebrew install and
+    AgentFly's own LaunchAgent otherwise; both set `KeepAlive` (D4, D8; the
+    brew-services plist is checked once V4 exists).
+  - `doctor` is all green after a clean install: hashes recorded by V3a match, the
+    bundled Python is not user-writable (D5), `KeepAlive` is set, `agentfly` on `PATH`
+    is ours (D6 name clash), the registered events are on the known list and Cursor's
+    Hooks log has no "Invalid … config" / "Failed to parse" line for our file (D23),
+    and gate hooks in `~/.claude/settings.json` warn, or fail if V3a found an allow
+    can override (D24).
+  - On your Mac: kill the recorder and launchd restarts it. With `KeepAlive` off, or
+    during the gap, `doctor` is red, the offline guard denies `curl`, and the message
+    says `agentfly start`. After `agentfly uninstall`, `launchctl list | grep agentfly`
+    prints nothing.
 
 ### V4 · Homebrew formula and release workflow
 - **Owner:** worker-backend
-- **Lane:** backend, ∥ V3, V5 and V6 after V2. Its last check needs V3.
-- **Depends on:** V2 (for the brew-services check, V3)
+- **Lane:** backend, after V2. Its last check needs V3b.
+- **Depends on:** V2 (for the brew-services check, V3b)
 - **May touch:** new `packaging/homebrew/agentfly.rb`, new
   `packaging/homebrew/README.md`, new `.github/workflows/release.yml`. Not the
-  README; V3 owns the install section.
+  README; V3a and V3b own the install section.
 - **Done when:**
   - `brew install --build-from-source ./packaging/homebrew/agentfly.rb` and
     `brew test agentfly` pass locally (output pasted).
@@ -166,96 +164,49 @@ V7 and V9 can run in parallel.
     `agentfly-hook` with no server, and asserts valid JSON.
   - The caveats tell you to run `agentfly init -g`, and to run
     `agentfly uninstall` before `brew uninstall`.
-  - After V3 merges: `brew services start agentfly` serves `/health`
+  - After V3b merges: `brew services start agentfly` serves `/health`
     (output pasted).
   - The release workflow builds the UI once and makes the wheel and sdist. It
     has no publish step until you approve publishing.
 
-### V5 · Rules file, rule kinds, command normalisation, R0
-- **Owner:** worker-backend
-- **Lane:** backend, ∥ V3, V4 and V6 after V2
-- **Depends on:** V2, V2b (Write target path for R0), S3 ✅
-- **May touch:** `agentfly/recorder/rules.py`, `agentfly/recorder/names.py`; new
-  `agentfly/recorder/rulefile.py`, new `agentfly/recorder/normalize.py`; a
-  packaged default `agentfly/rules/default.toml`; new
-  `agentfly/cli/commands/{rules_check,rules_test}.py`; new
-  `agentfly/recorder/api/rules.py` (read-only `GET /api/rules`, plus the two
-  declared merge points); `tests/test_rules.py`; new
-  `tests/test_{rulefile,normalize,r0}.py`.
-- **Done when:**
-  - R1 and its lists load from `rules.toml`, and every existing rule test in
-    AGENTS.md still passes.
-  - **Normalisation applies to every rule, R1 included** (D10). With the
-    session marked, each of these counts as outbound and is blocked:
-    - `bash -c 'curl https://x.com'` and `sh -c "wget x.com"`;
-    - `echo $(curl https://x.com)` and `` echo `curl x.com` ``;
-    - `env A=1 curl x.com` and `sudo curl x.com`;
-    - `python3 -c "…"` and `node -e "…"`, even with no "http" in the text;
-    - unparseable commands: an unbalanced quote, or an unquoted `<<EOF` block.
+### V5a · Command normalisation, subagent mark, R0
+- **Brief:** `docs/briefs/V5a.md` (authoritative). Split from V5 (owner, 2026-10-18);
+  R0 also blocks `agentfly wipe` (owner, 2026-10-18).
+- **Lane:** backend, ∥ V3a and V6 · **Depends on:** V2b ✅, S3 ✅
 
-    These stay allowed while marked: `bash -c 'ls'`,
-    `curl localhost:8000/health`, `python3 -m pytest`, and
-    `git commit -m "$(cat <<'EOF' … EOF)"` (a quoted-delimiter heredoc body
-    is literal data, D10). Each case is a test.
-  - **R0 lives in code** and blocks:
-    - touching AgentFly's config and system folders, any `hooks.json` (user,
-      system or project) and the token;
-    - `kill`, `pkill` and `launchctl` aimed at the recorder;
-    - `agentfly serve`, `agentfly stop`, `agentfly uninstall` and `brew services`
-      for AgentFly (owner, 2026-10-16: a second `serve` rotated the token and
-      switched protection off);
-    - commands naming the recorder's port;
-    - a Write or Edit whose target path (from V2) is a guard path.
+### V5b · Rules file, rule kinds, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
+- **Owner:** worker-backend · brief to write after V5a merges
+- **Lane:** backend, after V5a; ∥ V3b
+- **Depends on:** V5a; V3a (`init -g` installs the active rules file)
+- **May touch:** `agentfly/recorder/rules.py`; new `agentfly/recorder/rulefile.py`;
+  packaged `agentfly/rules/default.toml`; new `agentfly/cli/{rules_check,rules_test}.py`;
+  new `agentfly/recorder/api/rules.py`; the rules step in `agentfly/install/`;
+  `tests/test_rules.py`, new `tests/test_rulefile.py`; the declared merge points.
+- **Done when** (carried from V5):
+  - R1 and its lists load from the rules file; the active file is root-owned in
+    `/Library/Application Support/AgentFly/` (D3) and installed by `init -g`. Every
+    existing rule test passes. A rules file that removes or weakens R0 is rejected.
+  - S3 additions (D10): flag-variant patterns, `path_scope = "outside_workspace"`,
+    `pipe_into`. The 10 S3 rules in `docs/spikes/S3-rules.toml` (v0.1 form of 5, 8
+    and 14) load and their inline tests pass with `agentfly rules test` (output
+    pasted). The subagent `scope`/`window` is replaced by D21 A, built in V5a.
+  - Every bundled and S3 rule ships bypass tests (owner, 2026-10-16).
+  - "Block npm publish after reading .env" is added by editing only the rules file:
+    a test, plus a diff that touches no `.py` file for it.
+  - block, warn and highlight produce the D11 answers (tests). `GET /api/rules` is
+    read-only and in the whitelist.
 
-    It is case-folded and goes through the same normalisation. It also checks
-    the raw, case-folded text, so an unparseable command can't hide a guard
-    name. A rules file that tries to remove or weaken R0 is rejected (tests).
-  - **S3 additions (D10, 2026-10-16):** flag-variant patterns (`--data*`, `=`
-    forms, clustered short flags), `path_scope = "outside_workspace"`,
-    `pipe_into`, and `scope`/`window` on `after_then` (subagent option (a),
-    pending S5). The 10 S3 rules in `docs/spikes/S3-rules.toml` (v0.1 form of
-    5, 8 and 14) load, and their inline tests pass with `agentfly rules test`
-    (output pasted).
-  - The hook client's offline guard (V2b) is run against the same
-    normalisation cases and must agree on every outbound one (SPEC § 9).
-  - **Every rule ships with bypass tests**, not only its own positive tests
-    (owner, 2026-10-16): spellings that mean the same action must also match.
-    For example, for an upload rule: `curl --data=@f`, `--data-binary @f`,
-    `-d@f`, `-sd @f`, long, short and `=` forms, and the same inside
-    `bash -c`, `env` and `sudo`. Each bundled rule and each S3 rule has them.
-  - "Block npm publish after reading .env" is added by editing only the rules
-    file: a test, plus a PR diff that touches no `.py` file for it.
-  - block, warn and highlight produce the D11 answers (tests).
-  - The decision path does no file or network I/O (a test that patches `open`
-    and `socket`).
-
-### V6 · Local session store and history API
-- **Owner:** worker-backend
-- **Lane:** backend, ∥ V3, V4 and V5 after V2
-- **Depends on:** V2
-- **May touch:** new `agentfly/recorder/localstore.py`,
-  `agentfly/recorder/store.py` (Neo4j optional, off by default),
-  `agentfly/recorder/memory.py`; new `agentfly/recorder/api/sessions.py`
-  (`GET /api/sessions`, `GET /api/sessions/{id}/steps`, plus the two declared
-  merge points); new `agentfly/cli/commands/wipe.py`; new
-  `tests/test_{localstore,sessions_api}.py`.
-- **Done when:**
-  - Steps are written to SQLite in the background, and hook latency is
-    unchanged (V2's benchmark re-run, both numbers pasted).
-  - Sessions and steps survive a restart. The list shows the workspace (per
-    D14), start and end, step, block and warn counts, and "marked by R1".
-  - A schema test proves only SPEC §4 fields plus the approved new fields are
-    stored, never content.
-  - Retention follows D14, and `agentfly wipe` exists (tests).
-  - The app runs with Neo4j unset (test), and the Neo4j copy still works when it
-    is configured (existing tests).
+### V6 · Local session store, history API, Neo4j opt-in, `agentfly wipe`
+- **Brief:** `docs/briefs/V6.md` (authoritative). Neo4j only with `neo4j = true` in
+  `~/.config/agentfly/config.toml` (owner, 2026-10-18).
+- **Lane:** backend, ∥ V3a and V5a · **Depends on:** V2 ✅
 
 ### V7 · Rule change flow: draft, check, diff, backtest, `sudo` approve
 - **Owner:** worker-backend
 - **Lane:** backend, ∥ V9
-- **Depends on:** V5, V6
+- **Depends on:** V5b, V6
 - **May touch:** new
-  `agentfly/cli/commands/{rules_draft,rules_diff,rules_backtest,rules_apply}.py`;
+  `agentfly/cli/{rules_draft,rules_diff,rules_backtest,rules_apply}.py`;
   `agentfly/recorder/rulefile.py`; new `agentfly/recorder/backtest.py`; new
   `agentfly/recorder/rules_reload.py`; new
   `tests/test_{rules_diff,backtest,rules_apply}.py`. **No new routes (D19).**
@@ -269,12 +220,12 @@ V7 and V9 can run in parallel.
     manual check on your Mac).
   - As your normal user, writing the active rules file fails (manual evidence
     pasted).
-  - `tests/test_api_surface.py` is unchanged by this card.
+  - `ROUTE_WHITELIST` in `tests/test_app.py` is unchanged by this card.
   - Plain-language drafting is not included unless D13 is approved.
 
 ### V8b · Recorder fields for the Why card and health strip
 - **Owner:** worker-backend · brief to write
-- **Lane:** backend, after V2b; ∥ V3, V4, V6.
+- **Lane:** backend, after V6 (same recorder files).
 - **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
 - **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
 - **Done when:** each step on `/api/steps` carries `rule_text`, `user_message`
@@ -285,7 +236,7 @@ V7 and V9 can run in parallel.
 ### V9 · UI: History and Rules tabs
 - **Owner:** worker-ui
 - **Lane:** UI, after V8; ∥ V7
-- **Depends on:** V5 (`GET /api/rules`), V6 (sessions API), V8
+- **Depends on:** V5b (`GET /api/rules`), V6 (sessions API), V8
 - **May touch:** new `ui/src/history/**` and `ui/src/rules/**`; the tab entry in
   the app shell; `ui/dist` (rebuilt); ui tests.
 - **Done when:**

@@ -464,7 +464,7 @@ Opinions E), and the fixed schema stops it inventing fields.
 ---
 
 ## D14. Local store for past sessions; what happens to Neo4j
-Status: **approved (2026-10-15)**: SQLite default, Neo4j optional, workspace path stored locally, 28-day retention, `agentfly wipe` · Changes: SPEC.md §3, §4
+Status: **approved (2026-10-15)**: SQLite default, Neo4j optional, workspace path stored locally, 28-day retention, `agentfly wipe`. Owner, 2026-10-18: Neo4j runs only with `neo4j = true` in `~/.config/agentfly/config.toml` (a present `neo4j.env` alone no longer turns it on); R0 denies `agentfly wipe` to the agent; `wipe` never clears session marks · Cards: V6, V5a · Changes: SPEC.md §3, §4
 
 | Option | What it means |
 |---|---|

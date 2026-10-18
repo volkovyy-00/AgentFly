@@ -1,52 +1,51 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-16 15:17 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: v2b-merged. S1–S5 ✅, V1a ✅, V2 ✅ (3da6dc7), V8 ✅ (92e7fdc, 4af8125), V2b ✅ (79a46a7). Nothing in flight; next wave not yet chosen.
+Updated: 2026-10-18 17:55 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: wave-3. S1–S5 ✅, V1a ✅, V2 ✅ (3da6dc7), V8 ✅ (92e7fdc, 4af8125), V2b ✅ (79a46a7). Wave 3 briefed and worktrees created 2026-10-18: V3a ∥ V5a ∥ V6.
 Pending decisions: D16
 
 ## Spikes and cards
 - Done (one line each under BOARD `## Done`): S1–S5, V1a, V2, V8, V2b.
-- Ready now (V2 and V2b merged), no briefs yet: V3 (CLI install, bundled Python), V5 (rules file, normalisation, R0), V6 (local store, history API, Neo4j off by default), V4 (Homebrew + release; its last check needs V3).
-- Lead's proposal to the owner (unanswered): V3 ∥ V5 ∥ V6 now (non-overlapping May touch), V4 optional fourth; V8b and V2c after V6 (same recorder files: step record, memory.py, store.py).
-- V2c: `tool_use_id` step merge + duplicate-read proposal; brief after the lead's D9 review.
-- V8b: recorder fields `rule_text`, `user_message`, `agent_message`, `highlighted`, `/health` `last_hook_at` + `offline_guard_count` (V2b already reports the count; check before briefing).
-- V1b (lead): SPEC lacks D13 = C, S3/S5 facts, D21–D25, R0 `agentfly serve`, 401/403 → guard, all one-liners denied offline, V2b's 0.5 s wait and latency note; D16 still open.
-- Brief writing: agent-ready-tickets, pass 2 (fresh verify) yes, oracle pass only if the owner asks. Cards V3/V5 put commands under `agentfly/cli/commands/`, but V2 put `serve` at `agentfly/cli/serve.py`; fix in the briefs.
-- V3 card: re-measure hook latency with the bundled Python (V2b p95 69 ms on the dev Python vs 50 ms target; owner accepted until V3).
-- V5 card: R0 also blocks `agentfly serve`, `agentfly stop`, `agentfly uninstall`, `brew services` (owner 2026-10-16).
+- Owner 2026-10-18: V3 split into V3a (init -g, uninstall) and V3b (start/stop/status, doctor); V5 split into V5a (normalisation, D21 subagent mark, R0) and V5b (rules file, kinds, D11 answers, rules CLI, /api/rules). R0 also denies `agentfly wipe`. Neo4j only with `neo4j = true` in ~/.config/agentfly/config.toml (recorded on D14). No pass 3 (oracle) on tickets.
+- Briefs: docs/briefs/V3a.md, V5a.md, V6.md (agent-ready-tickets, pass 2 done by fresh subagents). V3b and V5b briefs are written after V3a and V5a merge (their BOARD cards carry the remaining criteria).
+- Merge points (BOARD rules): `agentfly/cli/__init__.py` (no discovery; one import + one registration line per command), app.py routes and `apply_rules` (V5a owns; V6 adds one store line), `ROUTE_WHITELIST` in tests/test_app.py. CLI modules live in `agentfly/cli/` next to serve.py.
+- After V6: V2c (`tool_use_id` merge + duplicate-read proposal, after the lead's D9 review) and V8b (recorder fields; V2b already reports `offline_guard_count`, check before briefing).
+- V1b (lead): SPEC lacks D13 = C, S3/S5 facts, D21–D25, R0 `agentfly serve` and `wipe`, 401/403 → guard, all one-liners denied offline, V2b's 0.5 s wait, the §7 rules-file step moved to V5b, Neo4j opt-in; D16 still open.
+- V4 (Homebrew + release) not started; its last check needs V3b.
 
 ## In flight
-none
+- V3a · worker (owner starts) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
+- V5a · worker (owner starts) · .claude/worktrees/ag-v5a-r0-normalize · ag-v5a-r0-normalize · docs/reports/V5a.md
+- V6 · worker (owner starts) · .claude/worktrees/ag-v6-localstore · ag-v6-localstore · docs/reports/V6.md
 
-## Machine state (verified 2026-10-16 15:15 CEST)
-- /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`, no arguments → acts as `cursor`).
-- Recorder: NOT running (nothing on 8787; PID 90283 gone). While it is down, Cursor in this repo denies outbound commands and every `python -c`/`node -e` (offline guard); the deny says `agentfly start`, which arrives in V3. Start now: `uv run agentfly serve`.
-- Files: ~/.config/agentfly (neo4j.env, token, migration marker), ~/.local/share/agentfly/sessions.json (37 sessions). ~/.config/flightrecorder gone (migrated 13:28 byte-identical). Backup: ~/.config/flightrecorder.bak-2026-10-16 (mode 700).
-- AuraDB: Session 51, Step 98 (15:15). Owner said leave it, no --clear. Tests no longer touch it (live tests need AGENTFLY_TEST_NEO4J_ENV); a running recorder still writes real steps there while neo4j.env exists, until V6.
-- Worktrees: main (274a50b + this handoff). Merged and removable: ag-v2-package, ag-v8-trail, ag-v2b-hook-client (not removed; owner's call).
-- Git: core.hooksPath absolute (main's docs/roles/git-hooks: pre-commit, pre-push). `.claude/settings.json` denies `git push`, `git -C * push *`. Owner pushes with `AGENTFLY_ALLOW_PUSH=1`. origin/main = 274a50b (owner pushed 2026-10-16; this handoff commit is local only). origin also has branch ag-31-sunset-old-page, unexplained (ask the owner). Origin repo is PUBLIC.
-- /tmp/af-spike and /tmp/af-fresh present (spike scripts, S5 test project; copy in logs/spike/, gitignored; after a reboot `cp -Rp logs/spike/. /tmp/af-spike/`).
-- No Xcode Command Line Tools: `make` (and other /usr/bin dev shims) open an install dialog.
+## Machine state (verified 2026-10-18 17:53 CEST)
+- /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`). V3a's manual checks move it aside and restore it.
+- Recorder: NOT running (nothing on 8787). While it is down, Cursor in this repo denies outbound commands and every `python -c`/`node -e` (offline guard). Start: `uv run agentfly serve`.
+- Files (as of 2026-10-16): ~/.config/agentfly (neo4j.env, token, migration marker), ~/.local/share/agentfly/sessions.json. Backup ~/.config/flightrecorder.bak-2026-10-16 (mode 700).
+- AuraDB (as of 2026-10-16): Session 51, Step 98. Owner: leave it, no --clear. A running recorder writes there while neo4j.env exists, until V6 merges (then only with `neo4j = true`).
+- Worktrees: main plus the three above (created 2026-10-18 from the commit that carries the briefs). Old branches ag-v2-package, ag-v8-trail, ag-v2b-hook-client kept locally (merged).
+- Git: core.hooksPath absolute (main's docs/roles/git-hooks). `.claude/settings.json` denies `git push`; the owner pushes with `AGENTFLY_ALLOW_PUSH=1`. origin/main = 274a50b; b8ca2b1 and later are local only. origin branch ag-31-sunset-old-page: already gone (pruned 2026-10-18). Origin repo is PUBLIC.
+- /tmp/af-spike, /tmp/af-fresh (as of 2026-10-16); copy in logs/spike/ (gitignored).
+- No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Next wave: how many workers and which cards (lead proposes V3, V5, V6; V4 optional).
-2. Branch ag-31-sunset-old-page on origin: keep or delete.
+1. Start the three workers (first messages given in chat 2026-10-18; each is line 1 of its brief).
+2. R0 cost to confirm: SPEC has R0 check the raw command text too, so in an unmarked chat a commit message mentioning `hooks.json`, `.config/agentfly` or 8787 is denied. Lead recommends keeping SPEC as is for V5a and revisiting after real use.
 
-## Decisions changed since last handoff (ba74ffe)
-- D21 approved option A; D22, D23, D24 approved as written (owner, 2026-10-16).
-- D25 approved 2026-10-16, changed by the owner: hooks always post to 127.0.0.1:8787, no port file; `AGENTFLY_PORT` read only by `serve` and tests; a configurable port would go in root-owned config (D1).
-- Owner 2026-10-16: offline guard denies every inline one-liner (SPEC §9); V2b latency accepted until V3; V8 GIF dropped; AuraDB left as is.
+## Decisions changed since last handoff (b8ca2b1)
+- D14 status amended (owner 2026-10-18): Neo4j opt-in via config.toml; R0 denies `wipe`; wipe never clears marks.
 
 ## Open risks and findings
-- Recorder down ⇒ outbound commands denied in this repo (by design, D4); start it before working in Cursor here.
-- File reads fire preToolUse and beforeReadFile with no shared id → recorded twice · V2c proposal
-- One unknown event name disables a whole hooks.json; ~/.claude/settings.json is a third hook source; allow-vs-deny across sources untested · D23, D24, V3
-- The agent leaves Cursor's sandbox unasked · D22
-- F1 quoting and F2 writable interpreter · docs/spikes/S2-tamper.md; fixes in D5, built in V3
-- Push block is a guard, not a lock (`--no-verify`, env var, `sh -c`; Cursor agents not covered) · docs/learnings.md
+- Recorder down ⇒ outbound commands denied in this repo (by design, D4).
+- Decision path writes sessions.json with fsync on every hook (`SessionStore.save`); a latency floor and file I/O on the request path; no card owns it yet.
+- R0 does not guard ~/.claude/settings.json (D24: a hook source the agent can write); V3a reports whether an allow there can beat our deny.
+- File reads fire preToolUse and beforeReadFile with no shared id → recorded twice · V2c.
+- One unknown event name disables a whole hooks.json · D23, V3a.
+- The agent leaves Cursor's sandbox unasked · D22, V3a check.
+- Push block is a guard, not a lock (`--no-verify`, env var, `sh -c`; Cursor agents not covered) · docs/learnings.md.
 
 ## Next 3 actions
-1. On the owner's wave choice: write briefs (V3, V5, V6, maybe V4) with agent-ready-tickets + pass 2; create worktrees `.claude/worktrees/ag-<card>-<slug>`; give first messages.
-2. D9 review, then V2c and V8b briefs (after V6).
-3. V1b: SPEC catch-up (list above).
+1. When a worker reports: read `head -n 6` of its report, review, merge on the owner's OK, update STATE.
+2. After V3a/V5a merge: write V3b and V5b briefs (agent-ready-tickets, pass 2 only).
+3. D9 review, then V2c and V8b briefs (after V6); V1b SPEC catch-up.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.
