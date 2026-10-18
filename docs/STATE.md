@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-18 17:55 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: wave-3. S1–S5 ✅, V1a ✅, V2 ✅ (3da6dc7), V8 ✅ (92e7fdc, 4af8125), V2b ✅ (79a46a7). Wave 3 briefed and worktrees created 2026-10-18: V3a ∥ V5a ∥ V6 ∥ V1b (docs).
+Updated: 2026-10-18 21:40 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: wave-3 merging. V1b ✅ merged 65936a1, V5a ✅ merged 75c7c0e (check: 1827 passed, 4 skipped). V6 and V3a have follow-ups (staged merge, owner OK 2026-10-18).
 Pending decisions: D16
 
 ## Spikes and cards
@@ -13,10 +13,8 @@ Pending decisions: D16
 - V4 not started: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 needs a tap (not a bare .rb path). Revisit V4's checks before briefing.
 
 ## In flight
-- V3a · worker (owner starts) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
-- V5a · worker (owner starts) · .claude/worktrees/ag-v5a-r0-normalize · ag-v5a-r0-normalize · docs/reports/V5a.md
-- V6 · worker (owner starts) · .claude/worktrees/ag-v6-localstore · ag-v6-localstore · docs/reports/V6.md
-- V1b · worker (owner starts) · .claude/worktrees/ag-v1b-spec · ag-v1b-spec · docs/reports/V1b.md
+- V3a · worker (follow-up: merge main, strip subagentStart.task; merges after V6) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
+- V6 · worker (follow-up: merge main, route session events to the subagent link) · .claude/worktrees/ag-v6-localstore · ag-v6-localstore · docs/reports/V6.md
 
 ## Machine state (verified 2026-10-18 17:53 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`). V3a's manual checks move it aside and restore it.
@@ -29,13 +27,19 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Start the three workers (commands given in chat 2026-10-18: `uv sync`, then `claude --permission-mode plan` with line 1 of the brief).
+1. Paste the V6 and V3a follow-ups (given in chat 2026-10-18); after V6 merges, tell V3a to merge main once more.
 
 ## Decisions changed since last handoff (b8ca2b1)
+- Owner 2026-10-18: staged merge; D21 fallback mark expires after 30 min; root-run risk → R0 guards the install folder (V5b) and a package hash check before sudo (V3b).
 - D14 status amended (owner 2026-10-18): Neo4j opt-in via config.toml; R0 denies `wipe`; wipe never clears marks.
 - Owner 2026-10-18: R0 keeps the raw-text check as SPEC says, accepting that a commit message naming `hooks.json`, `.config/agentfly` or 8787 is denied; revisit after real use.
 
 ## Open risks and findings
+- MERGE BUG, fix in V6 follow-up (verified 2026-10-18 by probe on a trial merge V1b+V5a+V6, 1900 tests green): V6's `hook()` answers `sessionStart`/`sessionEnd`/`subagentStart` before `apply_rules`, so V5a's link never sees `subagentStart`; a subagent whose only link is `subagentStart` is allowed the R1 send (V5a alone: deny). Fix in V6 after V5a merges.
+- LEAK: hook client keeps `subagentStart.task` (the subagent's prompt text) in the request and the hook log; V3a registers `subagentStart`. Fix in V3a's follow-up before any real install.
+- V3a findings: a missing interpreter makes Cursor fail open (exit 127), unlike a missing client (exit 2, deny-all); Cursor reads the system hooks.json only at start-up (restart after init/uninstall); Settings → Hooks does not list system hooks; same-step "read .env + curl" can reach the shell gate before the read (curl can't carry the content); exact Cursor version list (3.24.12, 3.25.9 verified 2026-10-18).
+- V5a gaps: `pkill python`/`killall python3` can kill the recorder; ruby/perl -e not inline code; relative paths after `cd`, globs, brace expansion, variables not seen by R0; R0 does not guard ~/.claude/settings.json.
+- V6 gaps: README/HOOKS/.env.example still say neo4j.env alone enables Neo4j; Neo4j Session lacks workspace_root; marks inherited via D21 are not derivable from stored steps.
 - Recorder down ⇒ outbound commands denied in this repo (by design, D4).
 - Decision path writes sessions.json with fsync on every hook (`SessionStore.save`); a latency floor and file I/O on the request path; no card owns it yet.
 - R0 does not guard ~/.claude/settings.json (D24: a hook source the agent can write); V3a reports whether an allow there can beat our deny.

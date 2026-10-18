@@ -618,7 +618,7 @@ target flow in `docs/product-goals.md`. V1 makes the edit once you approve.
 ---
 
 ## D21. How the "secret was read" mark reaches a subagent
-Status: **approved (2026-10-16), option A** · Cards: V2b (client keeps `parent_tool_call_id`), V5 (engine), V1b (SPEC §5 R1) · Tested by: S5 §4 · Replaces: S3 §5's provisional (a)
+Status: **approved (2026-10-16), option A**; owner 2026-10-18: the workspace fallback mark expires after 30 minutes (built in V5a) · Cards: V2b (client keeps `parent_tool_call_id`), V5 (engine), V1b (SPEC §5 R1) · Tested by: S5 §4 · Replaces: S3 §5's provisional (a)
 
 | Option | What it means |
 |---|---|
