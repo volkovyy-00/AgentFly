@@ -522,5 +522,40 @@ def test_odd_shapes_are_ignored_not_errors(fields: dict[str, Any]) -> None:
     assert guard.files_reason(fields) is None
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"cwd": "/Users/me/.config", "file_path": "agentfly/token"},  # two halves of one path
+        {"cwd": "/Users/me/.config/agentfly", "file_path": "token"},
+        {"cwd": "/Users/me/.config/agentfly", "attachments": [{"file_path": "token"}]},
+        {"tool_input": {"file_path": "token", "working_directory": "/Users/me/.config/agentfly"}},
+        {"cwd": "/Users/me/.local/share", "tool_input": {"path": "agentfly/sessions.json"}},
+        {"tool_input": {"paths": ["/p/a.py", "~/.config/agentfly/token"]}},
+        {"tool_input": {"target_directories": ["/Users/me/.local/share/agentfly"]}},
+    ],
+)
+def test_a_relative_target_is_tried_under_the_folder_and_list_keys_are_read(
+    fields: dict[str, Any],
+) -> None:
+    assert guard.files_reason(fields) == "guard_path"
+
+
+def test_relative_targets_in_other_folders_are_allowed() -> None:
+    fields = {"cwd": "/p", "file_path": "agentfly/token", "tool_input": {"paths": ["a.py"]}}
+    assert guard.files_reason(fields) is None
+
+
+def test_a_relative_target_under_a_guard_folder_is_denied_with_no_recorder(
+    client: Path, isolated_home: Path
+) -> None:
+    event = {
+        "hook_event_name": "preToolUse",
+        "tool_name": "Read",
+        "cwd": "/Users/me/.config",
+        "tool_input": {"file_path": "agentfly/token"},
+    }
+    assert call_with_target(client, isolated_home, event)["permission"] == "deny"
+
+
 def test_the_guard_finds_a_repeated_dot_segment_in_a_command_too() -> None:
     assert guard.offline_answer("cat ~/.config/././agentfly/token")[1] == "guard_path"

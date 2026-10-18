@@ -319,21 +319,31 @@ def guard_reason(text: str) -> str | None:
 
 
 # What a file tool names: `tool_input` of `preToolUse`, `file_path` and attachments of
-# `beforeReadFile`, and the `cwd` of a shell call (R0 checks it too).
+# `beforeReadFile`, and the folder a call runs in (R0 checks `cwd` too). Values are a string or a
+# list of strings; a relative target is also tried under each folder.
 _PATH_KEYS: tuple[str, ...] = (
     "file_path",
     "path",
+    "paths",
     "target_file",
     "target_directory",
+    "target_directories",
     "target_notebook",
 )
+_DIR_KEYS: tuple[str, ...] = ("cwd", "working_directory")
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def file_targets(payload: dict[str, Any]) -> list[str]:
     """Paths the action names, whatever the event. Only strings; other shapes are ignored."""
-    found: list[str] = []
     tool_input: Any = payload.get("tool_input")
     sources: list[Any] = [payload, tool_input]
+    found: list[str] = []
     attachments: Any = payload.get("attachments")
     if isinstance(attachments, list):
         for item in attachments:
@@ -341,13 +351,15 @@ def file_targets(payload: dict[str, Any]) -> list[str]:
                 found.append(item)
             else:
                 sources.append(item)
+    folders: list[str] = []
     for source in sources:
         if isinstance(source, dict):
-            found += [source[key] for key in _PATH_KEYS if isinstance(source.get(key), str)]
-    cwd: Any = payload.get("cwd")
-    if isinstance(cwd, str):
-        found.append(cwd)
-    return found
+            for key in _PATH_KEYS:
+                found += _strings(source.get(key))
+            for key in _DIR_KEYS:
+                folders += _strings(source.get(key))
+    found += [os.path.join(f, t) for f in folders for t in found if not t.startswith("/")]
+    return found + folders
 
 
 def path_guard_reason(path: str) -> str | None:
