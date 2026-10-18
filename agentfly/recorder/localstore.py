@@ -36,6 +36,7 @@ QUEUE_MAX: int = 1024
 TICK_S: float = 60.0  # how often an idle writer wakes up to check the purge schedule
 REOPEN_AFTER_S: float = 5.0
 WRITE_TIMEOUT_S: float = 5.0
+WIPE_BUDGET_S: float = 10.0  # `agentfly wipe` gives up after this long, however busy the file is
 READ_TIMEOUT_S: float = 2.0
 PROGRESS_OPS: int = 1000  # SQLite VM steps between two looks at the read deadline
 SESSIONS_CAP: int = 500
@@ -105,6 +106,9 @@ class StoreUnavailable(Exception):
     """The history cannot be read right now (cannot open, or the time limit ran out)."""
 
 
+_IN_USE: str = "the history file is in use; old pages may remain"
+
+
 class WipeIncomplete(Exception):
     """Rows are deleted but the file still holds old pages (a reader kept the log busy)."""
 
@@ -144,8 +148,24 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     conn.execute("COMMIT")
 
 
-def purge_rows(conn: sqlite3.Connection, cutoff: str) -> None:
-    """Retention: steps older than the cutoff, then sessions that have no step left."""
+def _truncate_wal(conn: sqlite3.Connection) -> bool:
+    """Cut the log down to nothing so no old page image stays in it. False when a reader is busy.
+
+    It never waits: the writer thread must stay free, and the caller tries again later.
+    """
+    conn.execute("PRAGMA busy_timeout=0")
+    try:
+        busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+    finally:
+        conn.execute(f"PRAGMA busy_timeout={int(WRITE_TIMEOUT_S * 1000)}")
+    return not busy
+
+
+def purge_rows(conn: sqlite3.Connection, cutoff: str) -> bool:
+    """Retention: steps older than the cutoff, then sessions that have no step left.
+
+    Returns False when the log could not be cut yet (a reader holds it); try `_truncate_wal` again.
+    """
     with _transaction(conn):
         conn.execute("DELETE FROM steps WHERE time < ?", (cutoff,))
         conn.execute(
@@ -153,24 +173,36 @@ def purge_rows(conn: sqlite3.Connection, cutoff: str) -> None:
             " AND NOT EXISTS (SELECT 1 FROM steps WHERE steps.session_id = sessions.id)",
             (cutoff,),
         )
+    return _truncate_wal(conn)
 
 
-def _checkpoint(conn: sqlite3.Connection) -> None:
-    """Fold the log into the file and cut it. A busy answer is not an error, so look at it."""
-    for _ in range(25):
-        busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
-        if not busy:
-            return
+def _checkpoint(conn: sqlite3.Connection, deadline: float) -> None:
+    """Fold the log into the file and cut it. A busy answer is not an error, so look at it.
+
+    Quick tries with a pause between them: a checkpoint that waits for a reader would hold the
+    write lock the whole time and starve the recorder's own writer.
+    """
+    while not _truncate_wal(conn):
+        if time.monotonic() >= deadline:
+            raise WipeIncomplete(_IN_USE)
         time.sleep(0.2)
-    raise WipeIncomplete("the history file is in use; old pages may remain")
+
+
+def _wipe_reason(exc: sqlite3.Error) -> str:
+    """Why the file could not be rewritten: busy gets the "in use" text, anything else its class."""
+    busy = isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+    return _IN_USE if busy else f"the history file could not be rewritten ({type(exc).__name__})"
 
 
 def wipe_file(path: Path) -> tuple[int, int]:
     """Delete every session and step, then rewrite the file so nothing old stays in it.
 
-    Returns (sessions, steps) deleted. Session marks and Neo4j are not touched here.
+    Returns (sessions, steps) deleted. Session marks and Neo4j are not touched here. Gives up after
+    WIPE_BUDGET_S in total: with nothing deleted yet it raises the sqlite error, with rows already
+    deleted it raises WipeIncomplete.
     """
-    conn = sqlite3.connect(path, timeout=WRITE_TIMEOUT_S, isolation_level=None)
+    deadline = time.monotonic() + WIPE_BUDGET_S
+    conn = sqlite3.connect(path, timeout=WIPE_BUDGET_S, isolation_level=None)
     try:
         conn.execute("PRAGMA secure_delete=ON")
         try:
@@ -181,9 +213,14 @@ def wipe_file(path: Path) -> tuple[int, int]:
             if not str(exc).startswith("no such table"):
                 raise
             return 0, 0  # the recorder made the file but was stopped before the tables
-        _checkpoint(conn)
-        conn.execute("VACUUM")
-        _checkpoint(conn)
+        try:
+            _checkpoint(conn, deadline)
+            left = max(0, int((deadline - time.monotonic()) * 1000))
+            conn.execute(f"PRAGMA busy_timeout={left}")  # VACUUM may wait, but only this long
+            conn.execute("VACUUM")
+            _checkpoint(conn, deadline)
+        except sqlite3.Error as exc:
+            raise WipeIncomplete(_wipe_reason(exc)) from exc
     finally:
         conn.close()
     return sessions, steps
@@ -219,6 +256,7 @@ class LocalStore:
         self._retry_at: float = 0.0
         self._failing: bool = False
         self._dropping: bool = False
+        self._wal_dirty: bool = False  # a purge could not cut the log yet
 
     # ---- lifecycle
 
@@ -230,6 +268,7 @@ class LocalStore:
         self._last_purge = None
         self._retry_at = 0.0
         self._failing = self._dropping = False
+        self._wal_dirty = False
         # The thread keeps its own queue: a writer that outlives a failed stop() must not
         # start taking items meant for the next start().
         self._thread = threading.Thread(
@@ -315,13 +354,16 @@ class LocalStore:
             self._close()
 
     def _tick(self) -> None:
-        """Run the retention sweep at start and then once per PURGE_EVERY."""
+        """Run the retention sweep at start and once per PURGE_EVERY. Between sweeps, finish a
+        cut of the log that a reader blocked."""
         now = self.clock()
-        if self._last_purge is not None and now - self._last_purge < PURGE_EVERY:
-            return
-        self._last_purge = now
+        due = self._last_purge is None or now - self._last_purge >= PURGE_EVERY
         try:
-            purge_rows(self._connection(), (now - RETENTION).isoformat())
+            if due:
+                self._last_purge = now
+                self._wal_dirty = not purge_rows(self._connection(), (now - RETENTION).isoformat())
+            elif self._wal_dirty:
+                self._wal_dirty = not _truncate_wal(self._connection())
         except Exception as exc:  # noqa: BLE001
             self._failed(exc)
 

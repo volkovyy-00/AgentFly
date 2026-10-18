@@ -8,18 +8,19 @@ import queue
 import sys
 import threading
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from neo4j import Driver, GraphDatabase
 
-from agentfly.recorder.clean import command_for_storage, website_name
+from agentfly.recorder import clean as clean_settings
+from agentfly.recorder.clean import clean_command, website_name
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
-from agentfly.recorder.rules import RULES, Session
+from agentfly.recorder.rules import RULES, Session, mark
 
 logger = logging.getLogger("agentfly")
 
@@ -45,6 +46,9 @@ class StepRecord:
     rule_description: str | None = None
     prev_step_id: str | None = None
     workspace_root: str | None = None
+    # The command as typed, only when CLEAN_COMMANDS is off. Neo4j's Command node reads it;
+    # `command` (history, live trail) is always the cleaned text.
+    raw_command: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def step_id(self) -> str:
@@ -212,7 +216,7 @@ def _merge_step(tx: Any, record: StepRecord) -> None:
             MATCH (st:Step {id: $sid})
             MERGE (st)-[:TOUCHED]->(c)
             """,
-            cid=record.command,
+            cid=record.raw_command or record.command,
             sid=record.step_id,
         )
     for host in record.hosts:
@@ -336,6 +340,7 @@ def build_step_record(
     command: str | None = None
     hosts: tuple[str, ...] = ()
     tool: str | None = None
+    raw_command: str | None = None
 
     if kind == "read" or kind == "edit":
         raw_path: str = str(payload.get("file_path", "") or "")
@@ -344,7 +349,9 @@ def build_step_record(
             file_sensitive = is_sensitive(raw_path)
     elif kind == "shell":
         raw_cmd: str = str(payload.get("command", "") or "")
-        command = command_for_storage(raw_cmd, root)
+        command = clean_command(raw_cmd, root)
+        if not clean_settings.CLEAN_COMMANDS:
+            raw_command = raw_cmd
         hosts = hosts_from_cleaned(command)
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in words(command):
@@ -356,13 +363,15 @@ def build_step_record(
                 break
             if file_path is None and (root / token).exists():
                 file_path = relative_file_path(token, root)
-        # mark() reacts to any sensitive word in the raw command, and the cleaner may have
-        # hidden it. The step still records that a sensitive file was touched, without a path.
-        if not file_sensitive and any(is_sensitive(word) for word in words(raw_cmd)):
-            file_path = None
-            file_sensitive = True
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
+
+    if kind == "shell" and not file_sensitive:
+        # The rule engine's own test, whatever this chat's mark is: the history and R1 agree.
+        # (A read step already used it above: `mark()` tests the same file name.)
+        if mark(payload, replace(session, marked=False)).marked:
+            file_sensitive = True
+            file_path = None  # the cleaner hid the name; do not show another file as touched
 
     rule_description: str | None = None
     if rule_id is not None:
@@ -394,6 +403,7 @@ def build_step_record(
         rule_description=rule_description,
         prev_step_id=prev_step_id,
         workspace_root=first_workspace_root(payload),
+        raw_command=raw_command,
     )
 
 
