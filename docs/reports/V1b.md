@@ -1,7 +1,7 @@
 # V1b: SPEC catch-up
 Status: done (as of 2026-10-18 17:00)
 Result: SPEC.md now states S3, S5 and the owner answers of 2026-10-16..18. No "Pending S3" or "Pending S5" is left; the one marker is "Pending D16". Docs only; AGENTS.md needed no change. Unsettled points are listed below.
-Evidence: Check command passes: ruff clean, 100 files formatted, 650 passed, 4 skipped. `grep "Pending S[35]" SPEC.md` is empty. Files: SPEC.md, docs/reports/V1b.md. Commit on ag-v1b-spec (see git log).
+Evidence: Check command passes: ruff check and format clean, 650 passed, 4 skipped (run twice). `grep "Pending S[35]" SPEC.md` is empty. Files: SPEC.md, docs/reports/V1b.md. Commit on ag-v1b-spec (see git log).
 Needs owner: none. Optional: decide whether the 30-minute workspace fallback (D21) is a rules-file field (`scope`/`window`) or engine-only; I wrote it as engine behaviour.
 Details: see "## 2026-10-18 17:00" below.
 
@@ -27,14 +27,14 @@ Details: see "## 2026-10-18 17:00" below.
 | D14 | §3 (Neo4j needs `neo4j = true`, `wipe` keeps marks), §4 (already stated), §5 (R0 denies `wipe`), §11 |
 | D15 | §6 (already stated) |
 | D16 | not written in: stays proposed; §0 and §12 carry "Pending D16" |
-| D17 | §0 (it is the decision to write this SPEC); no other home |
+| D17 | no SPEC home: it is the decision to write this SPEC (and update AGENTS.md); the SPEC itself is its result |
 | D18 | §3, §8, §12 (already stated) |
 | D19 | §11 (already stated; `wipe` keeps marks added) |
 | D20 | §7, §12 (already stated) |
 | D21 | §5 "Subagents", §8 (`subagentStart` record-only) |
 | D22 | §10 "The sandbox is not a control", known gaps |
 | D23 | §3, §7 (`init -g`, `doctor`), §8 |
-| D24 | §7 (`doctor`), §8 "Where hooks come from", §10 known gaps |
+| D24 | §7 (`doctor`), §8 "Where hooks come from" (cites S2 for the allow-all-hook result), §10 known gaps |
 | D25 | §3, §8 |
 
 Owner answers not in DECISIONS: R0 denies `agentfly serve` and `agentfly wipe` (§5); 401/403 gets the offline guard, every inline one-liner is denied offline (§3, §9); 0.5 s wait and the p95 target re-measured in V3a (§8).
@@ -49,7 +49,7 @@ Owner answers not in DECISIONS: R0 denies `agentfly serve` and `agentfly wipe` (
 | What does R0 deny, including `serve` and `wipe`? | §5 "R0": AgentFly folders, any `hooks.json`, rules file, token; stop/remove commands and the port; `agentfly serve` and `agentfly wipe`; writes to guard paths. |
 | What does the client do on 401/403? | §3 and §9: applies the offline guard, never an allow. |
 | When does Neo4j receive steps? | §3: only with `neo4j = true` in `~/.config/agentfly/config.toml`. |
-| What does `wipe` delete? | §3 and §11: saved sessions and steps from the local store; never the marks; the Neo4j copy only by the store's `--clear`. |
+| What does `wipe` delete? | §3: saved sessions and steps from the local store; never the marks; the Neo4j copy only by the store's `--clear`. §11 repeats that it keeps the marks. |
 
 ### Unsettled, left as is, or not decided here
 - `scope` and `window` on `after_then`: D10 approved them as provisional option (a); D21 A replaced it and keeps the 30-minute workspace fallback. Whether that fallback is a rules-file field is not decided; SPEC describes it as engine behaviour. This is separate from the approved `path_scope`.

@@ -312,7 +312,8 @@ when the rules card is built.
   is harmless.
 
 **Scope of the mark.** It belongs to one chat (Cursor's conversation id). A
-secret read in one chat does not affect another. It is saved to a small file so
+secret read in one chat does not affect another, except for the chat's own
+subagents (below). It is saved to a small file so
 that a restart of the recorder does not forget it, and it clears only when a
 new chat starts.
 
@@ -512,9 +513,11 @@ events are untested.
 
 **Where hooks come from (D24).** Cursor runs hooks from several places side by
 side: the system file, the user and project `hooks.json`, and also
-`~/.claude/settings.json`, which the agent can write. A deny from the system
-file still stands next to them (S1), but how Cursor combines an allow from one
-of the other sources with AgentFly's deny is untested. `doctor` warns when
+`~/.claude/settings.json`, which the agent can write. In spike S2 an allow-all
+shell hook in the user or project `hooks.json` did not cancel AgentFly's deny.
+No spike tested `~/.claude/settings.json` that way, and how Cursor combines an
+allow from any other source with AgentFly's deny on the other events is
+untested. `doctor` warns when
 `~/.claude/settings.json` holds hooks on a gate event; that becomes a failure
 if an allow turns out to override.
 
