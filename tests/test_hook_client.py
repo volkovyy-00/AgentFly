@@ -601,3 +601,39 @@ def test_the_parents_task_call_and_a_subagent_start_keep_the_ids_that_link_them(
     assert task_body["tool_use_id"] == PARENT_CALL and "tool_input" not in task_body
     assert start_body["parent_conversation_id"] == "parent-chat"
     assert start_body["tool_call_id"] == PARENT_CALL == start_body["parent_tool_call_id"]
+
+
+@pytest.mark.parametrize("event_name", ["subagentStart", "sessionStart", "sessionEnd"])
+def test_a_planted_task_text_in_a_session_event_never_leaves_the_client(
+    client: Path, isolated_home: Path, event_name: str
+) -> None:
+    write_token(isolated_home)
+    event = {
+        "hook_event_name": event_name,
+        "conversation_id": "child-chat",
+        "workspace_roots": ["/proj"],
+        "parent_conversation_id": "parent-chat",
+        "tool_call_id": PARENT_CALL,
+        "subagent_id": "sub-1",
+        "subagent_type": "general-purpose",
+        "is_parallel_worker": False,
+        "task": PLANTED,
+        "additional_context": PLANTED,
+        "error_message": PLANTED,
+        "nested": {"task": PLANTED},
+    }
+    with StubRecorder() as stub:
+        result = run_hook(client, isolated_home, event, port=stub.port)
+    answer_of(result)
+    body = stub.bodies[0]
+    for where, text in (
+        ("body", stub.requests[0]["body"].decode()),
+        ("log", hook_log(isolated_home)),
+        ("stderr", result.stderr.decode()),
+        ("stdout", result.stdout.decode()),
+    ):
+        assert PLANTED not in text, where
+    assert body["parent_conversation_id"] == "parent-chat"
+    assert body["tool_call_id"] == PARENT_CALL
+    assert body["subagent_id"] == "sub-1" and body["subagent_type"] == "general-purpose"
+    assert body["is_parallel_worker"] is False

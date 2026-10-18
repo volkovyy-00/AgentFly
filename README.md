@@ -64,24 +64,45 @@ These files count as sensitive (decided by file name only):
 
 ## Installation
 
-```bash
-git clone https://github.com/volkovyy-00/AgentFly.git
-cd AgentFly
-uv sync          # creates .venv with the server dependencies
-./install.sh     # writes .cursor/hooks.json (gitignored, machine-local)
-```
-
-`uv sync` also installs the `agentfly` and `agentfly-hook` commands into `.venv`.
-To install the built package instead (the page is inside the wheel):
+AgentFly watches every Cursor project on this Mac, and the agent cannot switch it off without
+your password. Two commands, macOS only:
 
 ```bash
-uv build
-uv tool install dist/*.whl   # puts agentfly and agentfly-hook on your PATH
+uv build && uv tool install dist/*.whl   # from a clone; the PyPI and Homebrew releases come later
+agentfly init -g                          # asks for your password once
 ```
 
-Then open the folder in Cursor, mark it as **trusted**, and restart Cursor if
-the hooks do not show up under **Settings → Hooks**. Run `./install.sh` again
-after every clone and whenever `install.sh` changes.
+`agentfly init -g` downloads a pinned, checksum-verified Python and copies the hook client into
+`/Library/Application Support/AgentFly/` (root-owned, not writable by your user), writes a hash
+record there, and adds AgentFly's hooks to Cursor's system-wide
+`/Library/Application Support/Cursor/hooks.json`. Other tools' entries in that file are left as
+they are, and a backup of the old file is kept. It writes nothing and exits with an error if the
+installed Cursor version, or any hook event, is not one AgentFly has verified, or if the download
+fails its checksum. Running it twice changes nothing and needs no password the second time.
+Quit and reopen Cursor afterwards so it loads the hooks. Its Settings → Hooks panel does not list
+system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s)`.
+
+`init -g` and `uninstall` run the installed AgentFly package as root, so they are only as
+trustworthy as that package and the Python it was installed with, which your user (and so the
+agent) can write. Run them from a tool environment you just installed, not one an agent has
+had access to. After install, `agentfly doctor` (next card) compares the recorded hashes.
+
+To remove everything, run this **before** `uv tool uninstall`:
+
+```bash
+agentfly uninstall                  # asks for your password once
+```
+
+It removes AgentFly's hook entries first and then its system folder, and leaves other tools'
+entries alone. Until you run it, the installed hook client keeps guarding Cursor. **Quit and
+reopen Cursor afterwards:** it keeps its old hook list until it restarts, and in the meantime
+its calls to the removed client fail (exit 127), which lets every action through.
+
+**From a clone (developers).** `uv sync` makes `.venv` with the server dependencies and the
+`agentfly` and `agentfly-hook` commands. `./install.sh` writes a project-level
+`.cursor/hooks.json` (gitignored, no sudo, user-writable) for development only; after
+`agentfly init -g`, delete that file or every event arrives twice. Open the folder in Cursor,
+mark it as **trusted**, and restart Cursor if the hooks do not show under **Settings → Hooks**.
 
 ## Usage
 
