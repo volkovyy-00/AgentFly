@@ -289,40 +289,8 @@ def _rewrite_hooks(layout: Layout, new_text: str, old_text: str) -> None:
     _write_atomic(layout.hooks_file, new_text.encode("utf-8"), layout)
 
 
-def _hooks_info(
-    layout: Layout,
-    previous: dict[str, Any] | None,
-    existing: str | None,
-    merged: str,
-    backup: Path | None,
-) -> dict[str, Any]:
-    """What uninstall needs to give the original hooks file back byte for byte.
-
-    The splice cannot tell "no hooks key" from an empty one, so install records the backup of
-    the file as it was and the hash of what it wrote. A file we did not touch keeps the old values.
-    """
-    if existing is not None and merged == existing:
-        old = (previous or {}).get("hooks_file", {})
-        keys = ("original_backup", "original_sha256", "written_sha256")
-        return {key: old[key] for key in keys if key in old}
-    info: dict[str, Any] = {
-        "original_backup": None,
-        "original_sha256": None,
-        "written_sha256": _sha256(merged),
-    }
-    if backup is not None and existing is not None:
-        if not hooks_file.our_entries(existing, prefix(layout)):  # the file as the user had it
-            info["original_backup"] = backup.name
-            info["original_sha256"] = _sha256(existing)
-    return info
-
-
-def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -> str | None:
-    """The hooks file as it was before install, when the file is still exactly what install wrote.
-
-    Anything else (another tool edited it since, a backup that is gone or changed) gives None and
-    the caller keeps the spliced text.
-    """
+def _recorded_original(layout: Layout, info: dict[str, Any] | None) -> str | None:
+    """The hooks file as it was before install: the backup the record names, if it still matches."""
     if not info:
         return None
     try:
@@ -330,13 +298,70 @@ def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -
         if not isinstance(name, str) or Path(name).name != name:
             return None
         original = (layout.backups / name).read_bytes().decode("utf-8")
-        if _sha256(original) != info["original_sha256"]:
-            return None
-        if _sha256(current) != info["written_sha256"]:
-            return None
-        return original
     except (KeyError, TypeError, OSError, UnicodeDecodeError):
         return None
+    return original if _sha256(original) == info.get("original_sha256") else None
+
+
+def _only_ours_differs(
+    layout: Layout, entries: list[HookEntry], current: str, original: str
+) -> bool:
+    """Whether `current` and `original` differ in nothing but our entries (spliced forms equal)."""
+    mark = prefix(layout)
+    try:
+        with_ours = hooks_file.merge(original, entries, mark)
+        return hooks_file.remove_ours(current, mark) == hooks_file.remove_ours(with_ours, mark)
+    except InstallError:
+        return False
+
+
+def _hooks_info(
+    layout: Layout,
+    previous: dict[str, Any] | None,
+    existing: str | None,
+    merged: str,
+    backup: Path | None,
+    entries: list[HookEntry],
+) -> dict[str, Any]:
+    """What uninstall needs to give the original hooks file back byte for byte.
+
+    The splice cannot tell "no hooks key" from an empty one, so install records the backup of
+    the file as it was and the hash of what it wrote. A file we did not touch keeps the old values.
+    """
+    old = (previous or {}).get("hooks_file", {})
+    if existing is not None and merged == existing:
+        keys = ("original_backup", "original_sha256", "written_sha256")
+        return {key: old[key] for key in keys if key in old}
+    info: dict[str, Any] = {
+        "original_backup": None,
+        "original_sha256": None,
+        "written_sha256": _sha256(merged),
+    }
+    mark = prefix(layout)
+    if existing is None or backup is None:
+        return info
+    if not existing.strip() or not hooks_file.our_entries(existing, mark):
+        info["original_backup"], info["original_sha256"] = backup.name, _sha256(existing)
+    else:  # a repair or upgrade: the earlier original still holds if nothing but ours changed
+        kept = _recorded_original(layout, old)
+        if kept is not None and _only_ours_differs(layout, entries, existing, kept):
+            info["original_backup"], info["original_sha256"] = (
+                old["original_backup"],
+                old["original_sha256"],
+            )
+    return info
+
+
+def _exact_original(layout: Layout, info: dict[str, Any] | None, current: str) -> str | None:
+    """The original hooks file, when the file is still exactly what install wrote.
+
+    Anything else (another tool edited it since, a backup that is gone or changed) gives None and
+    the caller keeps the spliced text.
+    """
+    original = _recorded_original(layout, info)
+    if original is None or info is None or _sha256(current) != info.get("written_sha256"):
+        return None
+    return original
 
 
 def _swap_in(new: Path, target: Path, graveyard: Path) -> None:
@@ -465,7 +490,7 @@ def install(
         existing = _read_hooks(layout)
         merged = hooks_file.merge(existing, entries, prefix(layout))  # a bad file fails here
         backup = _backup(layout, existing) if existing is not None and merged != existing else None
-        hooks_info = _hooks_info(layout, previous, existing, merged, backup)
+        hooks_info = _hooks_info(layout, previous, existing, merged, backup, entries)
         record = records.build(
             agentfly_version=agentfly_version(),
             cursor_version=cursor_version,
@@ -493,11 +518,19 @@ def install(
             else:
                 _restore(layout, graveyard)
         except Exception:
-            if not created_root:  # the previous files are kept, never deleted by the next lines
+            if created_root:
+                note = (
+                    "cleaning up the failed install did not finish; "
+                    f"run `agentfly uninstall` to remove what is left of {layout.system_root}"
+                )
+            else:  # the previous files are kept, never deleted by the lines below
                 keep_graveyard = True
-                note = f"restoring the previous files failed; they are kept in {graveyard}"
-                print(f"agentfly init: {note}", file=sys.stderr)
-                failure.add_note(note)
+                note = (
+                    f"restoring the previous files failed; they are kept in {graveyard} "
+                    "(the next `agentfly init -g` removes that folder)"
+                )
+            print(f"agentfly init: {note}", file=sys.stderr)
+            failure.add_note(note)
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -546,6 +579,25 @@ def _strip_hooks(layout: Layout, *, created: bool, hooks_info: dict[str, Any] | 
     return [f"removed AgentFly's {len(ours)} entries from {layout.hooks_file}"]
 
 
+def _keep_old_backups(layout: Layout) -> list[str]:
+    """Earlier versions kept backups inside the system folder: move them out before it goes."""
+    old = layout.system_root / "backups"
+    if old.is_symlink() or not old.is_dir():
+        return []
+    moved = 0
+    for item in sorted(old.iterdir()):
+        if item.is_symlink() or not item.is_file():
+            continue
+        _make_dir(layout.backups, layout)
+        target, counter = layout.backups / item.name, 0
+        while target.exists():
+            counter += 1
+            target = layout.backups / f"{item.name}-{counter}"
+        os.rename(item, target)
+        moved += 1
+    return [f"kept {moved} earlier backup(s) in {layout.backups}"] if moved else []
+
+
 def describe_oserror(exc: OSError) -> str:
     """One line for the user: the system's reason, and the file it was about."""
     return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
@@ -560,6 +612,7 @@ def uninstall(layout: Layout) -> Outcome:
         messages = _strip_hooks(layout, created=bool(info and info.get("created")), hooks_info=info)
         if layout.system_root.is_symlink():
             raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
+        messages += _keep_old_backups(layout)
         messages += _remove_folder(layout)
     except OSError as exc:
         reason = describe_oserror(exc)

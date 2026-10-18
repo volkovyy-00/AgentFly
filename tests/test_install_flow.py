@@ -594,3 +594,92 @@ def test_leftovers_of_an_interrupted_uninstall_are_reported_and_removed(layout: 
     outcome = installer.uninstall(layout)
     assert outcome.changed and any("leftover" in line for line in outcome.messages)
     assert not stray.exists() and not installer.is_installed(layout)
+
+
+# ---------------------------------------------------------------- found by the final audit
+
+
+@pytest.mark.parametrize("blank", ["", "  \n"])
+def test_an_empty_hooks_file_installs_and_comes_back_as_it_was(
+    layout: Layout, archive: tuple[Path, PythonBuild], blank: str
+) -> None:
+    layout.cursor_dir.mkdir(parents=True)
+    layout.hooks_file.write_text(blank)
+    do_install(layout, archive)
+    assert hooks_file.our_entries(layout.hooks_file.read_text(), installer.prefix(layout))
+    installer.uninstall(layout)
+    assert layout.hooks_file.read_text() == blank and not layout.system_root.exists()
+
+
+def damage_one_of_our_entries(layout: Layout) -> None:
+    """Change one registered timeout in place, so the next run is a repair and the layout stays."""
+    text = layout.hooks_file.read_text()
+    assert '"timeout": 2' in text
+    layout.hooks_file.write_text(text.replace('"timeout": 2', '"timeout": 3', 1))
+
+
+def test_a_repair_keeps_the_byte_for_byte_give_back_when_only_our_entries_changed(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    original = '{"version": 1}\n'
+    layout.cursor_dir.mkdir(parents=True)
+    layout.hooks_file.write_text(original)
+    do_install(layout, archive)
+    damage_one_of_our_entries(layout)
+    assert do_install(layout, archive).changed  # the repair
+    installer.uninstall(layout)
+    assert layout.hooks_file.read_text() == original
+
+
+def test_a_repair_does_not_bring_back_the_original_over_another_tools_later_edit(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    layout.cursor_dir.mkdir(parents=True)
+    layout.hooks_file.write_text('{"version": 1}\n')
+    do_install(layout, archive)
+    data = json.loads(layout.hooks_file.read_text())
+    data["hooks"]["afterFileEdit"] = [json.loads(OTHER_TOOL_ENTRY)]
+    data["hooks"][cursor.EVENTS[0]][0]["timeout"] = (
+        3  # one of ours differs, so the next run repairs
+    )
+    layout.hooks_file.write_text(json.dumps(data, indent=2))
+    do_install(layout, archive)
+    installer.uninstall(layout)
+    left = json.loads(layout.hooks_file.read_text())
+    assert left["hooks"] == {"afterFileEdit": [json.loads(OTHER_TOOL_ENTRY)]}
+
+
+def test_a_cleanup_that_cannot_finish_says_what_is_left(
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def broken(*args: object, **kwargs: object) -> None:
+        raise InstallError("hook command does not start")
+
+    def cannot_clean(*args: object, **kwargs: object) -> None:
+        raise OSError(1, "Operation not permitted")
+
+    monkeypatch.setattr(installer, "smoke", broken)
+    monkeypatch.setattr(installer, "_undo_first_install", cannot_clean)
+    with pytest.raises(InstallError, match="does not start") as caught:
+        do_install(layout, archive)
+    assert "agentfly uninstall" in capsys.readouterr().err
+    assert any("did not finish" in note for note in caught.value.__notes__)
+    assert layout.system_root.exists()  # the safe side: nothing half-removed
+
+
+def test_uninstall_keeps_backups_an_earlier_version_left_inside_the_folder(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    layout.cursor_dir.mkdir(parents=True)
+    layout.hooks_file.write_text(OTHER_FILE)
+    do_install(layout, archive)
+    old = layout.system_root / "backups"
+    old.mkdir()
+    (old / "hooks.json.20260101-000000").write_text('{"older": true}\n')
+    outcome = installer.uninstall(layout)
+    assert any("earlier backup" in line for line in outcome.messages)
+    assert not layout.system_root.exists()
+    assert '{"older": true}\n' in [p.read_text() for p in layout.backups.iterdir()]
