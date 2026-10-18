@@ -410,3 +410,112 @@ def test_the_offline_count_file_is_never_followed_through_a_symlink(
     (logs / "offline-count").symlink_to(victim)
     answer_of(run_hook(client, isolated_home, event_for("beforeShellExecution"), port=free_port()))
     assert victim.read_text(encoding="utf-8") == "keep"
+
+
+# ---------------------------------------------------------------- file tools (D4, SPEC section 9)
+
+FILE_TARGETS = [
+    "~/.config/agentfly/token",
+    "~/.local/share/agentfly/sessions.json",
+    "~/.config/agentfly/config.toml",
+    "/Library/Application Support/Cursor/hooks.json",
+    "/Users/me/.config/agentfly/token",
+    "~/.CONFIG/AgentFly/TOKEN",  # other letter case
+    "~/.config/x/../agentfly/token",  # `..`
+    "/Users/me/Library/../.config/agentfly/token",
+    "/Library/Application Support/Cursor/../Cursor/hooks.json",  # `..` and a space
+    "~/.config/././agentfly/token",  # `/./` more than once
+    "~/.config//agentfly//token",
+    "/Library/Application\\ Support/AgentFly/rules.toml",
+]
+FILE_TOOLS = ["Read", "Write", "StrReplace", "Delete", "Edit"]
+
+
+def call_with_target(client: Path, home: Path, event: dict[str, Any]) -> dict[str, Any]:
+    write_token(home)  # a token but nothing listening
+    return answer_of(run_hook(client, home, {"conversation_id": "f1", **event}, port=free_port()))
+
+
+@pytest.mark.parametrize("path", FILE_TARGETS)
+def test_a_read_of_a_guard_path_is_denied_with_no_recorder(
+    client: Path, isolated_home: Path, path: str
+) -> None:
+    event = {"hook_event_name": "beforeReadFile", "file_path": path, "content": "x"}
+    answer = call_with_target(client, isolated_home, event)
+    assert answer["permission"] == "deny" and "agentfly start" in answer["user_message"]
+    assert "agentfly start" in answer["agent_message"]
+    assert '"guard": "guard_path"' in hook_log(isolated_home)
+
+
+@pytest.mark.parametrize("path", FILE_TARGETS)
+def test_an_attached_guard_path_is_denied_with_no_recorder(
+    client: Path, isolated_home: Path, path: str
+) -> None:
+    event = {
+        "hook_event_name": "beforeReadFile",
+        "file_path": "/p/a.txt",
+        "attachments": [{"type": "file", "file_path": "/p/b.txt"}, {"file_path": path}],
+    }
+    assert call_with_target(client, isolated_home, event)["permission"] == "deny"
+
+
+@pytest.mark.parametrize("tool", FILE_TOOLS)
+@pytest.mark.parametrize("path", FILE_TARGETS)
+def test_a_file_tool_on_a_guard_path_is_denied_with_no_recorder(
+    client: Path, isolated_home: Path, tool: str, path: str
+) -> None:
+    event = {
+        "hook_event_name": "preToolUse",
+        "tool_name": tool,
+        "tool_input": {"file_path": path, "content": "x", "new_string": "y"},
+    }
+    answer = call_with_target(client, isolated_home, event)
+    assert answer["permission"] == "deny" and "agentfly start" in answer["user_message"]
+
+
+def test_other_files_are_still_allowed_with_no_recorder(client: Path, isolated_home: Path) -> None:
+    read = {"hook_event_name": "beforeReadFile", "file_path": "/p/README.md", "attachments": []}
+    write = {
+        "hook_event_name": "preToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/p/src/app.py", "content": "hooks.json ~/.config/agentfly"},
+    }
+    assert call_with_target(client, isolated_home, read) == {"permission": "allow"}
+    assert call_with_target(client, isolated_home, write) == {"permission": "allow"}
+
+
+def test_a_file_named_like_a_tool_is_not_called_outbound(client: Path, isolated_home: Path) -> None:
+    event = {"hook_event_name": "beforeReadFile", "file_path": "/p/docs/curl"}
+    assert call_with_target(client, isolated_home, event) == {"permission": "allow"}
+
+
+def test_a_shell_call_in_a_guard_folder_is_denied_with_no_recorder(
+    client: Path, isolated_home: Path
+) -> None:
+    event = {
+        "hook_event_name": "beforeShellExecution",
+        "command": "cat token",
+        "cwd": "/Users/me/.config/agentfly",
+    }
+    assert call_with_target(client, isolated_home, event)["permission"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"file_path": 5},
+        {"file_path": None, "attachments": "x"},
+        {"attachments": [1, None, [], {"file_path": 7}, {"file_path": {"a": "~/x"}}]},
+        {"tool_input": "~/.config/agentfly/token"},  # a string is not a file tool's input
+        {"tool_input": {"file_path": ["a"], "path": 3}},
+        {"cwd": 4},
+        {"file_path": "/p/a\x00b"},
+    ],
+)
+def test_odd_shapes_are_ignored_not_errors(fields: dict[str, Any]) -> None:
+    assert all(isinstance(target, str) for target in guard.file_targets(fields))
+    assert guard.files_reason(fields) is None
+
+
+def test_the_guard_finds_a_repeated_dot_segment_in_a_command_too() -> None:
+    assert guard.offline_answer("cat ~/.config/././agentfly/token")[1] == "guard_path"
