@@ -76,7 +76,7 @@ v1            Docs:     V1a ✅ ──► V1b SPEC catch-up (worker, ∥ wave 3)
                              └──────────────────────► V9  History + Rules tabs (after V5b, V6, V8)
 ```
 
-Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel. Then V3b and V5b; V2c and
+Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel; post-merge review → fix cards F3 ∥ F5 ∥ F6. Then V3b and V5b; V2c and
 V8b after V6 (they share the step record, `memory.py` and `store.py`).
 V7 and V9 can run in parallel.
 
@@ -113,10 +113,22 @@ V7 and V9 can run in parallel.
   call with the same `tool_use_id` show as one step in `/api/steps`; the report proposes
   (does not build) the merge key for duplicate file reads (D9 note), with fixture evidence.
 
+### F3 · Install fixes from the V3a review (safe uninstall order, foreign entries, backups)
+- **Brief:** `docs/briefs/F3.md` (authoritative). From the post-merge review, 2026-10-18.
+- **Lane:** backend, ∥ F5 and F6; before V3b · **Depends on:** V3a ✅
+
+### F5 · Offline guard on file targets; marks only get stricter
+- **Brief:** `docs/briefs/F5.md` (authoritative). Owner 2026-10-18: guard denies Read/Write/Edit of guard paths (D4 note).
+- **Lane:** backend, ∥ F3 and F6; before V5b · **Depends on:** V5a ✅
+
+### F6 · History fixes from the V6 review (true "marked", wipe, retention, tests)
+- **Brief:** `docs/briefs/F6.md` (authoritative). From the post-merge review, 2026-10-18.
+- **Lane:** backend, ∥ F3 and F5 · **Depends on:** V6 ✅
+
 ### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
 - **Owner:** worker-backend · brief to write after V3a merges
 - **Lane:** backend, after V3a; ∥ V5b
-- **Depends on:** V3a ✅
+- **Depends on:** V3a ✅, F3
 - **May touch:** new `agentfly/cli/{start,stop,status,doctor}.py`; `agentfly/install/`;
   `agentfly/cli/uninstall.py` (also removes the service); README "Install";
   `tests/test_install_*.py`; the `agentfly/cli/__init__.py` merge point.
@@ -160,7 +172,7 @@ V7 and V9 can run in parallel.
 ### V5b · Rules file, rule kinds, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
 - **Owner:** worker-backend · brief to write after V5a merges
 - **Lane:** backend, after V5a; ∥ V3b
-- **Depends on:** V5a ✅, V3a ✅ (`init -g` installs the active rules file)
+- **Depends on:** V5a ✅, V3a ✅ (`init -g` installs the active rules file), F5
 - **May touch:** `agentfly/recorder/rules.py`; new `agentfly/recorder/rulefile.py`;
   packaged `agentfly/rules/default.toml`; new `agentfly/cli/{rules_check,rules_test}.py`;
   new `agentfly/recorder/api/rules.py`; the rules step in `agentfly/install/`;

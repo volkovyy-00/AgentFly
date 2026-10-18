@@ -163,7 +163,7 @@ S2 result (2026-10-15): a root-owned rules file is feasible: writes fail with `P
 ---
 
 ## D4. What happens when the recorder is down or slow
-Status: **approved (2026-10-15)**, offline guard (C) as default, on two conditions: launchd `KeepAlive` is in D8 and V3 for every install path (brew and our own LaunchAgent), and the deny message says `agentfly start`. · Depends on: D1
+Status: **approved (2026-10-15)**, offline guard (C) as default (owner 2026-10-18: it also denies Read, Write and Edit of guard paths; card F5), on two conditions: launchd `KeepAlive` is in D8 and V3 for every install path (brew and our own LaunchAgent), and the deny message says `agentfly start`. · Depends on: D1
 v1.1 option, not built now: a client-side per-chat taint marker, reconciled by the recorder, with a banner if a marker was deleted. · Cost accepted.
 
 | Option | What it means |

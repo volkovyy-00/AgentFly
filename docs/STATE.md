@@ -1,17 +1,20 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-18 21:12 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: wave-3-merged. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b ✅ 65936a1, V5a ✅ 75c7c0e, V6 ✅ 4d31e3d, V3a ✅ 3fdf2f1 (2026-10-18). Main check: 1978 passed, 4 skipped (live Neo4j). Nothing in flight; next wave not yet chosen.
+Updated: 2026-10-18 22:05 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: wave-3-merged. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b ✅ 65936a1, V5a ✅ 75c7c0e, V6 ✅ 4d31e3d, V3a ✅ 3fdf2f1 (2026-10-18). Main check: 1978 passed, 4 skipped (live Neo4j). Post-merge review done (V3a, V6: no critical/high; V5a reviewer stopped by a safety classifier, 2 leads confirmed by the lead). Fix cards F3 ∥ F5 ∥ F6 briefed (owner OK 2026-10-18), pass 2 done, worktrees created; V3b/V5b after them.
 Pending decisions: D16
 
 ## Spikes and cards
 - Done (one line each under BOARD `## Done`).
-- Ready to brief: V3b (start/stop/status, LaunchAgent, doctor; plus package-hash check before sudo, owner 2026-10-18), V5b (rules file, kinds, D11 answers, rules CLI, /api/rules; plus R0 guards AgentFly's install folder, owner 2026-10-18), V2c (`tool_use_id` merge + duplicate-read proposal; lead's D9 review first), V8b (recorder fields; check what V2b/V6 already send). V3b ∥ V5b both touch `agentfly/install/` (V5b: rules step of init -g): declare a merge point or sequence it. V2c and V8b share the step record, memory.py, store.py: one after the other.
+- Fix cards first: F3 (uninstall can leave exit 2 = deny-all; foreign escaped entries; backups lost), F5 (offline guard allows Read/Write of token, sessions.json, config.toml; observe() can clear a fallback mark), F6 (history shows unmarked after `bash -c 'cat .env'`/`curl -d@.env`; wipe hangs ~139 s on a busy DB; purged rows linger in WAL; CLEAN_COMMANDS=0 reaches history). V5a was not red-teamed: a conformance/test-strength review stays open.
+- Ready to brief after fixes: V3b (start/stop/status, LaunchAgent, doctor; plus package-hash check before sudo, owner 2026-10-18), V5b (rules file, kinds, D11 answers, rules CLI, /api/rules; plus R0 guards AgentFly's install folder, owner 2026-10-18), V2c (`tool_use_id` merge + duplicate-read proposal; lead's D9 review first), V8b (recorder fields; check what V2b/V6 already send). V3b ∥ V5b both touch `agentfly/install/` (V5b: rules step of init -g): declare a merge point or sequence it. V2c and V8b share the step record, memory.py, store.py: one after the other.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 installs only from a tap. Rework V4's checks before briefing.
 - Briefs: agent-ready-tickets with a fresh pass 2; no pass 3 (owner 2026-10-18). Start workers with `claude --permission-mode plan` and line 1 of the brief.
 - Merge rule (learnings): trial-merge parallel cards and probe cross-card behaviour; merge worker branches with `--no-commit` and keep main's STATE/BOARD.
 
 ## In flight
-none
+- F3 · worker · .claude/worktrees/ag-f3-install-fixes · ag-f3-install-fixes · docs/reports/F3.md
+- F5 · worker · .claude/worktrees/ag-f5-guard-fixes · ag-f5-guard-fixes · docs/reports/F5.md
+- F6 · worker · .claude/worktrees/ag-f6-history-fixes · ag-f6-history-fixes · docs/reports/F6.md
 
 ## Machine state (verified 2026-10-18 21:08 CEST)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent (V3a installed, then uninstalled). Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -23,11 +26,12 @@ none
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Next wave: lead proposes V3b ∥ V5b (install-folder overlap declared), then V2c, then V8b. V4 needs its checks reworked first.
+1. Start F3, F5, F6 (plan-mode commands given in chat 2026-10-18).
 2. Remove the four merged worktrees (frees disk): yes or no.
-3. Push main to origin when ready (about 27 local commits after 274a50b).
+3. Push main to origin when ready.
 
 ## Decisions changed since last handoff (b8ca2b1)
+- D4 note (owner 2026-10-18): the offline guard also denies Read, Write and Edit of guard paths (F5 builds it, SPEC §9).
 - D14 note (owner 2026-10-18): Neo4j opt-in via config.toml; R0 denies `wipe`; wipe never clears marks.
 - D21 note (owner 2026-10-18): the workspace fallback mark expires after 30 minutes.
 - Owner 2026-10-18: R0 keeps the raw-text check (commit messages naming guard paths are denied); root runs user-writable code during sudo → V5b guards the install folder, V3b checks the package hash before sudo; V3/V5 split into a/b; V1b to a worker; staged merge.
