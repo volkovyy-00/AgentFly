@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-18 21:40 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: wave-3 merging. V1b ✅ merged 65936a1, V5a ✅ merged 75c7c0e (check: 1827 passed, 4 skipped). V6 and V3a have follow-ups (staged merge, owner OK 2026-10-18).
+Updated: 2026-10-18 22:20 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: wave-3 merging. V1b ✅ 65936a1, V5a ✅ 75c7c0e, V6 ✅ 4d31e3d (main: 1902 passed, 4 skipped; subagentStart-only probe denies). V3a: last merge-main step (cli/__init__.py conflict), then lead merges.
 Pending decisions: D16
 
 ## Spikes and cards
@@ -13,8 +13,7 @@ Pending decisions: D16
 - V4 not started: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 needs a tap (not a bare .rb path). Revisit V4's checks before briefing.
 
 ## In flight
-- V3a · worker (follow-up: merge main, strip subagentStart.task; merges after V6) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
-- V6 · worker (follow-up: merge main, route session events to the subagent link) · .claude/worktrees/ag-v6-localstore · ag-v6-localstore · docs/reports/V6.md
+- V3a · worker (follow-up done 1d622f5; now: merge main again for V6's cli/__init__.py) · .claude/worktrees/ag-v3a-install · ag-v3a-install · docs/reports/V3a.md
 
 ## Machine state (verified 2026-10-18 17:53 CEST)
 - /Library/Application Support/Cursor/hooks.json, /Library/Application Support/AgentFly/, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (`.venv/bin/python hooks/hook.py`). V3a's manual checks move it aside and restore it.
@@ -27,7 +26,7 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Paste the V6 and V3a follow-ups (given in chat 2026-10-18); after V6 merges, tell V3a to merge main once more.
+1. Paste the V3a merge-main message (given in chat 2026-10-18 22:20).
 
 ## Decisions changed since last handoff (b8ca2b1)
 - Owner 2026-10-18: staged merge; D21 fallback mark expires after 30 min; root-run risk → R0 guards the install folder (V5b) and a package hash check before sudo (V3b).
@@ -35,8 +34,7 @@ Pending decisions: D16
 - Owner 2026-10-18: R0 keeps the raw-text check as SPEC says, accepting that a commit message naming `hooks.json`, `.config/agentfly` or 8787 is denied; revisit after real use.
 
 ## Open risks and findings
-- MERGE BUG, fix in V6 follow-up (verified 2026-10-18 by probe on a trial merge V1b+V5a+V6, 1900 tests green): V6's `hook()` answers `sessionStart`/`sessionEnd`/`subagentStart` before `apply_rules`, so V5a's link never sees `subagentStart`; a subagent whose only link is `subagentStart` is allowed the R1 send (V5a alone: deny). Fix in V6 after V5a merges.
-- LEAK: hook client keeps `subagentStart.task` (the subagent's prompt text) in the request and the hook log; V3a registers `subagentStart`. Fix in V3a's follow-up before any real install.
+- Fixed before merge: V6 swallowing `subagentStart` (V6 1bc5aa3) and the `subagentStart.task` leak (V3a 1d622f5, merges next).
 - V3a findings: a missing interpreter makes Cursor fail open (exit 127), unlike a missing client (exit 2, deny-all); Cursor reads the system hooks.json only at start-up (restart after init/uninstall); Settings → Hooks does not list system hooks; same-step "read .env + curl" can reach the shell gate before the read (curl can't carry the content); exact Cursor version list (3.24.12, 3.25.9 verified 2026-10-18).
 - V5a gaps: `pkill python`/`killall python3` can kill the recorder; ruby/perl -e not inline code; relative paths after `cd`, globs, brace expansion, variables not seen by R0; R0 does not guard ~/.claude/settings.json.
 - V6 gaps: README/HOOKS/.env.example still say neo4j.env alone enables Neo4j; Neo4j Session lacks workspace_root; marks inherited via D21 are not derivable from stored steps.

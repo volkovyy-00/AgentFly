@@ -94,6 +94,7 @@ V7 and V9 can run in parallel.
 - V2b ✅ 2026-10-16 · docs/reports/V2b.md · merged 79a46a7 · changed D25 (new); owner addendum: serve port check, 401/403 → guard, all one-liners denied offline, live Neo4j tests need AGENTFLY_TEST_NEO4J_ENV; p95 69 ms accepted until V3 · body: git show 7f7cd70:docs/BOARD.md
 - V1b ✅ 2026-10-18 · docs/reports/V1b.md · merged 65936a1 · SPEC catch-up; leaves §8 Duplicates (V2c) · body: git show 8b1258a:docs/BOARD.md
 - V5a ✅ 2026-10-18 · docs/reports/V5a.md · merged 75c7c0e · fallback mark expires after 30 min (owner, D21) · body: git show 8b1258a:docs/BOARD.md
+- V6 ✅ 2026-10-18 · docs/reports/V6.md · merged 4d31e3d · Neo4j opt-in (config.toml); session events reach the D21 link (follow-up 1bc5aa3) · body: git show 8b1258a:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -183,11 +184,6 @@ V7 and V9 can run in parallel.
   - R0 also guards AgentFly's own install folder (uv tool / pipx environment and the
     Homebrew keg), so the agent cannot change code that later runs under `sudo` (owner,
     2026-10-18).
-
-### V6 · Local session store, history API, Neo4j opt-in, `agentfly wipe`
-- **Brief:** `docs/briefs/V6.md` (authoritative). Neo4j only with `neo4j = true` in
-  `~/.config/agentfly/config.toml` (owner, 2026-10-18).
-- **Lane:** backend, ∥ V3a and V5a · **Depends on:** V2 ✅
 
 ### V7 · Rule change flow: draft, check, diff, backtest, `sudo` approve
 - **Owner:** worker-backend
