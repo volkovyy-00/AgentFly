@@ -218,11 +218,13 @@ for policy.
 values → `<arg>`, project-relative paths kept, hosts reduced to website names,
 env assigns → `NAME=<removed>`, hard-to-parse → `<program> <unparsed>`).
 
-- Helper for the save path: `command_for_storage(cmd, project_root)`.
+- The save path (`build_step_record`) always stores `clean_command(cmd, project_root)` in the
+  local history and the live trail.
 - **Default on.** Disable with `CLEAN_COMMANDS=0` (or `false` / `no` / `off`)
-  in the process environment when starting uvicorn. Off stores the **raw**
-  command — can leak secrets into Neo4j later; debugging only.
-- Listed in `.env.example`. Call `command_for_storage` when saving steps.
+  in the process environment when starting uvicorn. Off sends the **raw**
+  command to Neo4j's Command node only (the local history and live trail stay
+  cleaned) — can leak secrets into Neo4j; debugging only.
+- Listed in `.env.example`.
 
 ## Neo4j background store
 

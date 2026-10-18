@@ -183,3 +183,33 @@ def test_wipe_leaves_the_file_private(client: TestClient) -> None:
     assert local_store.flush()
     assert main(["wipe", "--yes"]) == 0
     assert (data_dir() / ls.DB_NAME).stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize(
+    ("sqlite_says", "in_use"),
+    [
+        ("database is locked", True),
+        ("database table is locked", True),
+        ("database or disk is full", False),
+        ("disk I/O error", False),
+    ],
+)
+def test_wipe_names_the_real_cause_when_the_file_cannot_be_rewritten(
+    sqlite_says: str,
+    in_use: bool,
+    client: TestClient,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post(client, {"hook_event_name": "beforeShellExecution", "command": "ls"})
+    assert local_store.flush()
+
+    def fails(_conn: sqlite3.Connection, _deadline: float) -> None:
+        raise sqlite3.OperationalError(sqlite_says)
+
+    monkeypatch.setattr(ls, "_checkpoint", fails)  # the rows are deleted, then the rewrite fails
+    assert main(["wipe", "--yes"]) == 1
+    err = capsys.readouterr().err
+    assert ("in use" in err) is in_use
+    if not in_use:
+        assert "OperationalError" in err and "run it again" in err

@@ -188,6 +188,12 @@ def _checkpoint(conn: sqlite3.Connection, deadline: float) -> None:
         time.sleep(0.2)
 
 
+def _wipe_reason(exc: sqlite3.Error) -> str:
+    """Why the file could not be rewritten: busy gets the "in use" text, anything else its class."""
+    busy = isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+    return _IN_USE if busy else f"the history file could not be rewritten ({type(exc).__name__})"
+
+
 def wipe_file(path: Path) -> tuple[int, int]:
     """Delete every session and step, then rewrite the file so nothing old stays in it.
 
@@ -214,7 +220,7 @@ def wipe_file(path: Path) -> tuple[int, int]:
             conn.execute("VACUUM")
             _checkpoint(conn, deadline)
         except sqlite3.Error as exc:
-            raise WipeIncomplete(_IN_USE) from exc
+            raise WipeIncomplete(_wipe_reason(exc)) from exc
     finally:
         conn.close()
     return sessions, steps

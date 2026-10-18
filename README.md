@@ -182,7 +182,7 @@ in [`.env.example`](.env.example).
 | `NEO4J_URI` | `~/.config/agentfly/neo4j.env` | AuraDB address, for example `neo4j+s://<id>.databases.neo4j.io` |
 | `NEO4J_USERNAME` | `~/.config/agentfly/neo4j.env` | Database user (on Aura this may be the instance id) |
 | `NEO4J_PASSWORD` | `~/.config/agentfly/neo4j.env` | Database password |
-| `CLEAN_COMMANDS` | Server process environment | `1` (default) cleans commands before saving; `0` / `false` / `off` saves raw commands (debugging only, may leak secrets into Neo4j) |
+| `CLEAN_COMMANDS` | Server process environment | `1` (default) cleans commands before saving; `0` / `false` / `off` sends raw commands to Neo4j only; the local history stays cleaned (debugging only, may leak secrets into Neo4j) |
 
 To install the credentials file from a file you downloaded from Aura (it sets
 folder mode 700 and file mode 600, and never prints values):
