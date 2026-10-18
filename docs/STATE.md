@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-18 22:05 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: wave-3-merged. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b ✅ 65936a1, V5a ✅ 75c7c0e, V6 ✅ 4d31e3d, V3a ✅ 3fdf2f1 (2026-10-18). Main check: 1978 passed, 4 skipped (live Neo4j). Post-merge review done (V3a, V6: no critical/high; V5a reviewer stopped by a safety classifier, 2 leads confirmed by the lead). Fix cards F3 ∥ F5 ∥ F6 briefed (owner OK 2026-10-18), pass 2 done, worktrees created; V3b/V5b after them.
+Updated: 2026-10-18 22:30 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: fix-cards-dispatched. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b ✅ 65936a1, V5a ✅ 75c7c0e, V6 ✅ 4d31e3d, V3a ✅ 3fdf2f1 (2026-10-18). Main check: 1978 passed, 4 skipped. Post-merge review → F3 ∥ F5 ∥ F6 briefed (d24e664), worktrees created; owner starts them.
 Pending decisions: D16
 
 ## Spikes and cards
@@ -9,6 +9,7 @@ Pending decisions: D16
 - Ready to brief after fixes: V3b (start/stop/status, LaunchAgent, doctor; plus package-hash check before sudo, owner 2026-10-18), V5b (rules file, kinds, D11 answers, rules CLI, /api/rules; plus R0 guards AgentFly's install folder, owner 2026-10-18), V2c (`tool_use_id` merge + duplicate-read proposal; lead's D9 review first), V8b (recorder fields; check what V2b/V6 already send). V3b ∥ V5b both touch `agentfly/install/` (V5b: rules step of init -g): declare a merge point or sequence it. V2c and V8b share the step record, memory.py, store.py: one after the other.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 installs only from a tap. Rework V4's checks before briefing.
 - Briefs: agent-ready-tickets with a fresh pass 2; no pass 3 (owner 2026-10-18). Start workers with `claude --permission-mode plan` and line 1 of the brief.
+- Review evidence: probes from the 2026-10-18 review live in the lead's scratchpad (ephemeral); re-run against F-branches before merging: subagentStart-only link denies; uninstall interrupted after client unlink must exit 127 not 2; `bash -c 'cat .env'` then curl → history marked; offline Read/Write/Delete of token denied.
 - Merge rule (learnings): trial-merge parallel cards and probe cross-card behaviour; merge worker branches with `--no-commit` and keep main's STATE/BOARD.
 
 ## In flight
