@@ -105,13 +105,9 @@ V7 and V9 can run in parallel.
 
 ## v1 cards
 
-### V2c · One step per action: `tool_use_id` merge, duplicate-read proposal
-- **Owner:** worker-backend · brief to write after V2b and the D9 review
-- **Lane:** backend, after V6 (same recorder files).
-- **Depends on:** V2b, V6
-- Split from V2b 2026-10-16 (brief budget). A `preToolUse` and a `beforeShellExecution`
-  call with the same `tool_use_id` show as one step in `/api/steps`; the report proposes
-  (does not build) the merge key for duplicate file reads (D9 note), with fixture evidence.
+### V2c · One step per action: merge by `tool_use_id`, path fallback for id-less reads
+- **Brief:** `docs/briefs/V2c.md` (authoritative, once written). Scope per the D9 merge-rule note (owner 2026-10-18).
+- **Lane:** backend, after F6 (both change `localstore.py`) · **Depends on:** V2b ✅, V6 ✅, F6, the owner's 3.25.9 edit capture
 
 ### F3 · Install fixes from the V3a review (safe uninstall order, foreign entries, backups)
 - **Brief:** `docs/briefs/F3.md` (authoritative). From the post-merge review, 2026-10-18.

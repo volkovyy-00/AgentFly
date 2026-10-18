@@ -326,6 +326,18 @@ today one read is recorded twice (S1 log). S5 records whether both carry the
 same `generation_id`. V2 proposes a merge key (for example `generation_id` plus
 `file_path`) in its report; the lead brings it to the owner.
 
+**Merge rule (owner, 2026-10-18, after the lead's D9 review).** The hook log
+(`~/.local/share/agentfly/logs/events.jsonl`) shows that on Cursor 3.25.9
+`beforeReadFile` does carry `tool_use_id`, equal to its `preToolUse` Read in 28 of 28
+reads (3.24.12: none, 3 reads); shell pairs match in 34 of 34; all 59 read paths are
+absolute. So: events of one chat with the same `tool_use_id` form one step, for every
+kind. Fallback for an id-less `beforeReadFile` only: the oldest unpaired `preToolUse`
+Read of the same chat and normalised path within 5 s. No pair means two steps, as
+before. Record and display only: rules still check every event, and the step's verdict
+is the stricter one among gate events. V2c builds it; MCP gets a made-up test case,
+no live test. The owner captures edits, parallel reads and one @-attached file on
+3.25.9 first.
+
 ---
 
 ## D10. Rule file language
