@@ -683,3 +683,33 @@ def test_uninstall_keeps_backups_an_earlier_version_left_inside_the_folder(
     assert any("earlier backup" in line for line in outcome.messages)
     assert not layout.system_root.exists()
     assert '{"older": true}\n' in [p.read_text() for p in layout.backups.iterdir()]
+
+
+def test_a_leftover_that_will_not_delete_does_not_stop_the_folder_from_moving_aside(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    command = registered_command(layout)
+    stray = layout.system_root.parent / f".{layout.system_root.name}-removing-1"
+    stray.mkdir()
+    (stray / "stuck").write_text("x")
+    real = shutil.rmtree
+
+    def refuse_the_stray(path: object, *args: object, **kwargs: object) -> None:
+        if Path(str(path)) == stray:
+            raise OSError(1, "Operation not permitted", str(path))
+        real(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(shutil, "rmtree", refuse_the_stray)
+    with pytest.raises(InstallError, match="Operation not permitted"):
+        installer.uninstall(layout)
+    assert not layout.system_root.exists() and run_registered(command) == 127
+
+
+def test_an_install_sweeps_what_an_interrupted_uninstall_moved_aside(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    stray = layout.system_root.parent / f".{layout.system_root.name}-removing-1"
+    (stray / "python").mkdir(parents=True)
+    do_install(layout, archive)
+    assert not stray.exists()

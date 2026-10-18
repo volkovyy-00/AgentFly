@@ -397,12 +397,11 @@ def _remove_folder(layout: Layout) -> list[str]:
 
     The folder is renamed away first: one atomic step after which the registered interpreter path
     is gone and a command Cursor cached exits 127 (allowed), whatever happens to the deletion.
-    Leftovers of an earlier interrupted run are deleted first, so a stale name never blocks it.
+    Leftovers of an earlier interrupted run go after that, so a leftover that will not delete
+    can never hold up the rename.
     """
     messages: list[str] = []
-    for old in _leftovers(layout):
-        shutil.rmtree(old)
-        messages.append(f"removed leftover {old}")
+    earlier = _leftovers(layout)
     if layout.system_root.exists():
         aside = layout.system_root.with_name(
             f".{layout.system_root.name}-removing-{time.time_ns()}"
@@ -410,6 +409,9 @@ def _remove_folder(layout: Layout) -> list[str]:
         os.rename(layout.system_root, aside)
         shutil.rmtree(aside)
         messages.append(f"removed {layout.system_root}")
+    for old in earlier:
+        shutil.rmtree(old)
+        messages.append(f"removed leftover {old}")
     return messages
 
 
@@ -443,7 +445,11 @@ def install(
     )
     created_root = not layout.system_root.exists()
     _make_dir(layout.system_root, layout)
-    for stale in [*layout.system_root.glob(".staging-*"), *layout.system_root.glob(".old-*")]:
+    for stale in [
+        *layout.system_root.glob(".staging-*"),
+        *layout.system_root.glob(".old-*"),
+        *_leftovers(layout),  # what an interrupted uninstall moved aside
+    ]:
         shutil.rmtree(stale, ignore_errors=True)
     staging = layout.system_root / f".staging-{os.getpid()}"
     graveyard = layout.system_root / f".old-{os.getpid()}"
@@ -488,7 +494,9 @@ def install(
 
         entries = desired_entries(layout)
         existing = _read_hooks(layout)
-        merged = hooks_file.merge(existing, entries, prefix(layout))  # a bad file fails here
+        merged = hooks_file.merge(
+            existing, entries, prefix(layout)
+        )  # a bad file fails here, before the record and the hooks are written
         backup = _backup(layout, existing) if existing is not None and merged != existing else None
         hooks_info = _hooks_info(layout, previous, existing, merged, backup, entries)
         record = records.build(
