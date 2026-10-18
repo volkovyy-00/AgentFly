@@ -6,14 +6,15 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from agentfly.recorder.paths import private_dir
-from agentfly.recorder.rules import Session
+from agentfly.recorder.rules import Session, mark
 
 # D21 A fallback: a marked chat starts a Task and no child event names it, so a new chat in the
 # same workspace inherits the mark for this long (counted from the Task).
@@ -205,12 +206,11 @@ class SessionStore:
             links_changed = True  # a child event linked this Task: no fallback needed
         if linkable:
             links_changed |= self.register_task(payload, sid)
-        if call in self.calls and not session.parent_id and call:
+        if call in self.calls and not session.parent_id:
             self._sessions[sid] = session = replace(session, parent_id=self.calls[call])
             changed = True
         if changed or links_changed:
-            if self.propagate():
-                changed = True
+            self.propagate()
             if links_changed:
                 self.save_links()
             self.save()
@@ -267,17 +267,19 @@ class SessionStore:
         parent_id: str = session.parent_id or self.calls.get(session.parent_call, "")
         return self._sessions.get(parent_id) if parent_id else None
 
-    def effective_marked(self, session: Session) -> bool:
-        """Marked itself, inside an inherited window, or a descendant of a marked chat."""
-        now: float = self.clock()
+    def chain(self, session: Session) -> Iterator[Session]:
+        """The chat, then its parent, grandparent and so on (a cycle or a long chain ends)."""
         seen: set[str] = set()
         current: Session | None = session
         while current is not None and current.id not in seen and len(seen) < _MAX_DEPTH:
-            if current.marked or current.inherited_until > now:
-                return True
+            yield current
             seen.add(current.id)
             current = self.parent_of(current)
-        return False
+
+    def effective_marked(self, session: Session) -> bool:
+        """Marked itself, inside an inherited window, or a descendant of a marked chat."""
+        now: float = self.clock()
+        return any(s.marked or s.inherited_until > now for s in self.chain(session))
 
     def effective(self, session: Session) -> Session:
         """The session as the rules should see it: marked if a parent chat is."""
@@ -285,33 +287,28 @@ class SessionStore:
             return replace(session, marked=True)
         return session
 
-    def ancestors(self, session: Session) -> list[Session]:
-        found: list[Session] = []
-        seen: set[str] = {session.id}
-        current: Session | None = self.parent_of(session)
-        while current is not None and current.id not in seen and len(seen) < _MAX_DEPTH:
-            found.append(current)
-            seen.add(current.id)
-            current = self.parent_of(current)
-        return found
-
     def propagate(self) -> bool:
         """A mark set inside a subagent marks its parents. True if any session changed."""
         changed: bool = False
         for session in list(self._sessions.values()):
             if not session.marked:
                 continue
-            for ancestor in self.ancestors(session):
+            for ancestor in islice(self.chain(session), 1, None):
                 if not ancestor.marked:
                     self._sessions[ancestor.id] = replace(ancestor, marked=True)
                     changed = True
         return changed
 
-    def mark_chain(self, session_id: str) -> None:
-        """Mark a chat and its parents for good, and save."""
-        session: Session | None = self._sessions.get(session_id)
-        if session is None:
-            return
-        self._sessions[session_id] = replace(session, marked=True)
-        self.propagate()
-        self.save()
+    def apply_mark(self, payload: dict[str, Any], stored: Session) -> tuple[Session, Session, bool]:
+        """Run the marking rule for one event: (session to save, session the rules see, marks).
+
+        A secret read in this chat marks it and its parents for good, even if a parent already
+        marked it. The caller saves the returned session with `put`, which writes the parents too.
+        `marks` is true when the chat became marked on this event, itself or through a parent.
+        """
+        was_marked: bool = self.effective_marked(stored)
+        if mark(payload, stored).marked and not stored.marked:
+            self._sessions[stored.id] = stored = replace(stored, marked=True)
+            self.propagate()
+        session: Session = self.effective(stored)
+        return stored, session, session.marked and not was_marked

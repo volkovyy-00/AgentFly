@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agentfly.recorder.memory import memory_steps, parse_limit
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
-from agentfly.recorder.rules import Session, decide, deny_messages, mark
+from agentfly.recorder.rules import Session, decide, deny_messages
 from agentfly.recorder.sessions import SessionStore
 from agentfly.recorder.store import StepRecord, build_step_record, graph_store
 
@@ -177,15 +177,8 @@ mount_v2_redirects(app)
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     """Mark, decide, memory + Neo4j enqueue, persist session. Returns (permission, verdict)."""
     store: SessionStore = get_store()
-    session_id: str = str(payload.get("conversation_id", "") or "unknown")
     stored: Session = store.observe(payload)  # links to a parent chat (D21 A), then the session
-    was_marked: bool = store.effective(stored).marked  # marked itself or through a parent chat
-    own: Session = mark(payload, stored)  # a read in this chat marks it even if a parent did
-    if own.marked and not stored.marked:
-        store.mark_chain(session_id)  # the chat and its parents; a subagent's mark reaches up
-        stored = store.get(session_id) or own
-    session: Session = store.effective(stored)
-    marks: bool = session.marked and not was_marked
+    stored, session, marks = store.apply_mark(payload, stored)  # also marks parent chats
     verdict, rule_id = decide(payload, session)
     order: int = session.next_step
     record: StepRecord = build_step_record(
@@ -195,7 +188,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         rule_id,
         order=order,
     )
-    session = replace(stored, next_step=session.next_step + 1)
+    session = replace(stored, next_step=order + 1)
     store.put(session)
     memory_steps.append_from_record(record, marks=marks)
     graph_store.enqueue(record)

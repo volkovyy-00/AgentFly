@@ -17,6 +17,11 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
+# The word that stands for a substitution; R0 reads the program names after the prefix.
+SUB_PREFIX: str = "@sub:"
+SUB_EMPTY: str = "@sub@"
+
+MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
 
 SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
@@ -25,6 +30,8 @@ _READERS: frozenset[str] = frozenset({"ruby", "perl"})
 _INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
 _SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
 
+_DQ_RUN = re.compile(r'[^"\\$`]+')  # plain text inside double quotes
+_BT_RUN = re.compile(r"[^`\\]+")  # plain text inside backticks
 _PLAIN = re.compile(r"[^ \t\r\n;&|()<>\\'\"$`]+")
 _SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'{},\\<>", " "))
 _ANSI_SIMPLE: dict[str, str] = {
@@ -170,6 +177,7 @@ class _Out:
         self.unparsed: bool = False
         self.unquoted_heredoc: bool = False
         self.code_heredoc: bool = False
+        self.scans: int = 0  # nested scans so far; MAX_SCANS caps the work of one command
 
 
 class _Scanner:
@@ -252,18 +260,27 @@ class _Scanner:
         reader: bool = any(is_reader(name) for name in names)
         if herestrings and reader:
             self.out.code_heredoc = True
+        # Each distinct text once, and only the first `eval` (it already holds the later ones):
+        # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work.
+        texts: dict[str, None] = {}
         for index, name in enumerate(names):
             if name in SHELLS:
                 script: str | None = shell_script(words[index + 1 :])
                 if script is not None:
-                    self.sub_scan(script)
-                for text in herestrings:
-                    self.sub_scan(text)
-            elif name == "eval" and index + 1 < len(words):
-                self.sub_scan(" ".join(words[index + 1 :]))
+                    texts[script] = None
+                texts.update(dict.fromkeys(herestrings))
+            elif (
+                name == "eval"
+                and index + 1 < len(words)
+                and not any(n == "eval" for n in names[:index])
+            ):
+                texts[" ".join(words[index + 1 :])] = None
+        for text in texts:
+            self.sub_scan(text)
 
     def sub_scan(self, text: str) -> None:
-        if self.depth >= MAX_DEPTH:
+        self.out.scans += 1
+        if self.depth >= MAX_DEPTH or self.out.scans > MAX_SCANS:
             self.out.unparsed = True
             return
         _Scanner(text, self.out, self.depth + 1).parse_list(None)
@@ -273,7 +290,7 @@ class _Scanner:
         if self.depth >= MAX_DEPTH:
             self.out.unparsed = True
             self.i = self.n
-            return "@sub@"
+            return SUB_EMPTY
         before: int = len(self.out.commands)
         self.depth += 1
         found: bool = self.parse_list(")")
@@ -444,6 +461,11 @@ class _Scanner:
         s, n = self.s, self.n
         parts: list[str] = []
         while self.i < n:
+            run = _DQ_RUN.match(s, self.i)
+            if run is not None:
+                parts.append(run.group())
+                self.i = run.end()
+                continue
             c: str = s[self.i]
             if c == '"':
                 self.i += 1
@@ -474,6 +496,11 @@ class _Scanner:
         s, n = self.s, self.n
         inner: list[str] = []
         while self.i < n:
+            run = _BT_RUN.match(s, self.i)
+            if run is not None:
+                inner.append(run.group())
+                self.i = run.end()
+                continue
             c: str = s[self.i]
             if c == "`":
                 self.i += 1
@@ -538,7 +565,7 @@ def _chr(code: int) -> str:
 def placeholder(inner: list[tuple[str, ...]]) -> str:
     """The word that stands for a substitution; it names the programs inside (R0 looks at it)."""
     names: list[str] = sorted({base_name(argv[0]) for argv in inner if argv})
-    return "@sub:" + ",".join(names) + "@" if names else "@sub@"
+    return SUB_PREFIX + ",".join(names) + "@" if names else SUB_EMPTY
 
 
 def shell_script(args: list[str]) -> str | None:
@@ -562,7 +589,7 @@ def shell_script(args: list[str]) -> str | None:
     return None
 
 
-@lru_cache(maxsize=16)  # mark, R0 and R1 parse the same command in one request
+@lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
 def normalize(text: str) -> Parsed:
     """Parse a shell command line. Never raises: trouble becomes `unparsed`."""
     out = _Out()

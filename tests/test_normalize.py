@@ -341,3 +341,30 @@ def test_a_big_command_is_parsed_in_linear_time() -> None:
     parsed = normalize(big)
     assert time.perf_counter() - start < 3.0
     assert not parsed.unparsed
+
+
+# ---------------------------------------------------------------- work stays bounded
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "eval " * 40 + "curl x",
+        "eval " * 3000 + "curl x",
+        "bash " * 300 + "-c 'curl x'",
+        "bash " * 200 + "<<< 'bash bash <<< ls'",
+        "bash -c 'a'; " * 2000,
+        "echo `a` " * 1000,
+    ],
+)
+def test_repeated_wrappers_do_not_multiply_the_work(text: str) -> None:
+    start = time.perf_counter()
+    parsed = normalize(text)
+    assert time.perf_counter() - start < 2.0
+    assert len(parsed.commands) < 10_000
+
+
+def test_the_first_eval_covers_the_later_ones() -> None:
+    assert ("curl", "x") in normalize("eval eval eval curl x").commands
+    assert ("curl", "x") in normalize("bash bash -c 'curl x'").commands
+    assert normalize("eval " * 40 + "curl x").unparsed  # too deep: counted as unparseable

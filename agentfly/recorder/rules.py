@@ -8,10 +8,10 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any
-from urllib.parse import urlparse
 
-from agentfly.recorder.names import is_local_host, is_sensitive
-from agentfly.recorder.normalize import Parsed, base_name, interpreter, normalize
+from agentfly.recorder import DEFAULT_PORT
+from agentfly.recorder.names import host_of, is_local_host, is_sensitive
+from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter, normalize
 
 Action = dict[str, Any]
 
@@ -62,10 +62,7 @@ def _looks_like_host_token(token: str) -> str | None:
     Also finds a URL glued to an option: `--url=https://host`, `--url=host`, `-d@https://host`.
     """
     if "://" in token:
-        try:
-            return urlparse("//" + token.split("://", 1)[1]).hostname
-        except ValueError:
-            return None
+        return host_of("//" + token.split("://", 1)[1])
     if token.startswith("-") and "=" in token:
         return _looks_like_host_token(token.split("=", 1)[1])
 
@@ -160,10 +157,13 @@ _R0_PATHS: tuple[str, ...] = (
 _R0_SUBCOMMANDS: frozenset[str] = frozenset({"serve", "stop", "uninstall", "wipe"})
 _R0_KILLERS: frozenset[str] = frozenset({"pkill", "killall"})
 _R0_RECORDER_WORDS: tuple[str, ...] = ("agentfly", "uvicorn", "recorder")
-_R0_LOOKUPS: tuple[str, ...] = ("pgrep", "pidof", "lsof", "ps", "fuser", "agentfly")
-_PORT = re.compile(r"(?<![a-z0-9])8787(?![a-z0-9])")  # D25; not inside a hex id
+_PROCESS_LOOKUPS: tuple[str, ...] = ("pgrep", "pidof", "lsof", "ps", "fuser")
+_R0_LOOKUPS: tuple[str, ...] = (*_PROCESS_LOOKUPS, "agentfly")
+_PORT = re.compile(
+    rf"(?<![a-z0-9])(?<!\d\.){DEFAULT_PORT}(?![a-z0-9])(?!\.\d)"
+)  # D25; not inside a hex id
 _INT = re.compile(r"-?\d+")
-_LOOKUP = re.compile(r"(?<![a-z0-9_])(pgrep|pidof|lsof|ps|fuser)(?![a-z0-9_])")
+_LOOKUP = re.compile(rf"(?<![a-z0-9_])({'|'.join(_PROCESS_LOOKUPS)})(?![a-z0-9_])")
 
 
 def _fold_path(text: str) -> str:
@@ -210,12 +210,12 @@ def _kill_hits_recorder(words: list[str], at: int) -> bool:
     own: set[int] = {RECORDER_PID} | ({RECORDER_PPID} if RECORDER_PPID > 1 else set())
     args: list[str] = words[at + 1 :]
     for position, arg in enumerate(args):
-        if any(f"@sub:{key}" in arg or f",{key}" in arg for key in _R0_LOOKUPS):
+        if any(f"{SUB_PREFIX}{key}" in arg or f",{key}" in arg for key in _R0_LOOKUPS):
             return True
         if not _INT.fullmatch(arg):
             continue
         number: int = int(arg)
-        if abs(number) in own or number == 0:
+        if abs(number) in own or arg == "0":  # `kill -0 PID` only probes
             return True
         if number == -1 and position > 0:  # `kill -1 123` is SIGHUP, `kill -9 -1` is everything
             return True
@@ -279,6 +279,13 @@ RULES: list[Rule] = [
 ]
 
 
+def _names_secret(word: str) -> bool:
+    """A word that is a sensitive file, or has one glued on: `--env-file=.env`, `-d@.env`."""
+    return is_sensitive(word) or any(
+        is_sensitive(part) for part in (word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1])
+    )
+
+
 def mark(action: Action, session: Session) -> Session:
     """Return session, marking if this action touches a sensitive file name."""
     if session.marked:
@@ -293,7 +300,7 @@ def mark(action: Action, session: Session) -> Session:
     if event == "beforeShellExecution":
         cmd: str = str(action.get("command", ""))
         for argv in normalize(cmd).all_commands():
-            if any(is_sensitive(word) for word in argv):
+            if any(_names_secret(word) for word in argv):
                 return replace(session, marked=True)
 
     return session

@@ -239,7 +239,18 @@ def test_r0_steps_are_recorded_as_blocked_by_r0(client: TestClient) -> None:
     assert "R0" in str(steps[-1])
 
 
-def test_r0_does_not_store_the_command_text_it_denied(client: TestClient, tmp_path: Path) -> None:
+def test_r0_does_not_store_the_command_text_it_denied(client: TestClient) -> None:
     post(client, shell("cat ~/.config/agentfly/token"))
     stored = (Path.home() / ".local/share/agentfly/sessions.json").read_text(encoding="utf-8")
     assert "token" not in stored
+
+
+def test_signal_zero_probes_and_is_not_every_process() -> None:
+    assert verdict_of(shell("kill -0 4242")) == ("allow", None)
+    assert verdict_of(shell("kill 0")) == ("blocked", "R0")
+
+
+@pytest.mark.parametrize("text", ["print(0.8787)", "version 1.8787.2", "id a8787b", "x87870"])
+def test_numbers_that_merely_contain_the_port_digits_are_not_the_port(text: str) -> None:
+    assert verdict_of(shell(f"echo '{text}'")) == ("allow", None)
+    assert verdict_of(shell(f"echo {text}")) == ("allow", None)

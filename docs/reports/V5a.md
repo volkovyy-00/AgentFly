@@ -1,9 +1,17 @@
 # V5a: Command normalisation, subagent mark, R0
-Status: done (as of 2026-10-18 18:41)
+Status: done (as of 2026-10-18 19:20)
 Result: Rules now see through wrappers, substitutions, heredocs and one-liners; R0 runs first and cannot be softened; a mark follows a chat into its subagents and survives a restart. R0 and R1 stay in Python. One owner question: should the workspace fallback mark expire (built) or stay for good?
-Evidence: code commit 954e766 on ag-v5a-r0-normalize; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1805 passed, 4 skipped (650 before). Live smoke over HTTP with a real `serve`: 17/17.
+Evidence: commits 954e766, then the final-verification fixes; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 1827 passed, 4 skipped (650 before). Live smoke over HTTP with a real `serve`: 17/17.
 Needs owner: Should a chat marked by the 30-minute workspace fallback stay marked for good once granted? Built: the mark ends 30 minutes after the Task ("and no longer"). Recommend keeping that; permanent would block unrelated chats.
-Details: see "## 2026-10-18 18:41" below.
+Details: see "## 2026-10-18 19:20" below.
+
+## 2026-10-18 19:20
+
+Final verification (smoke, suite, simplify, independent audit) after 954e766. Changes, in the commit after it:
+- Audit finding, confirmed and fixed: `eval eval ... curl x` (N=20, 100 characters) took 10 s and made 1M parsed commands, freezing the recorder. `normalize` now scans each distinct nested text once, only the first `eval` of a command (it already holds the later ones), and stops after `MAX_SCANS = 256` nested scans (the result is then `unparsed`, so a marked session denies it). 3000 repeated `eval` words now take 0.3 s.
+- Audit findings fixed: `kill -0 PID` is no longer "every process"; the port check ignores `0.8787` and `1.8787.2`; marking is case-folded (`cat ./.ENV`, SPEC section 5 says paths are case-folded) and sees a secret glued to a flag (`-d@.env`, `--env-file=.env`).
+- Simplify (4 reviewers): the mark logic moved into `SessionStore.apply_mark` (`apply_rules` shrinks by about 8 lines at the V6 merge point); one `chain` walk replaces two copies; dead flags removed; `names.host_of` is used again (and no longer raises on a malformed URL); the process-lookup names and the port number come from one place; the placeholder prefix is a shared constant; double-quoted and backtick text is scanned in runs; the parse cache holds 4 entries. Skipped: a shared atomic-write helper (the brief says leave `save()` alone) and a shared app-client test fixture (outside the card).
+- Audit findings left as they are (static matching; added to the gaps below): data piped into a shell or interpreter (`echo 'curl x' | sh`, V5b `pipe_into`); `pgrep -f agentfly | xargs kill`; a guard path split across commands or hidden by globs and braces (`cd ~/.config && cat agentfly/token`, `cat ~/.config/agent*`); `rm -rf ~/.config` or `~/.local/share` (erases the history without naming the folder); the word-anywhere tool match that already existed (`grep curl .`, `which curl`, `git stash push`, `pytest -k http` are denied in a marked session, as before); commit messages that spell a guard path or `hooks.json`.
 
 ## 2026-10-18 18:41
 
