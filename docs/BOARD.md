@@ -1,7 +1,7 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5, V1a, V2, V8 and V2b are done (2026-10-16). Wave 3
-(V3a, V5a, V6) briefed 2026-10-18; V3 and V5 were split into a/b halves.
+Status: **spikes S1–S5, V1a, V2, V8, V2b done (2026-10-16); wave 3 V1b, V3a, V5a, V6
+done and merged (2026-10-18). V3 and V5 were split into a/b halves.
 D16 is the only open decision.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
@@ -95,6 +95,7 @@ V7 and V9 can run in parallel.
 - V1b ✅ 2026-10-18 · docs/reports/V1b.md · merged 65936a1 · SPEC catch-up; leaves §8 Duplicates (V2c) · body: git show 8b1258a:docs/BOARD.md
 - V5a ✅ 2026-10-18 · docs/reports/V5a.md · merged 75c7c0e · fallback mark expires after 30 min (owner, D21) · body: git show 8b1258a:docs/BOARD.md
 - V6 ✅ 2026-10-18 · docs/reports/V6.md · merged 4d31e3d · Neo4j opt-in (config.toml); session events reach the D21 link (follow-up 1bc5aa3) · body: git show 8b1258a:docs/BOARD.md
+- V3a ✅ 2026-10-18 · docs/reports/V3a.md · merged 3fdf2f1 · Intel x86_64 build; Cursor 3.24.12 and 3.25.9 (exact list); R1 10/10 sandboxed and not; hook client strips subagentStart.task · body: git show 8b1258a:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -112,14 +113,10 @@ V7 and V9 can run in parallel.
   call with the same `tool_use_id` show as one step in `/api/steps`; the report proposes
   (does not build) the merge key for duplicate file reads (D9 note), with fixture evidence.
 
-### V3a · System install: `init -g` and `uninstall`
-- **Brief:** `docs/briefs/V3a.md` (authoritative). Split from V3 (owner, 2026-10-18).
-- **Lane:** backend, ∥ V5a and V6 · **Depends on:** V2b ✅
-
 ### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
 - **Owner:** worker-backend · brief to write after V3a merges
 - **Lane:** backend, after V3a; ∥ V5b
-- **Depends on:** V3a
+- **Depends on:** V3a ✅
 - **May touch:** new `agentfly/cli/{start,stop,status,doctor}.py`; `agentfly/install/`;
   `agentfly/cli/uninstall.py` (also removes the service); README "Install";
   `tests/test_install_*.py`; the `agentfly/cli/__init__.py` merge point.
@@ -163,7 +160,7 @@ V7 and V9 can run in parallel.
 ### V5b · Rules file, rule kinds, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
 - **Owner:** worker-backend · brief to write after V5a merges
 - **Lane:** backend, after V5a; ∥ V3b
-- **Depends on:** V5a ✅; V3a (`init -g` installs the active rules file)
+- **Depends on:** V5a ✅, V3a ✅ (`init -g` installs the active rules file)
 - **May touch:** `agentfly/recorder/rules.py`; new `agentfly/recorder/rulefile.py`;
   packaged `agentfly/rules/default.toml`; new `agentfly/cli/{rules_check,rules_test}.py`;
   new `agentfly/recorder/api/rules.py`; the rules step in `agentfly/install/`;

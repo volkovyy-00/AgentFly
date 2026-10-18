@@ -34,6 +34,12 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Ask what a second start of a service does to shared files.** A second `agentfly serve` rewrote the token before failing to bind, and the running recorder then rejected every hook, which the client answered with allow (V8 worker, 2026-10-16; fixed in V2b).
 - **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.
 
+## Merging parallel cards
+- **Green tests on each branch do not prove the merge.** V6 answered session events before `apply_rules`, so V5a's `subagentStart` link never ran; the trial merge passed 1900 tests while a probe showed the subagent send allowed (2026-10-18). Before merging cards that share a merge point, trial-merge them and probe the cross-card behaviour.
+- **A worker's merge-main commit can carry old lead files.** The pre-commit hook made the V3a worker unstage STATE/BOARD, so its merge commit kept old copies, and merging it into main would have reverted them. Merge such a branch with `--no-commit`, `git checkout HEAD -- docs/STATE.md docs/BOARD.md`, check the lead files' diff is empty, then commit (2026-10-18).
+- **Check free disk before trial worktrees.** Each worktree's `.venv` plus a scratch trial filled the disk mid-test; pytest errors then looked like code failures (2026-10-18). `df -h /` first; remove merged worktrees.
+
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).
 - **The agent leaves Cursor's sandbox on its own.** S5 (2026-10-16): `sudo` failed in the sandbox (127); the agent re-ran it with `sandbox: false`, no prompt to the owner. Never treat the sandbox as a control (D22).
+- **Cursor reads the system hooks.json only at start-up, and a missing interpreter fails open.** V3a (3.25.9, 2026-10-18): after `uninstall` without a restart Cursor kept calling the removed Python (exit 127) and let actions through.

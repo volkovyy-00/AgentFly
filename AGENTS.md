@@ -15,9 +15,17 @@ moves toward it card by card. So:
 The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 
 ## Commands
-These are today's commands; `init`, `start` and `doctor` (V3) add to them.
+These are today's commands; `start`, `stop`, `status` and `doctor` (V3b) add to them.
 - Install deps: `uv sync`
-- Wire Cursor hooks (writes gitignored `.cursor/hooks.json`): `./install.sh`
+- Install for every project (one `sudo`; bundled Python and hook client in
+  `/Library/Application Support/AgentFly/`, tagged entries in
+  `/Library/Application Support/Cursor/hooks.json`): `agentfly init -g`. Remove it:
+  `agentfly uninstall` (our entries first, then the folder). Quit and reopen Cursor after
+  either: it reads the system file only at start-up. The installed client is a copy, so a
+  hook client change needs `init -g` again.
+- Dev-only wiring (writes gitignored `.cursor/hooks.json`): `./install.sh`. With `init -g`
+  also installed, every event arrives twice.
+- Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`
@@ -105,6 +113,8 @@ SPEC section 8.)
   call's server and tool names), and any nested `content` / `output` (for
   example `attachments[].content`). The hook log keeps no command text.
   Top-level fields such as `parent_tool_call_id` pass through (D21).
+  Session events (`sessionStart`, `sessionEnd`, `subagentStart`) keep only ids and
+  names; `subagentStart.task` (the subagent's prompt) never leaves the client.
 - On deny, put the rule text in BOTH `user_message` and `agent_message`, and
   add to `agent_message`: "Do not retry with another tool or language. Stop
   and tell the user."
@@ -121,7 +131,9 @@ SPEC section 8.)
 - Command cleaning (`agentfly/recorder/clean.py`) is **on by default**. Set
   `CLEAN_COMMANDS=0` (or `false` / `off`) when starting the server to store
   raw commands instead — debugging only; secrets may then reach Neo4j.
-- Neo4j (optional, off by default in v1): `uv run python -m agentfly.recorder.check_db` /
+- Local history: SQLite `~/.local/share/agentfly/history.db`, 28-day retention (D14).
+- Neo4j (optional, off by default): runs only with `neo4j = true` in
+  `~/.config/agentfly/config.toml`; `neo4j.env` alone does not turn it on. `uv run python -m agentfly.recorder.check_db` /
   `python -m agentfly.recorder.store --counts` / `--clear`. Writes are background-only;
   never DELETE except `--clear`. If `neo4j+s://` fails TLS verify on the host, use `neo4j+ssc://`
   (documented in `.env.example`); restart the server after editing creds.
@@ -186,6 +198,16 @@ lines for them (R0 and normalisation: V5).
   `Cache-Control: no-cache`; `/v2/` (also `/v2`, `/v2/index.html`) answers 307 to
   `/` with the query kept; missing `ui/dist` logs a warning and does not
   prevent the app from importing.
+- Normaliser and R0 (`tests/test_normalize.py`, `tests/cases.py`, `tests/test_r0.py`):
+  wrappers, substitutions, heredocs and one-liners; guard paths and R0 commands denied
+  unmarked, bare, wrapped and unparseable. Subagent mark (`tests/test_subagent_mark.py`):
+  parent link in either order, restart, 30-minute workspace fallback.
+- History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
+  `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
+  marks and links; Neo4j off without `neo4j = true`; a session event still links a subagent.
+- Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
+  byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
+  repair and uninstall on a temporary root, the sudo command line.
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole
@@ -225,5 +247,10 @@ lines for them (R0 and normalisation: V5).
     `parent_tool_call_id` on every event (D21 A links it to the parent's mark).
     One unknown event name disables a whole `hooks.json` (D23);
     `~/.claude/settings.json` is a third hook source (D24).
+  - V3a (Cursor 3.25.9, 2026-10-18): the system file loads at start-up only (Hooks log:
+    `Loaded N enterprise hook(s)` / `No enterprise hooks configuration found`); Settings →
+    Hooks does not list system hooks. A missing interpreter exits 127 and Cursor lets the
+    action through; a missing client file exits 2 and Cursor denies everything. A
+    `~/.claude/settings.json` allow did not cancel our shell deny (one trial).
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
     notes in `demo/NOTES.md`; T0 disabled in the hook client.
