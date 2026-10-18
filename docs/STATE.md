@@ -6,7 +6,7 @@ Pending decisions: D16
 ## Spikes and cards
 - Done (one line each under BOARD `## Done`).
 - Fix cards F3, F5, F6 merged (BOARD Done). V5a was not red-teamed: a conformance/test-strength review stays open.
-- Ready to brief after fixes: V3b (start/stop/status, LaunchAgent, doctor; plus package-hash check before sudo, owner 2026-10-18), V5b (rules file, kinds, D11 answers, rules CLI, /api/rules; plus R0 guards AgentFly's install folder, owner 2026-10-18), V2c (brief `docs/briefs/V2c.md` ready, pass 2 done; scope per D9 merge-rule note, owner 2026-10-18: merge by `tool_use_id` for every kind, path fallback for id-less `beforeReadFile` and `afterFileEdit` (owner 2026-10-18); capture done, `docs/spikes/V2c-capture.md`; dispatched 2026-10-18, brief also fixes the flaky history test (owner)), V8b (recorder fields; check what V2b/V6 already send). V3b ∥ V5b both touch `agentfly/install/` (V5b: rules step of init -g): declare a merge point or sequence it. V2c and V8b share the step record, memory.py, store.py: one after the other.
+- Briefs ready (pass 2 done 2026-10-18): V3b `docs/briefs/V3b.md` (service + doctor; next, ∥ V2c), V3c (package check before sudo, R0 guards install folder and blocks reinstalling AgentFly, version-change confirm), V5b (rules file, severities, rules check/test, /api/rules, npm rule in default; lead re-checks against main before dispatch), V5c (S3 additions, ten S3 rules as off-by-default example, bypass tests). Order: V3b → V3c → V5b → V5c (they share `agentfly/install/` and the CLI). V8b after V2c (shares step record, memory.py, store.py); its highlighted verdict comes from V5b.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 installs only from a tap. Rework V4's checks before briefing.
 - Briefs: agent-ready-tickets with a fresh pass 2; no pass 3 (owner 2026-10-18). Start workers with `claude --permission-mode plan` and line 1 of the brief.
 - Review evidence: the four 2026-10-18 probes re-run on the merged tree (subagentStart-only link, history marks for wrapped/`-d@` reads, offline file tools on token spellings; uninstall stop points via F3's per-call sweep): all pass.
@@ -25,13 +25,14 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Start the V2c worker (command in the lead's last message).
-2. V3b/V5b wave choice: together with a merge point, or one after the other.
+1. Start the V2c worker (command in the lead's message of 2026-10-18).
+2. Start the V3b worker once its worktree exists (lead creates it on request).
 
 ## Decisions changed since last handoff (b8ca2b1)
 - D4 note (owner 2026-10-18): the offline guard also denies Read, Write and Edit of guard paths (F5 builds it, SPEC §9).
 - D14 note (owner 2026-10-18): Neo4j opt-in via config.toml; R0 denies `wipe`; wipe never clears marks.
 - D21 note (owner 2026-10-18): the workspace fallback mark expires after 30 minutes.
+- Owner 2026-10-18 (late): V3b ∥ V2c, then V3c → V5b → V5c; V5b split into V5b + V5c; package check and install-folder guard in a new V3c; R0 blocks the agent from installing/upgrading/removing AgentFly and a version change needs the owner's confirm; npm-publish rule in the default; S3 rules ship off by default.
 - Owner 2026-10-18: F3's failed restore keeps the old Python in a printed `.old-*` folder (accepted); flaky history test folded into V2c.
 - Owner 2026-10-18: R0 keeps the raw-text check (commit messages naming guard paths are denied); root runs user-writable code during sudo → V5b guards the install folder, V3b checks the package hash before sudo; V3/V5 split into a/b; V1b to a worker; staged merge.
 
@@ -42,13 +43,14 @@ Pending decisions: D16
 - R0 gaps (V5a): `pkill python`/`killall python3` can kill the recorder (V3b KeepAlive restarts it); ruby/perl -e not inline code; relative paths after `cd`, globs, brace expansion and variables unseen; ~/.claude/settings.json not guarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md predates V6/V3a in places; Neo4j Session lacks workspace_root; marks inherited through D21 are not derivable from stored steps.
+- No card owns SPEC §10's per-session hash check at session start (raised in V3b pass 2).
 - Flaky history test (missing flush; failed once in the merged full run, passed on rerun) · V2c fixes it.
 - One action recorded as two steps · V2c. On 3.25.9 `beforeReadFile` carries `tool_use_id` (28/28 match); SPEC §8 and AGENTS.md hook facts say otherwise until V2c.
 - Push block is a guard, not a lock · docs/learnings.md.
 
 ## Next 3 actions
-1. When V2c reports: read its head, probe (one step per action, hook answers unchanged), trial-merge.
-2. On the owner's wave choice: V3b and V5b briefs (agent-ready-tickets, pass 2); V8b after V2c.
+1. Create the V3b worktree (`.claude/worktrees/ag-v3b-service`, branch ag-v3b-service) and give the start command.
+2. When V2c or V3b reports: read its head, probe, trial-merge. Then V3c, re-check V5b's brief against main, V5b, V5c.
 3. Rework V4's checks (local tap, CLT or a CI runner) and ask the owner.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.
