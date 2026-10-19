@@ -321,13 +321,42 @@ def test_a_marking_half_that_arrives_first_stays_the_marking_step(client: TestCl
 
 
 def test_an_edit_that_began_with_a_secret_read_is_an_edit_step(client: TestClient) -> None:
-    # Known gap (report): history derives "marked" from read and shell steps, so it shows False.
     post(client, pre("Read", "e1", path="/w/.env"))
     post(client, read("/w/.env", "e1"))
     post(client, pre("Write", "e1", path="/w/.env"))
     [step] = live(client)
     assert (step["kind"], step["sensitive"]) == ("edit", True)
     assert client.get("/api/steps?limit=5").json()["marked_order"] == 1
+    assert local_store.flush()  # V6b: history says the same
+    [session] = client.get("/api/sessions").json()["sessions"]
+    assert session["marked"] is True
+    assert client.get("/api/sessions/c/steps").json()["marked_order"] == 1
+
+
+def test_a_later_half_of_a_step_keeps_the_flag_of_the_half_that_marked(clock: Clock) -> None:
+    merger = merge.StepMerger(clock=clock)
+
+    def half(marks: bool) -> StepRecord:
+        return StepRecord(
+            session_id="c",
+            started_at="t",
+            order=1,
+            time="t",
+            kind="read",
+            verdict="allowed",
+            marks=marks,
+        )
+
+    steps = [
+        ("preToolUse", {"tool_name": "Read", "tool_input": {"file_path": "/w/.env"}}, False),
+        ("beforeReadFile", {"file_path": "/w/.env"}, True),  # this half marks the chat
+        ("preToolUse", {"tool_name": "Write", "tool_input": {"file_path": "/w/.env"}}, False),
+        ("afterFileEdit", {"file_path": "/w/.env"}, False),  # a specific hook: becomes the base
+    ]
+    for name, fields, marks in steps:
+        payload = event(name, "c", "e1" if name != "afterFileEdit" else None, **fields)
+        merged, _ = merger.join("c", payload, half(marks))
+    assert (merged.kind, merged.marks) == ("edit", True)
 
 
 # ---------------------------------------------------------------- answers and storage

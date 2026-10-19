@@ -205,6 +205,14 @@ lines for them (R0 and normalisation: V5).
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
   marks and links; Neo4j off without `neo4j = true`; a session event still links a subagent.
+- History marks (`tests/test_history_mark.py`, V6b): the marked flag and the marking step
+  (`marked_order`) equal `/api/steps` for `cat .env`, a `.env` read, a lone Write and a read of
+  `.env.example`; a Read+Write of `.env` with one id (and the id-less `afterFileEdit` that ends
+  it) marks, also after a restart; a subagent, a parent marked through its subagent (links in
+  either order, nested) and a chat in the 30-minute fallback are marked with no marking step,
+  another workspace is not; a `history.db` from before V6b opens with every row, the same marked
+  flags and the first read answering 200; a failed upgrade rolls back; a flagging failure changes
+  no hook answer.
 - Step merge (`tests/test_step_merge.py`, `tests/fixtures/v2c_capture.json`): a shell, read
   or MCP pair with one `tool_use_id` is one step on the page, in history and in Neo4j's
   queue; the id-less fallback (0.3 s joins; 6 s, another path or another chat do not; the

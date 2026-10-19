@@ -181,6 +181,19 @@ mount_ui(app, _UI_DIST)
 mount_v2_redirects(app)
 
 
+def flag_marked(store: SessionStore, chat: Session) -> None:
+    """Tell the history which chats the rules count as marked now: this chat and its parents (V6b).
+
+    Every event offers the whole chain, so a parent that a subagent marked (it may have no event
+    of its own afterwards) is flagged too, and a flag that was dropped is sent again. It runs after
+    the decision and never raises: a history problem must not turn into a hook error.
+    """
+    try:
+        local_store.mark_sessions(c.id for c in store.chain(chat) if store.effective_marked(c))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("local store: marked chats not queued (%s)", type(exc).__name__)
+
+
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     """Mark, decide, memory + Neo4j enqueue, persist session. Returns (permission, verdict)."""
     store: SessionStore = get_store()
@@ -194,6 +207,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         verdict,
         rule_id,
         order=order,
+        marks=marks,
     )
     # V2c: the second hook of one action updates its step (same order) instead of adding one.
     saved, previous = step_merger.join(session.id, payload, record)
@@ -204,6 +218,7 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         memory_steps.append_from_record(saved, marks=marks)
     graph_store.enqueue(saved)
     local_store.enqueue(saved)
+    flag_marked(store, stored)  # after the step is queued: the chat's row exists by then
 
     permission: dict[str, str]
     if verdict == "blocked" and rule_id is not None:
@@ -237,7 +252,8 @@ async def hook(request: Request) -> Response:
         return JSONResponse({"detail": "malformed json"}, status_code=400)
 
     if local_store.record_session_event(payload):  # history row only: not a step, no order number
-        get_store().observe(payload)  # but still V5a's parent link (subagentStart) and marks
+        store = get_store()
+        flag_marked(store, store.observe(payload))  # V5a's parent link (subagentStart) and marks
         return JSONResponse({"permission": "allow"})
 
     permission, verdict = apply_rules(payload)

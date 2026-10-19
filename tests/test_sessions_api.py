@@ -90,12 +90,20 @@ def test_steps_come_back_in_order_without_content(client: TestClient) -> None:
 
     body = client.get("/api/sessions/s1/steps").json()
     assert body["session"] == "s1" and body["truncated"] is False
+    assert list(body) == ["session", "steps", "truncated", "marked_order"]
+    assert body["marked_order"] == 2  # the .env read, as GET /api/steps?limit= says
     steps = body["steps"]
     assert [s["order"] for s in steps] == [1, 2, 3]
     assert steps[1]["file"] == ".env" and steps[1]["sensitive"] is True
     assert steps[2]["verdict"] == "blocked" and steps[2]["rule"] == "R1"
     assert steps[2]["command"] == "curl -H <arg> x.com" and steps[2]["host"] == "x.com"
     assert "abc" not in json.dumps(body)
+
+
+def test_a_chat_that_was_never_marked_has_no_marking_step(client: TestClient) -> None:
+    post(client, read("README.md"))
+    assert local_store.flush()
+    assert client.get("/api/sessions/s1/steps").json()["marked_order"] is None
 
 
 def test_a_stored_step_has_the_live_trails_keys_plus_its_time(client: TestClient) -> None:

@@ -56,6 +56,7 @@ class Joined:
     specific: StepRecord | None = None  # the latest half from a specific hook
     best: StepRecord | None = None  # the strictest half from a gate hook (not afterFileEdit)
     wrote: bool = False
+    marks: bool = False  # some half marked the chat; a later base record must not clear it (V6b)
     events: set[str] = field(default_factory=set)  # the hook events folded in so far
 
     def add(self, event: str, record: StepRecord, writes: bool) -> StepRecord:
@@ -67,6 +68,7 @@ class Joined:
         ):
             self.best = record
         self.wrote = self.wrote or writes
+        self.marks = self.marks or record.marks
         self.events.add(event)
         return self.merged()
 
@@ -81,6 +83,7 @@ class Joined:
             verdict=verdict.verdict,
             rule_id=verdict.rule_id,
             rule_description=verdict.rule_description,
+            marks=self.marks,
         )
         if self.wrote:
             merged = replace(merged, kind="edit", tool=None)

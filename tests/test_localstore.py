@@ -85,7 +85,7 @@ def test_only_the_columns_spec_section_4_lists(store: LocalStore, db: Path) -> N
         for (name,) in rows(db, "SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     assert tables == {
-        "sessions": ["id", "workspace_root", "started_at", "ended_at"],
+        "sessions": ["id", "workspace_root", "started_at", "ended_at", "marked"],
         "steps": [
             "session_id",
             "ord",
@@ -98,6 +98,7 @@ def test_only_the_columns_spec_section_4_lists(store: LocalStore, db: Path) -> N
             "command",
             "hosts",
             "rule_id",
+            "marks",
         ],
     }
 
@@ -227,7 +228,7 @@ def test_without_a_workspace_root_none_is_stored_not_the_recorders_folder(
     assert store.list_sessions()[0]["workspace_root"] is None
 
 
-# ---------------------------------------------------------------- "marked" is derived
+# ---------------------------------------------------------------- "marked" is what the rules did
 
 
 MARKING_COMMANDS = [
@@ -327,6 +328,84 @@ def test_an_edit_of_a_sensitive_file_does_not_mark_the_session(store: LocalStore
     store.enqueue(record(1, kind="edit", file_path=".env", file_sensitive=True))
     assert store.flush()
     assert store.list_sessions()[0]["marked"] is False  # mark() only reacts to reads and shells
+
+
+def test_the_marking_step_is_stored_and_named(store: LocalStore, db: Path) -> None:
+    store.enqueue(record(1))
+    store.enqueue(record(2, kind="read", file_path=".env", file_sensitive=True, marks=True))
+    store.enqueue(record(3, kind="read", file_path=".env", file_sensitive=True))
+    assert store.flush()
+    assert rows(db, "SELECT ord, marks FROM steps ORDER BY ord") == [(1, 0), (2, 1), (3, 0)]
+    found = store.session_steps("s1")
+    assert found is not None and found[2] == 2
+    assert [s["order"] for s in found[0]] == [1, 2, 3]
+    assert all("marks" not in step for step in found[0])  # steps keep the live trail's keys
+
+
+def test_the_marking_step_is_found_even_beyond_the_steps_cap(
+    store: LocalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ls, "STEPS_CAP", 2)
+    store.enqueue(record(1))
+    store.enqueue(record(2))
+    store.enqueue(record(3, marks=True))
+    assert store.flush()
+    found = store.session_steps("s1")
+    assert found is not None and (len(found[0]), found[1], found[2]) == (2, True, 3)
+
+
+def test_mark_sessions_sets_the_flag_and_nothing_lowers_it(store: LocalStore, db: Path) -> None:
+    store.enqueue(record(1))
+    assert store.flush()
+    assert store.list_sessions()[0]["marked"] is False
+    store.mark_sessions(["s1", "nobody"])
+    assert store.flush()
+    assert store.list_sessions()[0]["marked"] is True
+    assert rows(db, "SELECT id FROM sessions") == [("s1",)]  # a chat with no row gets none
+    store.enqueue(record(2))  # a later step, a session event and a re-send leave it alone
+    assert store.record_session_event({"hook_event_name": "sessionEnd", "conversation_id": "s1"})
+    store.mark_sessions([])
+    assert store.flush()
+    assert store.list_sessions()[0]["marked"] is True
+
+
+def test_mark_sessions_never_raises_and_leaves_the_drop_warning_alone(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    LocalStore().mark_sessions(["x"])  # not started: nothing to do
+    monkeypatch.setattr(ls, "QUEUE_MAX", 1)
+    release = threading.Event()
+    stuck = LocalStore()
+    monkeypatch.setattr(stuck, "_write", lambda _item: release.wait(10), raising=False)
+    stuck.start(db)
+    try:
+        stuck.enqueue(record(1))
+        for _ in range(5):
+            stuck.mark_sessions(["s1"])  # the queue is full: dropped, never raised, never waited
+        stuck._dropping = True
+        release.set()
+        assert stuck.flush()
+        stuck.mark_sessions(["s1"])
+        assert stuck._dropping is True  # only a step that was queued clears the warning state
+    finally:
+        release.set()
+        stuck.stop()
+
+
+def test_retention_keeps_the_chat_marked_even_when_the_marking_step_is_gone(
+    store: LocalStore,
+) -> None:
+    store.enqueue(record(1, at=DAY0, marks=True))
+    store.mark_sessions(["s1"])
+    store.enqueue(record(2, at=DAY0 + timedelta(days=27)))
+    assert store.flush()
+    store.clock = Clock(DAY0 + timedelta(days=30))  # type: ignore[method-assign]
+    store.enqueue(record(3, at=DAY0 + timedelta(days=30)))
+    assert store.flush()
+    [session] = store.list_sessions()
+    assert (session["steps"], session["marked"]) == (2, True)
+    found = store.session_steps("s1")
+    assert found is not None and found[2] is None  # the marking step aged out; the chat did not
 
 
 # ---------------------------------------------------------------- retention
@@ -472,8 +551,10 @@ def test_no_value_is_formatted_into_any_sql_statement(
                 hosts=(plant,),
                 rule_id=plant,
                 workspace_root=plant,
+                marks=True,
             )
         )
+        s.mark_sessions([plant])
         assert s.record_session_event(
             {"hook_event_name": "sessionEnd", "conversation_id": plant, "workspace_roots": [plant]}
         )
