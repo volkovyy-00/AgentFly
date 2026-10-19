@@ -20,6 +20,7 @@ LOADED = re.compile(r"Loaded (\d+) enterprise hook\(s\) for steps: (.*?)\s*$")
 NONE = re.compile(r"No enterprise hooks configuration found")
 INVALID = re.compile(r"\bInvalid (?P<source>.*?)\s*config\b")
 UNPARSED = re.compile(r"\bFailed to parse (?P<source>.*?)\s*hooks configuration\b")
+_RELEVANT = re.compile(r"enterprise|Invalid|Failed to parse")
 _OTHER_SOURCES: tuple[str, ...] = ("user", "project", "workspace", "claude", "plugin")
 _START_FOLDER = re.compile(r"^\d{8}T\d{6}$")
 _TAIL_BYTES = 4 << 20  # a long-running Cursor writes a lot; the last lines say how it stands
@@ -40,6 +41,8 @@ def status_of(text: str) -> LogStatus | None:
     """The state the last line about the system file gives, or None when there is none."""
     status: LogStatus | None = None
     for line in text.splitlines():
+        if not _RELEVANT.search(line):  # a long log is mostly other lines: skip them cheaply
+            continue
         loaded = LOADED.search(line)
         if loaded:
             steps = tuple(step.strip() for step in loaded[2].split(",") if step.strip())
@@ -60,18 +63,13 @@ def read_tail(path: Path) -> str:
         return handle.read().decode("utf-8", errors="replace")
 
 
-def logs_root(home: Path) -> Path:
-    return home / "Library" / "Application Support" / "Cursor" / "logs"
-
-
 def latest(home: Path) -> tuple[Path | None, list[Path]]:
     """The newest Cursor start folder and the Hooks logs in it (None when Cursor has no logs)."""
+    root = home / "Library" / "Application Support" / "Cursor" / "logs"
     try:
-        folders = sorted(
-            p for p in logs_root(home).iterdir() if p.is_dir() and _START_FOLDER.match(p.name)
-        )
+        folders = sorted(p for p in root.iterdir() if p.is_dir() and _START_FOLDER.match(p.name))
     except OSError:
-        return None, []
+        folders = []
     if not folders:
         return None, []
     return folders[-1], sorted(folders[-1].glob("window*/output_*/cursor.hooks.*.log"))

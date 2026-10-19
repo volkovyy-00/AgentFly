@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from agentfly.install import InstallError, service
+from agentfly.install import service
 
 
 def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -21,10 +20,6 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 def run(args: argparse.Namespace) -> int:
-    try:
-        for line in service.stop():
-            print(line)
-    except InstallError as exc:
-        print(f"agentfly stop: {exc}", file=sys.stderr)
-        return 1
+    for line in service.stop():
+        print(line)
     return 0

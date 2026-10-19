@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from agentfly.install import InstallError, service
+from agentfly.install import service
 
 
 def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -21,17 +21,12 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 def run(args: argparse.Namespace) -> int:
-    try:
-        manager = service.detect_manager()
-        for line in service.start(manager):
-            print(line)
-        if service.wait_for_health() is not None:
-            print(f"recorder answers on 127.0.0.1:{service.HEALTH_PORT}")
-            return 0
-    except InstallError as exc:
-        print(f"agentfly start: {exc}", file=sys.stderr)
-        return 1
-    where = "" if manager.brew else f"; see {service.log_path()}"
+    for line in service.start():
+        print(line)
+    if service.wait_for_health() is not None:
+        print(f"recorder answers on 127.0.0.1:{service.HEALTH_PORT}")
+        return 0
+    where = "" if service.detect_manager().brew else f"; see {service.log_path()}"
     print(
         f"agentfly start: the recorder did not answer on 127.0.0.1:{service.HEALTH_PORT} "
         f"within {service.START_TIMEOUT:g} s{where}",

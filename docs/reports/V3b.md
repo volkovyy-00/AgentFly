@@ -1,7 +1,7 @@
 # V3b: Service and `doctor`: `start`, `stop`, `status`, `doctor`
 Status: done, except the manual checks on the owner's Mac (as of 2026-10-19 12:10)
 Result: start/stop/status (own LaunchAgent, or brew services in a keg), uninstall removes the service, doctor (12 lines), guard lists cover the service labels. Tested with stubs and two throwaway real-launchd runs. Not run on the owner's Mac: the real label, init -g, doctor after a Cursor restart.
-Evidence: code at 0f53329 (6 commits after e1d4aeb); `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 2479 passed, 5 skipped (before: 2158 passed, 5 skipped without test_package). Tests: test_service.py, test_doctor.py, test_install_cli.py, tests/cases.py.
+Evidence: 8 commits on ag-v3b-service after e1d4aeb; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 2490 passed, 5 skipped (before: 2158 passed, 5 skipped without test_package). Tests: test_service.py, test_doctor.py, test_install_cli.py, tests/cases.py.
 Needs owner: run the checklist below on your Mac after merging (it changes login items and needs `agentfly init -g`). Recommended: yes, once; it is the only part not tested against the real service.
 Details: see "## 2026-10-19 12:10" below.
 
@@ -76,7 +76,8 @@ Left behind: one entry `"dev.agentfly.v3bprobe54766" => enabled` in launchd's ov
 
 ### For the lead
 - **D8 and the brief** name only `homebrew.mxcl.agentfly`; V4 should pin the formula's `plist_name` (or accept `sh.brew.agentfly`) and the `path` check
-  assumes `bin/agentfly` is a symlink to the venv script or has a shebang naming the venv Python; a Homebrew wrapper script would warn "cannot tell".
+  accepts a symlink to the venv script, a script whose shebang names this Python, or a wrapper script that names the folder of our command (what
+  `write_exec_script` makes); any other `agentfly` first on PATH fails. Check it against the real formula.
 - The **enterprise-source error line** in the Hooks log has never been seen (only `Invalid user config` / `Failed to parse user|project hooks configuration`).
   `doctor` treats an error line that names no user/project/workspace/Claude source as about the system file.
 - **SPEC §10** "where the reference hashes live" is answered by this card (`hashes.json`, checked by `doctor`); not edited here (V6b works in SPEC.md). Same for a
@@ -84,5 +85,9 @@ Left behind: one entry `"dev.agentfly.v3bprobe54766" => enabled` in launchd's ov
 - `sudo agentfly uninstall` takes the root branch and leaves the user's service; the README says to run it without `sudo`.
 - `hook_client.py` changed (guard list): the installed copy is stale until `init -g` is run again.
 - V3c: `checks.CHECKS` is a plain list of `check_*(ctx) -> Check` functions; a "package unchanged" line is one more function. `installer.lock_problems` is public.
-- The test suite grew by about 320 tests and 35 s; `test_doctor.py` skips the install's smoke run and byte-compile for speed.
+- The test suite grew by about 330 tests and 30 s; `test_doctor.py` skips the install's smoke run and byte-compile for speed.
 - A hand-started `agentfly serve` plus the service would crash-loop on the busy port; `start` warns when something already answers `/health`.
+- R0 and the offline guard match the labels anywhere in a command, so an agent's `git commit -m '... dev.agentfly.recorder ...'` or
+  `rg dev.agentfly.recorder` is denied (same as `.config/agentfly` today). Workers on V3c/V4 should avoid the literal in commands.
+- Without a GUI session (ssh) `launchctl print` exits 112; `start`, `stop`, `status` and `uninstall` say so in one line, they do not treat the service as stopped.
+- `start` also reloads a job that is loaded without `KeepAlive` although its file has it (the warning `doctor` gives).

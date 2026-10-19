@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+import agentfly.recorder.rules as rules
 from agentfly.cli import main
 from agentfly.install import InstallError, service
 from tests.service_helpers import Brew, Launchd, homebrew_package
@@ -43,6 +44,15 @@ def brewed(tmp_path: Path, isolated_home: Path, monkeypatch: pytest.MonkeyPatch)
     brew = Brew(prefix, isolated_home)
     monkeypatch.setattr(service, "PACKAGE_FILE", homebrew_package(prefix))
     return brew
+
+
+# ---------------------------------------------------------------- the labels R0 protects
+
+
+def test_every_launchd_label_of_the_service_is_a_guard_path() -> None:
+    # hook_client.py cannot import these, so nothing else ties a renamed label to the guard lists
+    for label in (service.LABEL, *service.BREW_LABELS):
+        assert label.casefold() in rules._R0_PATHS, label
 
 
 # ---------------------------------------------------------------- which manager
@@ -119,6 +129,20 @@ def test_start_enables_a_label_that_was_switched_off(launchd: Launchd) -> None:
     assert launchd.state()["disabled"] == []
 
 
+def test_start_reloads_a_loaded_job_that_has_lost_its_keepalive(
+    isolated_home: Path, launchd: Launchd
+) -> None:
+    # what `doctor` warns about and tells you to fix with `agentfly start`
+    service.start()
+    jobs = launchd.state()["jobs"]
+    jobs[LABEL]["keepalive"] = False  # loaded from an edited file, which was then restored
+    launchd.update(jobs=jobs)
+    assert service.inspect().live_keepalive is False
+    service.start()
+    assert service.inspect().live_keepalive is True
+    assert launchd.loaded() == [LABEL]
+
+
 def test_start_waits_while_launchd_tears_the_old_job_down(
     isolated_home: Path, launchd: Launchd
 ) -> None:
@@ -141,9 +165,8 @@ def test_start_on_a_loaded_job_without_a_process_kickstarts_it(launchd: Launchd)
 
 
 def test_start_warns_when_something_else_already_answers_on_the_port(
-    monkeypatch: pytest.MonkeyPatch, launchd: Launchd
+    launchd: Launchd, healthy: None
 ) -> None:
-    monkeypatch.setattr(service, "health", lambda timeout=2.0: {"ok": True})
     messages = service.start()
     port = str(service.HEALTH_PORT)
     assert any("already answers" in line and port in line for line in messages)
@@ -165,6 +188,25 @@ def test_start_and_stop_refuse_to_run_as_root(
     with pytest.raises(InstallError, match="not with sudo"):
         getattr(service, verb)()
     assert launchd.calls() == []
+
+
+def test_start_turns_a_file_system_error_into_one_line(isolated_home: Path) -> None:
+    (isolated_home / "Library").write_text("a file where a folder should be")
+    with pytest.raises(InstallError, match="cannot write"):
+        service.start()
+
+
+def test_stop_turns_a_file_system_error_into_one_line(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.start()
+
+    def refuse(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError(1, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    with pytest.raises(InstallError, match="Operation not permitted"):
+        service.stop()
 
 
 # ---------------------------------------------------------------- stop
@@ -224,7 +266,7 @@ def test_inspect_reports_every_state(launchd: Launchd) -> None:
     service.start()
     state = service.inspect()
     assert (state.loaded, state.running) == (True, True)
-    assert (state.keepalive, state.live_keepalive, state.program_exists) == (True, True, True)
+    assert (state.keepalive, state.live_keepalive) == (True, True)
     assert state.pid and state.summary == f"running, pid {state.pid}"
 
     launchd.stop_job(LABEL)

@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from stub_state import serve
+
 FORMULA = "agentfly"
 LABEL = "sh.brew.agentfly"
 
@@ -45,7 +47,7 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
     plist = Path(state["plist"])
     if verb == "start":
         plist.parent.mkdir(parents=True, exist_ok=True)
-        data = {"Label": LABEL, "KeepAlive": state["keepalive"], "ProgramArguments": [FORMULA]}
+        data = {"Label": LABEL, "KeepAlive": True, "ProgramArguments": [FORMULA]}
         plist.write_bytes(plistlib.dumps(data))
         state["started"] = True
         return 0, f"==> Successfully started `{FORMULA}` (label: {LABEL})\n", ""
@@ -58,16 +60,5 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
     return 64, "", f"stub brew: unsupported arguments {args}\n"
 
 
-def main(argv: list[str]) -> int:
-    state_path = Path(argv[0])
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["calls"].append(argv[1:])
-    code, out, err = run(state, argv[1:])
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    sys.stdout.write(out)
-    sys.stderr.write(err)
-    return code
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(serve(run, sys.argv[1:]))

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from agentfly.install import InstallError, service
+from agentfly.install import service
 
 
 def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -18,13 +17,8 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 def run(args: argparse.Namespace) -> int:
-    try:
-        state = service.inspect()
-    except InstallError as exc:
-        print(f"agentfly status: {exc}", file=sys.stderr)
-        return 1
-    label = "brew services " + service.BREW_FORMULA if state.manager.brew else service.LABEL
-    print(f"manager:  {state.manager.name} ({label})")
+    state = service.inspect()
+    print(f"manager:  {state.manager.name} ({state.manager.label})")
     print(f"service:  {state.summary}")
     answer = service.health()
     port = f"127.0.0.1:{service.HEALTH_PORT}"

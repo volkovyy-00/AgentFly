@@ -7,11 +7,13 @@ is down. `stop` unloads the job and deletes the file, as `brew services stop` do
 recorder stays down at the next login too.
 
 Where the tools and files are is fixed in this module; nothing is read from the user's settings (D25
-for the port). Every outside call goes through `_run`, which tests replace with stub executables.
+for the port). Every outside call goes through `_run`; tests point `LAUNCHCTL` and `PACKAGE_FILE`
+at stub executables.
 """
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -27,6 +29,7 @@ from xml.parsers.expat import ExpatError
 
 import agentfly
 from agentfly.install import InstallError
+from agentfly.install.installer import describe_oserror
 from agentfly.recorder import DEFAULT_PORT
 from agentfly.recorder.paths import data_dir, private_dir
 
@@ -56,6 +59,10 @@ class Manager:
     def name(self) -> str:
         return "brew services" if self.brew else "launchd LaunchAgent"
 
+    @property
+    def label(self) -> str:
+        return f"brew services {BREW_FORMULA}" if self.brew else LABEL
+
 
 @dataclass(frozen=True)
 class State:
@@ -73,18 +80,6 @@ class State:
         return bool(self.plist and self.plist.get("KeepAlive"))
 
     @property
-    def program(self) -> str | None:
-        arguments = (self.plist or {}).get("ProgramArguments")
-        if isinstance(arguments, list) and arguments and isinstance(arguments[0], str):
-            return arguments[0]
-        program = (self.plist or {}).get("Program")
-        return program if isinstance(program, str) else None
-
-    @property
-    def program_exists(self) -> bool | None:
-        return None if self.program is None else Path(self.program).exists()
-
-    @property
     def summary(self) -> str:
         if self.running:
             return f"running, pid {self.pid}" if self.pid else "running"
@@ -98,12 +93,8 @@ class State:
 # ---------------------------------------------------------------- where things are
 
 
-def launch_agents_dir() -> Path:
-    return Path.home() / "Library" / "LaunchAgents"
-
-
 def plist_path(label: str = LABEL) -> Path:
-    return launch_agents_dir() / f"{label}.plist"
+    return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
 
 
 def log_path() -> Path:
@@ -135,6 +126,14 @@ def expected_plist() -> dict[str, Any]:
     }
 
 
+def plist_drift(actual: dict[str, Any] | None) -> list[str]:
+    """The keys in which a service file differs from what `start` writes (all of them if none)."""
+    wanted, actual = expected_plist(), actual or {}
+    return sorted(
+        key for key in wanted.keys() | actual.keys() if wanted.get(key) != actual.get(key)
+    )
+
+
 # ---------------------------------------------------------------- running the tools
 
 
@@ -154,16 +153,32 @@ def _domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def _target() -> str:
+    return f"{_domain()}/{LABEL}"
+
+
 def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
     return _run([LAUNCHCTL, *args])
+
+
+def _fail(verb: str, result: subprocess.CompletedProcess[str]) -> InstallError:
+    return InstallError(f"launchctl {verb} failed ({result.returncode}): {_tail(result.stderr)}")
 
 
 def _launchctl_ok(*args: str) -> None:
     result = _launchctl(*args)
     if result.returncode != 0:
-        raise InstallError(
-            f"launchctl {args[0]} failed ({result.returncode}): {_tail(result.stderr)}"
-        )
+        raise _fail(args[0], result)
+
+
+def _print_job() -> str | None:
+    """`launchctl print` of our job: its text, or None when launchd does not have it loaded."""
+    result = _launchctl("print", _target())
+    if result.returncode in _NOT_LOADED:
+        return None
+    if result.returncode != 0:
+        raise _fail("print", result)
+    return result.stdout
 
 
 def _require_user(verb: str) -> None:
@@ -186,24 +201,21 @@ def read_plist(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def inspect(manager: Manager | None = None) -> State:
-    manager = manager or detect_manager()
-    return _inspect_brew(manager) if manager.brew else _inspect_agent(manager)
+def inspect() -> State:
+    manager = detect_manager()
+    return _inspect_brew(manager) if manager.brew else _inspect_agent()
 
 
 def _existing(path: Path) -> Path | None:
     return path if path.exists() or path.is_symlink() else None
 
 
-def _inspect_agent(manager: Manager) -> State:
-    path = plist_path()
+def _inspect_agent() -> State:
+    manager, path = Manager(), plist_path()
     plist = read_plist(path)
-    result = _launchctl("print", f"{_domain()}/{LABEL}")
-    if result.returncode in _NOT_LOADED:
+    out = _print_job()
+    if out is None:
         return State(manager, _existing(path), plist, False, False, None, None)
-    if result.returncode != 0:
-        raise InstallError(f"launchctl print failed ({result.returncode}): {_tail(result.stderr)}")
-    out = result.stdout
     pid = re.search(r"^\s*pid = (\d+)\s*$", out, re.MULTILINE)
     running = re.search(r"^\s*state = running\s*$", out, re.MULTILINE) is not None
     properties = re.search(r"^\s*properties = (.*)$", out, re.MULTILINE)
@@ -258,17 +270,17 @@ def wait_for_health(timeout: float | None = None) -> dict[str, Any] | None:
 # ---------------------------------------------------------------- start
 
 
-def start(manager: Manager | None = None) -> list[str]:
+def start() -> list[str]:
     _require_user("start")
-    manager = manager or detect_manager()
+    manager = detect_manager()
     if manager.brew:
         return _brew_services(manager, "start")
-    state = _inspect_agent(manager)
-    wanted = expected_plist()
-    if state.loaded and state.plist == wanted:
+    state = _inspect_agent()
+    # A job loaded without KeepAlive although its file has it is what `doctor` warns about.
+    if state.loaded and not plist_drift(state.plist) and state.live_keepalive is not False:
         if state.running:
             return [f"already running (pid {state.pid})"]
-        _launchctl_ok("kickstart", f"{_domain()}/{LABEL}")
+        _launchctl_ok("kickstart", _target())
         return [f"{LABEL} was loaded but not running; started it"]
     messages: list[str] = []
     if not state.loaded and health() is not None:
@@ -278,8 +290,8 @@ def start(manager: Manager | None = None) -> list[str]:
         )
     if state.loaded:
         _unload()
-        messages.append("the service file changed; reloaded it")
-    _write_plist(plist_path(), wanted)
+        messages.append("the loaded job differs from its service file; reloaded it")
+    _write_plist(plist_path(), expected_plist())
     _enable_if_disabled()
     _launchctl_ok("bootstrap", _domain(), str(plist_path()))
     messages.append(f"loaded {LABEL} (restarts itself, starts at login)")
@@ -293,19 +305,22 @@ def _enable_if_disabled() -> None:
     if result.returncode == 0 and re.search(
         rf'"{re.escape(LABEL)}"\s*=>\s*disabled', result.stdout
     ):
-        _launchctl("enable", f"{_domain()}/{LABEL}")
+        _launchctl("enable", _target())
 
 
 def _write_plist(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    private_dir(log_path().parent)  # launchd opens the log file but does not make its folder
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(log_path().parent)  # launchd opens the log file but does not make its folder
         temp.write_bytes(plistlib.dumps(data, fmt=plistlib.FMT_XML))
         os.chmod(temp, 0o644)  # launchd refuses a plist others can write
         os.replace(temp, path)
+    except OSError as exc:
+        raise InstallError(f"cannot write {path} ({describe_oserror(exc)})") from exc
     finally:
-        temp.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):  # best effort: the error above is the one to report
+            temp.unlink(missing_ok=True)
 
 
 def _brew_services(manager: Manager, verb: str) -> list[str]:
@@ -321,21 +336,11 @@ def _brew_services(manager: Manager, verb: str) -> list[str]:
 
 def _unload() -> None:
     """`bootout`, then wait until launchd really has let go: the teardown is not instant."""
-    target = f"{_domain()}/{LABEL}"
-    result = _launchctl("bootout", target)
+    result = _launchctl("bootout", _target())
     if result.returncode not in _BOOTOUT_OK:
-        raise InstallError(
-            f"launchctl bootout failed ({result.returncode}): {_tail(result.stderr)}"
-        )
+        raise _fail("bootout", result)
     deadline = time.monotonic() + UNLOAD_TIMEOUT
-    while True:
-        probe = _launchctl("print", target)
-        if probe.returncode in _NOT_LOADED:
-            return
-        if probe.returncode != 0:
-            raise InstallError(
-                f"launchctl print failed ({probe.returncode}): {_tail(probe.stderr)}"
-            )
+    while _print_job() is not None:
         if time.monotonic() >= deadline:
             raise InstallError(
                 f"launchd still has {LABEL} loaded after {UNLOAD_TIMEOUT:g} s; run it again"
@@ -343,17 +348,23 @@ def _unload() -> None:
         time.sleep(POLL_INTERVAL)
 
 
+def _remove_file(path: Path) -> list[str]:
+    if not _existing(path):
+        return []
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise InstallError(f"cannot remove {path} ({describe_oserror(exc)})") from exc
+    return [f"removed {path}"]
+
+
 def _teardown_agent() -> list[str]:
     """Unload our own job and delete its file; an empty list means there was nothing to do."""
     messages: list[str] = []
-    if _inspect_agent(Manager()).loaded:
+    if _print_job() is not None:
         _unload()
         messages.append(f"unloaded {LABEL}")
-    path = plist_path()
-    if _existing(path):
-        path.unlink()
-        messages.append(f"removed {path}")
-    return messages
+    return messages + _remove_file(plist_path())
 
 
 def _teardown_brew(manager: Manager) -> list[str]:
@@ -362,24 +373,21 @@ def _teardown_brew(manager: Manager) -> list[str]:
     if state.loaded or state.plist_path is not None:
         messages += _brew_services(manager, "stop")
     for label in BREW_LABELS:  # `brew uninstall` leaves these behind (D8)
-        leftover = plist_path(label)
-        if _existing(leftover):
-            leftover.unlink()
-            messages.append(f"removed {leftover}")
+        messages += _remove_file(plist_path(label))
     return messages
 
 
-def stop(manager: Manager | None = None) -> list[str]:
+def stop() -> list[str]:
     _require_user("stop")
-    manager = manager or detect_manager()
+    manager = detect_manager()
     messages = _teardown_brew(manager) if manager.brew else _teardown_agent()
     return messages or ["already stopped"]
 
 
-def remove(manager: Manager | None = None) -> list[str]:
+def remove() -> list[str]:
     """What `uninstall` runs: stop everything of ours, whichever way it was started."""
     _require_user("uninstall")
-    manager = manager or detect_manager()
+    manager = detect_manager()
     messages = _teardown_agent()
     if manager.brew:
         messages += _teardown_brew(manager)

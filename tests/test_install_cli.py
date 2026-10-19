@@ -229,22 +229,17 @@ def install_and_start(system: Layout, tmp_path: Path) -> None:
     service.start()
 
 
-def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    codes: list[int] = []
-
+def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None) -> int:
         installer.uninstall(system)
-        codes.append(0)
         return 0
 
     monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
-    return codes
 
 
 def test_uninstall_also_stops_and_removes_the_service(
     system: Layout,
     tmp_path: Path,
-    isolated_home: Path,
     launchd: Launchd,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

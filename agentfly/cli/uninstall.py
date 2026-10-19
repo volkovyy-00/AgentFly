@@ -42,25 +42,26 @@ def _as_user() -> int:
             return code
     try:
         messages = service.remove()  # the user's login session owns it: no sudo
+        failure = ""
     except InstallError as exc:
-        print(
-            f"agentfly uninstall: the system files are removed, but the recorder service is "
-            f"not ({exc}); run `agentfly uninstall` again"
-            if installed
-            else f"agentfly uninstall: cannot remove the recorder service ({exc}); "
-            "run `agentfly uninstall` again",
-            file=sys.stderr,
-        )
-        if installed:
-            print(RESTART_HINT)
-        return 1
+        messages, failure = [], str(exc)
     for line in messages:
         print(line)
-    if not installed and not messages:
+    if failure:
+        what = (
+            "the system files are removed, but the service is not"
+            if installed
+            else "cannot remove the service"
+        )
+        print(
+            f"agentfly uninstall: {what} ({failure}); run `agentfly uninstall` again",
+            file=sys.stderr,
+        )
+    elif not installed and not messages:
         print("nothing of AgentFly's is installed")
     if installed:
         print(RESTART_HINT)
-    return 0
+    return 1 if failure else 0
 
 
 def run(args: argparse.Namespace) -> int:

@@ -11,18 +11,16 @@ that `print-disabled` reports as switched off until `enable` is run for them.
 
 from __future__ import annotations
 
-import json
-import plistlib
 import sys
-from pathlib import Path
-from typing import Any
+
+from stub_state import serve
 
 
 def label_of(target: str) -> str:
     return target.rsplit("/", 1)[-1]
 
 
-def render(label: str, job: dict[str, Any]) -> str:
+def render(label: str, job: dict) -> str:
     lines = [
         f"gui/501/{label} = {{",
         "\tactive count = 1",
@@ -43,8 +41,8 @@ def render(label: str, job: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
-    jobs: dict[str, dict[str, Any]] = state["jobs"]
+def run(state: dict, args: list[str]) -> tuple[int, str, str]:
+    jobs: dict[str, dict] = state["jobs"]
     verb, rest = (args[0] if args else ""), args[1:]
     if verb == "enable":
         label = label_of(rest[0])
@@ -55,8 +53,11 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
         rows += [f'\t\t"{name}" => disabled' for name in state["disabled"]]
         return 0, "\tdisabled services = {\n" + "\n".join(rows) + "\n\t}\n", ""
     if verb == "bootstrap":
+        import plistlib
+
         plist = rest[-1]
-        data = plistlib.loads(Path(plist).read_bytes())
+        with open(plist, "rb") as handle:
+            data = plistlib.load(handle)
         label = data["Label"]
         if label in jobs or state["bootstrap_code"]:
             code = state["bootstrap_code"] or 5
@@ -66,7 +67,7 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
             "plist": plist,
             "keepalive": bool(data.get("KeepAlive")),
             "args": data["ProgramArguments"],
-            "pid": state["next_pid"] if state["start_ok"] else None,
+            "pid": state["next_pid"],
             "dying": 0,
         }
         return 0, "", ""
@@ -105,23 +106,8 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
         state["next_pid"] += 1
         job["pid"] = state["next_pid"]
         return 0, "", ""
-    if verb == "list":
-        rows = ["PID\tStatus\tLabel"]
-        rows += [f"{job['pid'] or '-'}\t0\t{label}" for label, job in jobs.items()]
-        return 0, "\n".join(rows) + "\n", ""
     return 64, "", f"stub launchctl: unsupported arguments {args}\n"
 
 
-def main(argv: list[str]) -> int:
-    state_path = Path(argv[0])
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["calls"].append(argv[1:])
-    code, out, err = run(state, argv[1:])
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    sys.stdout.write(out)
-    sys.stderr.write(err)
-    return code
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(serve(run, sys.argv[1:]))

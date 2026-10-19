@@ -58,7 +58,6 @@ class Launchd(Stub):
             {
                 "jobs": {},
                 "next_pid": 4000,
-                "start_ok": True,
                 "bootout_lag": 0,
                 "bootout_code": 0,
                 "bootstrap_code": 0,
@@ -84,7 +83,7 @@ class Brew(Stub):
             prefix / "bin",
             "brew",
             BREW_STUB,
-            {"started": False, "keepalive": True, "plist": str(plist)},
+            {"started": False, "plist": str(plist)},
         )
         self.plist = plist
 
