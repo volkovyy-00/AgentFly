@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
 Updated: 2026-10-19 20:10 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: V3c-V8b-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6 ✅ (BOARD Done; last merges V8b 9b2e00e, V3c 07a8d7f; trial c71d5d3 = main tree, 3× 3419 passed, 5 skipped, 365–410 s each).
+Phase: V3c-V8b-merged-pushed. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6 ✅ (BOARD Done; last merges V8b 9b2e00e, V3c 07a8d7f; trial c71d5d3 = main tree, 3× 3419 passed, 5 skipped, 365–410 s each).
 Pending decisions: D16
 
 ## Spikes and cards
@@ -13,19 +13,18 @@ Pending decisions: D16
 ## In flight
 none
 
-## Machine state (verified 2026-10-19 20:05 CEST)
+## Machine state (verified 2026-10-19 20:20 CEST)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly LaunchAgent (launchctl list empty for agentfly); harmless override `dev.agentfly.v3bprobe54766 => enabled` stays.
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files: ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly (logs, sessions.json). Neo4j gets nothing without `neo4j = true` in ~/.config/agentfly/config.toml (absent). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees: main only. V3c and V8b worktrees and branches removed after merge; their worker sessions can be closed. Disk 29 GiB free.
-- Git: origin/main = b6e51cc (as of 2026-10-18 22:55); main is ahead (owner pushes with `AGENTFLY_ALLOW_PUSH=1`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks and gh run list/view, pr view/checks; ask on core.hooksPath; deny git push, --no-verify, commit -n, gh writes (api, auth, pr create/merge/edit/close/comment/review, issue, repo, release, secret, variable, workflow, run rerun/cancel/delete), Read ~/.config/agentfly. Guards, not locks.
+- Git: origin/main = 56cfe66 (owner pushed 2026-10-19 ~20:15); later commits are local only (owner pushes with `AGENTFLY_ALLOW_PUSH=1`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks and gh run list/view, pr view/checks; ask on core.hooksPath; deny git push, --no-verify, commit -n, gh writes (api, auth, pr create/merge/edit/close/comment/review, issue, repo, release, secret, variable, workflow, run rerun/cancel/delete), Read ~/.config/agentfly. Guards, not locks.
 - GitHub (owner 2026-10-19): Actions → fork PR workflows "Require approval for all external contributors". No `.github/workflows` yet.
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Push main: `! AGENTFLY_ALLOW_PUSH=1 git push origin main` (also F7's prerequisite for its draft PR).
-2. Say "go" for F7 after the lead's re-check of its brief against main.
+1. Say "go" for F7 after the lead's re-check of its brief against main.
 
 ## Decisions changed since last handoff (252b86c; earlier: git show 252b86c:docs/STATE.md)
 - Owner 2026-10-19: V3c same-version rebuild whose files match their own RECORD → ask, not stop; no message advises deleting the root record.
@@ -49,7 +48,7 @@ none
 - Test suite 6–7 min serial (3,419 tests); F7 addresses it.
 
 ## Next 3 actions
-1. Owner pushes main; the lead re-checks F7's brief against 07a8d7f (references, premise), then the owner says "go" and dispatches it.
+1. The lead re-checks F7's brief against 07a8d7f (references, premise), then the owner says "go" and dispatches it.
 2. Verify the 7 /code-review findings plus the V3c/V8b leftovers → write one fix card (brief + pass 2); dispatch alongside F7 only if its files do not overlap F7's.
 3. Then: re-check V5b's brief; move AGENTS.md "Testing" to tests/README.md.
 
