@@ -6,7 +6,11 @@
       "Bash(uv run pytest *)",
       "Bash(npm --prefix ui ci)",
       "Bash(npm --prefix ui run check)",
-      "Bash(npm --prefix ui run build)"
+      "Bash(npm --prefix ui run build)",
+      "Bash(gh run list*)",
+      "Bash(gh run view*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr checks*)"
     ],
     "ask": [
       "Bash(*core.hooksPath*)",
@@ -20,6 +24,23 @@
       "Bash(git commit * -n*)",
       "Bash(git -C * commit -n*)",
       "Bash(git -C * commit * -n*)",
+      "Bash(gh api*)",
+      "Bash(gh auth*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr edit*)",
+      "Bash(gh pr close*)",
+      "Bash(gh pr comment*)",
+      "Bash(gh pr review*)",
+      "Bash(gh issue*)",
+      "Bash(gh repo*)",
+      "Bash(gh release*)",
+      "Bash(gh secret*)",
+      "Bash(gh variable*)",
+      "Bash(gh workflow*)",
+      "Bash(gh run rerun*)",
+      "Bash(gh run cancel*)",
+      "Bash(gh run delete*)",
       "Read(~/.config/agentfly/**)"
     ]
   }

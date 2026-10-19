@@ -196,9 +196,19 @@ V7 and V9 can run in parallel.
 ---
 
 ### F7 · Test speed and CI
-- **Owner:** worker-backend · brief to write after V3c and V8b merge (both add tests; xdist failures would be blamed on them)
-- **Scope (owner 2026-10-19: pytest-xdist approved, CI yes):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` grouped (`xdist_group`, `--dist loadgroup`); `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), macOS runner, actions pinned by SHA, `permissions: contents: read`, Node 22.
-- **Done when:** full suite passes 3 runs in a row under xdist with wall time measured before and after; CI green on a push.
+- **Owner:** worker-backend · brief written (docs/briefs/F7.md, pass 2 2026-10-19); the lead re-checks it after V3c and V8b merge · next after that merge, before V5b
+- **Scope (owner 2026-10-19: pytest-xdist approved, CI yes; CI on main pushes and pull requests only, macOS only; a red main blocks merges):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` on one worker; `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), actions pinned by SHA, `permissions: contents: read`, Node 22; arm64-only failures fixed in F7.
+- **Done when:** full suite passes 3 runs in a row under xdist, at most half the serial wall time; CI green on the owner's draft pull request.
+
+### F8 · Type checking: pyright
+- **Owner:** worker-backend · brief not written · after F7; alone, not alongside V5b (fixing type errors touches all of `agentfly/`)
+- **Scope (owner 2026-10-19: pyright approved):** before the brief, the lead counts basic-mode errors and checks how the pyright package gets its Node runtime (a first-run download would put the network in the check command; `pyright[nodejs]` would be a new dependency to ask about). Pyright in dev deps and AGENTS.md "Approved dependencies", basic mode, existing errors fixed (not silenced wholesale), a step in `ci.yml` and AGENTS.md's check command.
+- **Done when:** pyright clean locally and in CI; F7's `ci.yml` test covers the new step.
+
+### F9 · Security scans: CodeQL and Dependabot
+- **Owner:** the owner (repo settings) + worker for one YAML file · after F7
+- **Scope (owner 2026-10-19: CodeQL and Dependabot yes; alerts, security updates and Actions updates only, no uv/npm version-update PRs):** CodeQL default setup (an owner click in repo settings: no workflow file, no write permission in our workflows; runs on GitHub's Linux runners, which "macOS only" does not cover; it is a scanner, not the test CI). Dependabot alerts and security updates (settings) plus `.github/dependabot.yml` for GitHub Actions version updates only; no uv/npm version-update PRs (they bypass the lead and fail the stale-build check); `@xyflow/react` and `motion` stay pinned. Dependabot PRs are never merged on GitHub: the lead folds them into a card.
+- **Done when:** a CodeQL run on main and the alert settings on; findings triaged (fixed, or a later card).
 
 ## Not on the board (on purpose)
 - **Publishing to PyPI and the Homebrew tap:** the lead does it, after your OK

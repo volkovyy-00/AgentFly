@@ -1,12 +1,12 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-19 16:45 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: V3c-V8b-dispatched-setup. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V5a, V6, V6b, V8, F3, F5, F6 ✅ (BOARD Done; last merges V3b ba6f488, V6b a9b753f, trial 3×2534 passed). V3c and V8b dispatched 2026-10-19; V8b reports done (16:37), lead review not started. Setup changes committed 42bfe0a.
+Updated: 2026-10-19 18:20 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: V3c-V8b-dispatched-setup. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V5a, V6, V6b, V8, F3, F5, F6 ✅ (BOARD Done; last merges V3b ba6f488, V6b a9b753f, trial 3×2534 passed). V3c and V8b dispatched 2026-10-19; both report done (V8b 16:41, V3c 18:10); V8b lead review: merge-ready (0 med/high; 2 low → fix card; UI notes ui/README.md:37-38 + useTrail comment → UI card; rule looked up twice → V5b). V3c lead review: needs fixes (verified): packages.py:343-350 advises `sudo rm` of the root record (loses hooks_file created/backup, then accepts any dist against its own RECORD); packages.py:171 os.stat follows symlinks. Later: .pth runs in the checking process; hand-typed `sudo agentfly` unchecked; R0 false positives (uv tool … --with ./x, brew upgrade --dry-run, ls of .venv dist-info). merge-tree V8b+V3c clean. Setup changes committed 42bfe0a.
 Pending decisions: D16
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
-- Order: V3c ∥ V8b → V5b → V5c (share `agentfly/install/` and the CLI) → V7 ∥ V9. F7 (xdist, CI; owner approved pytest-xdist and CI) and one fix card for the real /code-review findings come after V3c and V8b merge. V8b's highlighted verdict comes from V5b.
-- Briefs: V5b, V5c exist (pass 2, 2026-10-18; references resolve, their only missing files are ones V5b creates). V7, V9, F7, the fix card: not written. Standing rule (lead.md, owner 2026-10-19): the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch, unasked; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`.
+- Order: V3c ∥ V8b → F7 (owner 2026-10-19: before V5b) → V5b ∥ F9 → F8 (alone) → V5c (share `agentfly/install/` and the CLI) → V7 ∥ V9. F7 (xdist, CI; owner approved pytest-xdist and CI) and one fix card for the real /code-review findings come after V3c and V8b merge. V8b's highlighted verdict comes from V5b.
+- Briefs: V5b, V5c exist (pass 2, 2026-10-18; references resolve, their only missing files are ones V5b creates). F7 brief pass 2 done 2026-10-19 (docs/briefs/F7.md; arm64-only CI failures fixed in F7; re-check after V3c+V8b merge, then dispatch on the owner's go). V7, V9, the fix card: not written. Standing rule (lead.md, owner 2026-10-19): the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch, unasked; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT; `brew install --build-from-source` needs CLT, pydantic-core needs Rust, Homebrew 7 installs only from a tap. F7's CI runner may give V4 a place for its checks; rework then.
 - Merge: trial-merge parallel cards in a scratch worktree, probe cross-card behaviour, merge with `--no-commit`, keep main's STATE/BOARD. Lead /code-review high on each branch before merge.
 - Workers dispatched before 42bfe0a (V3c, V8b) lack the self-review line in docs/reports/README.md and the new settings until they merge main; the pre-commit merge rule reaches them already (hooksPath runs main's copy).
@@ -25,13 +25,16 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Paste "V3c report ready" when the V3c worker finishes (V8b already reports done; the lead reviews it next).
+1. Paste the V3c fix steps (lead gave them 2026-10-19) to the V3c worker; then "V3c report ready".
+2. Confirm GitHub Actions setting saved (owner set "Require approval for all external contributors", 2026-10-19).
 
 ## Decisions changed since last handoff (097f4f4; earlier: git show 097f4f4:docs/STATE.md)
 - Owner 2026-10-19: V3c dispatched (brief re-checked b7a635b); V8b dispatched ∥ V3c (a0258f7): a warned step is tested in process only (no runtime watch-only switch); a step blocked by two rules shows the earlier half's rule. V8b adds `marked_order` to `?all=1`.
 - Owner 2026-10-19: setup after two brainstorm-advisor reviews and /code-review (3 fixes): lead-context cap, pre-commit merge rule (merge of a main commit may carry its lead files), state-check branch warning, dispatch.sh, worker self-review (/code-review high), settings allow/ask/deny (advisor's version; no sudo deny), merged branches and repo `logs/` deleted.
-- Owner 2026-10-19: pytest-xdist approved (AGENTS.md list gets it with F7); CI on GitHub Actions approved (F7, `ci.yml`).
 - Owner 2026-10-19: verify the 7 /code-review findings after V3c/V8b merge; one fix card for the real ones.
+- Owner 2026-10-19: V3c same-version rebuild whose files match their own RECORD → ask, not stop; no `sudo rm` record advice (brief amended).
+- Owner 2026-10-19: F8 pyright (approved dep), F9 CodeQL + Dependabot (alerts, security, Actions updates only) after F7. D26 approved: B, in force after F7's CI is green on main a few times. settings.json: gh writes and `gh auth` denied; gh run list/view, pr view/checks allowed.
+- Owner 2026-10-19: F7 (xdist, ci.yml) approved; CI on main pushes and PRs only, macOS only; a red main blocks merges (checked on origin/main's exact SHA, D26).
 - Owner 2026-10-19: the lead refreshes or writes briefs itself before every dispatch (lead.md).
 
 ## Open risks and findings
@@ -50,6 +53,6 @@ Pending decisions: D16
 ## Next 3 actions
 1. Review V8b: read its report, lead /code-review high on `main...ag-v8b-recorder-fields`, probe the new fields; hold the merge for a trial merge with V3c.
 2. When V3c reports: review it the same way, trial-merge V3c + V8b (3× full suite), probe, ask the owner to merge.
-3. Then: re-check V5b's brief (standing rule), verify the 7 review findings → fix card, brief F7; move AGENTS.md "Testing" to tests/README.md.
+3. Then: re-check V5b's brief (standing rule), verify the 7 review findings → fix card, brief F7 (before writing it, raise with the owner: merge via PR once CI exists; owner 2026-10-19: discuss then); move AGENTS.md "Testing" to tests/README.md.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.

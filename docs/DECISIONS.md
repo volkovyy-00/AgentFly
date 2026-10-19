@@ -33,6 +33,7 @@ hand; "approved" always means the owner's explicit yes):
 - D23 approved 2026-10-16 · Only events the installed Cursor accepts are registered
 - D24 approved 2026-10-16 · `~/.claude/settings.json` is a third hook source
 - D25 approved 2026-10-16 · Hooks always use port 8787; no port file
+- D26 approved 2026-10-19 · How cards reach main once CI exists
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -698,3 +699,22 @@ configurable port is ever needed, it goes in the root-owned config (D1), not in
 
 **Why.** A port in a user-writable file would let an agent point the client at
 its own server that always answers allow.
+
+---
+
+## D26. How cards reach main once CI exists
+Status: **approved (2026-10-19): B**, in force once F7's CI has been green on main a few times (C until then) · Cards: F7 (CI) · Tested by: the first batch PR after F7
+
+| Option | What it means |
+|---|---|
+| A. One PR per card | Each card branch gets its own PR; the next is updated with main and waits for CI again. |
+| **B. One PR per batch, fast-forward** | The lead builds `merge/<batch>` from main with the card merges only (no lead files). The owner pushes it and opens one PR; CI tests the combined result. Green: the lead runs `git merge --ff-only merge/<batch>` on main and commits the handoff on main; the owner pushes main and GitHub marks the PR merged. Red: the branch is dropped, main is untouched, and the card's worker fixes it on its branch (a fix card if the card was closed); the lead rebuilds the batch. |
+| B2. Batch PR, merge button | As B, but the owner merges on GitHub (merge commits only; squash and rebase off in repo settings); the lead then runs `git fetch && git merge --ff-only origin/main`, and `dispatch.sh` refuses while main is behind origin/main. |
+| C. No PRs | The lead merges locally as today; CI runs after the owner pushes main. |
+
+**Chosen: B** (owner 2026-10-19), after F7's CI has been green on main a few times (first batch: V5b's); C until then.
+B needs no hook change (lead files stay on main only), keeps every SHA on local main, and the lead
+never pushes. "A red main blocks merges" (owner 2026-10-19) is checked on the exact commit:
+`git fetch`, then the push run for `origin/main`'s SHA; no finished run counts as unknown, not green.
+A GitHub ruleset requiring a PR on main is not compatible with B's push of main unless the owner
+bypasses it; the owner's later choice.
