@@ -209,8 +209,9 @@ lines for them (R0 and normalisation: V5).
   (`marked_order`) equal `/api/steps` for `cat .env`, a `.env` read, a lone Write and a read of
   `.env.example`; a Read+Write of `.env` with one id (and the id-less `afterFileEdit` that ends
   it) marks, also after a restart; a subagent, a parent marked through its subagent (links in
-  either order, nested) and a chat in the 30-minute fallback are marked with no marking step,
-  another workspace is not; a `history.db` from before V6b opens with every row, the same marked
+  either order, nested) and a chat in the 30-minute fallback are marked with no marking step
+  (a fallback chat that marks itself after the window ended names that step, as `/api/steps`
+  does), another workspace is not; a `history.db` from before V6b opens with every row, the same marked
   flags and the first read answering 200; a failed upgrade rolls back; a flagging failure changes
   no hook answer.
 - Step merge (`tests/test_step_merge.py`, `tests/fixtures/v2c_capture.json`): a shell, read

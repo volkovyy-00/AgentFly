@@ -15,6 +15,7 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.localstore as ls
 from agentfly.recorder.localstore import LocalStore, local_store
 from agentfly.recorder.paths import config_dir, data_dir, private_dir
+from agentfly.recorder.sessions import FALLBACK_SECONDS
 from tests.test_localstore import listed, record, rows
 from tests.test_step_merge import edited, event, post, pre
 
@@ -196,6 +197,23 @@ def test_a_chat_in_the_workspace_fallback_is_marked_and_one_elsewhere_is_not(
     assert marking_step(client, "NEW") is None
     assert listed(client, "OTHER")["marked"] is False
     assert marking_step(client, "OTHER") is None
+
+
+def test_a_chat_marked_by_the_fallback_that_later_marks_itself_names_that_step(
+    client: TestClient,
+) -> None:
+    now = [1_000_000.0]
+    app_module.get_store().clock = lambda: now[0]  # so the 30-minute window can end
+    post(client, read("/w/.env", "P"))
+    post(client, task("P", "T1"))  # no child event ever names T1
+    for _ in range(6):
+        post(client, shell("ls", "B"))  # steps 1-6, inside the window
+    assert listed(client, "B")["marked"] is True
+    assert marking_step(client, "B") is None
+    now[0] += FALLBACK_SECONDS + 1
+    post(client, shell("cat .env", "B"))  # step 7: the window is over, B marks itself
+    assert listed(client, "B")["marked"] is True
+    assert marking_step(client, "B") == 7 == live_marked_order(client)
 
 
 def test_a_session_event_of_a_chat_in_the_fallback_marks_its_row(client: TestClient) -> None:

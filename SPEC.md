@@ -179,8 +179,10 @@ only. They record what the rules decided, so History does not have to guess from
 the saved steps: a chat counts as marked when the rules treat it so, including
 through a subagent link or the 30-minute workspace fallback (section 5), and it
 stays marked in History after that window ends. At most one step is the marking
-step: the one on whose event the chat became marked. A chat that was marked
-through a link has none. `GET /api/sessions/{id}/steps` names it by its order
+step: the one on whose event the chat became marked. A chat marked only through
+a link or the workspace fallback has none; if it later marks itself (for example
+after the fallback window has ended), that step is its marking step.
+`GET /api/sessions/{id}/steps` names it by its order
 number (`marked_order`), the way `GET /api/steps` does. Chats saved by an older
 recorder keep the marked value History showed for them, and have no marking step.
 
