@@ -274,7 +274,7 @@ def wipe_file(path: Path) -> tuple[int, int]:
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
-    """One STEPS_QUERY row in the same keys as GET /api/steps, plus the time."""
+    """One STEPS_QUERY row in the keys of GET /api/steps, plus the time (not its rule text)."""
     hosts: list[str] = json.loads(row[8])
     return {
         "order": row[0],

@@ -51,6 +51,10 @@ class StepRecord:
     # The command as typed, only when CLEAN_COMMANDS is off. Neo4j's Command node reads it;
     # `command` (history, live trail) is always the cleaned text.
     raw_command: str | None = field(default=None, repr=False, compare=False)
+    # V8b: the deny answer's messages, for the live page's Why card. Memory only: no store writes
+    # these (the rule's own text is `rule_description`).
+    user_message: str | None = field(default=None, repr=False, compare=False)
+    agent_message: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def step_id(self) -> str:
@@ -331,10 +335,13 @@ def build_step_record(
     *,
     order: int,
     marks: bool = False,
+    user_message: str | None = None,
+    agent_message: str | None = None,
 ) -> StepRecord:
     """Build a cleaned StepRecord. Uses session.next_step only via `order` arg.
 
     `marks` is what `SessionStore.apply_mark` said about this event: it made the chat marked.
+    The messages are the ones the hook answer for this event sent, if it sent any (V8b).
     """
     event: str = str(payload.get("hook_event_name", ""))
     kind: str = kind_from_event(event)
@@ -417,6 +424,8 @@ def build_step_record(
         workspace_root=first_workspace_root(payload),
         marks=marks,
         raw_command=raw_command,
+        user_message=user_message,
+        agent_message=agent_message,
     )
 
 

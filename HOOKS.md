@@ -139,8 +139,12 @@ client after the decision in `demo/NOTES.md`.
 uv run agentfly serve              # or: AGENTFLY_PORT=N uv run agentfly serve (--port wins)
 ```
 
-- `GET /health` → `{"ok": true, "offline_guard_count": N}` (Host check only). `N` is how many
-  calls the hook client's offline guard answered (advisory; read from the count file).
+- `GET /health` → `{"ok": true, "offline_guard_count": N, "last_hook_at": T}` (Host check only).
+  `N` is how many calls the hook client's offline guard answered (advisory; read from the count
+  file). `T` is the time of the last `/hook` request that passed the token check, as UTC ISO 8601
+  with milliseconds (`2026-10-19T09:30:05.123+00:00`); `null` until the first one since the
+  recorder started. A request with a wrong or missing token does not change it. It is kept in
+  process memory only.
 - `POST /hook` → Host → token → Content-Type → JSON → mark session → R1 decide →
   allow or deny. Sessions persist in `~/.local/share/agentfly/sessions.json`.
 - Listens on `127.0.0.1` only; token file mode `600`.
@@ -265,8 +269,8 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
   kept; any other `/v2/...` path is a 404.
 - `GET /api/steps` → `{session, steps}` for the **most recent** session,
   last 10 cleaned steps from process memory. `?all=1` returns every retained
-  step for that session (checks only). Memory keeps at most 500 steps per
-  session (oldest dropped; order numbers keep counting).
+  step for that session and adds `marked_order` (below; `null` when unmarked). Memory keeps at
+  most 500 steps per session (oldest dropped; order numbers keep counting).
 - `GET /api/steps?limit=N` (1 to 50; a larger count is 50) returns the last N
   steps plus three more fields:
   - `hidden`: counts of the session's steps outside that window, including steps
@@ -284,14 +288,22 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
     it is `null` and the counts start from zero.
   - `limit` must be ASCII digits and at least 1; anything else (`limit=`, `0`,
     `-1`, `abc`, `+5`) is 400 `{"detail": "bad limit"}`. A repeated key takes the
-    last value. With `all=1`, `limit` wins. Without `limit` the body has only
-    `session` and `steps`.
+    last value. With `all=1`, `limit` wins. Without `limit` or `all` the body has only
+    `session` and `steps`; with `all=1` and no `limit` it has `session`, `steps` and
+    `marked_order` (the same value `?limit=1` sends).
 - Step object fields: `order`, `kind` (`read|shell|edit|tool`), `verdict`
   (`allowed|blocked|warned`), `tool`, `file`, `sensitive`, `command`, `host`,
   `rule` (nullables as needed). Built from `StepRecord` in `apply_rules`
   (sync append) — Neo4j enqueue stays separate and async.
-- Empty state: `{"session": null, "steps": []}`; with `limit`, also
-  `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
+- Three more keys, **present only when they apply** (never `null`), for the page's Why card:
+  `rule_text` (the message of the rule that fired, on a blocked or warned step), and
+  `user_message` and `agent_message` (exactly the strings the hook answer for that step sent, so
+  only on a step whose answer was a deny; a warned step's answer is a plain allow, so it has
+  `rule_text` and neither message). A merged step (two hooks, one `tool_use_id`) carries those of
+  the half whose verdict it shows; on a tie the earlier half stays. They live in process memory
+  only: not in `history.db`, not in Neo4j, not in `/api/sessions`.
+- Empty state: `{"session": null, "steps": []}`; with `all=1`, also `marked_order: null`; with
+  `limit`, also `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
   on server restart (lifespan).
 - Wrong Host → 403. No Cypher from the page.
 - Demo: `uv run agentfly serve` → `uv run python fake_agent.py` → open

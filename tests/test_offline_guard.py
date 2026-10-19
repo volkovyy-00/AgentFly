@@ -395,8 +395,9 @@ def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
         after = wait_for_health(port, process)
     finally:
         stop_recorder(process)
-    assert health == {"ok": True, "offline_guard_count": len(commands)}
-    assert after == health
+    assert health == {"ok": True, "offline_guard_count": len(commands), "last_hook_at": None}
+    assert after["offline_guard_count"] == len(commands)
+    assert after["last_hook_at"] is not None  # the real answer above reached the recorder (V8b)
 
 
 def test_the_offline_count_file_is_never_followed_through_a_symlink(

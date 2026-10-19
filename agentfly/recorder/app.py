@@ -9,6 +9,7 @@ import stat
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ def find_ui_dist() -> Path:
 _UI_DIST: Path = find_ui_dist()
 _token: str = ""
 _store: SessionStore | None = None
+_last_hook_at: str | None = None  # V8b: UTC, set by each /hook request that passed the token check
 
 
 def write_token(directory: Path) -> str:
@@ -83,10 +85,11 @@ def get_store() -> SessionStore:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    global _token, _store
+    global _token, _store, _last_hook_at
     migrate_legacy()
     _token = write_token(config_dir())
     _store = SessionStore(data_dir() / "sessions.json")
+    _last_hook_at = None
     memory_steps.clear()
     local_store.start(data_dir() / DB_NAME)
     if neo4j_opt_in():  # D14: neo4j.env alone does not turn Neo4j on
@@ -128,7 +131,11 @@ def offline_guard_count() -> int:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "offline_guard_count": offline_guard_count()}
+    return {
+        "ok": True,
+        "offline_guard_count": offline_guard_count(),
+        "last_hook_at": _last_hook_at,
+    }
 
 
 @app.get("/api/steps")
@@ -194,12 +201,21 @@ def flag_marked(store: SessionStore, chat: Session) -> None:
         logger.warning("local store: marked chats not queued (%s)", type(exc).__name__)
 
 
+def hook_answer(verdict: str, rule_id: str | None) -> dict[str, str]:
+    """What Cursor is told: a deny with the rule's messages, else a plain allow (warn included)."""
+    if verdict == "blocked" and rule_id is not None:
+        user_msg, agent_msg = deny_messages(rule_id)
+        return {"permission": "deny", "user_message": user_msg, "agent_message": agent_msg}
+    return {"permission": "allow"}
+
+
 def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     """Mark, decide, memory + Neo4j enqueue, persist session. Returns (permission, verdict)."""
     store: SessionStore = get_store()
     stored: Session = store.observe(payload)  # links to a parent chat (D21 A), then the session
     stored, session, marks = store.apply_mark(payload, stored)  # also marks parent chats
     verdict, rule_id = decide(payload, session)
+    permission: dict[str, str] = hook_answer(verdict, rule_id)
     order: int = session.next_step
     record: StepRecord = build_step_record(
         payload,
@@ -208,6 +224,10 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         rule_id,
         order=order,
         marks=marks,
+        # V8b: the very strings the answer sends (none for an allow, a warn included). They are on
+        # each half, so the merge keeps those of the half whose verdict the step shows.
+        user_message=permission.get("user_message"),
+        agent_message=permission.get("agent_message"),
     )
     # V2c: the second hook of one action updates its step (same order) instead of adding one.
     saved, previous = step_merger.join(session.id, payload, record)
@@ -219,25 +239,18 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     graph_store.enqueue(saved)
     local_store.enqueue(saved)
     flag_marked(store, stored)  # after the step is queued: the chat's row exists by then
-
-    permission: dict[str, str]
-    if verdict == "blocked" and rule_id is not None:
-        user_msg, agent_msg = deny_messages(rule_id)
-        permission = {
-            "permission": "deny",
-            "user_message": user_msg,
-            "agent_message": agent_msg,
-        }
-    else:
-        permission = {"permission": "allow"}
     return permission, verdict
 
 
 @app.post("/hook")
 async def hook(request: Request) -> Response:
+    global _last_hook_at
     provided: str | None = request.headers.get(TOKEN_HEADER)
     if provided is None or provided != _token:
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    # Milliseconds: the page parses this with `new Date(...)`, which fixes the fraction at 3 digits.
+    _last_hook_at = datetime.now(UTC).isoformat(timespec="milliseconds")
 
     if not content_type_is_json(request):
         return JSONResponse({"detail": "unsupported media type"}, status_code=415)

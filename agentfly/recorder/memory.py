@@ -121,6 +121,10 @@ class _Session:
             self.marking = new
         return True
 
+    @property
+    def marked_order(self) -> int | None:
+        return None if self.marking is None else self.marking["order"]
+
     def _alarms_below(self, floor: int) -> Iterator[Step]:
         """Blocked or warned steps below `floor`, newest first (retained, then evicted)."""
         for step in reversed(self.steps):
@@ -138,12 +142,12 @@ class _Session:
             "steps": window,
             "hidden": {key: self.counts[key] - in_window[key] for key in _COUNT_KEYS},
             "flagged": pick_flagged(self.marking, self._alarms_below(floor), floor),
-            "marked_order": None if self.marking is None else self.marking["order"],
+            "marked_order": self.marked_order,
         }
 
 
 def _step_dict(record: StepRecord) -> Step:
-    return {
+    step: Step = {
         "order": record.order,
         "kind": record.kind,
         "verdict": record.verdict,
@@ -154,6 +158,15 @@ def _step_dict(record: StepRecord) -> Step:
         "host": record.hosts[0] if record.hosts else None,
         "rule": record.rule_id,
     }
+    # V8b: the Why card's text. Absent, not null, when no rule fired or the answer sent none.
+    for key, value in (
+        ("rule_text", record.rule_description),
+        ("user_message", record.user_message),
+        ("agent_message", record.agent_message),
+    ):
+        if value is not None:
+            step[key] = value
+    return step
 
 
 class MemorySteps:
@@ -194,11 +207,15 @@ class MemorySteps:
             sid: str | None = self.current_session_id
             if sid is None:
                 body: dict[str, Any] = {"session": None, "steps": []}
-                return body if limit is None else {**body, **_empty_view()}
+                if limit is not None:
+                    return {**body, **_empty_view()}
+                return {**body, "marked_order": None} if all_steps else body
             memory: _Session = self._sessions[sid]
             if limit is None:
                 steps: list[Step] = list(memory.steps)
-                return {"session": sid, "steps": steps if all_steps else steps[-_LAST_N:]}
+                if all_steps:  # V8b: the page no longer needs a second `?limit=1` request
+                    return {"session": sid, "steps": steps, "marked_order": memory.marked_order}
+                return {"session": sid, "steps": steps[-_LAST_N:]}
             return {"session": sid, **memory.window_view(limit)}
 
 

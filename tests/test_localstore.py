@@ -726,6 +726,25 @@ def test_planted_content_never_reaches_the_file(
     assert marker.encode() not in store_bytes(data_dir() / ls.DB_NAME)
 
 
+def test_the_deny_messages_never_reach_the_file(store: LocalStore, db: Path) -> None:
+    """V8b: the messages stay in memory. The markers differ from the rule text on purpose."""
+    store.enqueue(
+        record(
+            1,
+            verdict="blocked",
+            rule_id="R1",
+            rule_description="RULE_TEXT_MARK",
+            user_message="UM_MARK_71c2",
+            agent_message="AM_MARK_71c2",
+        )
+    )
+    assert store.flush()
+    assert rows(db, "SELECT rule_id FROM steps") == [("R1",)]  # the step itself was written
+    saved = store_bytes(db)
+    assert b"UM_MARK_71c2" not in saved and b"AM_MARK_71c2" not in saved
+    assert b"RULE_TEXT_MARK" not in saved  # nor the rule text: SPEC section 4 lists only the id
+
+
 def test_the_history_keeps_the_cleaned_command_and_neo4j_alone_gets_the_raw_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
