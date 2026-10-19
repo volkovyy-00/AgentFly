@@ -28,7 +28,12 @@ from tests.test_hook_client import EVENT, check_allow_and_log, run_client
 
 REPO = Path(__file__).resolve().parents[1]
 UV = shutil.which("uv")
-pytestmark = pytest.mark.skipif(UV is None, reason="uv is not installed")
+# One wheel build per run, and tests that plant files in that install and put them back: all of
+# them share one xdist worker, in file order.
+pytestmark = [
+    pytest.mark.skipif(UV is None, reason="uv is not installed"),
+    pytest.mark.xdist_group(name="package"),
+]
 _OFFLINE_HINTS = ("error sending request", "dns error", "Failed to fetch", "Connection refused")
 
 

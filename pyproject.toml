@@ -24,6 +24,7 @@ agentfly-hook = "agentfly.hook_client:main"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.16.9",
 ]
 
@@ -47,3 +48,6 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# A mistyped marker is an error, not a warning. Parallel flags (-n, --dist) stay on the command
+# line: the live-Neo4j test starts its own `python -m pytest` and reads this file too.
+strict_markers = true

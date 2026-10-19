@@ -29,6 +29,7 @@ from tests.helpers import (
     start_recorder,
     stop_recorder,
     wait_for_health,
+    wallclock,
     write_token,
 )
 
@@ -513,6 +514,7 @@ def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
     assert "offline" not in hook_log(isolated_home)
 
 
+@wallclock
 def test_latency_with_the_recorder_up(client: Path, isolated_home: Path) -> None:
     """Spot check only. The 50 ms target is measured and reported in docs/reports/V2b.md."""
     port = free_port()

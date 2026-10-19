@@ -21,6 +21,7 @@ from agentfly.recorder.localstore import LocalStore, StoreUnavailable, local_sto
 from agentfly.recorder.paths import config_dir, data_dir
 from agentfly.recorder.rules import Session, mark
 from agentfly.recorder.store import StepRecord, build_step_record
+from tests.helpers import wallclock
 
 DAY0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 HEADERS = {"Content-Type": "application/json"}
@@ -486,6 +487,7 @@ def test_a_purged_row_is_gone_from_the_file_and_its_log_after_one_more_write(db:
         s.stop()
 
 
+@wallclock
 def test_a_reader_only_delays_the_purge_and_the_next_item_finishes_it(db: Path) -> None:
     marker = "DELAYED_MARKER_5e21"
     clock = Clock(DAY0)
@@ -578,6 +580,7 @@ def test_no_value_is_formatted_into_any_sql_statement(
         assert cutoff not in sql and cutoff[:19] not in sql, sql
 
 
+@wallclock
 def test_enqueue_never_blocks_when_the_queue_is_full(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -811,6 +814,7 @@ def test_a_healthy_store_gives_the_reference_answers(client: TestClient) -> None
 
 
 @pytest.mark.parametrize("breakage", ["directory", "read-only file", "locked"])
+@wallclock
 def test_a_store_that_cannot_be_written_changes_and_delays_no_answer(
     breakage: str, isolated_home: Path
 ) -> None:

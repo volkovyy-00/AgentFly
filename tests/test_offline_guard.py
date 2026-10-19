@@ -23,6 +23,7 @@ from tests.helpers import (
     start_recorder,
     stop_recorder,
     wait_for_health,
+    wallclock,
     write_token,
 )
 
@@ -299,6 +300,7 @@ def timed_call(client: Path, home: Path, name: str, port: int) -> tuple[dict[str
 
 
 @pytest.mark.parametrize("name", list(EVENTS))
+@wallclock
 def test_calls_to_a_recorder_that_does_not_answer_in_time_give_the_guard_answer(
     client: Path, isolated_home: Path, name: str
 ) -> None:

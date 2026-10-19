@@ -10,6 +10,7 @@ import pytest
 from agentfly.recorder.normalize import MAX_DEPTH, normalize, shell_script
 from agentfly.recorder.rules import parsed_is_outbound
 from tests.cases import HEREDOC_COMMIT, MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
+from tests.helpers import wallclock
 
 
 def words_of(command: str) -> list[str]:
@@ -335,6 +336,7 @@ def test_odd_text_never_raises(text: str) -> None:
     normalize(text)
 
 
+@wallclock
 def test_a_big_command_is_parsed_in_linear_time() -> None:
     big = "echo " + "word " * 200_000 + "$(ls) 'a b' \"c d\"\n" * 5
     start = time.perf_counter()
@@ -357,6 +359,7 @@ def test_a_big_command_is_parsed_in_linear_time() -> None:
         "echo `a` " * 1000,
     ],
 )
+@wallclock
 def test_repeated_wrappers_do_not_multiply_the_work(text: str) -> None:
     start = time.perf_counter()
     parsed = normalize(text)

@@ -30,7 +30,7 @@ from agentfly.recorder.store import (
     graph_store,
     neo4j_opt_in,
 )
-from tests.helpers import NEO4J_ENV, REPO, client_env, free_port
+from tests.helpers import NEO4J_ENV, REPO, client_env, free_port, wallclock
 from tests.leak_cases import LEAKY_COMMANDS, SECRET
 
 # The owner's real login file. Collection runs under the real HOME (conftest swaps it per test).
@@ -194,6 +194,7 @@ def test_queue_drops_when_full() -> None:
     assert store._queue.qsize() == 1
 
 
+@wallclock
 def test_hooks_stay_fast_when_store_write_fails(
     client: TestClient,
     token: str,
