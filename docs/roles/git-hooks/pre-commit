@@ -12,6 +12,23 @@ if echo "$staged" | grep -q '\.DS_Store$'; then
 fi
 
 lead=$(echo "$staged" | grep -E '^docs/(STATE|BOARD|DECISIONS|learnings)\.md$')
+if [ -n "$lead" ] && [ "$branch" != "main" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+  # A worker's merge of a main commit (conflicted or --no-commit) may carry that commit's copy
+  # unchanged: it then equals the later merge base, so the lead's merge keeps main's newer copy.
+  # Anything else stays rejected: a merge of a commit not on main, an edit, a deletion (no blob).
+  stale=$lead
+  if git merge-base --is-ancestor MERGE_HEAD main 2>/dev/null; then
+    stale=""
+    for f in $lead; do
+      staged_blob=$(git rev-parse -q --verify ":$f") || staged_blob=""
+      merged_blob=$(git rev-parse -q --verify "MERGE_HEAD:$f") || merged_blob=""
+      if [ -z "$staged_blob" ] || [ "$staged_blob" != "$merged_blob" ]; then
+        stale="$stale $f"
+      fi
+    done
+  fi
+  lead=$(echo $stale)
+fi
 if [ -n "$lead" ] && [ "$branch" != "main" ]; then
   echo "pre-commit: lead-only file(s) staged on branch $branch:" $lead >&2
   echo "pre-commit: only the lead edits these, on main. Unstage them: git restore --staged $lead" >&2

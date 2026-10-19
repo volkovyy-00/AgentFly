@@ -83,6 +83,13 @@ done <<EOF
 $(section "In flight" | grep -E '^- [A-Z][0-9]+' | tr '·' '\n' | sed 's/^ *//; s/ *$//; s/`//g' | grep '/')
 EOF
 
+# An in-flight branch whose diff from main touches a lead file would bring an old copy back at merge.
+for b in $(section "In flight" | grep -E '^- [A-Z][0-9]+' | awk -F' · ' '{print $4}' | tr -d '`'); do
+  git -C "$root" rev-parse -q --verify "refs/heads/$b" >/dev/null || continue
+  touched=$(git -C "$root" diff --name-only "main...$b" -- docs/STATE.md docs/BOARD.md docs/DECISIONS.md docs/learnings.md)
+  [ -z "$touched" ] || warn "branch $b changes lead file(s) against main:" $touched
+done
+
 for pid in $(grep -oE 'pid [0-9]+' "$STATE" | awk '{print $2}' | sort -u); do
   kill -0 "$pid" 2>/dev/null || warn "pid $pid in STATE.md is not running"
 done

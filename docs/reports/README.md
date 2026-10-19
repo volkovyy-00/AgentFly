@@ -15,3 +15,8 @@ Details: see "## YYYY-MM-DD HH:MM" below.
 
 Below line 6: one `## YYYY-MM-DD HH:MM` section per update, newest first, with the full
 evidence (pasted command output, paths). Spike reports (`docs/spikes/<id>.md`) use the same top block.
+
+Before you set `Status: done`, review your own branch: in Claude Code run `/code-review high` on the
+diff `main...HEAD`. Fix a finding only inside your card's Touches/May-touch list; list every other
+finding, and any you chose not to fix, under the newest `##` section with one line on why. A Cursor
+worker without `/code-review` says so in that section.

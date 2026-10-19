@@ -12,7 +12,7 @@ Workers are other sessions (Claude Code in git worktrees, or Cursor agents). The
 - Never push. Local commits on main only, and only when asked or at handoff.
 - Never edit code or files a worker's card owns. If a card's "May touch" list is wrong, change the card, not the code.
 - A decision changes status only on the owner's explicit yes. Record the date and any change in the status line.
-- Report what works and what does not, then stop (AGENTS.md "One step at a time"). Do not start the next card unasked.
+- Report what works and what does not, then stop (AGENTS.md "One card at a time"). Do not start the next card unasked.
 - Use a non-receiving target (`https://example.invalid`) for any send-out test. Never print the token, `.env` values or request bodies.
 - Keep STATE live: overwrite `docs/STATE.md` as soon as a card is dispatched or finished, a decision is approved, or machine state changes. Usage limits give no warning.
 - Never start a `claude` session from Bash; the owner starts workers.
@@ -38,8 +38,9 @@ In Codex or Cursor (no hook, no system prompt) the owner pastes: "You are the Ag
 2. Make `BOARD.md` and `DECISIONS.md` agree with STATE. A done card collapses to one line under `## Done`: `- S1 ✅ <date> · <report path> · changed D9 D11 · body: git show <sha>:docs/BOARD.md`.
 3. Run `docs/roles/state-check.sh --write-index`, then `docs/roles/state-check.sh`; it must end in `OK`. Check machine state fresh and mark each item verified or "as of <time>".
 4. Add lessons to `docs/learnings.md` (80 lines or fewer). A lesson that becomes a standing rule moves to AGENTS.md or this file and is deleted there.
-5. Commit on main: `handoff: <phase>`. Nothing under /tmp, no secrets, no `.DS_Store`.
-6. Tell the owner the commit SHA and anything not captured in the files.
+5. Delete merged worker branches that no worktree uses: `git branch -d` on `git branch --merged main` `ag-*` names minus the `branch` lines of `git worktree list --porcelain`.
+6. Commit on main: `handoff: <phase>`. Nothing under /tmp, no secrets, no `.DS_Store`.
+7. Tell the owner the commit SHA and anything not captured in the files.
 
 ## When to compact, clear or hand off
 | Situation | Do |
@@ -55,4 +56,5 @@ In Codex or Cursor (no hook, no system prompt) the owner pastes: "You are the Ag
 - A worker writes `docs/reports/<card>.md` per `docs/reports/README.md`. Lines 2–6 are Status, Result, Evidence, Needs owner, Details. Spikes keep `docs/spikes/<id>.md` with the same top block.
 - The lead reads only `head -n 6` unless something needs checking. Evidence means pasted command output, file paths, test names.
 - The owner pastes "V2 report ready", never a transcript.
+- Dispatch a card with `docs/roles/dispatch.sh <card> <slug>`: it makes the worktree and branch and prints the owner's start command.
 - Worker brief, line 1: "You are a worker on card <ID> in <worktree>. Follow AGENTS.md and this brief; report per docs/reports/README.md. Never push; commit on your branch only, the lead merges."

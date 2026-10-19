@@ -1,8 +1,9 @@
 # AgentFly v1 board (revision 3)
 
-Status: **spikes S1–S5, V1a, V2, V8, V2b done (2026-10-16); wave 3 V1b, V3a, V5a, V6
-done and merged (2026-10-18). V3 and V5 were split into a/b halves.
-D16 is the only open decision.** V2 was split into V2 and V2b; V2b's duplicates half is V2c.
+Status (2026-10-19): **spikes S1–S5 and V1a, V1b, V2, V2b, V2c, V3a, V3b, V5a, V6, V6b, V8,
+F3, F5, F6 done and merged (see Done). In flight: V3c ∥ V8b. Next: V5b → V5c, then V7 ∥ V9;
+V4 on hold (no Xcode CLT on this Mac). D16 is the only open decision.** V2 was split into V2 and
+V2b (its duplicates half is V2c); V3 and V5 into a/b/c cards.
 Cards with a file in `docs/briefs/` take that brief as authoritative. After
 approval, any card whose plan depends on a decision you changed is rewritten
 before it starts.
@@ -114,6 +115,7 @@ V7 and V9 can run in parallel.
 
 ### V3c · Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
 - **Brief:** `docs/briefs/V3c.md` (authoritative). Package check (V3b's) and install-folder guard (moved from V5b to V3b by the owner 2026-10-18); split out of V3b (owner 2026-10-18). R0 also blocks reinstalling AgentFly; a version change needs the owner's confirm (owner 2026-10-18).
+- **Status:** in flight 2026-10-19 · worktree `.claude/worktrees/ag-v3c-package-check` · branch `ag-v3c-package-check` · report `docs/reports/V3c.md`
 - **Lane:** backend, next (V3b ✅); before V5b · **Depends on:** V3b ✅
 
 ### V4 · Homebrew formula and release workflow
@@ -167,7 +169,8 @@ V7 and V9 can run in parallel.
   - Plain-language drafting is not included unless D13 is approved.
 
 ### V8b · Recorder fields for the Why card and health strip
-- **Owner:** worker-backend · brief to write
+- **Brief:** `docs/briefs/V8b.md` (authoritative; pass 2 done 2026-10-19). Adds `marked_order` to `?all=1` (V8 report's ask). Fields live in memory only.
+- **Status:** in flight 2026-10-19 ∥ V3c · worktree `.claude/worktrees/ag-v8b-recorder-fields` · branch `ag-v8b-recorder-fields` · report `docs/reports/V8b.md` (shared with V3c: AGENTS.md "Testing" only)
 - **Lane:** backend, next (V6b ✅; same recorder files).
 - **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
 - **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
@@ -191,6 +194,11 @@ V7 and V9 can run in parallel.
   - The web check and the stale-build check pass, and you say it is demo-ready.
 
 ---
+
+### F7 · Test speed and CI
+- **Owner:** worker-backend · brief to write after V3c and V8b merge (both add tests; xdist failures would be blamed on them)
+- **Scope (owner 2026-10-19: pytest-xdist approved, CI yes):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` grouped (`xdist_group`, `--dist loadgroup`); `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), macOS runner, actions pinned by SHA, `permissions: contents: read`, Node 22.
+- **Done when:** full suite passes 3 runs in a row under xdist with wall time measured before and after; CI green on a push.
 
 ## Not on the board (on purpose)
 - **Publishing to PyPI and the Homebrew tap:** the lead does it, after your OK
