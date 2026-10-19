@@ -1,4 +1,4 @@
-"""`agentfly uninstall`: take AgentFly's hook entries out, then its system folder (SPEC 7)."""
+"""`agentfly uninstall`: hook entries out first, then the system folder and the service (SPEC 7)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 
-from agentfly.install import InstallError, elevate, installer
+from agentfly.install import InstallError, elevate, installer, service
 from agentfly.install.layout import SYSTEM
 
 
@@ -14,7 +14,10 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser = commands.add_parser(
         "uninstall",
         help="remove AgentFly's system hooks and files (needs sudo once)",
-        description="Removes AgentFly's entries from Cursor's system hooks file, then its folder.",
+        description=(
+            "Removes AgentFly's entries from Cursor's system hooks file, then its folder, and "
+            "stops and removes the recorder service. Run it without sudo: it asks for the password."
+        ),
     )
     parser.set_defaults(run=run)
 
@@ -25,17 +28,45 @@ RESTART_HINT = (
 )
 
 
+def _as_user() -> int:
+    installed = installer.is_installed(SYSTEM)
+    if installed:
+        print("AgentFly will ask for your password once, to remove its system files.")
+        code = elevate.run_elevated(["uninstall"])
+        if code != 0:
+            print(
+                "agentfly uninstall: the recorder service was left running, because the hooks "
+                "are still registered; run `agentfly uninstall` again",
+                file=sys.stderr,
+            )
+            return code
+    try:
+        messages = service.remove()  # the user's login session owns it: no sudo
+    except InstallError as exc:
+        print(
+            f"agentfly uninstall: the system files are removed, but the recorder service is "
+            f"not ({exc}); run `agentfly uninstall` again"
+            if installed
+            else f"agentfly uninstall: cannot remove the recorder service ({exc}); "
+            "run `agentfly uninstall` again",
+            file=sys.stderr,
+        )
+        if installed:
+            print(RESTART_HINT)
+        return 1
+    for line in messages:
+        print(line)
+    if not installed and not messages:
+        print("nothing of AgentFly's is installed")
+    if installed:
+        print(RESTART_HINT)
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     try:
         if os.geteuid() != 0:
-            if not installer.is_installed(SYSTEM):
-                print("nothing of AgentFly's is installed")
-                return 0
-            print("AgentFly will ask for your password once, to remove its system files.")
-            code = elevate.run_elevated(["uninstall"])
-            if code == 0:
-                print(RESTART_HINT)
-            return code
+            return _as_user()
         outcome = installer.uninstall(SYSTEM)
         for line in outcome.messages:
             print(line)
