@@ -223,23 +223,36 @@ def smoke(command: str, event: str, run_as: tuple[int, int] | None) -> None:
         )
 
 
-def assert_locked(layout: Layout) -> None:
-    """Nothing in the system folder is a stray link, or writable by group or others."""
+def lock_problems(layout: Layout, *, check_owner: bool) -> list[str]:
+    """What in the system folder is a stray link, or can be written by group or others.
+
+    Also what the user could not enter or read (the hook would fail), and, when `check_owner`, what
+    is not owned by the system user. `doctor` asks this as the user; the installer asks it as root.
+    """
     if layout.system_root.is_symlink():
-        raise InstallError(f"{layout.system_root} is a symbolic link")
+        return [f"{layout.system_root} is a symbolic link"]
+    problems: list[str] = []
     for path in [layout.system_root, *layout.system_root.rglob("*")]:
         relative = path.relative_to(layout.system_root).parts
         if path.is_symlink() or (relative and relative[0].startswith((".old-", ".staging-"))):
             continue  # a link is not followed; the work folders are not live
         info = path.lstat()
         if stat.S_ISDIR(info.st_mode) and not info.st_mode & 0o001:
-            raise InstallError(f"{path} cannot be entered by the user, so the hook would fail")
+            problems.append(f"{path} cannot be entered by the user, so the hook would fail")
         if info.st_mode & 0o022:
-            raise InstallError(f"{path} can be written by group or others")
+            problems.append(f"{path} can be written by group or others")
         if not info.st_mode & 0o004:
-            raise InstallError(f"{path} cannot be read by the user, so the hook would fail")
-        if layout.owner is not None and os.geteuid() == 0 and info.st_uid != layout.owner[0]:
-            raise InstallError(f"{path} is not owned by the system user")
+            problems.append(f"{path} cannot be read by the user, so the hook would fail")
+        if check_owner and layout.owner is not None and info.st_uid != layout.owner[0]:
+            problems.append(f"{path} is not owned by the system user")
+    return problems
+
+
+def assert_locked(layout: Layout) -> None:
+    """Nothing in the system folder is a stray link, or writable by group or others."""
+    problems = lock_problems(layout, check_owner=os.geteuid() == 0)
+    if problems:
+        raise InstallError(problems[0])
 
 
 def _backup(layout: Layout, text: str) -> Path:

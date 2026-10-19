@@ -6,7 +6,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from agentfly.cli import init, serve, start, status, stop, uninstall, wipe
+from agentfly.cli import doctor, init, serve, start, status, stop, uninstall, wipe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_parser(commands)
     stop.add_parser(commands)
     status.add_parser(commands)
+    doctor.add_parser(commands)
     return parser
 
 
