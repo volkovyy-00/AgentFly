@@ -182,7 +182,7 @@ V7 and V9 can run in parallel.
 ---
 
 ### F7 · Test speed and CI
-- **Owner:** worker-backend · brief written (docs/briefs/F7.md, pass 2 2026-10-19); the lead re-checks it against 07a8d7f before dispatch · next, before V5b (owner 2026-10-19)
+- **Owner:** worker-backend · dispatched 2026-10-19 (worktree ag-f7-test-speed, from 9dbe698; brief re-checked against e48d7ee, pass 2) · next, before V5b (owner 2026-10-19)
 - **Scope (owner 2026-10-19: pytest-xdist approved, CI yes; CI on main pushes and pull requests only, macOS only; a red main blocks merges):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` on one worker; `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), actions pinned by SHA, `permissions: contents: read`, Node 22; arm64-only failures fixed in F7.
 - **Done when:** full suite passes 3 runs in a row under xdist, at most half the serial wall time; CI green on the owner's draft pull request.
 
