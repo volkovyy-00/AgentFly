@@ -74,11 +74,14 @@ _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell 
 _ALWAYS_OUTBOUND: frozenset[str] = frozenset({"gh", "aws"})
 _HOSTED_OUTBOUND: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
 _INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
-_GUARD_PATHS: tuple[str, ...] = (
+_GUARD_PATHS: tuple[str, ...] = (  # the same list as `_R0_PATHS` in agentfly/recorder/rules.py
     ".config/agentfly",
     ".local/share/agentfly",
     "/library/application support/agentfly",
     "hooks.json",
+    "dev.agentfly.recorder",
+    "homebrew.mxcl.agentfly",
+    "sh.brew.agentfly",
 )
 
 

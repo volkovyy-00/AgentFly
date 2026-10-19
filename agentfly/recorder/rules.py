@@ -147,12 +147,18 @@ def check_r1(action: Action, session: Session) -> bool:
 # ---------------------------------------------------------------- R0: protect AgentFly itself
 
 # Case-folded. `hooks.json` also covers `.cursor/hooks.json` in any folder and
-# `/Library/Application Support/Cursor/hooks.json` (and a bare name after a `cd`).
+# `/Library/Application Support/Cursor/hooks.json` (and a bare name after a `cd`). The last three
+# are the recorder's launchd labels (its own, Homebrew's current and legacy): they name the service
+# file in `~/Library/LaunchAgents` with or without `.plist`, which `defaults` adds on its own.
+# agentfly/hook_client.py `_GUARD_PATHS` is the same list.
 _R0_PATHS: tuple[str, ...] = (
     ".config/agentfly",
     ".local/share/agentfly",
     "/library/application support/agentfly",
     "hooks.json",
+    "dev.agentfly.recorder",
+    "homebrew.mxcl.agentfly",
+    "sh.brew.agentfly",
 )
 _R0_SUBCOMMANDS: frozenset[str] = frozenset({"serve", "stop", "uninstall", "wipe"})
 _R0_KILLERS: frozenset[str] = frozenset({"pkill", "killall"})
