@@ -1,9 +1,21 @@
 # V3c: Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
-Status: done (as of 2026-10-19 16:42)
-Result: init -g/uninstall hash the tool environment before any password prompt, stop on a changed or extra file, ask on upgrades. Root runs -I -S -B, no byte-code, on the bundled Python. R0 guards the environment and uv/pipx/brew installs. doctor has a package line. Real sudo and Homebrew not tried.
-Evidence: 17c8350 on ag-v3c-package-check. `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 3303 passed, 5 skipped (baseline 2534). New: test_install_packages.py (37), test_root_command.py (8), plus CLI, doctor, R0, offline-guard and real-wheel cases.
-Needs owner: Rebuilding at the same version stops init -g and uninstall (as the brief says); the wheel is rebuilt every card. Keep it and raise the version before each rebuild, or ask instead of stopping when files match their own RECORD? Recommend: keep.
-Details: see "## 2026-10-19 16:42" below.
+Status: done (as of 2026-10-19 18:10)
+Result: init -g/uninstall hash the tool environment before any password prompt and stop on a changed, extra or unlistable file; upgrades ask. Root runs -I -S -B, no byte-code, on the bundled Python. R0 guards the environment and uv/pipx/brew. doctor: package line. Real sudo, Homebrew untried.
+Evidence: be6122c (17c8350 before final verification) on ag-v3c-package-check. `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 3376 passed, 5 skipped (baseline 2534). Smoke test on a real built wheel under uv tool: 7 scenarios, sudo never reached on a bad package.
+Needs owner: Rebuilding at the same version (AgentFly, or a dependency under another Python) stops init -g/uninstall, as the brief says. Keep it, or ask instead of stopping when the files match their own RECORD? Recommend: ask, because a dependency has no version to raise.
+Details: see "## 2026-10-19 18:10" below.
+
+## 2026-10-19 18:10
+
+### Final verification (smoke test, simplify, independent audit)
+- **Smoke test, real wheel** (`uv build`, `uv tool install` under a throwaway HOME, the installed tool's own Python drives the real `main(["init","-g"])` and `main(["uninstall"])`, only `sudo` is a recorder): a clean environment reaches sudo with the exact argv (`... -I -S -B -X pycache_prefix=/var/empty -c <bootstrap> <site> init -g`); a planted `.so`, a changed AgentFly module, a changed `neo4j` file, and a mode-000 `numpy/` folder each stop both commands before sudo and name the file; deleting the extra file lets `init -g` through. With a `.pth` and an unchecked-hash `.pyc` planted in that real environment the old root command wrote both markers and the new one wrote none and still ran the package.
+- **Found by the smoke test:** `uv tool install --force`, `--reinstall` and both together leave an extra file in `site-packages` (uv 0.9.5); only `uv tool uninstall` then install removes it. So "reinstall" looped on an extra file. The message and `doctor` now say to delete it or `uv tool uninstall` first (`packages.advice`, one text for both).
+- **Simplify** (4 reviewers): the R0 package rule was quadratic (a 46 KB command took 4.5 s, longer than the hook client waits, after which the offline guard answers); it is linear now (6 ms) and gave the same answers on 120,000 random inputs. `extra` is a field, not a guess from message endings; `unreadable` is derived; `ensure_confirmed`, `lead` and `advice` replace repeated text; `packages` and `current` are required arguments; shared test helpers (`upgrade`, `install_system`, `status_of`, `path_of`).
+- **Independent audit** (6 findings, each checked): (1) a folder the user cannot list was skipped by `os.walk` but root can read it, and `neo4j` imports `numpy` at import time: reproduced, now a problem (`packages._unlisted` `onerror`), covered by mode 000 and 0400 tests and the smoke test. (2) R0 missed patterns (`*`, `?`, `{`), operands fed by `xargs`/`parallel`/`find -exec`, and read the value of `--python` as a tool name: fixed. (3) a dependency that keeps its version and changes its files (a reinstall under another Python) stopped both commands with a hint to raise a version it does not have: the message now names the distribution and says to remove the record (`sudo rm ".../hashes.json"`, then it is checked against `RECORD` only, as on a first install); the stop itself is the brief's rule and stays the owner's question above. (6) a NUL byte in a RECORD path raised: now a problem line. Not changed: (4) the offline guard has no package-command rule (open point 3 below), (5) indirect spellings such as `cd ~/.local/share/uv/tools && rm -rf agentfly-recorder` or `$(uv tool dir)` (the same limit R0 already has; SPEC section 10).
+
+### Open points that changed
+- Open point 1 (same-version rebuild) now covers dependencies; see Needs owner.
+- Measured but not changed (outside this card's files): `pythons.file_sha256` reads each file twice (about 114 of 172 ms to hash the real environment), and `-X pycache_prefix` makes root start in about 0.95 s instead of 0.33 s because the standard library and `neo4j` compile from source each time.
 
 ## 2026-10-19 16:42
 
