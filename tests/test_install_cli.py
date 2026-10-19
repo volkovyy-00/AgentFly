@@ -17,6 +17,8 @@ from tests.helpers import REPO
 from tests.install_helpers import (
     MODULE,
     NEW_AGENTFLY,
+    REBUILDS,
+    TOOL_DISTS,
     fake_python_tar,
     install_system,
     make_cursor_app,
@@ -345,6 +347,23 @@ class Sudo:
             self.then()
         return 0
 
+    def installs(self, system: Layout, build: pythons.PythonBuild, tmp_path: Path) -> None:
+        """When called, do what root would: `installer.install` into `system`."""
+        self.then = lambda: installer.install(
+            system,
+            build,
+            cursor_version="3.24.12",
+            source=installer.client_source(),
+            archive=tmp_path / "dl" / "fake-python.tar.gz",
+        )
+
+
+def owner_answers(monkeypatch: pytest.MonkeyPatch, yes: bool) -> list[list[str]]:
+    """The owner's reply to the prompt; the returned list collects what was asked."""
+    asked: list[list[str]] = []
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: asked.append(changes) or yes)
+    return asked
+
 
 @pytest.fixture
 def sudo(monkeypatch: pytest.MonkeyPatch) -> Sudo:
@@ -452,7 +471,7 @@ def test_an_upgrade_shows_old_and_new_versions_and_stops_unless_the_owner_confir
     captured = capsys.readouterr()
     assert "agentfly-recorder: changed from 0.1.0 to 0.2.0" in captured.out
     assert "not confirmed; nothing was changed" in captured.err and sudo.calls == []
-    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: False)
+    owner_answers(monkeypatch, False)
     assert main(["uninstall"]) == 1
     assert "uninstall: not confirmed" in capsys.readouterr().err and sudo.calls == []
 
@@ -467,15 +486,8 @@ def test_a_confirmed_upgrade_goes_ahead_and_the_record_holds_the_new_hashes(
     tmp_path: Path,
 ) -> None:
     upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
-    seen: list[list[str]] = []
-    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
-    sudo.then = lambda: installer.install(
-        system,
-        installed,
-        cursor_version="3.24.12",
-        source=installer.client_source(),
-        archive=tmp_path / "dl" / "fake-python.tar.gz",
-    )
+    seen = owner_answers(monkeypatch, True)
+    sudo.installs(system, installed, tmp_path)
     assert main(["init", "-g"]) == 0
     assert seen == [["agentfly-recorder: changed from 0.1.0 to 0.2.0"]]
     assert sudo.calls == [(["init", "-g"], subprocess.DEVNULL, system.interpreter)]
@@ -508,8 +520,7 @@ def test_a_dependency_upgrade_alone_goes_ahead_after_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     upgrade(tool_env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
-    seen: list[list[str]] = []
-    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
+    seen = owner_answers(monkeypatch, True)
     assert main(["uninstall"]) == 0
     assert seen == [["fakedep: changed from 1.0 to 1.1"]] and len(sudo.calls) == 1
 
@@ -554,37 +565,31 @@ def test_uninstall_with_nothing_installed_checks_no_package(
 
 # ---------------------------------------------------------------- a rebuild at the same version
 
-REBUILDS = [
-    ("agentfly-recorder", NEW_AGENTFLY),
-    ("fakedep", {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}),
+REBUILD_CASES = [
+    pytest.param(*REBUILDS[0], id="AgentFly rebuilt"),
+    pytest.param(*REBUILDS[1], id="a dependency under another Python"),
 ]
-REBUILD_IDS = ["AgentFly rebuilt", "a dependency under another Python"]
 
 
-def rebuild(env: packages.Environment, index: int) -> str:
+def rebuild(env: packages.Environment, name: str, files: dict[str, bytes]) -> None:
     """Reinstall one distribution at the version it has: other files, a RECORD that agrees."""
-    name, files = REBUILDS[index]
-    version = "0.1.0" if name == "agentfly-recorder" else "1.0"
-    upgrade(env, name, version, files)
-    return name
+    upgrade(env, name, TOOL_DISTS[name][0], files)
 
 
-@pytest.mark.parametrize("index", range(len(REBUILDS)), ids=REBUILD_IDS)
+@pytest.mark.parametrize(("name", "files"), REBUILD_CASES)
 @pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]], ids=["init", "uninstall"])
 def test_a_rebuild_at_the_same_version_asks_and_stops_after_a_no(
     command: list[str],
-    index: int,
+    name: str,
+    files: dict[str, bytes],
     installed: pythons.PythonBuild,
     tool_env: packages.Environment,
     sudo: Sudo,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    name = rebuild(tool_env, index)
-    asked: list[list[str]] = []
-    monkeypatch.setattr(
-        packages, "confirm", lambda changes, ask=None: asked.append(changes) or False
-    )
+    rebuild(tool_env, name, files)
+    asked = owner_answers(monkeypatch, False)
     assert main(command) == 1
     assert len(asked) == 1 and asked[0][0].startswith(f"{name}: same version ")
     assert "files differ from install but match RECORD" in asked[0][0]
@@ -594,9 +599,10 @@ def test_a_rebuild_at_the_same_version_asks_and_stops_after_a_no(
     assert sudo.calls == []  # no password was asked for
 
 
-@pytest.mark.parametrize("index", range(len(REBUILDS)), ids=REBUILD_IDS)
+@pytest.mark.parametrize(("name", "files"), REBUILD_CASES)
 def test_a_rebuild_at_the_same_version_goes_on_after_a_yes_and_writes_the_new_hashes(
-    index: int,
+    name: str,
+    files: dict[str, bytes],
     system: Layout,
     installed: pythons.PythonBuild,
     tool_env: packages.Environment,
@@ -605,15 +611,9 @@ def test_a_rebuild_at_the_same_version_goes_on_after_a_yes_and_writes_the_new_ha
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    name = rebuild(tool_env, index)
-    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: True)
-    sudo.then = lambda: installer.install(
-        system,
-        installed,
-        cursor_version="3.24.12",
-        source=installer.client_source(),
-        archive=tmp_path / "dl" / "fake-python.tar.gz",
-    )
+    rebuild(tool_env, name, files)
+    owner_answers(monkeypatch, True)
+    sudo.installs(system, installed, tmp_path)
     assert main(["init", "-g"]) == 0
     assert len(sudo.calls) == 1
     stored = (records.read(system) or {})["packages"][name]["files"]
@@ -630,8 +630,8 @@ def test_uninstall_goes_on_after_a_yes_for_a_rebuild(
     sudo: Sudo,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rebuild(tool_env, 0)
-    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: True)
+    rebuild(tool_env, *REBUILDS[0])
+    owner_answers(monkeypatch, True)
     assert main(["uninstall"]) == 0 and len(sudo.calls) == 1
 
 
@@ -642,8 +642,23 @@ def test_a_rebuild_with_a_file_that_fails_its_own_record_never_asks(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rebuild(tool_env, 0)
+    rebuild(tool_env, *REBUILDS[0])
     (tool_env.site / MODULE).write_text("import os\n")
     monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
     assert main(["init", "-g"]) == 1
     assert "does not match its RECORD" in capsys.readouterr().err and sudo.calls == []
+
+
+def test_a_damaged_package_section_in_the_record_asks_instead_of_going_quiet(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Found by the audit: a section the code could not read once meant "no record", no prompt."""
+    record = records.read(system) or {}
+    record["packages"] = "garbage"
+    system.record.write_text(records.dumps(record), encoding="utf-8")
+    asked = owner_answers(monkeypatch, True)
+    assert main(["init", "-g"]) == 0
+    assert len(asked) == 1 and len(sudo.calls) == 1  # asked first, then the password

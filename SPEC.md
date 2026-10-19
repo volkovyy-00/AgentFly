@@ -496,8 +496,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   can write. So, before any password prompt, both hash every file of every
   distribution in that environment. Each file must equal the hash in its
   distribution's own `RECORD` and be a plain file: a link, or a file behind a
-  linked folder below `site-packages`, is a mismatch (links above it, such as a
-  home folder on another disk, are resolved once and trusted). A file in
+  linked folder inside the environment, is a mismatch (links above the
+  environment, such as a home folder on another disk, are resolved once and
+  trusted). A file in
   `site-packages` that no `RECORD` lists is a mismatch (except `__pycache__` and
   the files uv, pipx and Homebrew leave: `_virtualenv.py`, `_virtualenv.pth`,
   `pipx_shared.pth`, `homebrew_deps.pth`), and so is a folder your user cannot

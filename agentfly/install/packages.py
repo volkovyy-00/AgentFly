@@ -67,21 +67,13 @@ class Distribution:
 class Check:
     distributions: dict[str, Distribution]  # what is on disk now: what the record should hold
     problems: list[str]  # a changed or extra file; empty when nothing is wrong
-    changes: list[str]  # what differs from the record though it matches RECORD: the owner confirms
+    changes: list[str]  # what differs from the record (every file matches its RECORD): to confirm
     extra: bool  # a problem is a file that should not be there: installing over it keeps it
 
 
 def lead(items: list[str]) -> str:
     """The first of `items`, and how many more there are."""
     return f"{items[0]} (and {len(items) - 1} more)" if len(items) > 1 else items[0]
-
-
-@dataclass(frozen=True)
-class _Found:
-    name: str
-    version: str
-    actual: dict[str, str]  # readable regular files: path as listed -> SHA-256 hex
-    recorded: dict[str, str | None]  # RECORD's sha256 per listed path as hex; None when unusable
 
 
 # ---------------------------------------------------------------- the environment
@@ -141,37 +133,56 @@ def _inside(path: str, folder: str) -> bool:
     return path == folder or path.startswith(f"{folder}{os.sep}")
 
 
-def _not_plain(full: str) -> str | None:
+def _not_plain(full: str, real_folders: dict[str, str]) -> str | None:
     """Why a listed file is not a plain file where RECORD puts it, or None.
 
-    `site` is resolved once by the caller, so a link among the folders above `site-packages` (a
-    home folder on another disk) is part of the base; a link below it, or the file itself, is not.
+    `site` and the environment's root are resolved once by the caller, so a link among the folders
+    above the environment (a home folder on another disk) is part of the base. A link inside it,
+    between its root and the file, or the file itself, is not.
+    The file is `lstat`ed, its folder resolved: `real_folders` keeps each folder's answer for the
+    whole check, since about 1400 files sit in about 260 folders.
     """
     mode = os.lstat(full).st_mode
     if stat.S_ISLNK(mode):
         return f"{full} is a symbolic link, and RECORD lists a plain file"
     if not stat.S_ISREG(mode):
         return f"{full} is listed in RECORD but is not a regular file"
-    if os.path.realpath(full) != full:
+    folder = os.path.dirname(full)
+    real = real_folders.get(folder)
+    if real is None:
+        real = real_folders[folder] = os.path.realpath(folder)
+    if real != folder:
         return f"{full} is reached through a symbolic link"
     return None
 
 
 def _read_dist(
-    site: str, prefix: str, info: Path, listed: set[str], problems: list[str]
-) -> _Found | None:
+    site: str,
+    prefix: str,
+    info: Path,
+    listed: set[str],
+    problems: list[str],
+    real_folders: dict[str, str],
+) -> Distribution | None:
+    """One distribution: its readable files hashed, each compared with its own RECORD row."""
     try:
+        for part in ("METADATA", "RECORD"):  # read only as plain files: a link could be /dev/zero
+            if (why := _not_plain(os.path.join(info, part), real_folders)) is not None:
+                problems.append(why)
+                return None
         meta = PathDistribution(info).metadata
-        name, version = _normal(meta["Name"]), meta["Version"]
+        name, version = meta.get("Name"), meta.get("Version")
+        if not name or not version:  # a distribution recorded with no version could never be asked
+            raise KeyError("Name or Version")
+        name = _normal(name)
         with (info / "RECORD").open(newline="", encoding="utf-8") as handle:
             rows = list(csv.reader(handle))
     except (OSError, KeyError, ValueError, TypeError, csv.Error):
-        problems.append(f"{info} has no readable METADATA and RECORD")
+        problems.append(f"{info} has no readable METADATA, Name, Version and RECORD")
         return None
     own_record = os.path.normpath(info / "RECORD")
     listed.add(own_record)
-    actual: dict[str, str] = {}
-    recorded: dict[str, str | None] = {}
+    files: dict[str, str] = {}
     for row in rows:
         if not row:
             continue
@@ -180,21 +191,28 @@ def _read_dist(
         if full == own_record or "__pycache__" in rel.split("/"):
             continue  # RECORD cannot hash itself; byte-code is never read by root
         listed.add(full)
-        recorded[rel] = _sha256_hex(row[1]) if len(row) > 1 else None
         if not _inside(full, prefix):
             problems.append(f"{info.name}/RECORD names {rel}, outside the environment")
             continue
         try:
-            if (why := _not_plain(full)) is None:
-                actual[rel] = file_sha256(Path(full))
-            else:
-                problems.append(why)
+            why = _not_plain(full, real_folders)
+            digest = file_sha256(Path(full)) if why is None else ""
         except (OSError, ValueError) as exc:  # ValueError: a NUL byte in the path
             reason, shown = (
                 (exc.strerror, full) if isinstance(exc, OSError) else (str(exc), repr(full))
             )
             problems.append(f"{shown} is listed in RECORD but cannot be read ({reason})")
-    return _Found(name, version, actual, recorded)
+            continue
+        if why is not None:
+            problems.append(why)
+            continue
+        files[rel] = digest
+        wanted = _sha256_hex(row[1]) if len(row) > 1 else None
+        if wanted is None:
+            problems.append(f"RECORD has no usable sha256 for {full}, so it cannot be checked")
+        elif wanted != digest:
+            problems.append(f"{full} does not match its RECORD")
+    return Distribution(name, version, files)
 
 
 def _unlisted(site: str, listed: set[str]) -> tuple[list[str], list[str]]:
@@ -205,12 +223,11 @@ def _unlisted(site: str, listed: set[str]) -> tuple[list[str], list[str]]:
     """
     found: list[str] = []
     unlistable: list[str] = []
-    top = site
 
     def cannot_list(error: OSError) -> None:
         unlistable.append(f"{error.filename} cannot be listed ({error.strerror})")
 
-    for root, dirs, files in os.walk(top, onerror=cannot_list):
+    for root, dirs, files in os.walk(site, onerror=cannot_list):
         walk = []
         for folder in sorted(dirs):
             path = os.path.join(root, folder)
@@ -224,7 +241,7 @@ def _unlisted(site: str, listed: set[str]) -> tuple[list[str], list[str]]:
         dirs[:] = walk
         for name in sorted(files):
             path = os.path.join(root, name)
-            if (root == top and name in UNLISTED_OK) or path in listed:
+            if (root == site and name in UNLISTED_OK) or path in listed:
                 continue
             found.append(path)
     return found, unlistable
@@ -234,17 +251,21 @@ def _unlisted(site: str, listed: set[str]) -> tuple[list[str], list[str]]:
 
 
 def stored_from(record: dict[str, Any] | None) -> dict[str, tuple[str, dict[str, str]]] | None:
-    """The `packages` section of `hashes.json` as name -> (version, files); None if it has none."""
-    section = record.get("packages") if record else None
-    if not isinstance(section, dict):
+    """The `packages` section of `hashes.json` as name -> (version, files).
+
+    None when the record has no such section (a first install, or one from before V3c): there is
+    nothing to differ from. A section or an entry that is malformed is not "no record": it reads as
+    empty or missing, so every distribution it fails to describe is asked about.
+    """
+    if not record or "packages" not in record:
         return None
+    section = record["packages"]
     stored: dict[str, tuple[str, dict[str, str]]] = {}
-    for name, entry in section.items():
+    for name, entry in section.items() if isinstance(section, dict) else []:
         files = entry.get("files") if isinstance(entry, dict) else None
         version = entry.get("version") if isinstance(entry, dict) else None
-        if not isinstance(files, dict) or not isinstance(version, str):
-            return None
-        stored[name] = (version, {str(k): str(v) for k, v in files.items()})
+        if isinstance(files, dict) and isinstance(version, str):
+            stored[name] = (version, {str(k): str(v) for k, v in files.items()})
     return stored
 
 
@@ -263,9 +284,10 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     site, prefix = os.path.realpath(env.site), os.path.realpath(env.prefix)  # once, here
     problems: list[str] = []
     listed: set[str] = set()
-    found: dict[str, _Found] = {}
+    found: dict[str, Distribution] = {}
+    real_folders: dict[str, str] = {}
     for info in sorted(Path(site).glob("*.dist-info")):
-        dist = _read_dist(site, prefix, info, listed, problems)
+        dist = _read_dist(site, prefix, info, listed, problems, real_folders)
         if dist is None:
             continue
         if dist.name in found:
@@ -274,45 +296,37 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     unlisted, unlistable = _unlisted(site, listed)
     problems += [f"{path} is not listed in any RECORD" for path in unlisted]
     problems += [f"{why}, so what it holds cannot be checked" for why in unlistable]
-    stored = stored_from(record)
+    changes = _changes(found, stored_from(record))
+    return Check(found, problems, changes, bool(unlisted or unlistable))
+
+
+def _changes(
+    found: dict[str, Distribution], stored: dict[str, tuple[str, dict[str, str]]] | None
+) -> list[str]:
+    """What differs from the record, though every file matches its own RECORD: to be asked."""
+    if stored is None:
+        return []  # no record yet: a first install, or one from before V3c
     changes: list[str] = []
     for name, dist in sorted(found.items()):
-        problems += _against_record(site, dist)
-        old = stored.get(name) if stored is not None else None
-        if stored is None:
-            continue
+        old = stored.get(name)
         if old is None or old[0] != dist.version:
             changes.append(f"{name}: changed from {old[0] if old else 'none'} to {dist.version}")
-        elif old[1] != dist.actual:
+        elif old[1] != dist.files:
             differ = sum(
                 1
-                for rel in old[1].keys() | dist.actual.keys()
-                if old[1].get(rel) != dist.actual.get(rel)
+                for rel in old[1].keys() | dist.files.keys()
+                if old[1].get(rel) != dist.files.get(rel)
             )
             changes.append(
                 f"{name}: same version {dist.version}, files differ from install but match "
                 f"RECORD ({differ}): expected only if you reinstalled or rebuilt"
             )
-    for name, (version, _files) in sorted((stored or {}).items()):
-        if name not in found:
-            changes.append(f"{name}: changed from {version} to none")
-    distributions = {
-        name: Distribution(name, dist.version, dict(dist.actual)) for name, dist in found.items()
-    }
-    return Check(distributions, problems, changes, bool(unlisted or unlistable))
-
-
-def _against_record(site: str, dist: _Found) -> list[str]:
-    out: list[str] = []
-    for rel, digest in sorted(dist.actual.items()):
-        wanted = dist.recorded.get(rel)
-        if wanted is None:
-            out.append(
-                f"RECORD has no usable sha256 for {_path(site, rel)}, so it cannot be checked"
-            )
-        elif wanted != digest:
-            out.append(f"{_path(site, rel)} does not match its RECORD")
-    return out
+    changes += [
+        f"{name}: changed from {version} to none"
+        for name, (version, _files) in sorted(stored.items())
+        if name not in found
+    ]
+    return changes
 
 
 def advice(check: Check) -> str:

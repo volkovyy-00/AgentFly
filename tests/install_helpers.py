@@ -188,6 +188,10 @@ TOOL_DISTS: dict[str, tuple[str, dict[str, bytes]]] = {
 
 MODULE = "agentfly/module.py"
 NEW_AGENTFLY = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"VALUE = 2\n"}
+# fakedep reinstalled under another Python: the same version, an extension named for it
+ANOTHER_PYTHON = {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}
+# (name, files) of a distribution reinstalled at the version it has, with other files
+REBUILDS = [("agentfly-recorder", NEW_AGENTFLY), ("fakedep", ANOTHER_PYTHON)]
 
 
 def path_of(env: packages.Environment, rel: str) -> Path:
@@ -195,7 +199,7 @@ def path_of(env: packages.Environment, rel: str) -> Path:
     return Path(os.path.normpath(env.site / rel))
 
 
-def _record_hash(data: bytes) -> str:
+def record_hash(data: bytes) -> str:
     digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
     return "sha256=" + digest.decode()
 
@@ -213,10 +217,10 @@ def write_dist(env: packages.Environment, name: str, version: str, files: dict[s
         target = path_of(env, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        rows.append(f"{rel},{_record_hash(data)},{len(data)}")
+        rows.append(f"{rel},{record_hash(data)},{len(data)}")
     for rel, data in own.items():
         (info / rel).write_bytes(data)
-        rows.append(f"{info.name}/{rel},{_record_hash(data)},{len(data)}")
+        rows.append(f"{info.name}/{rel},{record_hash(data)},{len(data)}")
     rows.append(f"{info.name}/RECORD,,")
     (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return info

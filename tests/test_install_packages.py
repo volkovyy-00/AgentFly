@@ -17,12 +17,13 @@ import pytest
 
 from agentfly.install import InstallError, packages
 from tests.install_helpers import (
+    ANOTHER_PYTHON,
     MODULE,
     NEW_AGENTFLY,
-    TOOL_DISTS,
     hashes_of,
     make_tool_env,
     path_of,
+    record_hash,
     upgrade,
     write_dist,
 )
@@ -40,6 +41,21 @@ def env(tool_env: packages.Environment) -> packages.Environment:
 
 def problems(env: packages.Environment, record: dict[str, Any] | None) -> list[str]:
     return packages.inspect(env, record).problems
+
+
+def rewrite_record_hash(info: Path, part: str) -> None:
+    """Make the RECORD row of `info/part` agree with the file as it is now."""
+    data = (info / part).read_bytes()
+    row = f"{info.name}/{part},{record_hash(data)},{len(data)}"
+    lines = (info / "RECORD").read_text(encoding="utf-8").splitlines()
+    rows = [row if line.startswith(f"{info.name}/{part},") else line for line in lines]
+    (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def stop_message(record: dict[str, Any], then: str = "agentfly init -g") -> str:
+    with pytest.raises(InstallError) as caught:
+        packages.require(record, then)
+    return str(caught.value)
 
 
 # ---------------------------------------------------------------- an unchanged install
@@ -67,7 +83,7 @@ def test_the_allowed_names_count_only_at_the_top_of_site_packages(
     env: packages.Environment,
 ) -> None:
     (env.site / "agentfly" / "_virtualenv.pth").write_text("import os\n")
-    assert [p for p in problems(env, None)] == [
+    assert problems(env, None) == [
         f"{env.site / 'agentfly' / '_virtualenv.pth'} is not listed in any RECORD"
     ]
 
@@ -87,31 +103,15 @@ def test_nothing_outside_site_packages_is_looked_at(env: packages.Environment) -
 # ---------------------------------------------------------------- one changed or extra file
 
 
-@pytest.mark.parametrize(
-    ("rel", "what"),
-    [(MODULE, "an AgentFly module"), (SCRIPT, "an entry script"), (DEP_FILE, "a dependency file")],
-)
+@pytest.mark.parametrize("rel", [MODULE, SCRIPT, DEP_FILE], ids=["module", "script", "dependency"])
 def test_one_changed_file_is_named_with_or_without_a_record(
-    env: packages.Environment, rel: str, what: str
+    env: packages.Environment, rel: str
 ) -> None:
     record = hashes_of(env)
     path_of(env, rel).write_bytes(b"import os; os.system('id')\n")
     changed = [f"{path_of(env, rel)} does not match its RECORD"]
     assert problems(env, record) == changed
     assert problems(env, None) == changed
-
-
-def test_a_file_changed_together_with_its_record_asks_the_owner(
-    env: packages.Environment,
-) -> None:
-    """The owner's decision: a RECORD that agrees with the file is enough to ask, not to stop."""
-    record = hashes_of(env)
-    evil = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"import os\n"}
-    upgrade(env, "agentfly-recorder", "0.1.0", evil)  # the RECORD agrees with the new file
-    check = packages.inspect(env, record)
-    assert check.problems == [] and len(check.changes) == 1
-    assert check.changes[0].startswith("agentfly-recorder: same version 0.1.0, files differ")
-    assert packages.inspect(env, None).changes == []  # with no record there is nothing to ask
 
 
 def test_an_extra_file_next_to_an_agentfly_module_is_named(env: packages.Environment) -> None:
@@ -166,10 +166,10 @@ def test_a_listed_folder_replaced_by_a_link_is_reported(
     assert f"{env.site / 'fakedep'} is not listed in any RECORD" in found  # and the link itself
 
 
-def test_links_above_site_packages_are_part_of_the_base(
+def test_links_above_the_environment_are_part_of_the_base(
     env: packages.Environment, tmp_path: Path
 ) -> None:
-    """A home folder or a tools folder on another disk is a link; the site is resolved once."""
+    """A home folder or a tools folder on another disk is a link; the paths are resolved once."""
     link = tmp_path / "linked-env"
     link.symlink_to(env.prefix, target_is_directory=True)
     through = packages.Environment(link, link / "lib" / "python3.12" / "site-packages")
@@ -279,7 +279,33 @@ def test_a_distribution_without_a_record_is_a_problem(env: packages.Environment)
     info = next(env.site.glob("fakedep-*.dist-info"))
     (info / "RECORD").unlink()
     found = problems(env, None)
-    assert any(f"{info} has no readable METADATA and RECORD" in p for p in found)
+    assert any(f"{info} has no readable METADATA, Name, Version and RECORD" in p for p in found)
+
+
+@pytest.mark.parametrize("header", ["Name: odd\n", "Version: 1.0\n", "Name: odd\nVersion: \n"])
+def test_a_distribution_without_a_name_or_a_version_is_a_problem(
+    env: packages.Environment, header: str
+) -> None:
+    """Recorded with no version it could never be asked about again (found by the audit)."""
+    info = write_dist(env, "odd", "1.0", {"odd/__init__.py": b"x = 1\n"})
+    (info / "METADATA").write_text("Metadata-Version: 2.1\n" + header)
+    rewrite_record_hash(info, "METADATA")  # so that only the header is odd
+    found = problems(env, None)
+    assert any("no readable METADATA, Name, Version and RECORD" in p for p in found), found
+
+
+@pytest.mark.parametrize("part", ["RECORD", "METADATA"])
+def test_a_linked_record_or_metadata_is_a_problem_and_is_not_read(
+    env: packages.Environment, tmp_path: Path, part: str
+) -> None:
+    """A link to /dev/zero would hang the user's own command; it is refused before any read."""
+    target = next(env.site.glob("fakedep-*.dist-info")) / part
+    copy = tmp_path / f"{part}.copy"
+    copy.write_bytes(target.read_bytes())
+    target.unlink()
+    target.symlink_to(copy)
+    found = problems(env, None)
+    assert f"{target} is a symbolic link, and RECORD lists a plain file" in found
 
 
 def test_two_copies_of_one_distribution_are_a_problem(env: packages.Environment) -> None:
@@ -360,13 +386,22 @@ def test_require_counts_the_other_problems(env: packages.Environment) -> None:
 # ---------------------------------------------------------------- the stored section
 
 
-def test_a_malformed_section_reads_as_none() -> None:
+def test_no_section_means_no_record_and_a_malformed_one_means_nothing_is_known() -> None:
     assert packages.stored_from(None) is None
-    assert packages.stored_from({"packages": []}) is None
-    assert packages.stored_from({"packages": {"a": {"version": 1, "files": {}}}}) is None
-    assert packages.stored_from({"packages": {"a": {"version": "1", "files": {"f": "ab"}}}}) == {
-        "a": ("1", {"f": "ab"})
-    }
+    assert packages.stored_from({"schema": 1}) is None  # an install from before V3c
+    assert packages.stored_from({"packages": []}) == {}  # not "no record": everything is asked
+    good = {"version": "1", "files": {"f": "ab"}}
+    assert packages.stored_from({"packages": {"a": good}}) == {"a": ("1", {"f": "ab"})}
+    odd = {"packages": {"a": good, "b": {"version": 1, "files": {}}, "c": {"version": "1"}}}
+    assert packages.stored_from(odd) == {"a": ("1", {"f": "ab"})}  # b and c are not described
+
+
+def test_a_malformed_record_asks_instead_of_going_quiet(env: packages.Environment) -> None:
+    record = hashes_of(env)
+    both = ["agentfly-recorder: changed from none to 0.1.0", "fakedep: changed from none to 1.0"]
+    assert packages.inspect(env, {"packages": "garbage"}).changes == both
+    record["packages"]["fakedep"]["version"] = None  # one entry unreadable
+    assert packages.inspect(env, record).changes == ["fakedep: changed from none to 1.0"]
 
 
 # ---------------------------------------------------------------- where the environment is
@@ -459,10 +494,8 @@ def test_the_advice_for_an_extra_file_is_not_to_reinstall_over_it(
     (env.site / "agentfly" / "_native.so").write_bytes(b"\x7fELF")
     check = packages.inspect(env, record)
     assert check.extra
-    with pytest.raises(InstallError) as caught:
-        packages.require(record, "agentfly init -g")
-    assert "delete each extra file" in str(caught.value)
-    assert "uv tool uninstall agentfly-recorder" in str(caught.value)
+    text = stop_message(record)
+    assert "delete each extra file" in text and "uv tool uninstall agentfly-recorder" in text
 
 
 def test_a_changed_file_gets_the_reinstall_advice_only(env: packages.Environment) -> None:
@@ -470,16 +503,14 @@ def test_a_changed_file_gets_the_reinstall_advice_only(env: packages.Environment
     path_of(env, MODULE).write_bytes(b"x = 1\n")
     check = packages.inspect(env, record)
     assert not check.extra
-    with pytest.raises(InstallError) as caught:
-        packages.require(record, "agentfly init -g")
-    assert "delete each extra file" not in str(caught.value)
-    assert "reinstall AgentFly from a source you trust" in str(caught.value)
+    text = stop_message(record)
+    assert "delete each extra file" not in text
+    assert "reinstall AgentFly from a source you trust" in text
 
 
 # ---------------------------------------------------------------- a rebuild at the same version
 
 REBUILT = "same version {}, files differ from install but match RECORD"
-ANOTHER_PYTHON = {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}
 
 
 def test_a_rebuild_of_agentfly_at_the_same_version_asks_instead_of_stopping(
@@ -488,6 +519,7 @@ def test_a_rebuild_of_agentfly_at_the_same_version_asks_instead_of_stopping(
     record = hashes_of(env)
     upgrade(env, "agentfly-recorder", "0.1.0", NEW_AGENTFLY)  # other module, RECORD agrees
     check = packages.require(record, "agentfly init -g")  # no InstallError
+    assert packages.inspect(env, None).changes == []  # with no record there is nothing to ask
     assert check.problems == []
     assert check.changes == [
         "agentfly-recorder: " + REBUILT.format("0.1.0") + " (1): expected only if you "
@@ -523,12 +555,6 @@ def test_a_rebuild_with_an_extra_file_still_stops(env: packages.Environment) -> 
     assert found == [f"{env.site / 'fakedep' / '_planted.so'} is not listed in any RECORD"]
 
 
-def stop_message(env: packages.Environment, record: dict[str, Any]) -> str:
-    with pytest.raises(InstallError) as caught:
-        packages.require(record, "agentfly init -g")
-    return str(caught.value)
-
-
 @pytest.mark.parametrize("fault", ["changed", "extra", "link", "no hash"])
 def test_no_stop_message_advises_removing_the_record(env: packages.Environment, fault: str) -> None:
     record = hashes_of(env)
@@ -541,6 +567,6 @@ def test_no_stop_message_advises_removing_the_record(env: packages.Environment, 
         path_of(env, DEP_FILE).symlink_to(path_of(env, MODULE))
     else:
         rewrite_record(env, lambda lines: [r.replace("sha256=", "md5=") for r in lines])
-    text = stop_message(env, record)
+    text = stop_message(record)
     for word in ("hashes.json", "sudo", " rm ", "raise the version"):
         assert word not in text, (word, text)
