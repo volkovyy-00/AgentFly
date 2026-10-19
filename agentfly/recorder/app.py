@@ -224,11 +224,8 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         rule_id,
         order=order,
         marks=marks,
-    )
-    # V8b: the step carries the very strings the answer sends (none for an allow, a warn included).
-    # Set before the merge, so the half whose verdict the merged step shows brings its own.
-    record = replace(
-        record,
+        # V8b: the very strings the answer sends (none for an allow, a warn included). They are on
+        # each half, so the merge keeps those of the half whose verdict the step shows.
         user_message=permission.get("user_message"),
         agent_message=permission.get("agent_message"),
     )

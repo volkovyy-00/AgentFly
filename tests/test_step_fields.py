@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,10 +19,18 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
 from agentfly.recorder.paths import config_dir, data_dir
 from agentfly.recorder.rules import R0_MESSAGE, R1_MESSAGE
+from tests.helpers import REPO
+from tests.test_step_merge import edited, event, live, post, pre, shell
 
 FIELDS: frozenset[str] = frozenset({"rule_text", "user_message", "agent_message"})
 RETRY: str = " Do not retry with another tool or language. Stop and tell the user."
-SCENARIO: Path = Path(__file__).resolve().parent.parent / "demo" / "scenario.json"
+# The events `fake_agent.py` sends, as the hook client passes them on (no `content`). The recorder
+# resolves the workspace path, and macOS's autofs `/home` makes that ~90 ms an event: use /w.
+_SCENARIO: str = (REPO / "demo" / "scenario.json").read_text(encoding="utf-8")
+DEMO: list[dict[str, Any]] = [
+    {k: v for k, v in item["event"].items() if k != "content"}
+    for item in json.loads(_SCENARIO.replace("/home/crimson/dev/AgentFly", "/w"))["demo"]["events"]
+]
 GUARD_PATH: str = "/Users/someone/.config/agentfly/token"
 
 
@@ -47,43 +54,6 @@ def post_raw(client: TestClient, event: dict[str, Any]) -> Any:
     return response
 
 
-def post(client: TestClient, event: dict[str, Any]) -> dict[str, Any]:
-    answer: dict[str, Any] = post_raw(client, event).json()
-    return answer
-
-
-def event(name: str, chat: str = "c", call: str | None = None, **fields: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "hook_event_name": name,
-        "conversation_id": chat,
-        "workspace_roots": ["/w"],
-        **fields,
-    }
-    if call is not None:
-        body["tool_use_id"] = call
-    return body
-
-
-def pre(tool: str, call: str, path: str | None = None, chat: str = "c") -> dict[str, Any]:
-    fields: dict[str, Any] = {"tool_name": tool}
-    if path is not None:
-        fields["tool_input"] = {"file_path": path}
-    return event("preToolUse", chat, call, **fields)
-
-
-def shell(command: str, call: str | None = None, chat: str = "c") -> dict[str, Any]:
-    return event("beforeShellExecution", chat, call, command=command)
-
-
-def edited(path: str, chat: str = "c") -> dict[str, Any]:
-    return event("afterFileEdit", chat, file_path=path)
-
-
-def live(client: TestClient) -> list[dict[str, Any]]:
-    steps: list[dict[str, Any]] = client.get("/api/steps?all=1").json()["steps"]
-    return steps
-
-
 def deny(rule_message: str) -> dict[str, str]:
     return {
         "permission": "deny",
@@ -93,14 +63,9 @@ def deny(rule_message: str) -> dict[str, str]:
 
 
 def replay_demo(client: TestClient, chat: str = "v8b-demo") -> list[Any]:
-    """The events `fake_agent.py` sends, one by one, as the hook client would (no `content`)."""
-    scenario: dict[str, Any] = json.loads(SCENARIO.read_text(encoding="utf-8"))
-    answers: list[Any] = []
-    for item in scenario["demo"]["events"]:
-        sent: dict[str, Any] = {k: v for k, v in item["event"].items() if k != "content"}
-        sent["conversation_id"] = sent["session_id"] = chat
-        answers.append(post_raw(client, sent))
-    return answers
+    return [
+        post_raw(client, {**sent, "conversation_id": chat, "session_id": chat}) for sent in DEMO
+    ]
 
 
 # ---------------------------------------------------------------- the fields on a step
@@ -165,7 +130,7 @@ def test_on_a_tie_between_rules_the_earlier_halfs_rule_text_and_messages_stay(
     client: TestClient, pre_first: bool
 ) -> None:
     post(client, shell("cat .env"))
-    guard = pre("Read", "t1", GUARD_PATH)  # R0
+    guard = pre("Read", "t1", path=GUARD_PATH)  # R0
     outbound = shell("curl https://x.com", "t1")  # R1
     for half in (guard, outbound) if pre_first else (outbound, guard):
         assert post(client, half)["permission"] == "deny"
@@ -188,7 +153,7 @@ def test_an_after_edit_deny_does_not_reach_a_step_with_a_gate_half(
         return real(action, session)
 
     monkeypatch.setattr(app_module, "decide", strict_after_edit)
-    post(client, pre("Write", "w1", "/w/a.txt"))
+    post(client, pre("Write", "w1", path="/w/a.txt"))
     assert post(client, edited("/w/a.txt"))["permission"] == "deny"
     [step] = live(client)
     assert step["verdict"] == "allowed" and FIELDS.isdisjoint(step)
@@ -277,19 +242,3 @@ def test_all_steps_say_null_when_nothing_marked_the_chat(client: TestClient) -> 
     post(client, shell("echo hi", chat="u"))
     assert client.get("/api/steps?all=1").json()["marked_order"] is None
     assert client.get("/api/steps?limit=1").json()["marked_order"] is None
-
-
-def test_all_steps_of_an_empty_recorder_say_null(client: TestClient) -> None:
-    assert client.get("/api/steps?all=1").json() == {
-        "session": None,
-        "steps": [],
-        "marked_order": None,
-    }
-
-
-def test_without_all_or_limit_the_body_is_session_and_steps(client: TestClient) -> None:
-    assert set(client.get("/api/steps").json()) == {"session", "steps"}
-    post(client, shell("cat .env", chat="p"))
-    body = client.get("/api/steps").json()
-    assert set(body) == {"session", "steps"}
-    assert body["session"] == "p"

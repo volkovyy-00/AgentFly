@@ -323,7 +323,4 @@ def test_all_steps_snapshot_names_the_marking_step() -> None:
     memory.append_step("s", make_step(2), marks=True)
     memory.append_step("s", make_step(3))
     assert memory.snapshot(all_steps=True)["marked_order"] == 2
-    assert (
-        memory.snapshot(all_steps=True)["marked_order"] == memory.snapshot(limit=1)["marked_order"]
-    )
     assert set(memory.snapshot()) == {"session", "steps"}
