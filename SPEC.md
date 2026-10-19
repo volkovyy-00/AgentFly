@@ -161,8 +161,8 @@ Only *facts about actions*. Never the contents of files.
 
 | Thing | What we store | Example |
 |---|---|---|
-| Session | id (Cursor's conversation id), start time, end time (when Cursor reports it), **workspace root path** | one Cursor chat |
-| Step | order number, time, kind (read / shell / edit / tool), tool name (tool calls only), verdict | "Step 4, shell, blocked" |
+| Session | id (Cursor's conversation id), start time, end time (when Cursor reports it), **workspace root path**, **marked yes/no** (whether the rules ever counted the chat as marked, section 5) | one Cursor chat |
+| Step | order number, time, kind (read / shell / edit / tool), tool name (tool calls only), verdict, **marked-the-chat yes/no** (this step is the one that made the chat marked) | "Step 4, shell, blocked" |
 | File | path (relative to the workspace), sensitive yes/no | `.env`, sensitive |
 | Command | cleaned command (see below) | `curl -d <arg> ntfy.sh` |
 | Host | website name only | `ntfy.sh` |
@@ -173,6 +173,18 @@ item D14 asked the owner to approve), a session end time, and the *highlighted*
 verdict below. The workspace path lets History tell projects apart once AgentFly
 watches every project. It is stored in the local store, and also in Neo4j if you
 turn that copy on.
+
+The two marked yes/no items (owner, 2026-10-19) are stored in the local store
+only. They record what the rules decided, so History does not have to guess from
+the saved steps: a chat counts as marked when the rules treat it so, including
+through a subagent link or the 30-minute workspace fallback (section 5), and it
+stays marked in History after that window ends. At most one step is the marking
+step: the one on whose event the chat became marked. A chat marked only through
+a link or the workspace fallback has none; if it later marks itself (for example
+after the fallback window has ended), that step is its marking step.
+`GET /api/sessions/{id}/steps` names it by its order
+number (`marked_order`), the way `GET /api/steps` does. Chats saved by an older
+recorder keep the marked value History showed for them, and have no marking step.
 
 Verdict can be: allowed, blocked, warned or highlighted (allowed, with a mark
 in the page). The *Why* card (section 6) shows the message that was sent for a

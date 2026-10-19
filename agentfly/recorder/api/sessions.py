@@ -17,8 +17,10 @@ def api_session_steps(id: str) -> JSONResponse:
     found = local_store.session_steps(id)
     if found is None:
         return JSONResponse({"detail": "unknown session"}, status_code=404)
-    steps, truncated = found
-    return JSONResponse({"session": id, "steps": steps, "truncated": truncated})
+    steps, truncated, marked_order = found
+    return JSONResponse(
+        {"session": id, "steps": steps, "truncated": truncated, "marked_order": marked_order}
+    )
 
 
 def history_unavailable(_request: Request, _exc: Exception) -> JSONResponse:

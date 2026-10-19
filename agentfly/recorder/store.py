@@ -46,6 +46,8 @@ class StepRecord:
     rule_description: str | None = None
     prev_step_id: str | None = None
     workspace_root: str | None = None
+    # V6b: this is the step on whose event the rules first counted the chat as marked.
+    marks: bool = False
     # The command as typed, only when CLEAN_COMMANDS is off. Neo4j's Command node reads it;
     # `command` (history, live trail) is always the cleaned text.
     raw_command: str | None = field(default=None, repr=False, compare=False)
@@ -328,8 +330,12 @@ def build_step_record(
     rule_id: str | None,
     *,
     order: int,
+    marks: bool = False,
 ) -> StepRecord:
-    """Build a cleaned StepRecord. Uses session.next_step only via `order` arg."""
+    """Build a cleaned StepRecord. Uses session.next_step only via `order` arg.
+
+    `marks` is what `SessionStore.apply_mark` said about this event: it made the chat marked.
+    """
     event: str = str(payload.get("hook_event_name", ""))
     kind: str = kind_from_event(event)
     now: str = datetime.now(UTC).isoformat()
@@ -409,6 +415,7 @@ def build_step_record(
         rule_description=rule_description,
         prev_step_id=prev_step_id,
         workspace_root=first_workspace_root(payload),
+        marks=marks,
         raw_command=raw_command,
     )
 
