@@ -6,6 +6,7 @@ Needs `uv`, and the network the first time (hatchling is fetched into uv's cache
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from agentfly.install import elevate
 from tests.helpers import free_port, make_legacy, package_files
 from tests.test_hook_client import EVENT, check_allow_and_log, run_client
 
@@ -134,16 +136,64 @@ def test_the_installed_tool_offers_init_g_and_uninstall_and_runs_as_a_module(
             check=False,
         )
         assert result.returncode == 0, result.stderr
-    # What sudo runs: the tool's own Python, isolated, as a module.
+    # What sudo runs on a first install (V3c): the tool environment's base Python with -I -S, the
+    # site folder appended and no byte-code read; the real wheel's dependencies load from there.
+    python = next(installed.home.glob(".local/share/uv/tools/*/bin/python"))
+    command = elevate.sudo_command(
+        ["init", "--help"],
+        site=installed.package_dir.parent,
+        python=Path(os.path.realpath(python)),
+    )
+    result = subprocess.run(
+        command[1:], env=installed.env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0 and "--global" in result.stdout, result.stderr
+
+
+CHECK_SCRIPT = (
+    "import json; from agentfly.install import packages; "
+    "check = packages.inspect(packages.tool_environment(), None); "
+    "print(json.dumps({'problems': check.problems, 'dists': sorted(check.distributions)}))"
+)
+
+
+def package_check(installed: Installed) -> dict[str, list[str]]:
+    """`packages.inspect` run by the installed tool itself, on its own real environment."""
     python = next(installed.home.glob(".local/share/uv/tools/*/bin/python"))
     result = subprocess.run(
-        [str(python), "-I", "-B", "-m", "agentfly.cli", "init", "--help"],
+        [str(python), "-I", "-B", "-c", CHECK_SCRIPT],
         env=installed.env,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0 and "--global" in result.stdout, result.stderr
+    assert result.returncode == 0, result.stderr
+    found: dict[str, list[str]] = json.loads(result.stdout)
+    return found
+
+
+def test_a_real_uv_tool_environment_passes_the_package_check(installed: Installed) -> None:
+    found = package_check(installed)
+    assert found["problems"] == [], found["problems"]  # only _virtualenv.* is unlisted, and allowed
+    assert "agentfly-recorder" in found["dists"] and len(found["dists"]) > 5
+
+
+def test_a_planted_file_and_a_changed_file_in_a_real_environment_are_named(
+    installed: Installed,
+) -> None:
+    extra = installed.package_dir / "_planted.so"
+    module = installed.package_dir / "install" / "layout.py"
+    original = module.read_bytes()
+    try:
+        extra.write_bytes(b"\x7fELF")
+        module.write_bytes(original + b"\n# changed\n")
+        problems = package_check(installed)["problems"]
+    finally:
+        extra.unlink(missing_ok=True)
+        module.write_bytes(original)
+    assert f"{extra} is not listed in any RECORD" in problems
+    assert f"{module} does not match its RECORD" in problems
+    assert package_check(installed)["problems"] == []
 
 
 def fetch(port: int, path: str) -> tuple[int, bytes]:

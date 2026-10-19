@@ -109,6 +109,16 @@ ALLOWED = [
     "wget http://localhost/f",
     "echo hello world",
     "make test",
+    # the package root runs (V3c): looking, and work in a source checkout, stay allowed offline
+    "agentfly status",
+    "uv tool list",
+    "uv tool install ruff",
+    "ls ~/.local/bin",
+    "ls ~/.local/share/uv/tools",
+    "ls ~/opt/AgentFly",
+    "cat agentfly/install/packages.py",
+    "cat /Users/me/Projects/AgentFly/agentfly/cli/init.py",
+    "cat /Users/me/Projects/AgentFly/.venv/lib/python3.12/site-packages/fastapi/__init__.py",
 ]
 
 

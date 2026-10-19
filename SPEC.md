@@ -303,6 +303,17 @@ weaken it:
   that name its port;
 - `agentfly serve` (a second recorder once rotated the token) and
   `agentfly wipe` (deleting the history is for you, not the agent);
+- touching the package that `agentfly init -g` and `agentfly uninstall` run as
+  root: AgentFly's tool environment (`uv tool`, `pipx` and Homebrew keg, in
+  their default places) and its two entry scripts, `~/.local/bin/agentfly` and
+  `agentfly-hook`. Running one by its full path counts as touching it; plain
+  `agentfly status` does not;
+- installing, upgrading, reinstalling or removing AgentFly with `uv tool`,
+  `pipx` or `brew`. A command is denied when it names AgentFly, an operand is a
+  file, a URL or a variable, or it acts on every tool at once (`brew upgrade`,
+  `uv tool upgrade --all`, `pipx upgrade-all`); installing other tools by name,
+  and `uv tool list`, stay allowed. Text that cannot be parsed is denied when it
+  holds one of these verbs;
 - a Write or edit whose target path is one of those guard paths.
 
 R0 sees commands after the normalisation below, case-folded, and also checks
@@ -471,13 +482,38 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `agentfly` on `PATH` is ours.
 - **`init -g`** writes the system hooks file, installs the hook client and its
   bundled Python, and sets up the system-owned rules file, with one `sudo`
-  (D1, D2, D5). It writes only events from a known list for the installed
+  (D1, D2, D5). Before it asks for the password it checks the package it is
+  about to run as root (see "The package check" below). It writes only events from a known list for the installed
   Cursor version, and writes nothing when the version or an event is unknown
   (D23). The move from `~/.config/flightrecorder` (D7) has already happened at the
   recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
   every event arrives twice.
+- **The package check (V3c).** `init -g` and `uninstall` run AgentFly's own
+  Python package as root, and that package sits in a tool environment your user
+  can write. So, before any password prompt, both hash every file of every
+  distribution in that environment. If the version equals the one in the
+  root-owned record, each file must equal the hash stored then. If it differs (an
+  upgrade, a new or a removed dependency), each file must equal the hash in the
+  distribution's own `RECORD`, the commands print "changed from X to Y" and go on
+  only after you confirm in a terminal. With no record yet (a first install, or
+  one from before V3c) each file is compared with its `RECORD`. A file in
+  `site-packages` that no `RECORD` lists is a mismatch (except `__pycache__` and
+  the files uv, pipx and Homebrew leave: `_virtualenv.py`, `_virtualenv.pth`,
+  `pipx_shared.pth`, `homebrew_deps.pth`). A mismatch stops the command, names
+  the file and says to reinstall the package and run it again. If you rebuilt
+  the same version yourself, raise the version number first: a new version
+  asks, it does not stop. An editable install, or a run from a source checkout,
+  is refused; install the wheel (`uv build && uv tool install dist/*.whl`).
+  The hashes and versions are stored in the root-owned record. Root then runs
+  `python -I -S -B -X pycache_prefix=/var/empty -c <bootstrap>`: no `site`, so
+  no `.pth` and no `sitecustomize`, and no `__pycache__` is read or written.
+  The interpreter is the bundled, root-owned Python whenever it is installed
+  and matches its recorded hash; a first install, and a repair that replaces the
+  bundled Python, run on the tool environment's own base interpreter. The base
+  Python (uv's or Homebrew's, which other projects use) is not hashed, so
+  upgrading it stops nothing.
 - **Run (D8).** `agentfly start`, `stop` and `status` use `brew services` for a
   Homebrew install (the package sits in `<prefix>/Cellar/agentfly/`) and
   AgentFly's own LaunchAgent otherwise. `agentfly serve` runs the recorder in
@@ -497,7 +533,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
     to `~/.local/share/agentfly/logs/recorder.log`.
 - **`agentfly doctor`** prints one line per check (ok, warn or fail) and exits 1
   if any fails. It needs no password. The checks: the hash record exists; the
-  bundled Python and the hook client match their recorded hashes (D1); nothing
+  bundled Python and the hook client match their recorded hashes (D1); AgentFly's
+  package and its dependencies are what `init -g` hashed (the "package" line;
+  a version change since is a warning, a changed or extra file a failure); nothing
   in AgentFly's system folder can be written by your user, and it is owned by
   the system user (D5); AgentFly's entries in the system `hooks.json` are the
   ones `init -g` wrote; the service is loaded and running, its file is what
@@ -693,9 +731,14 @@ tampering with installed code.**
   one per rule change.
 
 **Detected** (the agent might manage it, but it will be noticed): patching
-AgentFly's own installed code under the Homebrew folder, which your user can
-write to. `agentfly doctor` and each session start compare file hashes with the
-ones recorded at install, and a mismatch raises a red banner.
+AgentFly's own installed code in its tool environment, which your user can write
+to. Before it asks for your password, `init -g` and `uninstall` compare every
+file of every distribution with the hashes stored at install (or with the
+distribution's `RECORD` after a version change, which you confirm) and refuse to
+run a changed package as root; `agentfly doctor` reports the same comparison on
+its "package" line. R0 also denies touching that environment and reinstalling
+AgentFly with `uv tool`, `pipx` or `brew` (section 5). The recorder's per-session
+hash check and a banner on the page are not built.
 
 **Your `sudo` does not reach the agent (D3).** Spike S2 could not tell whether a
 `sudo` password entered in your own Terminal could be reused from the agent's
@@ -747,9 +790,26 @@ Other measures:
   recorder this way means your own rules stop running (only the offline subset
   applies, section 9), and deleting the session notes makes marks forgotten.
   The result is detected by `doctor` and the health strip, not prevented.
-- The hash check is run by AgentFly's own code, so code that has been tampered
-  with could hide the tampering. Where the recorded hashes live and what checks
-  them is for the install card to decide.
+- The package check is run by AgentFly's own code, from the tree it checks, so
+  code that has been tampered with could hide the tampering. The recorded hashes
+  live in the root-owned record; nothing outside the tool environment checks the
+  checker.
+- The base Python the tool environment runs on (uv's or Homebrew's) is not
+  hashed, and its `__pycache__` is writable by your user. A first install, and a
+  repair that replaces the bundled Python, run root on that base interpreter;
+  every other run uses the bundled one.
+- `RECORD` is trusted on each new version: an upgrade is checked only against
+  the distribution's own `RECORD`, so the "changed from X to Y" list you confirm
+  is the control. The first `init -g` after V3c on an older install has no stored
+  hashes and is checked against `RECORD` alone.
+- A file changed after the check and before root imports it (while the password
+  prompt waits) is not caught; root's second hashing records what it sees and
+  protects nothing.
+- A tool environment outside the default places (a custom `UV_TOOL_DIR`,
+  `PIPX_HOME` or Homebrew prefix) is checked by `init -g` but not guarded by R0
+  by path; the Homebrew layout has not been tried on a real formula.
+- Hash mismatches after a rebuild at the same version stop `init -g`: raise the
+  version first.
 - "Write a script file, then run it" is not caught: only inline one-liners and
   heredocs fed to the shells and interpreters listed in section 5 count.
 

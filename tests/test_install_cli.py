@@ -5,17 +5,23 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import IO
 
 import pytest
 
 from agentfly.cli import build_parser, init, main, uninstall
-from agentfly.install import elevate, installer, pythons, service
+from agentfly.install import elevate, installer, packages, pythons, records, service
 from agentfly.install.layout import SYSTEM, Layout
 from tests.helpers import REPO
-from tests.install_helpers import fake_python_tar, make_cursor_app, make_layout, write_archive
+from tests.install_helpers import (
+    TOOL_DISTS,
+    fake_python_tar,
+    make_cursor_app,
+    make_layout,
+    write_archive,
+    write_dist,
+)
 from tests.service_helpers import Launchd
 
 
@@ -46,32 +52,6 @@ def test_init_without_g_says_so_and_exits_2(capsys: pytest.CaptureFixture[str]) 
     assert "init -g" in capsys.readouterr().err
 
 
-def test_the_sudo_command_runs_the_package_as_a_module() -> None:
-    command = elevate.sudo_command(["init", "-g"])
-    assert command == [
-        "/usr/bin/sudo",
-        sys.executable,
-        "-I",
-        "-B",
-        "-m",
-        "agentfly.cli",
-        "init",
-        "-g",
-    ]
-
-
-def test_the_module_entry_point_works_the_way_sudo_will_run_it() -> None:
-    # `-m agentfly.cli` needs a __main__; without it Python says "cannot be directly executed".
-    result = subprocess.run(
-        [sys.executable, "-I", "-B", "-m", "agentfly.cli", "init", "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "--global" in result.stdout
-
-
 @pytest.fixture
 def system(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Layout:
     """The CLI modules pointed at a temporary root (a test patch; the CLI has no flag)."""
@@ -92,7 +72,7 @@ def test_init_as_a_user_downloads_then_pipes_the_archive_to_sudo(
     def fake_download(wanted: pythons.PythonBuild, target: Path) -> None:
         target.write_bytes(data)
 
-    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None) -> int:
+    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
         assert stdin is not None
         seen.update(tail=tail, body=stdin.read())
         return 0
@@ -160,7 +140,9 @@ def test_uninstall_as_a_user_runs_itself_under_sudo(
         system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
     )
     calls: list[list[str]] = []
-    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: calls.append(tail) or 0)
+    monkeypatch.setattr(
+        elevate, "run_elevated", lambda tail, stdin=None, **kw: calls.append(tail) or 0
+    )
     assert main(["uninstall"]) == 0
     assert calls == [["uninstall"]]
     assert uninstall.RESTART_HINT in capsys.readouterr().out
@@ -178,7 +160,7 @@ def test_init_repairing_only_the_client_does_not_download_the_python_again(
     monkeypatch.setattr(pythons, "select_build", lambda *a: build)
     monkeypatch.setattr(pythons, "download", lambda *a: pytest.fail("downloaded the Python"))
     monkeypatch.setattr(
-        elevate, "run_elevated", lambda tail, stdin=None: calls.append((tail, stdin)) or 0
+        elevate, "run_elevated", lambda tail, stdin=None, **kw: calls.append((tail, stdin)) or 0
     )
     assert main(["init", "-g"]) == 0
     assert calls == [(["init", "-g"], subprocess.DEVNULL)]
@@ -234,7 +216,7 @@ def install_and_start(system: Layout, tmp_path: Path) -> None:
 
 
 def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None) -> int:
+    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
         installer.uninstall(system)
         return 0
 
@@ -268,7 +250,7 @@ def test_uninstall_leaves_the_service_alone_when_the_system_part_fails(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_and_start(system, tmp_path)
-    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: 1)
+    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None, **kw: 1)
     assert main(["uninstall"]) == 1
     assert launchd.loaded() == [service.LABEL]  # the service part never ran
     err = capsys.readouterr().err
@@ -287,7 +269,9 @@ def test_a_failed_system_part_does_not_claim_what_it_cannot_know(
     """The elevated part removed the hook entries, then failed on the folder: the hooks are gone."""
     install_and_start(system, tmp_path)
 
-    def removes_the_entries_then_fails(tail: list[str], stdin: IO[bytes] | None = None) -> int:
+    def removes_the_entries_then_fails(
+        tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object
+    ) -> int:
         installer.uninstall(system)
         return 1
 
@@ -307,7 +291,7 @@ def test_a_cancelled_password_prompt_with_no_service_installed_says_the_same(
 ) -> None:
     install_system(system, tmp_path)
     assert launchd.loaded() == []
-    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: 1)
+    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None, **kw: 1)
     assert main(["uninstall"]) == 1
     err = capsys.readouterr().err
     assert "sudo part failed" in err and "service was not touched" in err
@@ -346,3 +330,242 @@ def test_a_service_that_will_not_unload_is_one_line_and_a_second_run_finishes_it
     monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
     assert main(["uninstall"]) == 0
     assert not service.plist_path().exists()
+
+
+# ---------------------------------------------------------------- the package check (V3c)
+
+MODULE = "agentfly/module.py"
+NEW_AGENTFLY = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"VALUE = 2\n"}
+
+
+def upgrade_agentfly(env: packages.Environment) -> None:
+    """What `uv tool upgrade agentfly-recorder` leaves: version 0.2.0, files and RECORD agreeing."""
+    shutil.rmtree(next(env.site.glob("agentfly_recorder-*.dist-info")))
+    write_dist(env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
+
+
+class Sudo:
+    """Stands in for `elevate.run_elevated`: records the call and, if asked, does the root work."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], object, Path | None]] = []
+        self.then: object = None
+
+    def __call__(
+        self, tail: list[str], stdin: IO[bytes] | None = None, *, python: Path | None = None
+    ) -> int:
+        self.calls.append((tail, stdin, python))
+        if callable(self.then):
+            self.then()
+        return 0
+
+
+@pytest.fixture
+def sudo(monkeypatch: pytest.MonkeyPatch) -> Sudo:
+    fake = Sudo()
+    monkeypatch.setattr(elevate, "run_elevated", fake)
+    return fake
+
+
+@pytest.fixture
+def installed(
+    system: Layout, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> pythons.PythonBuild:
+    path, build = write_archive(tmp_path / "dl", fake_python_tar())
+    installer.install(
+        system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+    )
+    monkeypatch.setattr(pythons, "select_build", lambda *a: build)
+    return build
+
+
+@pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]])
+def test_a_changed_package_file_stops_before_any_password_prompt(
+    command: list[str],
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    changed = tool_env.site / "agentfly" / "module.py"
+    changed.write_text("import os\n")
+    assert main(command) == 1
+    err = capsys.readouterr().err
+    assert str(changed) in err and f"run `agentfly {' '.join(command)}` again" in err
+    assert "Reinstall AgentFly" in err and "Traceback" not in err
+    assert sudo.calls == [] and system.system_root.exists()  # nothing was asked, nothing removed
+
+
+@pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]])
+def test_an_extra_file_in_site_packages_stops_it_too(
+    command: list[str],
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tool_env.site / "agentfly" / "_native.so").write_bytes(b"\x7fELF")
+    assert main(command) == 1
+    assert "_native.so is not listed in any RECORD" in capsys.readouterr().err
+    assert sudo.calls == []
+
+
+def test_a_clean_install_is_checked_and_init_asks_for_no_password(
+    installed: pythons.PythonBuild, sudo: Sudo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["init", "-g"]) == 0
+    assert "already installed" in capsys.readouterr().out and sudo.calls == []
+
+
+def test_root_runs_on_the_bundled_python_when_it_is_installed_and_unchanged(
+    system: Layout, installed: pythons.PythonBuild, sudo: Sudo
+) -> None:
+    system.client.write_text("tampered\n")  # a repair that leaves the Python alone
+    assert main(["init", "-g"]) == 0
+    assert sudo.calls == [(["init", "-g"], subprocess.DEVNULL, system.interpreter)]
+    sudo.calls.clear()
+    assert main(["uninstall"]) == 0
+    assert sudo.calls == [(["uninstall"], None, system.interpreter)]
+
+
+def test_root_runs_on_the_tool_environments_python_when_the_bundled_one_is_not_to_be_trusted(
+    system: Layout,
+    tmp_path: Path,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system.interpreter.write_text("#!/bin/sh\nexit 0\n")  # the bundled Python was changed
+    monkeypatch.setattr(pythons, "download", lambda build, target: target.write_bytes(b"x"))
+    assert main(["init", "-g"]) == 0
+    assert sudo.calls[0][2] is None  # a repair that replaces it: the base interpreter
+    sudo.calls.clear()
+    assert main(["uninstall"]) == 0
+    assert sudo.calls == [(["uninstall"], None, None)]
+
+
+def test_a_first_install_runs_root_on_the_tool_environments_python(
+    system: Layout, tmp_path: Path, sudo: Sudo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = fake_python_tar()
+    _, build = write_archive(tmp_path / "unused", data)
+    monkeypatch.setattr(pythons, "select_build", lambda *a: build)
+    monkeypatch.setattr(pythons, "download", lambda wanted, target: target.write_bytes(data))
+    assert main(["init", "-g"]) == 0
+    assert [call[2] for call in sudo.calls] == [None]
+
+
+def test_an_upgrade_shows_old_and_new_versions_and_stops_unless_the_owner_confirms(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    upgrade_agentfly(tool_env)
+    monkeypatch.setattr(packages.sys, "stdin", None)  # no terminal: nobody can say yes
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert "agentfly-recorder: changed from 0.1.0 to 0.2.0" in captured.out
+    assert "not confirmed; nothing was changed" in captured.err and sudo.calls == []
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: False)
+    assert main(["uninstall"]) == 1
+    assert "uninstall: not confirmed" in capsys.readouterr().err and sudo.calls == []
+
+
+def test_a_confirmed_upgrade_goes_ahead_and_the_record_holds_the_new_hashes(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    upgrade_agentfly(tool_env)
+    seen: list[list[str]] = []
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
+    sudo.then = lambda: installer.install(
+        system,
+        installed,
+        cursor_version="3.24.12",
+        source=installer.client_source(),
+        archive=tmp_path / "dl" / "fake-python.tar.gz",
+    )
+    assert main(["init", "-g"]) == 0
+    assert seen == [["agentfly-recorder: changed from 0.1.0 to 0.2.0"]]
+    assert sudo.calls == [(["init", "-g"], subprocess.DEVNULL, system.interpreter)]
+    stored = records.read(system)["packages"]  # type: ignore[index]
+    assert stored["agentfly-recorder"]["version"] == "0.2.0"
+    assert stored["agentfly-recorder"]["files"][MODULE] != ""
+    sudo.calls.clear()
+    assert main(["init", "-g"]) == 0  # now it is the recorded state: no prompt, no sudo
+    assert sudo.calls == [] and "already installed" in capsys.readouterr().out
+
+
+def test_an_upgrade_with_a_file_changed_against_its_own_record_is_stopped(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    upgrade_agentfly(tool_env)
+    (tool_env.site / MODULE).write_text("import os\n")
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    assert "does not match its RECORD" in capsys.readouterr().err and sudo.calls == []
+
+
+def test_a_dependency_upgrade_alone_goes_ahead_after_confirmation(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shutil.rmtree(next(tool_env.site.glob("fakedep-*.dist-info")))
+    shutil.rmtree(tool_env.site / "fakedep")
+    write_dist(tool_env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
+    seen: list[list[str]] = []
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
+    assert main(["uninstall"]) == 0
+    assert seen == [["fakedep: changed from 1.0 to 1.1"]] and len(sudo.calls) == 1
+
+
+def test_a_new_homebrew_or_uv_python_does_not_stop_init_or_uninstall(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tool_env.prefix / "pyvenv.cfg").write_text("home = /opt/homebrew/Cellar/python@3.12/3.12.99\n")
+    (tool_env.prefix / "bin" / "python").write_text("a newer interpreter\n")
+    assert main(["init", "-g"]) == 0
+    assert "already installed" in capsys.readouterr().out
+    assert main(["uninstall"]) == 0
+    assert len(sudo.calls) == 1
+
+
+def test_a_source_checkout_is_refused_with_the_wheel_hint_before_any_password(
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def refused() -> packages.Environment:
+        raise packages.InstallError(
+            f"running from a source checkout or an editable install. {packages.WHEEL_HINT}"
+        )
+
+    monkeypatch.setattr(packages, "tool_environment", refused)
+    for command in (["init", "-g"], ["uninstall"]):
+        assert main(command) == 1
+    assert capsys.readouterr().err.count(packages.WHEEL_HINT) == 2 and sudo.calls == []
+
+
+def test_uninstall_with_nothing_installed_checks_no_package(
+    system: Layout, sudo: Sudo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packages, "tool_environment", lambda: pytest.fail("looked at the package"))
+    assert main(["uninstall"]) == 0 and sudo.calls == []

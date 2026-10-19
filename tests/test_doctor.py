@@ -21,10 +21,26 @@ from typing import Any
 import pytest
 
 from agentfly.cli import doctor, main
-from agentfly.install import checks, cursor, installer, pythons, service
+from agentfly.install import (
+    InstallError,
+    checks,
+    cursor,
+    installer,
+    packages,
+    pythons,
+    records,
+    service,
+)
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
-from tests.install_helpers import fake_python_tar, make_cursor_app, make_layout, write_archive
+from tests.install_helpers import (
+    TOOL_DISTS,
+    fake_python_tar,
+    make_cursor_app,
+    make_layout,
+    write_archive,
+    write_dist,
+)
 from tests.service_helpers import Brew, Launchd, homebrew_package
 
 IDS = [
@@ -32,6 +48,7 @@ IDS = [
     "python",
     "lock",
     "client",
+    "package",
     "hooks",
     "events",
     "service",
@@ -201,6 +218,22 @@ def change_client(w: World) -> None:
     w.layout.client.write_text(w.layout.client.read_text() + "# changed\n")
 
 
+def change_package_file(w: World) -> None:
+    (packages.tool_environment().site / "agentfly" / "module.py").write_text("import os\n")
+
+
+def add_extra_file(w: World) -> None:
+    (packages.tool_environment().site / "agentfly" / "_native.so").write_bytes(b"\x7fELF")
+
+
+def forget_the_package_hashes(w: World) -> None:
+    """An install from before V3c: the record has no `packages` section."""
+    record = records.read(w.layout)
+    assert record is not None
+    del record["packages"]
+    w.layout.record.write_text(records.dumps(record), encoding="utf-8")
+
+
 def change_python(w: World) -> None:
     helper = w.layout.python_dir / "lib" / "python3.12" / "helper.py"
     helper.write_text(helper.read_text() + "VALUE = 2\n")
@@ -249,6 +282,9 @@ def put_another_agentfly_first(w: World) -> None:
 FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
     "a changed hook client": ("client", change_client),
     "a changed bundled Python": ("python", change_python),
+    "a changed file of the package": ("package", change_package_file),
+    "an extra file in site-packages": ("package", add_extra_file),
+    "no package hashes in the record": ("package", forget_the_package_hashes),
     "a changed entry in hooks.json": ("hooks", change_entry),
     "a missing entry in hooks.json": ("hooks", drop_entry),
     "no hooks.json": ("hooks", lambda w: w.layout.hooks_file.unlink()),
@@ -297,6 +333,7 @@ def test_a_missing_record_leaves_what_needs_it_unchecked(world: World) -> None:
     results = world.results()
     assert results["python"].level == results["client"].level == "warn"
     assert "not checked" in results["python"].text and "no hash record" in results["client"].text
+    assert results["package"].level == "warn" and "no hash record" in results["package"].text
 
 
 def test_after_stop_the_service_file_and_keepalive_lines_only_warn(world: World) -> None:
@@ -674,3 +711,63 @@ def test_doctor_reads_and_changes_nothing(command: World) -> None:
     before = snapshot()
     main(["doctor"])
     assert snapshot() == before
+
+
+# ---------------------------------------------------------------- the package line (V3c)
+
+
+def test_the_package_line_fails_after_one_changed_file_and_passes_after_a_reinstall(
+    world: World,
+) -> None:
+    env = packages.tool_environment()
+    module = env.site / "agentfly" / "module.py"
+    original = module.read_bytes()
+    module.write_bytes(b"import os\n")
+    line = world.results()["package"]
+    assert line.level == "fail" and str(module) in line.text
+    assert "changed since AgentFly was installed" in line.text and "init -g" in line.text
+    module.write_bytes(original)  # reinstalling the same wheel puts the same bytes back
+    assert world.results()["package"].level == "ok"
+
+
+def test_an_extra_file_is_named_on_the_package_line(world: World) -> None:
+    add_extra_file(world)
+    text = world.results()["package"].text
+    assert "_native.so is not listed in any RECORD" in text
+
+
+def test_the_package_line_counts_what_it_checked(world: World) -> None:
+    assert world.results()["package"].text == (
+        "AgentFly and its 1 dependencies match the record"  # the fake environment has two
+    )
+
+
+def test_an_upgrade_since_install_only_warns_and_says_to_run_init_again(world: World) -> None:
+    env = packages.tool_environment()
+    shutil.rmtree(next(env.site.glob("fakedep-*.dist-info")))
+    shutil.rmtree(env.site / "fakedep")
+    write_dist(env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
+    line = world.results()["package"]
+    assert line.level == "warn" and "fakedep: changed from 1.0 to 1.1" in line.text
+    assert "agentfly init -g" in line.text
+    assert world.levels("fail") == set()
+
+
+def test_run_from_a_source_checkout_the_package_line_is_not_checked(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refused() -> packages.Environment:
+        raise InstallError("AgentFly is running from a source checkout")
+
+    monkeypatch.setattr(packages, "tool_environment", refused)
+    line = world.results()["package"]
+    assert line.level == "warn" and "not checked" in line.text and "source checkout" in line.text
+    assert world.levels("fail") == set()
+
+
+def test_the_package_line_lists_the_installed_versions_it_compared(world: World) -> None:
+    record = records.read(world.layout)
+    assert record is not None
+    assert {n: v["version"] for n, v in record["packages"].items()} == {
+        name: version for name, (version, _files) in TOOL_DISTS.items()
+    }

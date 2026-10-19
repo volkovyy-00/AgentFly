@@ -85,10 +85,22 @@ fails its checksum. Running it twice changes nothing and needs no password the s
 Quit and reopen Cursor afterwards so it loads the hooks. Its Settings → Hooks panel does not list
 system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s)`.
 
-`init -g` and `uninstall` run the installed AgentFly package as root, so they are only as
-trustworthy as that package and the Python it was installed with, which your user (and so the
-agent) can write. Run them from a tool environment you just installed, not one an agent has
-had access to.
+`init -g` and `uninstall` run the installed AgentFly package as root, and that package lives in a
+tool environment your user (and so the agent) can write. So before they ask for your password they
+hash every file of every package in it and compare the hashes with the ones `init -g` stored in
+its root-owned record. A changed file, or a file no package lists, stops the command: it names the
+file and tells you to reinstall AgentFly and run it again. After an upgrade (of AgentFly or of one
+dependency) they list what changed ("changed from 0.1.0 to 0.2.0") and go on only after you answer
+`y` in a terminal; the new hashes replace the old. If you rebuilt the same version yourself, raise
+the version in `pyproject.toml` first, or the stored hashes will not match. Root then runs on the
+bundled, root-owned Python, with no `.pth`, no `sitecustomize` and no cached byte-code. A
+first install, which has no bundled Python yet, runs on the tool environment's base Python. Run
+`init -g` from a tool environment installed from a wheel you built or downloaded yourself, not from
+a source checkout or an editable install (they are refused). AgentFly's own protection also denies
+the agent touching that environment, `~/.local/bin/agentfly`, and installing, upgrading or removing
+AgentFly with `uv tool`, `pipx` or `brew`. SPEC.md section 10 lists what this still does not cover
+(the checker checks itself, the base Python is not hashed, a file changed while the password
+prompt waits).
 
 **The recorder as a service.** `agentfly start` runs the recorder in the background and starts it
 at every login. It restarts by itself within seconds if it is killed (launchd `KeepAlive`). For an
@@ -106,8 +118,8 @@ agentfly doctor     # one line per check: ok, warn or fail (exit 1 on any fail)
 While the recorder is stopped, AgentFly's hook client still denies outbound commands and edits of
 AgentFly's own files (the offline guard) and tells you to run `agentfly start`.
 
-`agentfly doctor` compares the installed Python and hook client with the hashes recorded at
-install, checks that nothing in AgentFly's system folder can be written by your user, that
+`agentfly doctor` compares the installed Python, hook client and Python packages with the
+hashes recorded at install, checks that nothing in AgentFly's system folder can be written by your user, that
 AgentFly's entries in Cursor's hooks file are the ones `init -g` wrote, that the service is running
 with `KeepAlive` (and, for Homebrew, that no LaunchAgent of AgentFly's is loaded next to it), that
 `agentfly` on your `PATH` is this install's (not another venv's), and that Cursor's Hooks log says it

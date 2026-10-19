@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from agentfly.install import InstallError, cursor, elevate, installer, pythons
+from agentfly.install import InstallError, cursor, elevate, installer, packages, pythons, records
 from agentfly.install.layout import SYSTEM
 
 
@@ -73,18 +73,28 @@ def _as_root(version: str, build: pythons.PythonBuild) -> int:
 
 
 def _as_user(version: str, build: pythons.PythonBuild) -> int:
-    bad = installer.status(SYSTEM, build, installer.client_source())
+    # The package is checked here, before anything asks for a password (V3c, SPEC section 10).
+    current = packages.require(records.read(SYSTEM), "agentfly init -g")
+    bad = installer.status(SYSTEM, build, installer.client_source(), current)
     if not bad:
         print("already installed and intact; nothing changed")
         return 0
+    if current.changes and not packages.confirm(current.changes):
+        print("agentfly init: not confirmed; nothing was changed", file=sys.stderr)
+        return 1
     print("AgentFly will ask for your password once, to write into /Library/Application Support.")
-    if "python" not in bad:  # the bundled Python is fine: no need to fetch it again
-        return elevate.run_elevated(["init", "-g"], stdin=subprocess.DEVNULL)
+    if "python" not in bad:
+        # The bundled Python is intact: no need to fetch it again, and root runs on it.
+        return elevate.run_elevated(
+            ["init", "-g"], stdin=subprocess.DEVNULL, python=SYSTEM.interpreter
+        )
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / build.name
         print(f"downloading {build.name} ...")
         pythons.download(build, archive)  # checked against the pinned SHA-256
         with archive.open("rb") as handle:
+            # No intact bundled Python to trust (a first install, or a new pin): root runs on the
+            # tool environment's base interpreter.
             return elevate.run_elevated(["init", "-g"], stdin=handle)
 
 

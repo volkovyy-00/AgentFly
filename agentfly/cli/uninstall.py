@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 
-from agentfly.install import InstallError, elevate, installer, service
+from agentfly.install import InstallError, elevate, installer, packages, records, service
 from agentfly.install.layout import SYSTEM
 
 
@@ -31,8 +31,14 @@ RESTART_HINT = (
 def _as_user() -> int:
     installed = installer.is_installed(SYSTEM)
     if installed:
+        # The package is checked here, before anything asks for a password (V3c, SPEC section 10).
+        current = packages.require(records.read(SYSTEM), "agentfly uninstall")
+        if current.changes and not packages.confirm(current.changes):
+            print("agentfly uninstall: not confirmed; nothing was changed", file=sys.stderr)
+            return 1
         print("AgentFly will ask for your password once, to remove its system files.")
-        code = elevate.run_elevated(["uninstall"])
+        python = SYSTEM.interpreter if installer.python_intact(SYSTEM) else None
+        code = elevate.run_elevated(["uninstall"], python=python)
         if code != 0:
             print(
                 f"agentfly uninstall: the sudo part failed (exit {code}); the service was not "

@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agentfly.install import service
+from agentfly.install import packages, service
 from tests.helpers import copy_client, free_port
+from tests.install_helpers import make_tool_env
 from tests.service_helpers import Launchd
 
 
@@ -34,6 +35,17 @@ def launchd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Launchd:
     monkeypatch.setattr(service, "POLL_INTERVAL", 0.001)
     monkeypatch.setattr(service, "START_TIMEOUT", 0.05)
     return stub
+
+
+@pytest.fixture(autouse=True)
+def tool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> packages.Environment:
+    """No test hashes the real tool environment (V3c): this process "runs from" a small clean one.
+
+    A test that wants a different environment patches `packages.tool_environment` again.
+    """
+    env = make_tool_env(tmp_path / "toolenv")
+    monkeypatch.setattr(packages, "tool_environment", lambda: env)
+    return env
 
 
 @pytest.fixture
