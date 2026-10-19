@@ -439,6 +439,7 @@ def test_steps_older_than_28_days_go_at_start_and_while_running(db: Path) -> Non
         second.stop()
 
 
+@wallclock
 def test_an_idle_recorder_still_sweeps(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ls, "TICK_S", 0.05)
     clock = Clock(DAY0)

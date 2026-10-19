@@ -262,11 +262,12 @@ lines for them (R0 and normalisation: V5).
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
   its own `HOME`, temporary folders and ports. `free_port` picks a free port whose remainder
   is the worker's own number (`PYTEST_XDIST_WORKER[_COUNT]`), and `StubRecorder` lets the system
-  pick its port, so workers do not share one (a crashed worker's replacement, gw8 of 8, can
-  share a class with a live one until the run ends). The package tests (one wheel build,
+  pick its port, so two workers' `free_port` results never collide (a port handed to a
+  subprocess is still checked first and bound later; a crashed worker's replacement, gw8 of 8,
+  can share a class with a live one). The package tests (one wheel build,
   files planted in the install and put back) carry `xdist_group(name="package")`; a test
   that asserts a time limit or leans on a sleep carries `@wallclock` (`tests/helpers.py`),
-  and a module that times anything must use it (checked). Each group runs on one worker, in
+  and a test that reads the clock without it fails a check. Each group runs on one worker, in
   file order. `strict_markers` makes an unknown marker an error, serial or parallel.
 - CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
   refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes

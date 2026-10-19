@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import socket
 import subprocess
@@ -26,19 +27,36 @@ def test_the_package_tests_share_one_worker() -> None:
     assert groups == {"package"}
 
 
-def test_a_module_that_times_a_test_puts_it_on_the_wallclock_worker() -> None:
+def read_tests() -> list[tuple[Path, str, ast.FunctionDef]]:
+    found = []
+    for path in sorted(TESTS.glob("test_*.py")):
+        if path != Path(__file__):
+            source = path.read_text(encoding="utf-8")
+            found += [
+                (path, source, node)
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+            ]
+    return found
+
+
+def test_a_test_that_reads_the_clock_is_on_the_wallclock_worker() -> None:
     # Every test that asserts a time limit (or leans on a sleep) carries @wallclock, so these tests
-    # share one worker and do not compete with each other. A new timing module must opt in.
-    timed = [
-        path.name
-        for path in sorted(TESTS.glob("test_*.py"))
-        if path != Path(__file__) and TIMED.search(path.read_text(encoding="utf-8"))
+    # share one worker and do not compete with each other. This sees a test that reads the clock
+    # itself, and a module that times a test through a helper (it must use the mark somewhere).
+    timers = [t for t in read_tests() if TIMED.search(ast.get_source_segment(t[1], t[2]) or "")]
+    assert timers, "the scan found no test that reads the clock"
+    bare = [
+        f"{path.name}::{node.name}"
+        for path, _, node in timers
+        if not any(isinstance(d, ast.Name) and d.id == "wallclock" for d in node.decorator_list)
     ]
-    assert timed, "the scan found no module that times anything"
-    missing = [
-        name for name in timed if "@wallclock" not in (TESTS / name).read_text(encoding="utf-8")
-    ]
-    assert missing == [], f"these modules time a test but never use @wallclock: {missing}"
+    assert bare == [], f"these tests read the clock without @wallclock: {bare}"
+    modules = {p for p in TESTS.glob("test_*.py") if TIMED.search(p.read_text(encoding="utf-8"))}
+    unmarked = sorted(
+        p.name for p in modules - {Path(__file__)} if "@wallclock" not in p.read_text()
+    )
+    assert unmarked == [], f"these modules time a test but never use @wallclock: {unmarked}"
     # helpers.py is imported before pytest registers markers, so a typo in the mark's name would
     # pass strict_markers and silently group nothing.
     assert (helpers.wallclock.name, helpers.wallclock.kwargs) == (

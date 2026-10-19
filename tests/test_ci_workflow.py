@@ -34,6 +34,8 @@ CHECK_LABELS = {
 TOP_KEYS = {"name", "on", "permissions", "concurrency", "jobs"}
 JOB_KEYS = {"runs-on", "timeout-minutes", "steps"}
 STEP_KEYS = {"name", "uses", "with", "run"}
+# AGENTS.md: ask before adding an action. A new one needs a deliberate edit of this set.
+APPROVED_ACTIONS = {"actions/checkout", "astral-sh/setup-uv", "actions/setup-node"}
 FORBIDDEN_WORDS = ("secrets", "pull_request_target", "workflow_run")
 PINNED = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 MACOS = re.compile(r"^macos-[\w.-]+$")
@@ -269,6 +271,8 @@ def job_problems(name: str, job: Any) -> list[str]:
         uses = step.get("uses")
         if uses is not None and not (isinstance(uses, str) and PINNED.match(uses)):
             found.append(f"uses must be pinned to a 40-character commit SHA, got {uses!r}")
+        elif uses is not None and uses.split("@")[0] not in APPROVED_ACTIONS:
+            found.append(f"action not approved in AGENTS.md: {uses!r}")
     checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
     if not checkouts:
         found.append(f"job {name}: no actions/checkout step")
@@ -407,6 +411,12 @@ MUTATIONS = [
         "concurrency",
     ),
     ("a group by sha only", GROUP, "ci-${{ github.sha }}", "concurrency"),
+    (
+        "an unapproved action",
+        "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+        "actions/cache@" + "0" * 40,
+        "not approved",
+    ),
     ("an unlocked sync", "- run: uv sync --locked", "- run: uv sync", "uv sync --locked"),
     ("an upper-case secret", "- run: uv sync --locked", ENV_SECRET, "secrets"),
     (
