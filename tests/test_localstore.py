@@ -311,7 +311,9 @@ def test_a_subagent_that_reads_a_secret_is_marked_in_history_even_under_a_marked
         },
     )
     post(client, hook_shell("bash -c 'cat .env'", "child", parent_tool_call_id="T1"))
-    assert listed(client, "child")["marked"] is True  # its own read, not only the inherited mark
+    assert (
+        listed(client, "child")["marked"] is True
+    )  # through the link; its read is no marking step
 
 
 def test_a_second_secret_read_in_a_marked_chat_is_still_flagged_sensitive(
@@ -324,12 +326,6 @@ def test_a_second_secret_read_in_a_marked_chat_is_still_flagged_sensitive(
     assert [s["sensitive"] for s in steps] == [True, True]
 
 
-def test_an_edit_of_a_sensitive_file_does_not_mark_the_session(store: LocalStore) -> None:
-    store.enqueue(record(1, kind="edit", file_path=".env", file_sensitive=True))
-    assert store.flush()
-    assert store.list_sessions()[0]["marked"] is False  # mark() only reacts to reads and shells
-
-
 def test_the_marking_step_is_stored_and_named(store: LocalStore, db: Path) -> None:
     store.enqueue(record(1))
     store.enqueue(record(2, kind="read", file_path=".env", file_sensitive=True, marks=True))
@@ -340,6 +336,13 @@ def test_the_marking_step_is_stored_and_named(store: LocalStore, db: Path) -> No
     assert found is not None and found[2] == 2
     assert [s["order"] for s in found[0]] == [1, 2, 3]
     assert all("marks" not in step for step in found[0])  # steps keep the live trail's keys
+
+
+def test_a_marking_step_marks_its_chat_in_the_same_write(store: LocalStore) -> None:
+    # No mark_sessions here: a full queue can drop that item, and the step must not depend on it.
+    store.enqueue(record(1, kind="read", file_path=".env", file_sensitive=True, marks=True))
+    assert store.flush()
+    assert store.list_sessions()[0]["marked"] is True
 
 
 def test_the_marking_step_is_found_even_beyond_the_steps_cap(

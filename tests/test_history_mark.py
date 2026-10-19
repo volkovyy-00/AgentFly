@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,44 +15,14 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.localstore as ls
 from agentfly.recorder.localstore import LocalStore, local_store
 from agentfly.recorder.paths import config_dir, data_dir, private_dir
-from agentfly.recorder.store import StepRecord
-
-DAY0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+from tests.test_localstore import listed, record, rows
+from tests.test_step_merge import edited, event, post, pre
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         yield test_client
-
-
-def post(client: TestClient, event: dict[str, Any]) -> dict[str, Any]:
-    token = (config_dir() / "token").read_text(encoding="utf-8").strip()
-    response = client.post(
-        "/hook", json=event, headers={"Content-Type": "application/json", "X-Recorder-Token": token}
-    )
-    assert response.status_code == 200
-    answer: dict[str, Any] = response.json()
-    return answer
-
-
-def event(name: str, chat: str, call: str | None = None, **fields: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "hook_event_name": name,
-        "conversation_id": chat,
-        "workspace_roots": ["/w"],
-        **fields,
-    }
-    if call is not None:
-        body["tool_use_id"] = call
-    return body
-
-
-def pre(tool: str, call: str | None, chat: str, path: str | None = None) -> dict[str, Any]:
-    fields: dict[str, Any] = {"tool_name": tool}
-    if path is not None:
-        fields["tool_input"] = {"file_path": path}
-    return event("preToolUse", chat, call, **fields)
 
 
 def read(path: str, chat: str, call: str | None = None, **extra: Any) -> dict[str, Any]:
@@ -64,10 +33,6 @@ def shell(command: str, chat: str, **extra: Any) -> dict[str, Any]:
     return event("beforeShellExecution", chat, command=command, **extra)
 
 
-def edited(path: str, chat: str) -> dict[str, Any]:
-    return event("afterFileEdit", chat, file_path=path)
-
-
 def task(chat: str, call: str) -> dict[str, Any]:
     return pre("Task", call, chat)
 
@@ -76,12 +41,6 @@ def started(chat: str, call: str) -> dict[str, Any]:
     return event(
         "subagentStart", chat, parent_conversation_id=chat, tool_call_id=call, subagent_id="sub"
     )
-
-
-def listed(client: TestClient, chat: str) -> dict[str, Any]:
-    assert local_store.flush()
-    by_id = {s["id"]: s for s in client.get("/api/sessions").json()["sessions"]}
-    return by_id[chat]
 
 
 def marking_step(client: TestClient, chat: str) -> int | None:
@@ -289,23 +248,20 @@ def test_wipe_then_the_chats_next_event_brings_the_flag_back() -> None:
 def test_a_flagging_failure_changes_no_hook_answer_and_logs_no_message(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    script = [
-        read("/w/.env", "{chat}"),
-        shell("curl https://x.com", "{chat}"),
-        task("{chat}", "T1"),
-        shell("ls", "{chat}"),
-        event("sessionStart", "{chat}"),
-    ]
+    def script(chat: str) -> list[dict[str, Any]]:
+        return [
+            read("/w/.env", chat),
+            shell("curl https://x.com", chat),
+            task(chat, "T1"),
+            shell("ls", chat),
+            event("sessionStart", chat),
+        ]
 
     def run(chat: str) -> list[Any]:
         token = (config_dir() / "token").read_text(encoding="utf-8").strip()
         headers = {"Content-Type": "application/json", "X-Recorder-Token": token}
-        out = []
-        for item in script:
-            fixed = {k: (chat if v == "{chat}" else v) for k, v in item.items()}
-            reply = client.post("/hook", json=fixed, headers=headers)
-            out.append((reply.status_code, reply.content))
-        return out
+        replies = [client.post("/hook", json=item, headers=headers) for item in script(chat)]
+        return [(reply.status_code, reply.content) for reply in replies]
 
     healthy = run("one")
 
@@ -357,8 +313,8 @@ OLD_SESSIONS = {
 OLD_FLAGS = {chat: marked for chat, (_, marked) in OLD_SESSIONS.items()}
 
 
-def build_old_history(path: Path) -> list[tuple[Any, ...]]:
-    """An fb72286 file with four saved chats. Returns every step row, to compare afterwards."""
+def build_old_history(path: Path) -> None:
+    """An fb72286 file with four saved chats."""
     private_dir(path.parent)
     conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -372,9 +328,7 @@ def build_old_history(path: Path) -> list[tuple[Any, ...]]:
                 "INSERT INTO steps VALUES (?, ?, ?, ?, NULL, 'allowed', ?, ?, NULL, '[]', NULL)",
                 (chat, order, started, kind, file_path, sensitive),
             )
-    rows = conn.execute("SELECT * FROM steps ORDER BY session_id, ord").fetchall()
     conn.close()
-    return rows
 
 
 @pytest.fixture
@@ -384,42 +338,25 @@ def old_db() -> Path:
     return path
 
 
-def rows_of(path: Path, sql: str) -> list[tuple[Any, ...]]:
-    conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
-    try:
-        return conn.execute(sql).fetchall()
-    finally:
-        conn.close()
-
-
 def table_columns(path: Path) -> dict[str, list[str]]:
-    conn = sqlite3.connect(path)
-    try:
-        return {
-            name: [c[1] for c in conn.execute(f"PRAGMA table_info({name})")]
-            for name in ("sessions", "steps")
-        }
-    finally:
-        conn.close()
+    return {
+        name: [c[1] for c in rows(path, f"PRAGMA table_info({name})")]
+        for name in ("sessions", "steps")
+    }
 
 
-def test_a_reader_that_beats_the_migration_lists_the_old_guess(old_db: Path) -> None:
-    reader = LocalStore()
-    reader.path = old_db  # never started: no writer thread, so nothing migrates the file
-    assert {s["id"]: s["marked"] for s in reader.list_sessions()} == OLD_FLAGS
-    found = reader.session_steps("a")
-    assert found is not None
-    steps, truncated, marking = found
-    assert ([s["order"] for s in steps], truncated, marking) == ([1, 2], False, None)
-    assert table_columns(old_db)["sessions"] == ["id", "workspace_root", "started_at", "ended_at"]
-
-
-def test_the_first_read_after_the_upgrade_answers_200_with_the_same_flags(old_db: Path) -> None:
+def test_the_first_read_after_the_upgrade_answers_200_with_the_old_flags(
+    old_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A read can beat the writer's upgrade at start-up. Keep the writer from starting, so it does.
+    monkeypatch.setattr(local_store, "start", lambda path: setattr(local_store, "path", path))
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
-        response = client.get("/api/sessions")  # may beat the writer's migration: either is fine
+        response = client.get("/api/sessions")
         assert response.status_code == 200
         assert {s["id"]: s["marked"] for s in response.json()["sessions"]} == OLD_FLAGS
-        assert client.get("/api/sessions/a/steps").status_code == 200
+        old_steps = client.get("/api/sessions/a/steps")
+        assert old_steps.status_code == 200 and old_steps.json()["marked_order"] is None
+    assert table_columns(old_db)["sessions"] == ["id", "workspace_root", "started_at", "ended_at"]
 
 
 def test_an_old_file_opens_without_loss_and_keeps_its_flags(old_db: Path, tmp_path: Path) -> None:
@@ -427,7 +364,7 @@ def test_an_old_file_opens_without_loss_and_keeps_its_flags(old_db: Path, tmp_pa
         "SELECT session_id, ord, time, kind, tool, verdict, file_path, file_sensitive,"
         " command, hosts, rule_id FROM steps ORDER BY session_id, ord"
     )
-    before = rows_of(old_db, old_rows)
+    before = rows(old_db, old_rows)
     store = LocalStore()
     store.start(old_db)
     try:
@@ -435,7 +372,7 @@ def test_an_old_file_opens_without_loss_and_keeps_its_flags(old_db: Path, tmp_pa
         assert {s["id"]: s["marked"] for s in store.list_sessions()} == OLD_FLAGS
     finally:
         store.stop()
-    assert rows_of(old_db, old_rows) == before and len(before) == 5  # every step kept as it was
+    assert rows(old_db, old_rows) == before and len(before) == 5  # every step kept as it was
     fresh = LocalStore()
     fresh.start(tmp_path / "fresh.db")
     try:
@@ -443,26 +380,13 @@ def test_an_old_file_opens_without_loss_and_keeps_its_flags(old_db: Path, tmp_pa
     finally:
         fresh.stop()
     assert table_columns(old_db) == table_columns(tmp_path / "fresh.db")  # same columns, same order
-    assert table_columns(old_db)["sessions"][-1] == "marked"
-    assert table_columns(old_db)["steps"][-1] == "marks"
 
 
 def test_an_old_chat_can_be_marked_after_the_upgrade(old_db: Path) -> None:
     store = LocalStore()
     store.start(old_db)
     try:
-        store.enqueue(
-            StepRecord(
-                session_id="d",
-                started_at=DAY0.isoformat(),
-                order=2,
-                time=DAY0.isoformat(),
-                kind="shell",
-                verdict="allowed",
-                file_sensitive=True,
-                marks=True,
-            )
-        )
+        store.enqueue(record(2, session="d", kind="shell", file_sensitive=True, marks=True))
         store.mark_sessions(["d"])
         assert store.flush()
         assert {s["id"]: s["marked"] for s in store.list_sessions()}["d"] is True

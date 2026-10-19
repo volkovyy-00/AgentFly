@@ -88,33 +88,22 @@ _MARK_SESSION: str = "UPDATE sessions SET marked = 1 WHERE id = ? AND marked = 0
 # Before V6b "marked" was a guess: a read or shell step touched a sensitive file. It stays the
 # value of a chat saved by that recorder (see `_upgrade`).
 _GUESSED_MARK: str = "t.file_sensitive = 1 AND t.kind IN ('read', 'shell')"
-SESSIONS_QUERY: str = """
+_LISTING: str = """
 SELECT s.id, s.workspace_root, s.started_at,
        COALESCE(s.ended_at, MAX(t.time)) AS ended_at,
        COUNT(t.ord) AS steps,
        COALESCE(SUM(t.verdict = 'blocked'), 0) AS blocked,
        COALESCE(SUM(t.verdict = 'warned'), 0) AS warned,
-       s.marked AS marked
-FROM (SELECT id, workspace_root, started_at, ended_at, marked FROM sessions
+       {marked} AS marked
+FROM (SELECT id, workspace_root, started_at, ended_at{column} FROM sessions
       ORDER BY started_at DESC, id LIMIT ?) s
 LEFT JOIN steps t ON t.session_id = s.id
 GROUP BY s.id
 ORDER BY s.started_at DESC, s.id
 """
+SESSIONS_QUERY: str = _LISTING.format(marked="s.marked", column=", marked")
 # The same listing for a file the writer has not upgraded yet (a read can beat it at start-up).
-SESSIONS_QUERY_V1: str = f"""
-SELECT s.id, s.workspace_root, s.started_at,
-       COALESCE(s.ended_at, MAX(t.time)) AS ended_at,
-       COUNT(t.ord) AS steps,
-       COALESCE(SUM(t.verdict = 'blocked'), 0) AS blocked,
-       COALESCE(SUM(t.verdict = 'warned'), 0) AS warned,
-       COALESCE(MAX({_GUESSED_MARK}), 0) AS marked
-FROM (SELECT id, workspace_root, started_at, ended_at FROM sessions
-      ORDER BY started_at DESC, id LIMIT ?) s
-LEFT JOIN steps t ON t.session_id = s.id
-GROUP BY s.id
-ORDER BY s.started_at DESC, s.id
-"""
+SESSIONS_QUERY_V1: str = _LISTING.format(marked=f"COALESCE(MAX({_GUESSED_MARK}), 0)", column="")
 SESSION_EXISTS_QUERY: str = "SELECT 1 FROM sessions WHERE id = ?"
 STEPS_QUERY: str = """
 SELECT ord, time, kind, verdict, tool, file_path, file_sensitive, command, hosts, rule_id
@@ -123,20 +112,14 @@ FROM steps WHERE session_id = ? ORDER BY ord LIMIT ?
 # Not limited by STEPS_CAP: the marking step is named even when the list is cut.
 MARKING_STEP_QUERY: str = "SELECT MIN(ord) FROM steps WHERE session_id = ? AND marks = 1"
 
-_HAS_COLUMN: str = "SELECT 1 FROM pragma_table_info(?) WHERE name = ?"
-# (table, column, statements that add it). An older file gets them in one transaction.
-_UPGRADES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("steps", "marks", ("ALTER TABLE steps ADD COLUMN marks INTEGER NOT NULL DEFAULT 0",)),
-    (
-        "sessions",
-        "marked",
-        (
-            "ALTER TABLE sessions ADD COLUMN marked INTEGER NOT NULL DEFAULT 0",
-            # Old chats keep the value the old listing gave them; old steps keep marks = 0.
-            "UPDATE sessions SET marked = EXISTS (SELECT 1 FROM steps t"
-            f" WHERE t.session_id = sessions.id AND {_GUESSED_MARK})",
-        ),
-    ),
+_UPGRADED: str = "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'marked'"
+# What a file written before V6b needs, in one transaction: it has both new columns or neither.
+_UPGRADE: tuple[str, ...] = (
+    "ALTER TABLE steps ADD COLUMN marks INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN marked INTEGER NOT NULL DEFAULT 0",
+    # Old chats keep the value the old listing gave them; old steps keep marks = 0.
+    "UPDATE sessions SET marked = EXISTS (SELECT 1 FROM steps t"
+    f" WHERE t.session_id = sessions.id AND {_GUESSED_MARK})",
 )
 
 
@@ -193,23 +176,23 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     conn.execute("COMMIT")
 
 
-def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    return conn.execute(_HAS_COLUMN, (table, column)).fetchone() is not None
+def _upgraded(conn: sqlite3.Connection) -> bool:
+    """False for a file an older recorder wrote (before V6b): it has no `marked` column yet."""
+    return conn.execute(_UPGRADED).fetchone() is not None
 
 
 def _upgrade(conn: sqlite3.Connection) -> None:
     """Bring a file written by an older recorder up to the current tables, losing nothing.
 
-    All in one transaction (DDL rolls back too), so a crash leaves the old tables. The columns are
-    checked again inside it: a second recorder may have upgraded the file a moment ago.
+    All in one transaction (DDL rolls back too), so a crash leaves the old tables. It checks again
+    inside it: a second recorder may have upgraded the file a moment ago.
     """
-    if all(_has_column(conn, table, column) for table, column, _ in _UPGRADES):
+    if _upgraded(conn):
         return
     with _transaction(conn):
-        for table, column, statements in _UPGRADES:
-            if not _has_column(conn, table, column):
-                for statement in statements:
-                    conn.execute(statement)
+        if not _upgraded(conn):
+            for statement in _UPGRADE:
+                conn.execute(statement)
 
 
 def _truncate_wal(conn: sqlite3.Connection) -> bool:
@@ -394,17 +377,13 @@ class LocalStore:
         """The rules count these chats as marked now (V6b); the flag only goes up.
 
         Called after the chat's step or session event was queued, so the row is there when this
-        runs. A dropped call heals itself: every later event of a marked chat sends it again.
+        runs. Never waits: a full queue drops it, and every later event of a marked chat sends it
+        again. The steps' own drop warning covers the full queue, so this one stays quiet.
         """
         ids: tuple[str, ...] = tuple(session_ids)
-        if self._thread is None or not ids:
-            return
-        try:
-            self._queue.put_nowait(MarkedSessions(ids))
-        except queue.Full:
-            pass  # the steps' own drop warning says it; it must not flap here
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("local store: not queued (%s)", type(exc).__name__)
+        if self._thread is not None and ids:
+            with contextlib.suppress(queue.Full):
+                self._queue.put_nowait(MarkedSessions(ids))
 
     # ---- writer thread
 
@@ -517,6 +496,8 @@ class LocalStore:
                         int(item.marks),
                     ),
                 )
+                if item.marks:  # the marking step and its chat's flag are never apart
+                    conn.execute(_MARK_SESSION, (item.session_id,))
         elif isinstance(item, SessionEvent):
             with _transaction(conn):
                 conn.execute(_UPSERT_SESSION, (item.session_id, item.workspace_root, item.time))
@@ -554,10 +535,8 @@ class LocalStore:
         """Past sessions, newest first. Empty when nothing was ever saved."""
 
         def work(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-            upgraded: bool = _has_column(conn, "sessions", "marked")
-            rows = conn.execute(
-                SESSIONS_QUERY if upgraded else SESSIONS_QUERY_V1, (SESSIONS_CAP,)
-            ).fetchall()
+            query: str = SESSIONS_QUERY if _upgraded(conn) else SESSIONS_QUERY_V1
+            rows = conn.execute(query, (SESSIONS_CAP,)).fetchall()
             return [
                 {
                     "id": r[0],
@@ -589,7 +568,7 @@ class LocalStore:
                 return None
             rows = conn.execute(STEPS_QUERY, (session_id, STEPS_CAP + 1)).fetchall()
             marking: int | None = None
-            if _has_column(conn, "steps", "marks"):
+            if _upgraded(conn):
                 marking = conn.execute(MARKING_STEP_QUERY, (session_id,)).fetchone()[0]
             return [step_row_to_dict(r) for r in rows[:STEPS_CAP]], len(rows) > STEPS_CAP, marking
 
