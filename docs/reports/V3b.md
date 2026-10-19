@@ -1,9 +1,35 @@
 # V3b: Service and `doctor`: `start`, `stop`, `status`, `doctor`
-Status: done (as of 2026-10-19 13:26)
-Result: start/stop/status (own LaunchAgent or brew services), uninstall removes the service, doctor (12 lines), guard lists cover the labels. All acceptance checks passed, the manual ones on the owner's Mac too (init -g, start, kill -9, stop, Cursor deny, doctor, uninstall).
-Evidence: 8 commits on ag-v3b-service after e1d4aeb; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 2490 passed, 5 skipped (before: 2158 passed, 5 skipped without test_package). Tests: test_service.py, test_doctor.py, test_install_cli.py, tests/cases.py.
-Needs owner: none. Quit and reopen Cursor once more: the manual run ended with `uninstall`, which removed the hooks. The installed `agentfly` is this branch's build; reinstall from main after the merge.
-Details: see "## 2026-10-19 13:26" below (manual run); the build notes are in the section under it.
+Status: done (as of 2026-10-19 13:55)
+Result: Lead review fixed: doctor `path` compares venvs, not the base Python; Homebrew `start` retires our own LaunchAgent and doctor fails `service` if both load; a failed sudo part in `uninstall` claims only what is known. Test for each.
+Evidence: 8adf2c5 on ag-v3b-service; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 2501 passed, 5 skipped (was 2490). New tests in test_doctor.py, test_service.py, test_install_cli.py.
+Needs owner: none.
+Details: see "## 2026-10-19 13:55" below (review fixes); then the manual run (13:26) and the build notes (12:10).
+
+## 2026-10-19 13:55
+
+### Lead review: three fixes (commit 8adf2c5; nothing else changed except the docs that stated the old behaviour)
+| # | Cause | Fix | Tests |
+|---|---|---|---|
+| 1 | `checks._is_ours` compared `realpath(shebang interpreter)` with `realpath(sys.executable)`. Every venv's `python` is a symlink to the base Python, so any venv on the same base counted as ours (`ok path`). | New `_environment(python)`: the folder holding `pyvenv.cfg` beside the unresolved path or in its parent, else the installation itself. Both sides go through it. | `test_doctor.py`: `test_an_agentfly_of_another_venv_on_the_same_base_python_is_not_ours` (two venvs on one base, the other first on PATH, fails only `path`; failed before the fix with `ok path`), `..._of_this_venv_is_ours_even_when_it_is_not_the_recorded_script`, `test_two_commands_on_a_python_without_a_venv_share_its_environment` |
+| 2 | `service.start` returned from `_brew_services` without looking at `dev.agentfly.recorder`, so an earlier install's KeepAlive job kept port 8787 and `status`/`doctor` said ok. | On the Homebrew path `start` first runs `_teardown_agent()` (unload, wait, delete the file) and prints "replacing the LaunchAgent of an earlier install ..." plus the unloaded/removed lines; nothing is printed when there is none. `State.agent_loaded` (set by `_inspect_brew` from `launchctl print`) makes `status` append "; dev.agentfly.recorder is loaded too" and `doctor`'s `service` line fail with the label and "run `agentfly start`, which removes ours". | `test_service.py`: `test_a_homebrew_start_replaces_the_launch_agent_of_an_earlier_install`, `..._removes_a_launch_agent_file_that_is_not_loaded`, `..._without_a_launch_agent_of_ours_says_nothing_about_one`, `test_the_state_of_a_homebrew_install_shows_a_loaded_launch_agent_of_ours`; `test_doctor.py`: `test_a_homebrew_service_and_our_own_launch_agent_together_fail_the_service_line` (only `service` fails), `test_a_homebrew_service_alone_is_ok`. Stub launchctl + stub brew; the old "launchd.calls() == []" assertion became "no bootstrap" because `start` now looks (one `print`) |
+| 3 | `uninstall._as_user` printed "the recorder service was left running, because the hooks are still registered" for any non-zero sudo exit. | One line: `the sudo part failed (exit N); the service was not touched; run `agentfly uninstall` again`. The exit code is still returned. | `test_install_cli.py`: `test_uninstall_leaves_the_service_alone_when_the_system_part_fails` (reworded), `test_a_failed_system_part_does_not_claim_what_it_cannot_know` (the elevated part removed the entries, then failed), `test_a_cancelled_password_prompt_with_no_service_installed_says_the_same` |
+
+Real check of #1 on this Mac (the lead's case: the repo's `.venv` and the uv tool share `/usr/local/Cellar/python@3.12/3.12.11/.../python3.12`):
+```
+run from the repo .venv,      command = ~/.local/bin/agentfly (uv tool)  -> env of shebang .../uv/tools/agentfly-recorder, ours .../ag-v3b-service/.venv -> _is_ours False
+run from the uv tool's python, command = repo .venv/bin/agentfly          -> _is_ours False
+run from the uv tool's python, command = ~/.local/bin/agentfly            -> _is_ours True
+```
+Full check: `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = ruff clean, 163 files formatted, **2501 passed, 5 skipped** (2490 before).
+
+### Docs changed because they stated the old behaviour
+README (service paragraph, doctor paragraph, uninstall paragraph), SPEC §7 (Run `start` bullet, `doctor` bullet, Uninstall bullet; §10 untouched), AGENTS.md "Testing" (Service and Doctor lines). The older sections below (12:10 "What changed", decision notes) still say a failed system part "leaves the service running"; this section replaces that.
+
+### For the lead (seen while fixing, not changed because the review said to change nothing else)
+- `agentfly stop` on a Homebrew install still stops only `brew services` (`_teardown_brew`). A LaunchAgent of ours left by an earlier install would keep the recorder up after `stop` ("already stopped" is printed if brew's job is not loaded). `start` retires it, `uninstall` removes both, `doctor` fails `service` while it is loaded. Making `stop` call `_teardown_agent()` too is one line plus a test; say if you want it.
+- On a Homebrew install `status` and `doctor` now run one more `launchctl print`; if that fails (exit 112 without a GUI session) they end with the same one-line "cannot read the service state" as on the LaunchAgent path.
+- The Homebrew paths are tested with the stub `brew`/`launchctl`, not a real Homebrew keg.
+- `hook_client.py` is unchanged, so no `init -g` re-run is needed for these fixes. The `agentfly` installed on the owner's Mac is still the earlier build of this branch.
 
 ## 2026-10-19 13:26
 
