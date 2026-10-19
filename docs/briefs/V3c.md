@@ -4,7 +4,7 @@ You are a worker on card V3c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 
 **Summary.** `init -g` and `uninstall` run AgentFly's own code as root, and that code sits in a folder the agent's user can write. Stop the agent from changing it, and refuse to ask for the password when it has been changed anyway.
 
-**Written against:** 70f5c77 (2026-10-18); V3b (`doctor`) is not on main yet.
+**Written against:** 70f5c77 (2026-10-18); re-checked against 097f4f4 (2026-10-19): V3b and V6b merged, every reference below still holds; `doctor`'s checks live in `agentfly/install/checks.py`.
 
 **What was observed (2026-10-18, on the owner's Mac, `uv tool` install of 0.1.0)**
 - `sudo` runs the tool environment's `bin/python` with `-I -B`. That runs uv's `_virtualenv.pth` and the base Python's `sitecustomize.py`, and an unchecked-hash `.pyc` planted in `__pycache__` ran instead of its source. Root imports only `agentfly.*` and the standard library, no dependency.
@@ -15,6 +15,7 @@ You are a worker on card V3c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 - `agentfly/install/elevate.py` § `sudo_command`: the one root command line.
 - `agentfly/cli/init.py` § `_as_user` and `agentfly/cli/uninstall.py` § `run`: the last user-side code before `sudo`. `agentfly/install/records.py` § `build`: the root-owned `hashes.json`; the package hashes and versions go here.
 - `agentfly/recorder/rules.py` § `_R0_PATHS` and `agentfly/hook_client.py` § `_GUARD_PATHS`: the two guard lists, kept equal (substring match, case-folded, `cwd` included); `tests/cases.py` § `GUARD_PATHS` spells them.
+- `agentfly/install/checks.py`: one function per `doctor` line (`check_record`, `check_client`, …); the package line goes here.
 - SPEC.md § 10 "Known gaps" (the hash check is run by the code it checks; the install card decides where reference hashes live) and § 7 `doctor`.
 
 **Scope**
@@ -32,4 +33,4 @@ You are a worker on card V3c in /Users/volkovyy/Projects/AgentFly/.claude/worktr
 - `uv tool install --force <wheel>`, `uv tool upgrade agentfly-recorder`, `pipx reinstall agentfly-recorder` and `brew upgrade agentfly` are denied by R0, wrapped too; after an upgrade `init -g` names old and new versions and stops unless the owner confirms.
 - `doctor` fails its package line after one changed file and passes after a reinstall; SPEC § 10 names what stays unchecked (the checker checks itself; the base Python; `RECORD` is trusted on each new version; a file changed while the password prompt waits; a first install runs on the tool environment's Python; a tool environment outside the default places).
 
-**Dependencies:** V3b merged (`doctor`). V5b starts after this card (both touch `agentfly/install/`).
+**Dependencies:** V3b ✅ (merged ba6f488). V5b starts after this card (both touch `agentfly/install/`).
