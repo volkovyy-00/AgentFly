@@ -76,9 +76,9 @@ v1            Docs:     V1a ✅ ──► V1b SPEC catch-up (worker, ∥ wave 3)
                              └──────────────────────► V9  History + Rules tabs (after V5b, V6, V8)
 ```
 
-Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel; post-merge review → fix cards F3 ∥ F5 ∥ F6. Then V3b ∥ V2c (V2c dispatched 2026-10-18); then V3c, V5b, V5c
+Wave 3 (owner, 2026-10-18): V3a, V5a, V6 and V1b in parallel; post-merge review → fix cards F3 ∥ F5 ∥ F6. Then V3b ∥ V2c (V2c ✅ 2026-10-19); V6b ∥ V3b; then V3c, V5b, V5c (owner 2026-10-19: no parallel rules lane)
 one after the other (owner 2026-10-18: they share `agentfly/install/` and the CLI; V5b split into V5b + V5c, V3c split from
-V3b). V8b after V2c (they share the step record, `memory.py` and `store.py`).
+V3b). V8b after V6b (they share the step record, `memory.py` and `store.py`).
 V7 and V9 can run in parallel.
 
 ---
@@ -100,6 +100,7 @@ V7 and V9 can run in parallel.
 - F5 ✅ 2026-10-18 · docs/reports/F5.md · merged 4310f97 · offline guard covers file targets (D4 note); marks only get stricter · body: git show 2ad871e:docs/BOARD.md
 - F6 ✅ 2026-10-18 · docs/reports/F6.md · merged 61bb9a3 · history marked = R1; wipe bounded 10 s; purge cuts WAL; flaky test (no flush) in test_localstore folded into V2c (owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
 - F3 ✅ 2026-10-18 · docs/reports/F3.md · merged 83f8e7b · uninstall stop points exit 0 or 127; failed restore keeps old Python in `.old-*`, path printed (accepted by the owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
+- V2c ✅ 2026-10-19 · docs/reports/V2c.md · merged fb72286 · one step per action (id merge, path fallback); flaky history test fixed; history "marked" gap for edit steps accepted → V6b (owner 2026-10-19) · body: git show e2da26b:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -109,13 +110,13 @@ V7 and V9 can run in parallel.
 
 ## v1 cards
 
-### V2c · One step per action: merge by `tool_use_id`, path fallback for id-less reads
-- **Brief:** `docs/briefs/V2c.md` (authoritative). Scope per the D9 merge-rule note (owner 2026-10-18).
-- **Lane:** backend, after F6 (both change `localstore.py`) · **Depends on:** V2b ✅, V6 ✅, F6 ✅, the owner's 3.25.9 edit capture ✅ (`docs/spikes/V2c-capture.md`)
+### V6b · History shows which chats were marked, and by which step
+- **Brief:** `docs/briefs/V6b.md` (authoritative). V2c follow-up: a stored marked flag per chat and per step (owner 2026-10-19).
+- **Lane:** backend, ∥ V3b; then V8b · **Depends on:** V2c ✅
 
 ### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
 - **Brief:** `docs/briefs/V3b.md` (authoritative; pass 2 done 2026-10-18). Carries V3's service and `doctor` items.
-- **Lane:** backend, ∥ V2c; then V3c · **Depends on:** V3a ✅, F3 ✅
+- **Lane:** backend, ∥ V6b; then V3c · **Depends on:** V3a ✅, F3 ✅
 
 ### V3c · Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
 - **Brief:** `docs/briefs/V3c.md` (authoritative). Package check (V3b's) and install-folder guard (moved from V5b to V3b by the owner 2026-10-18); split out of V3b (owner 2026-10-18). R0 also blocks reinstalling AgentFly; a version change needs the owner's confirm (owner 2026-10-18).
@@ -172,7 +173,7 @@ V7 and V9 can run in parallel.
 
 ### V8b · Recorder fields for the Why card and health strip
 - **Owner:** worker-backend · brief to write
-- **Lane:** backend, after V2c (same recorder files).
+- **Lane:** backend, after V6b (same recorder files).
 - **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
 - **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
 - **Done when:** each step on `/api/steps` carries `rule_text`, `user_message`
