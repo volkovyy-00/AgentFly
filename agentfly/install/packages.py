@@ -35,6 +35,7 @@ from typing import Any
 
 import agentfly
 from agentfly.install import InstallError
+from agentfly.install.layout import SYSTEM
 from agentfly.install.pythons import file_sha256
 
 WHEEL_HINT = "uv build && uv tool install dist/*.whl"
@@ -63,11 +64,15 @@ class Check:
     distributions: dict[str, Distribution]  # what is on disk now: what the record should hold
     problems: list[str]  # a changed or extra file; empty when nothing is wrong
     changes: list[str]  # versions that differ from the record: the owner confirms these
-    rebuilt: bool  # a problem in a distribution whose version equals the recorded one
+    rebuilt: tuple[
+        str, ...
+    ]  # distributions with a problem though their version is the recorded one
+    extra: bool  # a problem is a file that should not be there: installing over it keeps it
 
-    def first_problem(self) -> str:
-        more = f" (and {len(self.problems) - 1} more)" if len(self.problems) > 1 else ""
-        return f"{self.problems[0]}{more}"
+
+def lead(items: list[str]) -> str:
+    """The first of `items`, and how many more there are."""
+    return f"{items[0]} (and {len(items) - 1} more)" if len(items) > 1 else items[0]
 
 
 @dataclass(frozen=True)
@@ -75,8 +80,7 @@ class _Found:
     name: str
     version: str
     actual: dict[str, str]  # readable regular files: path as listed -> SHA-256 hex
-    recorded: dict[str, str | None]  # RECORD's sha256 per path as hex; None when unusable
-    unreadable: frozenset[str]  # paths already reported as missing or not regular files
+    recorded: dict[str, str | None]  # RECORD's sha256 per listed path as hex; None when unusable
 
 
 # ---------------------------------------------------------------- the environment
@@ -128,6 +132,10 @@ def _sha256_hex(recorded: str) -> str | None:
         return None
 
 
+def _path(env: Environment, rel: str) -> str:
+    return os.path.normpath(os.path.join(env.site, rel))
+
+
 def _inside(path: str, folder: Path) -> bool:
     return path == str(folder) or path.startswith(f"{folder}{os.sep}")
 
@@ -136,8 +144,8 @@ def _read_dist(
     env: Environment, info: Path, listed: set[str], problems: list[str]
 ) -> _Found | None:
     try:
-        dist = PathDistribution(info)
-        name, version = _normal(dist.metadata["Name"]), dist.version
+        meta = PathDistribution(info).metadata
+        name, version = _normal(meta["Name"]), meta["Version"]
         with (info / "RECORD").open(newline="", encoding="utf-8") as handle:
             rows = list(csv.reader(handle))
     except (OSError, KeyError, ValueError, TypeError, csv.Error):
@@ -147,37 +155,45 @@ def _read_dist(
     listed.add(own_record)
     actual: dict[str, str] = {}
     recorded: dict[str, str | None] = {}
-    unreadable: set[str] = set()
     for row in rows:
         if not row:
             continue
         rel = row[0]
-        full = os.path.normpath(os.path.join(env.site, rel))
-        if full == own_record or "__pycache__" in Path(rel).parts:
+        full = _path(env, rel)
+        if full == own_record or "__pycache__" in rel.split("/"):
             continue  # RECORD cannot hash itself; byte-code is never read by root
         listed.add(full)
+        recorded[rel] = _sha256_hex(row[1]) if len(row) > 1 else None
         if not _inside(full, env.prefix):
             problems.append(f"{info.name}/RECORD names {rel}, outside the environment")
-            unreadable.add(rel)
             continue
-        recorded[rel] = _sha256_hex(row[1]) if len(row) > 1 else None
         try:
-            if not stat.S_ISREG(os.stat(full).st_mode):
+            if stat.S_ISREG(os.stat(full).st_mode):
+                actual[rel] = file_sha256(Path(full))
+            else:
                 problems.append(f"{full} is listed in RECORD but is not a regular file")
-                unreadable.add(rel)
-                continue
-            actual[rel] = file_sha256(Path(full))
-        except OSError as exc:
-            problems.append(f"{full} is listed in RECORD but cannot be read ({exc.strerror})")
-            unreadable.add(rel)
-    return _Found(name, version, actual, recorded, frozenset(unreadable))
+        except (OSError, ValueError) as exc:  # ValueError: a NUL byte in the path
+            reason, shown = (
+                (exc.strerror, full) if isinstance(exc, OSError) else (str(exc), repr(full))
+            )
+            problems.append(f"{shown} is listed in RECORD but cannot be read ({reason})")
+    return _Found(name, version, actual, recorded)
 
 
-def _unlisted(env: Environment, listed: set[str]) -> list[str]:
-    """Files under `site-packages` that no RECORD lists. A link is a file, and is not followed."""
+def _unlisted(env: Environment, listed: set[str]) -> tuple[list[str], list[str]]:
+    """Files under `site-packages` that no RECORD lists, and folders that cannot be listed.
+
+    A link is a file, and is not followed. A folder the user cannot list is a finding: root can
+    read what it holds (`neo4j` imports `numpy` if it finds one).
+    """
     found: list[str] = []
+    unlistable: list[str] = []
     top = os.path.normpath(env.site)
-    for root, dirs, files in os.walk(top):
+
+    def cannot_list(error: OSError) -> None:
+        unlistable.append(f"{error.filename} cannot be listed ({error.strerror})")
+
+    for root, dirs, files in os.walk(top, onerror=cannot_list):
         walk = []
         for folder in sorted(dirs):
             path = os.path.join(root, folder)
@@ -194,7 +210,7 @@ def _unlisted(env: Environment, listed: set[str]) -> list[str]:
             if (root == top and name in UNLISTED_OK) or path in listed:
                 continue
             found.append(path)
-    return found
+    return found, unlistable
 
 
 # ---------------------------------------------------------------- the record
@@ -237,15 +253,19 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
         if dist.name in found:
             problems.append(f"{env.site} holds two copies of {dist.name}")
         found[dist.name] = dist
-    problems += [f"{path} is not listed in any RECORD" for path in _unlisted(env, listed)]
+    unlisted, unlistable = _unlisted(env, listed)
+    problems += [f"{path} is not listed in any RECORD" for path in unlisted]
+    problems += [f"{why}, so what it holds cannot be checked" for why in unlistable]
     stored = stored_from(record)
     changes: list[str] = []
-    rebuilt = False
+    rebuilt: list[str] = []
+    extra = bool(unlisted or unlistable)
     for name, dist in sorted(found.items()):
         old = stored.get(name) if stored is not None else None
         if old is not None and old[0] == dist.version:
-            mine = _against_stored(env, dist, old[1])
-            rebuilt = rebuilt or bool(mine)
+            mine, added = _against_stored(env, dist, old[1])
+            rebuilt += [name] if mine else []
+            extra = extra or added
         else:
             mine = _against_record(env, dist)
             if stored is not None:
@@ -259,23 +279,25 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     distributions = {
         name: Distribution(name, dist.version, dict(dist.actual)) for name, dist in found.items()
     }
-    return Check(distributions, problems, changes, rebuilt)
+    return Check(distributions, problems, changes, tuple(rebuilt), extra)
 
 
-def _path(env: Environment, rel: str) -> str:
-    return os.path.normpath(os.path.join(env.site, rel))
-
-
-def _against_stored(env: Environment, dist: _Found, files: dict[str, str]) -> list[str]:
+def _against_stored(
+    env: Environment, dist: _Found, files: dict[str, str]
+) -> tuple[list[str], bool]:
+    """Problems against the stored hashes, and whether one is a file that was not there then."""
     out: list[str] = []
+    added = False
     for rel, digest in sorted(dist.actual.items()):
         if rel not in files:
             out.append(f"{_path(env, rel)} was not there when AgentFly was installed")
+            added = True
         elif files[rel] != digest:
             out.append(f"{_path(env, rel)} changed since AgentFly was installed")
-    for rel in sorted(set(files) - set(dist.actual) - dist.unreadable):
+    # A stored file RECORD still lists but that could not be read was reported when it was read.
+    for rel in sorted(set(files) - set(dist.recorded)):
         out.append(f"{_path(env, rel)} was there when AgentFly was installed and is gone")
-    return out
+    return out, added
 
 
 def _against_record(env: Environment, dist: _Found) -> list[str]:
@@ -291,19 +313,40 @@ def _against_record(env: Environment, dist: _Found) -> list[str]:
     return out
 
 
+def advice(check: Check) -> str:
+    """How to get a clean environment back: one text for the refusal and for `doctor`."""
+    reinstall = (
+        "reinstall AgentFly from a source you trust (for example `uv tool install --force <wheel>`)"
+    )
+    if not check.extra:
+        return reinstall
+    return (  # with uv, installing over a file no RECORD lists leaves it in place (uv 0.9.5)
+        "delete each extra file or uninstall AgentFly's package first (`uv tool uninstall "
+        f"agentfly-recorder`; installing over it does not remove it), then {reinstall}"
+    )
+
+
 def require(record: dict[str, Any] | None, then: str) -> Check:
     """The check of this process's environment, or an InstallError that says how to recover."""
     check = inspect(tool_environment(), record)
     if check.problems:
         text = (
-            f"AgentFly's package is not what was checked: {check.first_problem()}. No password "
-            "was asked for and nothing was changed. Reinstall AgentFly from a source you trust "
-            f"(for example `uv tool install --force <wheel>`) and run `{then}` again."
+            f"AgentFly's package is not what was checked: {lead(check.problems)}. No password "
+            f"was asked for and nothing was changed. To fix it, {advice(check)}, "
+            f"and run `{then}` again."
         )
-        if check.rebuilt:
+        if "agentfly-recorder" in check.rebuilt:
             text += (
                 " If you rebuilt this version yourself, raise the version in pyproject.toml "
                 "before you reinstall: a new version asks you to confirm instead of stopping."
+            )
+        if others := [name for name in check.rebuilt if name != "agentfly-recorder"]:
+            text += (  # same version, other files: a reinstall under another Python does that
+                f" {', '.join(others)} keep(s) the version recorded at install with other files, "
+                "which reinstalling under another Python does, and a dependency's version cannot "
+                f'be raised. To accept them, remove the record (`sudo rm "{SYSTEM.record}"`) and '
+                f"run `{then}` again: with no record they are checked against their own RECORD "
+                "files only, as on a first install."
             )
         raise InstallError(text)
     return check
@@ -325,3 +368,9 @@ def confirm(changes: list[str], ask: Callable[[str], str] | None = None) -> bool
     except EOFError:
         return False
     return answer.strip().lower() in {"y", "yes"}
+
+
+def ensure_confirmed(check: Check) -> None:
+    """A version change since the record was made needs the owner's yes; no yes is a refusal."""
+    if check.changes and not confirm(check.changes):
+        raise InstallError("not confirmed; nothing was changed")

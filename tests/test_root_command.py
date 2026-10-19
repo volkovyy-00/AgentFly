@@ -24,10 +24,11 @@ from agentfly.install import elevate, installer, packages
 from agentfly.install.layout import Layout
 from tests.helpers import REPO
 from tests.install_helpers import (
-    fake_python_tar,
+    build_for,
+    install_system,
     make_cursor_app,
     make_layout,
-    write_archive,
+    status_of,
     write_dist,
 )
 
@@ -112,19 +113,13 @@ def test_the_old_command_runs_the_planted_pth_and_byte_code(venv: Venv) -> None:
     assert {"pth", "pyc"} <= venv.markers()
 
 
-def test_the_command_init_passes_to_sudo_runs_none_of_the_planted_code(venv: Venv) -> None:
-    command = elevate.sudo_command(["init", "--help"], site=venv.site)
+@pytest.mark.parametrize("name", ["init", "uninstall"])
+def test_the_command_passed_to_sudo_runs_none_of_the_planted_code(venv: Venv, name: str) -> None:
+    command = elevate.sudo_command([name, "--help"], site=venv.site)
     assert command[0] == "/usr/bin/sudo"
     result = run(command[1:], venv.root)  # the same words, without sudo
     assert result.returncode == 0, result.stderr
-    assert "--global" in result.stdout  # it did run the package
-    assert venv.markers() == set()
-
-
-def test_the_command_uninstall_passes_to_sudo_runs_none_of_the_planted_code(venv: Venv) -> None:
-    command = elevate.sudo_command(["uninstall", "--help"], site=venv.site)
-    result = run(command[1:], venv.root)
-    assert result.returncode == 0, result.stderr
+    assert f"agentfly {name}" in result.stdout  # it did run the package
     assert venv.markers() == set()
 
 
@@ -179,10 +174,7 @@ def test_the_bundled_python_is_chosen_only_while_it_matches_the_record(tmp_path:
     layout: Layout = make_layout(tmp_path)
     make_cursor_app(layout)
     assert not installer.python_intact(layout)  # nothing installed: a first install
-    path, build = write_archive(tmp_path / "dl", fake_python_tar())
-    installer.install(
-        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
-    )
+    install_system(layout, tmp_path)
     assert installer.python_intact(layout)
     layout.interpreter.write_text("#!/bin/sh\nexit 0\n")
     assert not installer.python_intact(layout)
@@ -194,10 +186,7 @@ def test_a_different_pinned_build_does_not_make_the_recorded_python_untrusted(
     """`uninstall` needs a Python that matches the record, not the one this release pins."""
     layout = make_layout(tmp_path)
     make_cursor_app(layout)
-    path, build = write_archive(tmp_path / "dl", fake_python_tar())
-    installer.install(
-        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
-    )
-    other = type(build)(name="newer.tar.gz", url="", sha256="0" * 64)
-    assert installer.status(layout, other, installer.client_source()) == {"python"}
+    install_system(layout, tmp_path)
+    other = build_for(b"another build", name="newer.tar.gz")
+    assert status_of(layout, other) == {"python"}
     assert installer.python_intact(layout)

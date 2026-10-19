@@ -44,6 +44,10 @@ class Installed:
         return self.home / ".local" / "bin"
 
     @property
+    def python(self) -> Path:
+        return next(self.home.glob(".local/share/uv/tools/*/bin/python"))
+
+    @property
     def package_dir(self) -> Path:
         found = list(
             (self.home / ".local/share/uv/tools").glob("*/lib/python*/site-packages/agentfly")
@@ -138,11 +142,10 @@ def test_the_installed_tool_offers_init_g_and_uninstall_and_runs_as_a_module(
         assert result.returncode == 0, result.stderr
     # What sudo runs on a first install (V3c): the tool environment's base Python with -I -S, the
     # site folder appended and no byte-code read; the real wheel's dependencies load from there.
-    python = next(installed.home.glob(".local/share/uv/tools/*/bin/python"))
     command = elevate.sudo_command(
         ["init", "--help"],
         site=installed.package_dir.parent,
-        python=Path(os.path.realpath(python)),
+        python=Path(os.path.realpath(installed.python)),
     )
     result = subprocess.run(
         command[1:], env=installed.env, capture_output=True, text=True, check=False
@@ -159,9 +162,8 @@ CHECK_SCRIPT = (
 
 def package_check(installed: Installed) -> dict[str, list[str]]:
     """`packages.inspect` run by the installed tool itself, on its own real environment."""
-    python = next(installed.home.glob(".local/share/uv/tools/*/bin/python"))
     result = subprocess.run(
-        [str(python), "-I", "-B", "-c", CHECK_SCRIPT],
+        [str(installed.python), "-I", "-B", "-c", CHECK_SCRIPT],
         env=installed.env,
         capture_output=True,
         text=True,

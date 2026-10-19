@@ -184,10 +184,12 @@ _PACKAGE_VERBS: dict[str, frozenset[str]] = {
         {"install", "upgrade", "reinstall", "uninstall", "remove", "rm", "link", "unlink"}
     ),
 }
-_PACKAGE_BULK_VERBS: frozenset[str] = frozenset(
-    {"install-all", "upgrade-all", "reinstall-all", "uninstall-all"}
-)
 _ARCHIVE_SUFFIXES: tuple[str, ...] = (".whl", ".tar.gz", ".tgz", ".zip")
+# Options whose value is a Python, not a tool: `uv tool install --python /opt/x/python3 ruff`.
+_PYTHON_OPTIONS: frozenset[str] = frozenset({"--python", "-p"})
+# Programs that hand their input to a command as operands the text does not show.
+_FEEDERS: frozenset[str] = frozenset({"xargs", "parallel"})
+_EXEC_FLAGS: frozenset[str] = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _R0_KILLERS: frozenset[str] = frozenset({"pkill", "killall"})
 _R0_RECORDER_WORDS: tuple[str, ...] = ("agentfly", "uvicorn", "recorder")
 _PROCESS_LOOKUPS: tuple[str, ...] = ("pgrep", "pidof", "lsof", "ps", "fuser")
@@ -216,52 +218,68 @@ def _path_forms(text: str) -> list[str]:
 
 
 def _could_be_agentfly(word: str, manager: str) -> bool:
-    """An operand that is not a plain tool name: AgentFly's name, a file, a URL or a variable."""
-    if "agentfly" in word or "$" in word or "`" in word or word.endswith(_ARCHIVE_SUFFIXES):
+    """An operand that is not a plain tool name: a file, a URL, a variable or a pattern."""
+    if any(mark in word for mark in "$`*?{") or word.endswith(_ARCHIVE_SUFFIXES):
         return True
     if manager == "brew":  # `user/tap/formula` is a plain name to brew; a path or URL is not
         return word.startswith((".", "/", "~")) or "://" in word or word.endswith(".rb")
     return "/" in word or ":" in word or word.startswith(".")
 
 
-def _package_command_hit(
-    words: list[str], names: list[str], *, operands_unknown: bool = False
-) -> bool:
+def _package_command_hit(words: list[str], names: list[str], *, lossy: bool = False) -> bool:
     """`uv tool install --force dist/*.whl`, `pipx reinstall agentfly-recorder`, `brew upgrade`.
 
-    `operands_unknown`: the words come from text that could not be parsed, so an operand may have
-    been lost (`brew upgrade $(x`); any such verb is then taken for aimed at AgentFly.
+    `lossy`: the words come from text that could not be parsed, so an operand may have been lost
+    (`brew upgrade $(x`); any such verb is then taken for aimed at AgentFly.
     """
-    for index, manager in enumerate(names):
-        verbs: frozenset[str] | None = _PACKAGE_VERBS.get(manager)
-        if verbs is None:
-            continue
-        rest: list[str] = words[index + 1 :]
-        if manager == "uv":
-            if "tool" not in rest:
+    managers: list[int] = [i for i, name in enumerate(names) if name in _PACKAGE_VERBS]
+    if not managers:
+        return False
+    # `echo x.whl | xargs uv tool install`, `find . -exec uv tool install {} \;`: operands unseen.
+    lossy = lossy or any(n in _FEEDERS for n in names) or any(w in _EXEC_FLAGS for w in words)
+    named: bool = any("agentfly" in w for w in words)
+    end: int = len(words)
+    for manager in {names[i] for i in managers}:
+        verbs: frozenset[str] = _PACKAGE_VERBS[manager]
+        # Tables read from the right, so each manager word costs O(1): a long command must not
+        # keep R0 busy past the hook client's wait (it would then answer with the offline guard).
+        verb_at, tool_at = [end] * (end + 1), [end] * (end + 1)
+        all_from, operand_from, aimed_from = ([False] * (end + 1) for _ in range(3))
+        for k in range(end - 1, -1, -1):
+            word: str = words[k]
+            operand: bool = not word.startswith("-") and (
+                k == 0 or words[k - 1] not in _PYTHON_OPTIONS
+            )
+            verb_at[k] = k if word in verbs else verb_at[k + 1]
+            tool_at[k] = k if word == "tool" else tool_at[k + 1]
+            all_from[k] = all_from[k + 1] or word == "--all"
+            operand_from[k] = operand_from[k + 1] or operand
+            aimed_from[k] = aimed_from[k + 1] or (operand and _could_be_agentfly(word, manager))
+        for index in (i for i in managers if names[i] == manager):
+            start: int = index + 1
+            if manager == "uv":
+                if tool_at[start] == end:
+                    continue
+                start = tool_at[start] + 1
+            at: int = verb_at[start]
+            if at == end:
                 continue
-            rest = rest[rest.index("tool") + 1 :]
-        verb: str | None = next((w for w in rest if w in verbs), None)
-        if verb is None:
-            continue
-        operands: list[str] = [w for w in rest[rest.index(verb) + 1 :] if not w.startswith("-")]
-        if (
-            operands_unknown
-            or verb in _PACKAGE_BULK_VERBS
-            or "--all" in rest
-            or (verb == "upgrade" and not operands)
-        ):
-            return True
-        if any("agentfly" in w for w in words) or any(
-            _could_be_agentfly(w, manager) for w in operands
-        ):
-            return True
+            if (
+                lossy
+                or named
+                or words[at].endswith("-all")
+                or all_from[start]
+                or aimed_from[at + 1]
+                or (words[at] == "upgrade" and not operand_from[at + 1])
+            ):
+                return True
     return False
 
 
-def _r0_command_hit(argv: tuple[str, ...]) -> bool:
+def _r0_command_hit(argv: tuple[str, ...], *, lossy: bool = False) -> bool:
     """`agentfly serve|stop|uninstall|wipe`, `brew services`, `launchctl`, `pkill`, `kill`, and
-    `uv tool`, `pipx` or `brew` installing, upgrading or removing a tool."""
+    `uv tool`, `pipx` or `brew` installing, upgrading or removing a tool. `lossy`: the text could
+    not be parsed, so these words are a plain scan of it."""
     words: list[str] = [w.casefold() for w in argv]
     names: list[str] = [base_name(w) for w in argv]
     for index, name in enumerate(names):
@@ -274,7 +292,7 @@ def _r0_command_hit(argv: tuple[str, ...]) -> bool:
             return True
     if "launchctl" in names and any("agentfly" in w for w in words):
         return True
-    if _package_command_hit(words, names):
+    if _package_command_hit(words, names, lossy=lossy):
         return True
     if any(name in _R0_KILLERS for name in names):
         rest: list[str] = [w for w, n in zip(words, names, strict=True) if n not in _R0_KILLERS]
@@ -345,14 +363,7 @@ def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule
         return True
     if _PORT.search(haystack) or _PORT.search(word_forms):
         return True
-    if any(_r0_command_hit(argv) for argv in parsed.all_commands()):
-        return True
-    if parsed.unparsed and any(  # a lost operand may have been AgentFly's name or a variable
-        _package_command_hit(
-            [w.casefold() for w in argv], [base_name(w) for w in argv], operands_unknown=True
-        )
-        for argv in parsed.loose
-    ):
+    if any(_r0_command_hit(argv, lossy=parsed.unparsed) for argv in parsed.all_commands()):
         return True
     if parsed.unparsed and _LOOKUP.search(cmd.casefold()):
         # Substitutions are lost in text that cannot be parsed: a `kill` next to a lookup is aimed.

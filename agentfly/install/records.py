@@ -32,9 +32,9 @@ def build(
     entries: list[dict[str, Any]],
     created_hooks_file: bool,
     layout: Layout,
-    packages: dict[str, Any] | None = None,
+    packages: dict[str, Any],
 ) -> dict[str, Any]:
-    record: dict[str, Any] = {
+    return {
         "schema": SCHEMA,
         "agentfly_version": agentfly_version,
         "cursor_version": cursor_version,
@@ -51,10 +51,8 @@ def build(
             "entries": entries,
             "created": created_hooks_file,
         },
+        "packages": packages,  # every installed distribution: version and file hashes (V3c)
     }
-    if packages is not None:  # every installed distribution: version and file hashes (V3c)
-        record["packages"] = packages
-    return record
 
 
 def _relative(path: Path, layout: Layout) -> str:

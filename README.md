@@ -89,10 +89,13 @@ system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s
 tool environment your user (and so the agent) can write. So before they ask for your password they
 hash every file of every package in it and compare the hashes with the ones `init -g` stored in
 its root-owned record. A changed file, or a file no package lists, stops the command: it names the
-file and tells you to reinstall AgentFly and run it again. After an upgrade (of AgentFly or of one
+file and tells you to reinstall AgentFly and run it again (for an extra file, delete it or run
+`uv tool uninstall agentfly-recorder` first: installing over it leaves it in place). After an upgrade (of AgentFly or of one
 dependency) they list what changed ("changed from 0.1.0 to 0.2.0") and go on only after you answer
 `y` in a terminal; the new hashes replace the old. If you rebuilt the same version yourself, raise
-the version in `pyproject.toml` first, or the stored hashes will not match. Root then runs on the
+the version in `pyproject.toml` first, or the stored hashes will not match (a dependency that kept
+its version but changed its files has no version to raise: the message says how to reset the
+record). Root then runs on the
 bundled, root-owned Python, with no `.pth`, no `sitecustomize` and no cached byte-code. A
 first install, which has no bundled Python yet, runs on the tool environment's base Python. Run
 `init -g` from a tool environment installed from a wheel you built or downloaded yourself, not from

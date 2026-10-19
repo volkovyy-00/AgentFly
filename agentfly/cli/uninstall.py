@@ -33,9 +33,7 @@ def _as_user() -> int:
     if installed:
         # The package is checked here, before anything asks for a password (V3c, SPEC section 10).
         current = packages.require(records.read(SYSTEM), "agentfly uninstall")
-        if current.changes and not packages.confirm(current.changes):
-            print("agentfly uninstall: not confirmed; nothing was changed", file=sys.stderr)
-            return 1
+        packages.ensure_confirmed(current)
         print("AgentFly will ask for your password once, to remove its system files.")
         python = SYSTEM.interpreter if installer.python_intact(SYSTEM) else None
         code = elevate.run_elevated(["uninstall"], python=python)

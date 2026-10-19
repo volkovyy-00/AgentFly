@@ -21,6 +21,7 @@ from tests.install_helpers import (
     fake_python_tar,
     make_layout,
     run_hook_command,
+    status_of,
     stop_at,
     write_archive,
 )
@@ -229,10 +230,10 @@ def test_a_tampered_client_or_python_is_repaired(
     for victim in (layout.client, layout.python_dir / "lib" / "python3.12" / "helper.py"):
         victim.chmod(0o644)
         victim.write_text("tampered\n")
-        assert installer.status(layout, build, source)
+        assert status_of(layout, build, source)
         outcome = do_install(layout, archive)
         assert outcome.changed
-        assert installer.status(layout, build, source) == set()
+        assert status_of(layout, build, source) == set()
     assert layout.client.read_bytes() == source.read_bytes()
 
 
@@ -241,7 +242,7 @@ def test_a_removed_hook_entry_is_put_back(
 ) -> None:
     do_install(layout, archive)
     layout.hooks_file.write_text(OTHER_FILE)
-    assert installer.status(layout, archive[1], installer.client_source()) == {"hooks"}
+    assert status_of(layout, archive[1]) == {"hooks"}
     do_install(layout, archive)
     assert len(hooks_file.our_entries(layout.hooks_file.read_text(), installer.prefix(layout))) == 8
     assert OTHER_TOOL_ENTRY in layout.hooks_file.read_text()

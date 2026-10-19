@@ -79,9 +79,7 @@ def _as_user(version: str, build: pythons.PythonBuild) -> int:
     if not bad:
         print("already installed and intact; nothing changed")
         return 0
-    if current.changes and not packages.confirm(current.changes):
-        print("agentfly init: not confirmed; nothing was changed", file=sys.stderr)
-        return 1
+    packages.ensure_confirmed(current)
     print("AgentFly will ask for your password once, to write into /Library/Application Support.")
     if "python" not in bad:
         # The bundled Python is intact: no need to fetch it again, and root runs on it.

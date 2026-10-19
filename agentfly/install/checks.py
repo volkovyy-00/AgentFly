@@ -100,7 +100,6 @@ def build_context(
     home: Path | None = None,
     search_path: list[str] | None = None,
     own_script: Path | None = None,
-    environment: packages.Environment | None = None,
 ) -> Context:
     try:
         version: str | None = cursor.installed_version(layout.cursor_app)
@@ -112,12 +111,11 @@ def build_context(
         state = service.inspect()
     except InstallError as exc:
         error = str(exc)
-    environment_error = ""
-    if environment is None:
-        try:
-            environment = packages.tool_environment()
-        except InstallError as exc:
-            environment_error = str(exc)
+    try:
+        environment: packages.Environment | None = packages.tool_environment()
+        environment_error = ""
+    except InstallError as exc:
+        environment, environment_error = None, str(exc)
     return Context(
         layout=layout,
         build=build,
@@ -216,13 +214,10 @@ def check_package(ctx: Context) -> Finding:
         return fail("the hash record has no package hashes; run `agentfly init -g`")
     check = packages.inspect(ctx.environment, record)
     if check.problems:
-        return fail(
-            f"{check.first_problem()}; reinstall AgentFly from a source you trust, then run "
-            "`agentfly init -g`"
-        )
+        fix = packages.advice(check)
+        return fail(f"{packages.lead(check.problems)}; {fix}, then run `agentfly init -g`")
     if check.changes:
-        more = f" (and {len(check.changes) - 1} more)" if len(check.changes) > 1 else ""
-        return warn(f"{check.changes[0]}{more}; run `agentfly init -g` to record it")
+        return warn(f"{packages.lead(check.changes)}; run `agentfly init -g` to record it")
     return ok(f"AgentFly and its {len(check.distributions) - 1} dependencies match the record")
 
 

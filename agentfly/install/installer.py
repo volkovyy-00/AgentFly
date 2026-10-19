@@ -142,16 +142,14 @@ def python_intact(layout: Layout) -> bool:
         return False
 
 
-def status(
-    layout: Layout, build: PythonBuild, source: Path, current: packages.Check | None = None
-) -> set[str]:
-    """Which parts are missing or differ: any of "python", "client", "hooks"; empty when intact.
+def status(layout: Layout, build: PythonBuild, source: Path, current: packages.Check) -> set[str]:
+    """Which parts are missing or differ: any of "python", "client", "hooks", "packages".
 
-    With `current` (the check of the tool environment) "packages" is added when the record's
-    package hashes differ from what is installed now: an upgrade is not "intact".
+    Empty when intact. "packages" is the record's package hashes differing from `current`, the
+    check of the tool environment: an upgrade is not "intact".
     """
     record = records.read(layout)
-    everything = {"python", "client", "hooks"} | ({"packages"} if current is not None else set())
+    everything = {"python", "client", "hooks", "packages"}
     if record is None:
         return everything
     bad: set[str] = set()
@@ -168,7 +166,7 @@ def status(
             bad.add("client")
     except (KeyError, TypeError, OSError):
         return everything
-    if current is not None and record.get("packages") != packages.to_record(current.distributions):
+    if record.get("packages") != packages.to_record(current.distributions):
         bad.add("packages")
     try:
         text = _read_hooks(layout)

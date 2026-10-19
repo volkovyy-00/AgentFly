@@ -310,7 +310,8 @@ weaken it:
   `agentfly status` does not;
 - installing, upgrading, reinstalling or removing AgentFly with `uv tool`,
   `pipx` or `brew`. A command is denied when it names AgentFly, an operand is a
-  file, a URL or a variable, or it acts on every tool at once (`brew upgrade`,
+  file, a URL, a pattern or a variable, the operands come from `xargs` or
+  `find -exec`, or it acts on every tool at once (`brew upgrade`,
   `uv tool upgrade --all`, `pipx upgrade-all`); installing other tools by name,
   and `uv tool list`, stay allowed. Text that cannot be parsed is denied when it
   holds one of these verbs;
@@ -502,7 +503,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `site-packages` that no `RECORD` lists is a mismatch (except `__pycache__` and
   the files uv, pipx and Homebrew leave: `_virtualenv.py`, `_virtualenv.pth`,
   `pipx_shared.pth`, `homebrew_deps.pth`). A mismatch stops the command, names
-  the file and says to reinstall the package and run it again. If you rebuilt
+  the file and says to reinstall the package and run it again; an extra file stays
+  through `uv tool install --force` (measured, uv 0.9.5), so the message says to delete
+  it or to `uv tool uninstall` first. If you rebuilt
   the same version yourself, raise the version number first: a new version
   asks, it does not stop. An editable install, or a run from a source checkout,
   is refused; install the wheel (`uv build && uv tool install dist/*.whl`).
@@ -808,8 +811,15 @@ Other measures:
 - A tool environment outside the default places (a custom `UV_TOOL_DIR`,
   `PIPX_HOME` or Homebrew prefix) is checked by `init -g` but not guarded by R0
   by path; the Homebrew layout has not been tried on a real formula.
-- Hash mismatches after a rebuild at the same version stop `init -g`: raise the
-  version first.
+- A rebuild at the same version stops `init -g` and `uninstall`: the stored
+  hashes are the reference. For AgentFly itself, raise the version number first.
+  A dependency can keep its version and change its files (a reinstall under another
+  Python does that); a version cannot be raised for it, so the message tells you to
+  remove the record (`sudo rm "/Library/Application Support/AgentFly/hashes.json"`)
+  and run the command again, which then checks against `RECORD` only, as on a first
+  install. Whether such a rebuild should ask instead of stopping is an open question.
+- A folder in `site-packages` that your user cannot list is reported, because root
+  can read it; the check does not look inside.
 - "Write a script file, then run it" is not caught: only inline one-liners and
   heredocs fed to the shells and interpreters listed in section 5 count.
 

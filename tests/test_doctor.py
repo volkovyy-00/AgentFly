@@ -38,8 +38,8 @@ from tests.install_helpers import (
     fake_python_tar,
     make_cursor_app,
     make_layout,
+    upgrade,
     write_archive,
-    write_dist,
 )
 from tests.service_helpers import Brew, Launchd, homebrew_package
 
@@ -734,6 +734,7 @@ def test_an_extra_file_is_named_on_the_package_line(world: World) -> None:
     add_extra_file(world)
     text = world.results()["package"].text
     assert "_native.so is not listed in any RECORD" in text
+    assert "delete each extra file or uninstall AgentFly's package" in text  # a reinstall keeps it
 
 
 def test_the_package_line_counts_what_it_checked(world: World) -> None:
@@ -743,10 +744,7 @@ def test_the_package_line_counts_what_it_checked(world: World) -> None:
 
 
 def test_an_upgrade_since_install_only_warns_and_says_to_run_init_again(world: World) -> None:
-    env = packages.tool_environment()
-    shutil.rmtree(next(env.site.glob("fakedep-*.dist-info")))
-    shutil.rmtree(env.site / "fakedep")
-    write_dist(env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
+    upgrade(packages.tool_environment(), "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
     line = world.results()["package"]
     assert line.level == "warn" and "fakedep: changed from 1.0 to 1.1" in line.text
     assert "agentfly init -g" in line.text

@@ -14,6 +14,7 @@ import io
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -23,7 +24,7 @@ from types import TracebackType
 from typing import Any
 from unittest import mock
 
-from agentfly.install import packages
+from agentfly.install import installer, packages, records
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
 from tests.helpers import client_env
@@ -185,6 +186,15 @@ TOOL_DISTS: dict[str, tuple[str, dict[str, bytes]]] = {
 }
 
 
+MODULE = "agentfly/module.py"
+NEW_AGENTFLY = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"VALUE = 2\n"}
+
+
+def path_of(env: packages.Environment, rel: str) -> Path:
+    """Where a path written as RECORD writes it is on disk."""
+    return Path(os.path.normpath(env.site / rel))
+
+
 def _record_hash(data: bytes) -> str:
     digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
     return "sha256=" + digest.decode()
@@ -200,7 +210,7 @@ def write_dist(env: packages.Environment, name: str, version: str, files: dict[s
     }
     rows = []
     for rel, data in files.items():
-        target = Path(os.path.normpath(env.site / rel))
+        target = path_of(env, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         rows.append(f"{rel},{_record_hash(data)},{len(data)}")
@@ -210,6 +220,15 @@ def write_dist(env: packages.Environment, name: str, version: str, files: dict[s
     rows.append(f"{info.name}/RECORD,,")
     (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return info
+
+
+def upgrade(env: packages.Environment, name: str, version: str, files: dict[str, bytes]) -> None:
+    """What `uv tool upgrade` leaves: old files gone, a new dist-info with its own RECORD."""
+    for old in env.site.glob(f"{name.replace('-', '_')}-*.dist-info"):
+        for line in (old / "RECORD").read_text(encoding="utf-8").splitlines():
+            path_of(env, line.split(",")[0]).unlink(missing_ok=True)
+        shutil.rmtree(old)
+    write_dist(env, name, version, files)
 
 
 def make_tool_env(
@@ -224,6 +243,21 @@ def make_tool_env(
     for name, (version, files) in (dists or TOOL_DISTS).items():
         write_dist(env, name, version, files)
     return env
+
+
+def install_system(layout: Layout, tmp: Path) -> PythonBuild:
+    """`installer.install` into `layout` with the fake Python build; returns the build."""
+    path, build = write_archive(tmp / "dl", fake_python_tar())
+    installer.install(
+        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+    )
+    return build
+
+
+def status_of(layout: Layout, build: PythonBuild, source: Path | None = None) -> set[str]:
+    """`installer.status` with the check of the (fake) tool environment, as the CLI makes it."""
+    check = packages.inspect(packages.tool_environment(), records.read(layout))
+    return installer.status(layout, build, source or installer.client_source(), check)
 
 
 def hashes_of(env: packages.Environment) -> dict[str, Any]:

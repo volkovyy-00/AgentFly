@@ -15,12 +15,14 @@ from agentfly.install import elevate, installer, packages, pythons, records, ser
 from agentfly.install.layout import SYSTEM, Layout
 from tests.helpers import REPO
 from tests.install_helpers import (
-    TOOL_DISTS,
+    MODULE,
+    NEW_AGENTFLY,
     fake_python_tar,
+    install_system,
     make_cursor_app,
     make_layout,
+    upgrade,
     write_archive,
-    write_dist,
 )
 from tests.service_helpers import Launchd
 
@@ -203,13 +205,6 @@ def test_an_oserror_that_escapes_the_installer_is_still_one_line(
 # ---------------------------------------------------------------- the service goes too (V3b)
 
 
-def install_system(system: Layout, tmp_path: Path) -> None:
-    path, build = write_archive(tmp_path / "dl", fake_python_tar())
-    installer.install(
-        system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
-    )
-
-
 def install_and_start(system: Layout, tmp_path: Path) -> None:
     install_system(system, tmp_path)
     service.start()
@@ -334,15 +329,6 @@ def test_a_service_that_will_not_unload_is_one_line_and_a_second_run_finishes_it
 
 # ---------------------------------------------------------------- the package check (V3c)
 
-MODULE = "agentfly/module.py"
-NEW_AGENTFLY = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"VALUE = 2\n"}
-
-
-def upgrade_agentfly(env: packages.Environment) -> None:
-    """What `uv tool upgrade agentfly-recorder` leaves: version 0.2.0, files and RECORD agreeing."""
-    shutil.rmtree(next(env.site.glob("agentfly_recorder-*.dist-info")))
-    write_dist(env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
-
 
 class Sudo:
     """Stands in for `elevate.run_elevated`: records the call and, if asked, does the root work."""
@@ -371,10 +357,7 @@ def sudo(monkeypatch: pytest.MonkeyPatch) -> Sudo:
 def installed(
     system: Layout, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> pythons.PythonBuild:
-    path, build = write_archive(tmp_path / "dl", fake_python_tar())
-    installer.install(
-        system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
-    )
+    build = install_system(system, tmp_path)
     monkeypatch.setattr(pythons, "select_build", lambda *a: build)
     return build
 
@@ -393,7 +376,7 @@ def test_a_changed_package_file_stops_before_any_password_prompt(
     assert main(command) == 1
     err = capsys.readouterr().err
     assert str(changed) in err and f"run `agentfly {' '.join(command)}` again" in err
-    assert "Reinstall AgentFly" in err and "Traceback" not in err
+    assert "reinstall AgentFly" in err and "Traceback" not in err
     assert sudo.calls == [] and system.system_root.exists()  # nothing was asked, nothing removed
 
 
@@ -463,7 +446,7 @@ def test_an_upgrade_shows_old_and_new_versions_and_stops_unless_the_owner_confir
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    upgrade_agentfly(tool_env)
+    upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
     monkeypatch.setattr(packages.sys, "stdin", None)  # no terminal: nobody can say yes
     assert main(["init", "-g"]) == 1
     captured = capsys.readouterr()
@@ -483,7 +466,7 @@ def test_a_confirmed_upgrade_goes_ahead_and_the_record_holds_the_new_hashes(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    upgrade_agentfly(tool_env)
+    upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
     seen: list[list[str]] = []
     monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
     sudo.then = lambda: installer.install(
@@ -511,7 +494,7 @@ def test_an_upgrade_with_a_file_changed_against_its_own_record_is_stopped(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    upgrade_agentfly(tool_env)
+    upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
     (tool_env.site / MODULE).write_text("import os\n")
     monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
     assert main(["init", "-g"]) == 1
@@ -524,9 +507,7 @@ def test_a_dependency_upgrade_alone_goes_ahead_after_confirmation(
     sudo: Sudo,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shutil.rmtree(next(tool_env.site.glob("fakedep-*.dist-info")))
-    shutil.rmtree(tool_env.site / "fakedep")
-    write_dist(tool_env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
+    upgrade(tool_env, "fakedep", "1.1", {"fakedep/__init__.py": b"X = 2\n"})
     seen: list[list[str]] = []
     monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: seen.append(changes) or True)
     assert main(["uninstall"]) == 0
