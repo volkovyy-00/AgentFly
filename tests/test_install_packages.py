@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from agentfly.install import InstallError, packages
-from agentfly.install.layout import SYSTEM
 from tests.install_helpers import (
     MODULE,
     NEW_AGENTFLY,
@@ -49,7 +48,7 @@ def problems(env: packages.Environment, record: dict[str, Any] | None) -> list[s
 def test_a_clean_environment_has_no_problems_and_no_changes(env: packages.Environment) -> None:
     for record in (None, hashes_of(env)):
         check = packages.inspect(env, record)
-        assert check.problems == [] and check.changes == [] and not check.rebuilt
+        assert check.problems == [] and check.changes == []
         assert set(check.distributions) == {"agentfly-recorder", "fakedep"}
     files = packages.inspect(env, None).distributions["agentfly-recorder"].files
     assert SCRIPT in files and MODULE in files  # the entry script is hashed too
@@ -97,19 +96,22 @@ def test_one_changed_file_is_named_with_or_without_a_record(
 ) -> None:
     record = hashes_of(env)
     path_of(env, rel).write_bytes(b"import os; os.system('id')\n")
-    changed = f"{path_of(env, rel)} changed since AgentFly was installed"
-    assert problems(env, record) == [changed]
-    assert problems(env, None) == [f"{path_of(env, rel)} does not match its RECORD"]
+    changed = [f"{path_of(env, rel)} does not match its RECORD"]
+    assert problems(env, record) == changed
+    assert problems(env, None) == changed
 
 
-def test_a_file_changed_together_with_its_record_is_still_caught_by_the_stored_hash(
+def test_a_file_changed_together_with_its_record_asks_the_owner(
     env: packages.Environment,
 ) -> None:
+    """The owner's decision: a RECORD that agrees with the file is enough to ask, not to stop."""
     record = hashes_of(env)
     evil = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"import os\n"}
     upgrade(env, "agentfly-recorder", "0.1.0", evil)  # the RECORD agrees with the new file
-    assert problems(env, None) == []  # RECORD alone cannot tell
-    assert problems(env, record) == [f"{path_of(env, MODULE)} changed since AgentFly was installed"]
+    check = packages.inspect(env, record)
+    assert check.problems == [] and len(check.changes) == 1
+    assert check.changes[0].startswith("agentfly-recorder: same version 0.1.0, files differ")
+    assert packages.inspect(env, None).changes == []  # with no record there is nothing to ask
 
 
 def test_an_extra_file_next_to_an_agentfly_module_is_named(env: packages.Environment) -> None:
@@ -120,17 +122,59 @@ def test_an_extra_file_next_to_an_agentfly_module_is_named(env: packages.Environ
     assert problems(env, None) == [extra]
 
 
-def test_a_file_added_to_a_record_is_not_in_the_stored_hashes(env: packages.Environment) -> None:
+def test_a_planted_file_listed_in_a_record_without_a_hash_stops(env: packages.Environment) -> None:
     record = hashes_of(env)
     (env.site / "agentfly" / "extra.py").write_text("x = 1\n")
     info = next(env.site.glob("agentfly_recorder-*.dist-info"))
     with (info / "RECORD").open("a", encoding="utf-8") as handle:
         handle.write("agentfly/extra.py,,\n")  # the planted file, listed (RECORD is writable)
-    check = packages.inspect(env, record)
-    assert check.problems == [
-        f"{env.site / 'agentfly' / 'extra.py'} was not there when AgentFly was installed"
+    assert problems(env, record) == [
+        f"RECORD has no usable sha256 for {env.site / 'agentfly' / 'extra.py'}, "
+        "so it cannot be checked"
     ]
-    assert check.extra  # installing over it would not remove it
+
+
+# ---------------------------------------------------------------- links
+
+
+def test_a_listed_module_replaced_by_a_link_to_an_identical_copy_is_reported(
+    env: packages.Environment, tmp_path: Path
+) -> None:
+    record = hashes_of(env)
+    copy = tmp_path / "outside" / "module.py"
+    copy.parent.mkdir()
+    copy.write_bytes(path_of(env, MODULE).read_bytes())  # the same bytes: every hash still agrees
+    path_of(env, MODULE).unlink()
+    path_of(env, MODULE).symlink_to(copy)
+    for reference in (record, None):
+        found = problems(env, reference)
+        assert found == [
+            f"{path_of(env, MODULE)} is a symbolic link, and RECORD lists a plain file"
+        ]
+
+
+def test_a_listed_folder_replaced_by_a_link_is_reported(
+    env: packages.Environment, tmp_path: Path
+) -> None:
+    record = hashes_of(env)
+    copy = tmp_path / "outside" / "fakedep"
+    shutil.copytree(env.site / "fakedep", copy)
+    shutil.rmtree(env.site / "fakedep")
+    (env.site / "fakedep").symlink_to(copy, target_is_directory=True)
+    found = problems(env, record)
+    assert f"{path_of(env, DEP_FILE)} is reached through a symbolic link" in found
+    assert f"{env.site / 'fakedep'} is not listed in any RECORD" in found  # and the link itself
+
+
+def test_links_above_site_packages_are_part_of_the_base(
+    env: packages.Environment, tmp_path: Path
+) -> None:
+    """A home folder or a tools folder on another disk is a link; the site is resolved once."""
+    link = tmp_path / "linked-env"
+    link.symlink_to(env.prefix, target_is_directory=True)
+    through = packages.Environment(link, link / "lib" / "python3.12" / "site-packages")
+    assert packages.inspect(through, hashes_of(env)).problems == []
+    assert packages.inspect(through, None).problems == []
 
 
 def test_a_link_is_an_extra_file_whatever_it_points_at(
@@ -252,7 +296,7 @@ def test_an_upgrade_of_agentfly_alone_goes_ahead_and_the_new_hashes_are_the_ones
     record = hashes_of(env)
     upgrade(env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
     check = packages.inspect(env, record)
-    assert check.problems == [] and not check.rebuilt
+    assert check.problems == []
     assert check.changes == ["agentfly-recorder: changed from 0.1.0 to 0.2.0"]
     stored = packages.to_record(check.distributions)
     assert stored["agentfly-recorder"]["version"] == "0.2.0"
@@ -276,7 +320,6 @@ def test_an_upgrade_with_one_file_changed_against_its_own_record_is_stopped(
     path_of(env, "agentfly/module.py").write_bytes(b"import os\n")
     check = packages.inspect(env, record)
     assert check.problems == [f"{path_of(env, 'agentfly/module.py')} does not match its RECORD"]
-    assert not check.rebuilt  # a new version asks, it does not need the "raise the version" advice
 
 
 def test_a_new_and_a_vanished_distribution_are_listed_for_the_owner(
@@ -300,19 +343,6 @@ def test_a_record_from_before_v3c_is_checked_against_record_files_without_a_prom
     old_record = {"schema": 1, "agentfly_version": "0.1.0"}  # no `packages` section
     check = packages.inspect(env, old_record)
     assert check.problems == [] and check.changes == []
-
-
-def test_a_same_version_change_advises_raising_the_version(env: packages.Environment) -> None:
-    record = hashes_of(env)
-    path_of(env, MODULE).write_bytes(b"VALUE = 3\n")
-    check = packages.inspect(env, record)
-    assert check.rebuilt
-    with pytest.raises(InstallError) as caught:
-        packages.require(record, "agentfly init -g")
-    text = str(caught.value)
-    assert str(path_of(env, MODULE)) in text and "run `agentfly init -g` again" in text
-    assert "raise the version in pyproject.toml" in text
-    assert "No password was asked for" in text
 
 
 def test_require_returns_the_check_of_a_clean_environment(env: packages.Environment) -> None:
@@ -448,32 +478,69 @@ def test_a_changed_file_gets_the_reinstall_advice_only(env: packages.Environment
 
 # ---------------------------------------------------------------- a rebuild at the same version
 
-
-def test_the_rebuilt_distributions_are_named(env: packages.Environment) -> None:
-    record = hashes_of(env)
-    path_of(env, MODULE).write_bytes(b"VALUE = 3\n")
-    path_of(env, DEP_FILE).write_bytes(b"X = 3\n")
-    assert packages.inspect(env, record).rebuilt == ("agentfly-recorder", "fakedep")
+REBUILT = "same version {}, files differ from install but match RECORD"
+ANOTHER_PYTHON = {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}
 
 
-def test_a_rebuilt_dependency_is_not_told_to_raise_the_version(env: packages.Environment) -> None:
-    """A reinstall under another Python keeps a dependency's version and changes its files."""
-    record = hashes_of(env)
-    (env.site / "fakedep" / "_speed.so").write_bytes(b"\x7fELF other tag")
-    with pytest.raises(InstallError) as caught:
-        packages.require(record, "agentfly uninstall")
-    text = str(caught.value)
-    assert "raise the version" not in text
-    assert "fakedep keep(s) the version recorded at install with other files" in text
-    assert f'sudo rm "{SYSTEM.record}"' in text and "run `agentfly uninstall` again" in text
-
-
-def test_a_rebuilt_agentfly_is_told_to_raise_the_version_and_not_to_remove_the_record(
+def test_a_rebuild_of_agentfly_at_the_same_version_asks_instead_of_stopping(
     env: packages.Environment,
 ) -> None:
     record = hashes_of(env)
-    path_of(env, MODULE).write_bytes(b"VALUE = 3\n")
+    upgrade(env, "agentfly-recorder", "0.1.0", NEW_AGENTFLY)  # other module, RECORD agrees
+    check = packages.require(record, "agentfly init -g")  # no InstallError
+    assert check.problems == []
+    assert check.changes == [
+        "agentfly-recorder: " + REBUILT.format("0.1.0") + " (1): expected only if you "
+        "reinstalled or rebuilt"
+    ]
+
+
+def test_a_dependency_reinstalled_under_another_python_asks_too(env: packages.Environment) -> None:
+    record = hashes_of(env)
+    upgrade(env, "fakedep", "1.0", ANOTHER_PYTHON)  # the .so is named for another interpreter
+    check = packages.require(record, "agentfly uninstall")
+    assert check.changes == [
+        "fakedep: " + REBUILT.format("1.0") + " (2): expected only if you reinstalled or rebuilt"
+    ]
+    recorded = {"packages": packages.to_record(check.distributions)}  # what a yes writes
+    assert packages.inspect(env, recorded).changes == []
+
+
+def test_a_rebuild_with_a_file_that_fails_its_own_record_still_stops(
+    env: packages.Environment,
+) -> None:
+    record = hashes_of(env)
+    upgrade(env, "agentfly-recorder", "0.1.0", NEW_AGENTFLY)
+    path_of(env, MODULE).write_bytes(b"import os\n")  # now it fails the RECORD that was rebuilt
+    assert problems(env, record) == [f"{path_of(env, MODULE)} does not match its RECORD"]
+
+
+def test_a_rebuild_with_an_extra_file_still_stops(env: packages.Environment) -> None:
+    record = hashes_of(env)
+    upgrade(env, "fakedep", "1.0", ANOTHER_PYTHON)
+    (env.site / "fakedep" / "_planted.so").write_bytes(b"\x7fELF")
+    found = problems(env, record)
+    assert found == [f"{env.site / 'fakedep' / '_planted.so'} is not listed in any RECORD"]
+
+
+def stop_message(env: packages.Environment, record: dict[str, Any]) -> str:
     with pytest.raises(InstallError) as caught:
         packages.require(record, "agentfly init -g")
-    assert "raise the version in pyproject.toml" in str(caught.value)
-    assert "sudo rm" not in str(caught.value)
+    return str(caught.value)
+
+
+@pytest.mark.parametrize("fault", ["changed", "extra", "link", "no hash"])
+def test_no_stop_message_advises_removing_the_record(env: packages.Environment, fault: str) -> None:
+    record = hashes_of(env)
+    if fault == "changed":
+        path_of(env, MODULE).write_bytes(b"x = 1\n")
+    elif fault == "extra":
+        (env.site / "agentfly" / "_native.so").write_bytes(b"\x7fELF")
+    elif fault == "link":
+        path_of(env, DEP_FILE).unlink()
+        path_of(env, DEP_FILE).symlink_to(path_of(env, MODULE))
+    else:
+        rewrite_record(env, lambda lines: [r.replace("sha256=", "md5=") for r in lines])
+    text = stop_message(env, record)
+    for word in ("hashes.json", "sudo", " rm ", "raise the version"):
+        assert word not in text, (word, text)

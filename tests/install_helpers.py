@@ -235,6 +235,7 @@ def make_tool_env(
     root: Path, dists: dict[str, tuple[str, dict[str, bytes]]] | None = None
 ) -> packages.Environment:
     """A clean virtual environment of the shape `uv tool install` leaves: pyvenv.cfg, bin, site."""
+    root = root.resolve()  # the check resolves paths once; messages then match these
     site = root / "lib" / "python3.12" / "site-packages"
     site.mkdir(parents=True)
     (root / "bin").mkdir()

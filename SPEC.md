@@ -494,22 +494,27 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
 - **The package check (V3c).** `init -g` and `uninstall` run AgentFly's own
   Python package as root, and that package sits in a tool environment your user
   can write. So, before any password prompt, both hash every file of every
-  distribution in that environment. If the version equals the one in the
-  root-owned record, each file must equal the hash stored then. If it differs (an
-  upgrade, a new or a removed dependency), each file must equal the hash in the
-  distribution's own `RECORD`, the commands print "changed from X to Y" and go on
-  only after you confirm in a terminal. With no record yet (a first install, or
-  one from before V3c) each file is compared with its `RECORD`. A file in
+  distribution in that environment. Each file must equal the hash in its
+  distribution's own `RECORD` and be a plain file: a link, or a file behind a
+  linked folder below `site-packages`, is a mismatch (links above it, such as a
+  home folder on another disk, are resolved once and trusted). A file in
   `site-packages` that no `RECORD` lists is a mismatch (except `__pycache__` and
   the files uv, pipx and Homebrew leave: `_virtualenv.py`, `_virtualenv.pth`,
-  `pipx_shared.pth`, `homebrew_deps.pth`). A mismatch stops the command, names
-  the file and says to reinstall the package and run it again; an extra file stays
-  through `uv tool install --force` (measured, uv 0.9.5), so the message says to delete
-  it or to `uv tool uninstall` first. If you rebuilt
-  the same version yourself, raise the version number first: a new version
-  asks, it does not stop. An editable install, or a run from a source checkout,
-  is refused; install the wheel (`uv build && uv tool install dist/*.whl`).
-  The hashes and versions are stored in the root-owned record. Root then runs
+  `pipx_shared.pth`, `homebrew_deps.pth`), and so is a folder your user cannot
+  list. A mismatch stops the command, names the file and says to reinstall the
+  package and run it again; an extra file stays through `uv tool install --force`
+  (measured, uv 0.9.5), so the message says to delete it or to `uv tool
+  uninstall` first. What differs from the root-owned record made at the last
+  `init -g`, though every file matches its own `RECORD`, is listed and **asked**:
+  a changed version ("changed from X to Y"), a new or removed dependency, and a
+  distribution at the recorded version whose files differ from the stored hashes
+  (a rebuild, or a reinstall under another Python: "same version X, files differ
+  from install but match RECORD: expected only if you reinstalled or rebuilt").
+  The commands go on only after you confirm in a terminal. With no record yet (a
+  first install, or one from before V3c) there is nothing to differ from. An
+  editable install, or a run from a source checkout, is refused; install the
+  wheel (`uv build && uv tool install dist/*.whl`). After a yes the versions
+  and hashes are stored in the root-owned record. Root then runs
   `python -I -S -B -X pycache_prefix=/var/empty -c <bootstrap>`: no `site`, so
   no `.pth` and no `sitecustomize`, and no `__pycache__` is read or written.
   The interpreter is the bundled, root-owned Python whenever it is installed
@@ -801,23 +806,27 @@ Other measures:
   hashed, and its `__pycache__` is writable by your user. A first install, and a
   repair that replaces the bundled Python, run root on that base interpreter;
   every other run uses the bundled one.
-- `RECORD` is trusted on each new version: an upgrade is checked only against
-  the distribution's own `RECORD`, so the "changed from X to Y" list you confirm
-  is the control. The first `init -g` after V3c on an older install has no stored
-  hashes and is checked against `RECORD` alone.
+- `RECORD` is trusted whenever something changed: an upgrade, or a rebuild at the
+  same version, is checked against the distribution's own `RECORD` and asked, so
+  the list you confirm ("changed from X to Y", "same version X, files differ ...")
+  is the control, and someone who edits a file and its `RECORD` row together gets
+  a question, not a stop. The first `init -g` after V3c on an older install has
+  no stored hashes and is checked against `RECORD` alone.
+- `sudo agentfly init -g` or `sudo agentfly uninstall` typed by hand runs the tool
+  environment's Python as root unchecked and with `site` on (`.pth`,
+  `sitecustomize`, byte-code). The check and the `-I -S -B` command line exist
+  only on the path where `agentfly` asks for the password itself. The README says
+  to run both without `sudo`.
+- A `.pth` file in the tool environment runs inside the checking process (the
+  user's own `agentfly`, started with `site` on) before the check can report it,
+  so the check stops naive tampering only. R0 (which denies touching the
+  environment) and root's `-I -S -B` command line are the real defences.
 - A file changed after the check and before root imports it (while the password
   prompt waits) is not caught; root's second hashing records what it sees and
   protects nothing.
 - A tool environment outside the default places (a custom `UV_TOOL_DIR`,
   `PIPX_HOME` or Homebrew prefix) is checked by `init -g` but not guarded by R0
   by path; the Homebrew layout has not been tried on a real formula.
-- A rebuild at the same version stops `init -g` and `uninstall`: the stored
-  hashes are the reference. For AgentFly itself, raise the version number first.
-  A dependency can keep its version and change its files (a reinstall under another
-  Python does that); a version cannot be raised for it, so the message tells you to
-  remove the record (`sudo rm "/Library/Application Support/AgentFly/hashes.json"`)
-  and run the command again, which then checks against `RECORD` only, as on a first
-  install. Whether such a rebuild should ask instead of stopping is an open question.
 - A folder in `site-packages` that your user cannot list is reported, because root
   can read it; the check does not look inside.
 - "Write a script file, then run it" is not caught: only inline one-liners and

@@ -550,3 +550,100 @@ def test_uninstall_with_nothing_installed_checks_no_package(
 ) -> None:
     monkeypatch.setattr(packages, "tool_environment", lambda: pytest.fail("looked at the package"))
     assert main(["uninstall"]) == 0 and sudo.calls == []
+
+
+# ---------------------------------------------------------------- a rebuild at the same version
+
+REBUILDS = [
+    ("agentfly-recorder", NEW_AGENTFLY),
+    ("fakedep", {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}),
+]
+REBUILD_IDS = ["AgentFly rebuilt", "a dependency under another Python"]
+
+
+def rebuild(env: packages.Environment, index: int) -> str:
+    """Reinstall one distribution at the version it has: other files, a RECORD that agrees."""
+    name, files = REBUILDS[index]
+    version = "0.1.0" if name == "agentfly-recorder" else "1.0"
+    upgrade(env, name, version, files)
+    return name
+
+
+@pytest.mark.parametrize("index", range(len(REBUILDS)), ids=REBUILD_IDS)
+@pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]], ids=["init", "uninstall"])
+def test_a_rebuild_at_the_same_version_asks_and_stops_after_a_no(
+    command: list[str],
+    index: int,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    name = rebuild(tool_env, index)
+    asked: list[list[str]] = []
+    monkeypatch.setattr(
+        packages, "confirm", lambda changes, ask=None: asked.append(changes) or False
+    )
+    assert main(command) == 1
+    assert len(asked) == 1 and asked[0][0].startswith(f"{name}: same version ")
+    assert "files differ from install but match RECORD" in asked[0][0]
+    assert "expected only if you reinstalled or rebuilt" in asked[0][0]
+    err = capsys.readouterr().err
+    assert "not confirmed; nothing was changed" in err and "hashes.json" not in err
+    assert sudo.calls == []  # no password was asked for
+
+
+@pytest.mark.parametrize("index", range(len(REBUILDS)), ids=REBUILD_IDS)
+def test_a_rebuild_at_the_same_version_goes_on_after_a_yes_and_writes_the_new_hashes(
+    index: int,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    name = rebuild(tool_env, index)
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: True)
+    sudo.then = lambda: installer.install(
+        system,
+        installed,
+        cursor_version="3.24.12",
+        source=installer.client_source(),
+        archive=tmp_path / "dl" / "fake-python.tar.gz",
+    )
+    assert main(["init", "-g"]) == 0
+    assert len(sudo.calls) == 1
+    stored = (records.read(system) or {})["packages"][name]["files"]
+    on_disk = packages.inspect(tool_env, None).distributions[name].files
+    assert stored == on_disk  # the record now holds what was rebuilt
+    sudo.calls.clear()
+    assert main(["init", "-g"]) == 0  # and the next run is plain again
+    assert sudo.calls == [] and "already installed" in capsys.readouterr().out
+
+
+def test_uninstall_goes_on_after_a_yes_for_a_rebuild(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rebuild(tool_env, 0)
+    monkeypatch.setattr(packages, "confirm", lambda changes, ask=None: True)
+    assert main(["uninstall"]) == 0 and len(sudo.calls) == 1
+
+
+def test_a_rebuild_with_a_file_that_fails_its_own_record_never_asks(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rebuild(tool_env, 0)
+    (tool_env.site / MODULE).write_text("import os\n")
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    assert "does not match its RECORD" in capsys.readouterr().err and sudo.calls == []

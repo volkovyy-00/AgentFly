@@ -725,7 +725,7 @@ def test_the_package_line_fails_after_one_changed_file_and_passes_after_a_reinst
     module.write_bytes(b"import os\n")
     line = world.results()["package"]
     assert line.level == "fail" and str(module) in line.text
-    assert "changed since AgentFly was installed" in line.text and "init -g" in line.text
+    assert "does not match its RECORD" in line.text and "init -g" in line.text
     module.write_bytes(original)  # reinstalling the same wheel puts the same bytes back
     assert world.results()["package"].level == "ok"
 
@@ -769,3 +769,11 @@ def test_the_package_line_lists_the_installed_versions_it_compared(world: World)
     assert {n: v["version"] for n, v in record["packages"].items()} == {
         name: version for name, (version, _files) in TOOL_DISTS.items()
     }
+
+
+def test_a_rebuild_at_the_same_version_only_warns(world: World) -> None:
+    upgrade(packages.tool_environment(), "fakedep", "1.0", {"fakedep/__init__.py": b"X = 3\n"})
+    line = world.results()["package"]
+    assert line.level == "warn" and "fakedep: same version 1.0" in line.text
+    assert "match RECORD" in line.text and "agentfly init -g" in line.text
+    assert world.levels("fail") == set()

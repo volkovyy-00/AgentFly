@@ -2,15 +2,20 @@
 
 Those two commands re-run AgentFly's own code under `sudo`, and the code sits in a tool
 environment the agent's user can write. So every file of every installed distribution is hashed
-first. Against what depends on the distribution's version:
+first, and:
 
-- the version equals the one in the root-owned record: each file must equal the hash stored then;
-- the version differs, or the distribution is new (an upgrade): each file must equal the hash in
-  the distribution's own `RECORD`, and the change is listed for the owner to confirm;
-- there is no record yet (a first install, or one from before V3c): each file against its `RECORD`.
+- each file must equal the hash in its distribution's own `RECORD`, and be a plain file, not a
+  link or behind one; a file that does not is a mismatch and stops the command;
+- a file in `site-packages` that no `RECORD` lists, and a folder the user cannot list, are
+  mismatches too;
+- what differs from the root-owned record made at the last `init -g` is listed for the owner to
+  confirm: a version that changed, a distribution that came or went, and a distribution at the
+  recorded version whose files differ from the stored hashes yet match its `RECORD` (a rebuild, or
+  a reinstall under another Python);
+- with no record yet (a first install, or one from before V3c) there is nothing to differ from.
 
-A file in `site-packages` that no `RECORD` lists is a mismatch too. The base Python (uv's or
-Homebrew's, which other projects use) is never read. SPEC section 10 says what stays unchecked.
+The base Python (uv's or Homebrew's, which other projects use) is never read. SPEC section 10 says
+what stays unchecked.
 
 The environment is found from where `agentfly` was imported, never from `sysconfig` or
 `sys.prefix`: root runs `python -I -S`, and on Homebrew's Python `-S` makes both name the base
@@ -35,7 +40,6 @@ from typing import Any
 
 import agentfly
 from agentfly.install import InstallError
-from agentfly.install.layout import SYSTEM
 from agentfly.install.pythons import file_sha256
 
 WHEEL_HINT = "uv build && uv tool install dist/*.whl"
@@ -63,10 +67,7 @@ class Distribution:
 class Check:
     distributions: dict[str, Distribution]  # what is on disk now: what the record should hold
     problems: list[str]  # a changed or extra file; empty when nothing is wrong
-    changes: list[str]  # versions that differ from the record: the owner confirms these
-    rebuilt: tuple[
-        str, ...
-    ]  # distributions with a problem though their version is the recorded one
+    changes: list[str]  # what differs from the record though it matches RECORD: the owner confirms
     extra: bool  # a problem is a file that should not be there: installing over it keeps it
 
 
@@ -132,16 +133,32 @@ def _sha256_hex(recorded: str) -> str | None:
         return None
 
 
-def _path(env: Environment, rel: str) -> str:
-    return os.path.normpath(os.path.join(env.site, rel))
+def _path(site: str, rel: str) -> str:
+    return os.path.normpath(os.path.join(site, rel))
 
 
-def _inside(path: str, folder: Path) -> bool:
-    return path == str(folder) or path.startswith(f"{folder}{os.sep}")
+def _inside(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(f"{folder}{os.sep}")
+
+
+def _not_plain(full: str) -> str | None:
+    """Why a listed file is not a plain file where RECORD puts it, or None.
+
+    `site` is resolved once by the caller, so a link among the folders above `site-packages` (a
+    home folder on another disk) is part of the base; a link below it, or the file itself, is not.
+    """
+    mode = os.lstat(full).st_mode
+    if stat.S_ISLNK(mode):
+        return f"{full} is a symbolic link, and RECORD lists a plain file"
+    if not stat.S_ISREG(mode):
+        return f"{full} is listed in RECORD but is not a regular file"
+    if os.path.realpath(full) != full:
+        return f"{full} is reached through a symbolic link"
+    return None
 
 
 def _read_dist(
-    env: Environment, info: Path, listed: set[str], problems: list[str]
+    site: str, prefix: str, info: Path, listed: set[str], problems: list[str]
 ) -> _Found | None:
     try:
         meta = PathDistribution(info).metadata
@@ -159,19 +176,19 @@ def _read_dist(
         if not row:
             continue
         rel = row[0]
-        full = _path(env, rel)
+        full = _path(site, rel)
         if full == own_record or "__pycache__" in rel.split("/"):
             continue  # RECORD cannot hash itself; byte-code is never read by root
         listed.add(full)
         recorded[rel] = _sha256_hex(row[1]) if len(row) > 1 else None
-        if not _inside(full, env.prefix):
+        if not _inside(full, prefix):
             problems.append(f"{info.name}/RECORD names {rel}, outside the environment")
             continue
         try:
-            if stat.S_ISREG(os.stat(full).st_mode):
+            if (why := _not_plain(full)) is None:
                 actual[rel] = file_sha256(Path(full))
             else:
-                problems.append(f"{full} is listed in RECORD but is not a regular file")
+                problems.append(why)
         except (OSError, ValueError) as exc:  # ValueError: a NUL byte in the path
             reason, shown = (
                 (exc.strerror, full) if isinstance(exc, OSError) else (str(exc), repr(full))
@@ -180,7 +197,7 @@ def _read_dist(
     return _Found(name, version, actual, recorded)
 
 
-def _unlisted(env: Environment, listed: set[str]) -> tuple[list[str], list[str]]:
+def _unlisted(site: str, listed: set[str]) -> tuple[list[str], list[str]]:
     """Files under `site-packages` that no RECORD lists, and folders that cannot be listed.
 
     A link is a file, and is not followed. A folder the user cannot list is a finding: root can
@@ -188,7 +205,7 @@ def _unlisted(env: Environment, listed: set[str]) -> tuple[list[str], list[str]]
     """
     found: list[str] = []
     unlistable: list[str] = []
-    top = os.path.normpath(env.site)
+    top = site
 
     def cannot_list(error: OSError) -> None:
         unlistable.append(f"{error.filename} cannot be listed ({error.strerror})")
@@ -242,74 +259,59 @@ def to_record(distributions: dict[str, Distribution]) -> dict[str, Any]:
 
 
 def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
-    """Hash the environment and compare it with `record` (the root-owned `hashes.json`)."""
+    """Hash the environment, check it against its own RECORDs and against `record` (hashes.json)."""
+    site, prefix = os.path.realpath(env.site), os.path.realpath(env.prefix)  # once, here
     problems: list[str] = []
     listed: set[str] = set()
     found: dict[str, _Found] = {}
-    for info in sorted(env.site.glob("*.dist-info")):
-        dist = _read_dist(env, info, listed, problems)
+    for info in sorted(Path(site).glob("*.dist-info")):
+        dist = _read_dist(site, prefix, info, listed, problems)
         if dist is None:
             continue
         if dist.name in found:
-            problems.append(f"{env.site} holds two copies of {dist.name}")
+            problems.append(f"{site} holds two copies of {dist.name}")
         found[dist.name] = dist
-    unlisted, unlistable = _unlisted(env, listed)
+    unlisted, unlistable = _unlisted(site, listed)
     problems += [f"{path} is not listed in any RECORD" for path in unlisted]
     problems += [f"{why}, so what it holds cannot be checked" for why in unlistable]
     stored = stored_from(record)
     changes: list[str] = []
-    rebuilt: list[str] = []
-    extra = bool(unlisted or unlistable)
     for name, dist in sorted(found.items()):
+        problems += _against_record(site, dist)
         old = stored.get(name) if stored is not None else None
-        if old is not None and old[0] == dist.version:
-            mine, added = _against_stored(env, dist, old[1])
-            rebuilt += [name] if mine else []
-            extra = extra or added
-        else:
-            mine = _against_record(env, dist)
-            if stored is not None:
-                changes.append(
-                    f"{name}: changed from {old[0] if old else 'none'} to {dist.version}"
-                )
-        problems += mine
+        if stored is None:
+            continue
+        if old is None or old[0] != dist.version:
+            changes.append(f"{name}: changed from {old[0] if old else 'none'} to {dist.version}")
+        elif old[1] != dist.actual:
+            differ = sum(
+                1
+                for rel in old[1].keys() | dist.actual.keys()
+                if old[1].get(rel) != dist.actual.get(rel)
+            )
+            changes.append(
+                f"{name}: same version {dist.version}, files differ from install but match "
+                f"RECORD ({differ}): expected only if you reinstalled or rebuilt"
+            )
     for name, (version, _files) in sorted((stored or {}).items()):
         if name not in found:
             changes.append(f"{name}: changed from {version} to none")
     distributions = {
         name: Distribution(name, dist.version, dict(dist.actual)) for name, dist in found.items()
     }
-    return Check(distributions, problems, changes, tuple(rebuilt), extra)
+    return Check(distributions, problems, changes, bool(unlisted or unlistable))
 
 
-def _against_stored(
-    env: Environment, dist: _Found, files: dict[str, str]
-) -> tuple[list[str], bool]:
-    """Problems against the stored hashes, and whether one is a file that was not there then."""
-    out: list[str] = []
-    added = False
-    for rel, digest in sorted(dist.actual.items()):
-        if rel not in files:
-            out.append(f"{_path(env, rel)} was not there when AgentFly was installed")
-            added = True
-        elif files[rel] != digest:
-            out.append(f"{_path(env, rel)} changed since AgentFly was installed")
-    # A stored file RECORD still lists but that could not be read was reported when it was read.
-    for rel in sorted(set(files) - set(dist.recorded)):
-        out.append(f"{_path(env, rel)} was there when AgentFly was installed and is gone")
-    return out, added
-
-
-def _against_record(env: Environment, dist: _Found) -> list[str]:
+def _against_record(site: str, dist: _Found) -> list[str]:
     out: list[str] = []
     for rel, digest in sorted(dist.actual.items()):
         wanted = dist.recorded.get(rel)
         if wanted is None:
             out.append(
-                f"RECORD has no usable sha256 for {_path(env, rel)}, so it cannot be checked"
+                f"RECORD has no usable sha256 for {_path(site, rel)}, so it cannot be checked"
             )
         elif wanted != digest:
-            out.append(f"{_path(env, rel)} does not match its RECORD")
+            out.append(f"{_path(site, rel)} does not match its RECORD")
     return out
 
 
@@ -330,25 +332,11 @@ def require(record: dict[str, Any] | None, then: str) -> Check:
     """The check of this process's environment, or an InstallError that says how to recover."""
     check = inspect(tool_environment(), record)
     if check.problems:
-        text = (
+        raise InstallError(
             f"AgentFly's package is not what was checked: {lead(check.problems)}. No password "
             f"was asked for and nothing was changed. To fix it, {advice(check)}, "
             f"and run `{then}` again."
         )
-        if "agentfly-recorder" in check.rebuilt:
-            text += (
-                " If you rebuilt this version yourself, raise the version in pyproject.toml "
-                "before you reinstall: a new version asks you to confirm instead of stopping."
-            )
-        if others := [name for name in check.rebuilt if name != "agentfly-recorder"]:
-            text += (  # same version, other files: a reinstall under another Python does that
-                f" {', '.join(others)} keep(s) the version recorded at install with other files, "
-                "which reinstalling under another Python does, and a dependency's version cannot "
-                f'be raised. To accept them, remove the record (`sudo rm "{SYSTEM.record}"`) and '
-                f"run `{then}` again: with no record they are checked against their own RECORD "
-                "files only, as on a first install."
-            )
-        raise InstallError(text)
     return check
 
 
@@ -357,7 +345,7 @@ def confirm(changes: list[str], ask: Callable[[str], str] | None = None) -> bool
     print("AgentFly's package changed since the last `agentfly init -g`:")
     for line in changes:
         print(f"  {line}")
-    print("Each file matches its own RECORD; a new version is trusted on that alone.")
+    print("Every file matches its own RECORD; that is all this check can tell you about a change.")
     if ask is None:
         if sys.stdin is None or not sys.stdin.isatty():
             print("Run the command in a terminal to confirm this.", file=sys.stderr)
