@@ -1,9 +1,16 @@
 # V6b: History shows which chats were marked, and by which step
-Status: done (as of 2026-10-19 12:11)
-Result: History lists a chat as marked whenever the rules did (Read+Write of .env, subagent, parent marked by its subagent, 30-minute fallback) and /api/sessions/{id}/steps names the marking step (marked_order). Old history.db opens with no loss. Hook answers unchanged.
-Evidence: commits e1f42ff, d3514e4 on ag-v6b-history-mark. Full check: 2196 passed, 5 skipped (baseline 2164). Real-server smoke: bug seen on the base commit, fixed on the branch, same after a restart. Upgrade smoke on a file written by the real fb72286 code.
+Status: done (as of 2026-10-19 13:47)
+Result: History lists a chat as marked whenever the rules did (Read+Write of .env, subagent, parent via subagent, 30-minute fallback) and /api/sessions/{id}/steps names the marking step (marked_order). Old history.db opens with no loss. Hook answers unchanged. SPEC §4 reworded per lead review.
+Evidence: commits e1f42ff, d3514e4, fd899c5 on ag-v6b-history-mark. Full check: 2197 passed, 5 skipped (baseline 2164). New test pins a fallback chat that marks itself at step 7: history = /api/steps = 7. Smoke and upgrade smoke as before.
 Needs owner: none
-Details: see "## 2026-10-19 12:11" below.
+Details: see "## 2026-10-19 13:47" below.
+
+## 2026-10-19 13:47
+Lead review of the branch: code fine, one SPEC wording fix. No code change was needed.
+
+- **SPEC §4** (commit fd899c5). The sentence "A chat that was marked through a link has none." is now: a chat marked only through a link or the workspace fallback has no marking step; if it later marks itself (for example after the fallback window has ended), that step is its marking step. The AGENTS.md "Testing" bullet says the same in one clause.
+- **Test that pins it.** `test_a_chat_marked_by_the_fallback_that_later_marks_itself_names_that_step` (`tests/test_history_mark.py`): chat P reads `.env` and starts a Task; chat B (same workspace, no link) runs six `ls` steps inside the 30-minute window, so History lists B as marked with `marked_order` null; the store's clock moves past the window; B runs `cat .env` as step 7. Then B is marked and `marked_order` is 7 in `/api/sessions/B/steps` and in `/api/steps`. It passed at once, because the behavior already worked (`apply_mark` returns `marks` true once the window is over). It can fail: with the clock not advanced it fails (`None == 7`), and with `marks=False` in `apply_rules` it fails (`None == 7`). Both mutations reverted.
+- **Checks.** `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: ruff clean, 2197 passed, 5 skipped (2196 before, plus the new test).
 
 ## 2026-10-19 12:11
 Final verification (smoke, full check, simplify, independent audit) on e1f42ff + af3c012. Fixes are in d3514e4.
