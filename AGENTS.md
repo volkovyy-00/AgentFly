@@ -205,6 +205,12 @@ lines for them (R0 and normalisation: V5).
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
   marks and links; Neo4j off without `neo4j = true`; a session event still links a subagent.
+- Step merge (`tests/test_step_merge.py`, `tests/fixtures/v2c_capture.json`): a shell, read
+  or MCP pair with one `tool_use_id` is one step on the page, in history and in Neo4j's
+  queue; the id-less fallback (0.3 s joins; 6 s, another path or another chat do not; the
+  33rd waiting Read drops the oldest); strictest gate verdict; `afterFileEdit` never raises
+  it; hook answers byte-identical with and without the merge; the capture replays as five
+  steps. `tests/test_memory.py` covers `replace`.
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
   repair and uninstall on a temporary root, the sudo command line.
@@ -237,8 +243,9 @@ lines for them (R0 and normalisation: V5).
   - R1 (`agentfly/recorder/rules.py`): mark on sensitive read/shell word, then block
     outbound sends; sessions in `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
-  - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrives on
-    `preToolUse` and `beforeShellExecution` only. `preToolUse.tool_input` keys:
+  - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrived on
+    `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it from 3.25.9, see
+    V2c). `preToolUse.tool_input` keys:
     Shell `command`, `cwd`, `timeout`; Read `file_path`; Write `file_path`,
     `content`; Grep `file_path`, `pattern`. `ask` from `beforeShellExecution`
     pauses the agent (Skip / Always Run / Run); an allow with messages shows
@@ -252,5 +259,11 @@ lines for them (R0 and normalisation: V5).
     Hooks does not list system hooks. A missing interpreter exits 127 and Cursor lets the
     action through; a missing client file exits 2 and Cursor denies everything. A
     `~/.claude/settings.json` allow did not cancel our shell deny (one trial).
+  - V2c (Cursor 3.25.9, `docs/spikes/V2c-capture.md`): `beforeShellExecution` carries the
+    same `tool_use_id` as its `preToolUse` Shell (34 of 34) and `beforeReadFile` as its
+    `preToolUse` Read (28 of 28; all read paths absolute). One id covers an edit's Read and
+    Write; `afterFileEdit` has no id and fired for a create only; parallel reads' halves can
+    return in reverse order. A Read of a missing file fires no `beforeReadFile`. The server
+    merges by id, with a path fallback (SPEC section 8 "Duplicates").
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
     notes in `demo/NOTES.md`; T0 disabled in the hook client.

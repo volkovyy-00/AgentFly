@@ -1,0 +1,175 @@
+{
+ "chat": "cap",
+ "note": "docs/spikes/V2c-capture.md: Cursor 3.25.9, one chat, seconds from the first event",
+ "events": [
+  {
+   "at": 0,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "T0",
+    "tool_input": {
+     "file_path": "/w/scratch-capture.txt"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 1,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Write",
+    "tool_use_id": "T0",
+    "tool_input": {
+     "file_path": "/w/scratch-capture.txt"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 1.2,
+   "event": {
+    "hook_event_name": "afterFileEdit",
+    "file_path": "/w/scratch-capture.txt",
+    "edits": "<1 edits>",
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 6,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "T1",
+    "tool_input": {
+     "file_path": "/w/scratch-capture.txt"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 7,
+   "event": {
+    "hook_event_name": "beforeReadFile",
+    "file_path": "/w/scratch-capture.txt",
+    "attachments": [],
+    "tool_use_id": "T1",
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 8,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Write",
+    "tool_use_id": "T1",
+    "tool_input": {
+     "file_path": "/w/scratch-capture.txt"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 16,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "T2",
+    "tool_input": {
+     "file_path": "/w/README.md"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 16,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "T3",
+    "tool_input": {
+     "file_path": "/w/SPEC.md"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 17,
+   "event": {
+    "hook_event_name": "beforeReadFile",
+    "file_path": "/w/SPEC.md",
+    "attachments": [],
+    "tool_use_id": "T3",
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 17,
+   "event": {
+    "hook_event_name": "beforeReadFile",
+    "file_path": "/w/README.md",
+    "attachments": [],
+    "tool_use_id": "T2",
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 21,
+   "event": {
+    "hook_event_name": "preToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "T4",
+    "tool_input": {
+     "file_path": "/w/attached.md"
+    },
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  },
+  {
+   "at": 21,
+   "event": {
+    "hook_event_name": "beforeReadFile",
+    "file_path": "/w/attached.md",
+    "attachments": [],
+    "tool_use_id": "T4",
+    "conversation_id": "cap",
+    "workspace_roots": [
+     "/w"
+    ]
+   }
+  }
+ ]
+}

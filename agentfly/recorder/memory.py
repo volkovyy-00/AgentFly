@@ -8,6 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from agentfly.recorder.merge import step_merger
 from agentfly.recorder.store import StepRecord
 
 Step = dict[str, Any]
@@ -64,12 +65,12 @@ def _empty_counts() -> dict[str, int]:
     return dict.fromkeys(_COUNT_KEYS, 0)
 
 
-def _count(counts: dict[str, int], step: Step) -> None:
-    counts["total"] += 1
+def _count(counts: dict[str, int], step: Step, sign: int = 1) -> None:
+    counts["total"] += sign
     if step["kind"] in _KINDS:
-        counts[step["kind"]] += 1
+        counts[step["kind"]] += sign
     if step["verdict"] in _ALARMS:
-        counts[step["verdict"]] += 1
+        counts[step["verdict"]] += sign
 
 
 def _empty_view() -> dict[str, Any]:
@@ -95,6 +96,30 @@ class _Session:
         _count(self.counts, step)
         if marks and self.marking is None:
             self.marking = step
+
+    def replace(self, old: Step, new: Step, marks: bool) -> bool:
+        """Swap a step for its merged form (V2c). False when no such step was ever added here.
+
+        The counts follow the change. A step already evicted from the window changes in the counts
+        only: the cap is far above what two halves of one action are apart.
+        """
+        order: int = new["order"]
+        retained: bool = False
+        for steps in (self.steps, self.evicted_flagged):
+            for index in range(len(steps) - 1, -1, -1):
+                if steps[index]["order"] == order:
+                    steps[index] = new
+                    retained = retained or steps is self.steps
+                    break
+        if not retained and not (self.steps and order < self.steps[0]["order"]):
+            return False
+        _count(self.counts, old, -1)
+        _count(self.counts, new)
+        if self.marking is not None and self.marking["order"] == order:
+            self.marking = new
+        elif marks and self.marking is None:
+            self.marking = new
+        return True
 
     def _alarms_below(self, floor: int) -> Iterator[Step]:
         """Blocked or warned steps below `floor`, newest first (retained, then evicted)."""
@@ -144,9 +169,19 @@ class MemorySteps:
         with self._lock:
             self.current_session_id = None
             self._sessions.clear()
+        step_merger.clear()  # its steps are gone with the memory they point into
 
     def append_from_record(self, record: StepRecord, marks: bool = False) -> None:
         self.append_step(record.session_id, _step_dict(record), marks)
+
+    def replace_from_record(self, old: StepRecord, new: StepRecord, marks: bool = False) -> None:
+        """Show `new` in place of `old`, the same step merged with another hook of its action."""
+        with self._lock:
+            memory: _Session | None = self._sessions.get(new.session_id)
+            if memory is not None and memory.replace(_step_dict(old), _step_dict(new), marks):
+                self.current_session_id = new.session_id
+                return
+        self.append_from_record(new, marks)  # nothing to replace: show it as a step of its own
 
     def append_step(self, session_id: str, step: Step, marks: bool = False) -> None:
         with self._lock:

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from agentfly.recorder.api import sessions as sessions_api
 from agentfly.recorder.localstore import DB_NAME, local_store
 from agentfly.recorder.memory import memory_steps, parse_limit
+from agentfly.recorder.merge import step_merger
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
 from agentfly.recorder.rules import Session, decide, deny_messages
 from agentfly.recorder.sessions import SessionStore
@@ -194,11 +195,15 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         rule_id,
         order=order,
     )
-    session = replace(stored, next_step=order + 1)
-    store.put(session)
-    memory_steps.append_from_record(record, marks=marks)
-    graph_store.enqueue(record)
-    local_store.enqueue(record)
+    # V2c: the second hook of one action updates its step (same order) instead of adding one.
+    saved, previous = step_merger.join(session.id, payload, record)
+    store.put(replace(stored, next_step=order + 1 if previous is None else stored.next_step))
+    if previous is not None:
+        memory_steps.replace_from_record(previous, saved, marks=marks)
+    else:
+        memory_steps.append_from_record(saved, marks=marks)
+    graph_store.enqueue(saved)
+    local_store.enqueue(saved)
 
     permission: dict[str, str]
     if verdict == "blocked" and rule_id is not None:

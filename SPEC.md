@@ -556,14 +556,27 @@ The client throws away content before it logs or sends:
 
 ### Duplicates
 
-`preToolUse` and the specific gates can both fire for one action. When they
-carry the same `tool_use_id` they make one step. Spike S1 saw `tool_use_id` only
-on `preToolUse` and `beforeShellExecution` (Cursor's own docs list it for
-`preToolUse`, not for shell events), so only shell and tool calls can be merged
-this way. **Open:** a file read fires both `preToolUse` and `beforeReadFile`, and
-`beforeReadFile` has no `tool_use_id`, so reads would show twice. Spike S5
-found no field that links the two (`generation_id` is one value for a whole
-turn). The merge key is proposed in the hook-client card and goes to the owner.
+One action can fire two hooks: a general `preToolUse` and a specific one
+(`beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`); an edit also fires
+`afterFileEdit`. They make one step (V2c; Cursor 3.25.9 facts):
+- **Same `tool_use_id` in the same chat: one step, for every kind of event, however
+  many there are.** On 3.25.9 a shell pair matched in 34 of 34 and a read pair in 28 of 28
+  (all 59 read paths were absolute). One id also covers an edit's `preToolUse` Read and
+  Write. 3.24.12 sent no id on `beforeReadFile`.
+- **Fallback for events without an id** (same chat, same absolute path run through
+  `posixpath.normpath`, within 5 s): a `beforeReadFile` joins the oldest unpaired
+  `preToolUse` Read; an `afterFileEdit` (it never has an id and fires for a create, not
+  for an edit) joins the latest `preToolUse` Write. The waiting list lives in memory only,
+  expires, and holds at most 32 entries per chat (the oldest is dropped). With no pair
+  the events stay separate steps.
+- The second hook updates the step that exists (same order number and step id; nothing is
+  renumbered). The merged step has the specific event's file or command; kind `edit` if
+  either hook writes (`preToolUse` Write or `afterFileEdit`), else the specific event's
+  kind; the strictest verdict of the gate events (`afterFileEdit` never raises it); and it
+  is marked if either hook marked.
+- The rules still decide every event on its own, and every answer and its timing are the
+  same as without the merge. Not covered: MCP without an id, a restart between the two
+  hooks, steps saved before V2c, and edit tools other than `Write`.
 
 ### The answers
 
