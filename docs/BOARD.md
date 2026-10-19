@@ -101,6 +101,8 @@ V7 and V9 can run in parallel.
 - F6 ✅ 2026-10-18 · docs/reports/F6.md · merged 61bb9a3 · history marked = R1; wipe bounded 10 s; purge cuts WAL; flaky test (no flush) in test_localstore folded into V2c (owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
 - F3 ✅ 2026-10-18 · docs/reports/F3.md · merged 83f8e7b · uninstall stop points exit 0 or 127; failed restore keeps old Python in `.old-*`, path printed (accepted by the owner 2026-10-18) · body: git show 2ad871e:docs/BOARD.md
 - V2c ✅ 2026-10-19 · docs/reports/V2c.md · merged fb72286 · one step per action (id merge, path fallback); flaky history test fixed; history "marked" gap for edit steps accepted → V6b (owner 2026-10-19) · body: git show e2da26b:docs/BOARD.md
+- V3b ✅ 2026-10-19 · docs/reports/V3b.md · merged ba6f488 · start/stop/status (own LaunchAgent or brew services), doctor (12 lines), guards cover dev.agentfly.recorder, homebrew.mxcl.agentfly, sh.brew.agentfly; `stop` deletes the plist; lead review fixed doctor `path`, Homebrew `start`, uninstall message · body: git show e1d4aeb:docs/BOARD.md
+- V6b ✅ 2026-10-19 · docs/reports/V6b.md · merged a9b753f · history stores the marked flag (chat) and marking step (step); a fallback chat that later marks itself names that step (SPEC §4) · body: git show e1d4aeb:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -110,22 +112,15 @@ V7 and V9 can run in parallel.
 
 ## v1 cards
 
-### V6b · History shows which chats were marked, and by which step
-- **Brief:** `docs/briefs/V6b.md` (authoritative). V2c follow-up: a stored marked flag per chat and per step (owner 2026-10-19).
-- **Lane:** backend, ∥ V3b; then V8b · **Depends on:** V2c ✅
-
-### V3b · Service and `doctor`: `start`, `stop`, `status`, `doctor`
-- **Brief:** `docs/briefs/V3b.md` (authoritative; pass 2 done 2026-10-18). Carries V3's service and `doctor` items.
-- **Lane:** backend, ∥ V6b; then V3c · **Depends on:** V3a ✅, F3 ✅
-
 ### V3c · Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
 - **Brief:** `docs/briefs/V3c.md` (authoritative). Package check (V3b's) and install-folder guard (moved from V5b to V3b by the owner 2026-10-18); split out of V3b (owner 2026-10-18). R0 also blocks reinstalling AgentFly; a version change needs the owner's confirm (owner 2026-10-18).
-- **Lane:** backend, after V3b; before V5b · **Depends on:** V3b
+- **Lane:** backend, next (V3b ✅); before V5b · **Depends on:** V3b ✅
 
 ### V4 · Homebrew formula and release workflow
 - **Owner:** worker-backend
 - **Lane:** backend, after V2. Its last check needs V3b.
-- **Depends on:** V2 (for the brew-services check, V3b)
+- **Depends on:** V2 (for the brew-services check, V3b ✅)
+- **From V3b (2026-10-19):** Homebrew `stop` must also stop a leftover `dev.agentfly.recorder` (V3b review); pin the formula's launchd label (Homebrew 7 names it `sh.brew.agentfly`, D8 names `homebrew.mxcl.agentfly`; both are guarded).
 - **May touch:** new `packaging/homebrew/agentfly.rb`, new
   `packaging/homebrew/README.md`, new `.github/workflows/release.yml`. Not the
   README; V3a and V3b own the install section.
@@ -136,7 +131,7 @@ V7 and V9 can run in parallel.
     `agentfly-hook` with no server, and asserts valid JSON.
   - The caveats tell you to run `agentfly init -g`, and to run
     `agentfly uninstall` before `brew uninstall`.
-  - After V3b merges: `brew services start agentfly` serves `/health`
+  - V3b ✅: `brew services start agentfly` serves `/health`
     (output pasted).
   - The release workflow builds the UI once and makes the wheel and sdist. It
     has no publish step until you approve publishing.
@@ -173,7 +168,7 @@ V7 and V9 can run in parallel.
 
 ### V8b · Recorder fields for the Why card and health strip
 - **Owner:** worker-backend · brief to write
-- **Lane:** backend, after V6b (same recorder files).
+- **Lane:** backend, next (V6b ✅; same recorder files).
 - **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
 - **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
 - **Done when:** each step on `/api/steps` carries `rule_text`, `user_message`
