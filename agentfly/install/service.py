@@ -73,6 +73,7 @@ class State:
     running: bool
     pid: int | None
     live_keepalive: bool | None  # what launchd says about the loaded job; None when unknown
+    agent_loaded: bool = False  # Homebrew install only: a LaunchAgent of ours is loaded as well
 
     @property
     def keepalive(self) -> bool:
@@ -82,12 +83,14 @@ class State:
     @property
     def summary(self) -> str:
         if self.running:
-            return f"running, pid {self.pid}" if self.pid else "running"
-        if self.loaded:
-            return "loaded, not running"
-        if self.plist_path is not None:
-            return "not loaded (a service file exists)"
-        return "stopped (not installed)"
+            text = f"running, pid {self.pid}" if self.pid else "running"
+        elif self.loaded:
+            text = "loaded, not running"
+        elif self.plist_path is not None:
+            text = "not loaded (a service file exists)"
+        else:
+            text = "stopped (not installed)"
+        return f"{text}; {LABEL} is loaded too" if self.agent_loaded else text
 
 
 # ---------------------------------------------------------------- where things are
@@ -239,7 +242,16 @@ def _inspect_brew(manager: Manager) -> State:
     if path is None:  # stopped: a file left behind under either of Homebrew's names
         path = next((p for p in map(plist_path, BREW_LABELS) if _existing(p)), None)
     plist = read_plist(path) if path else None
-    return State(manager, path, plist, loaded, running, pid if isinstance(pid, int) else None, None)
+    return State(
+        manager,
+        path,
+        plist,
+        loaded,
+        running,
+        pid if isinstance(pid, int) else None,
+        None,
+        agent_loaded=_print_job() is not None,
+    )
 
 
 def health(timeout: float = 2.0) -> dict[str, Any] | None:
@@ -274,7 +286,7 @@ def start() -> list[str]:
     _require_user("start")
     manager = detect_manager()
     if manager.brew:
-        return _brew_services(manager, "start")
+        return _retire_agent() + _brew_services(manager, "start")
     state = _inspect_agent()
     # A job loaded without KeepAlive although its file has it is what `doctor` warns about.
     if state.loaded and not plist_drift(state.plist) and state.live_keepalive is not False:
@@ -365,6 +377,20 @@ def _teardown_agent() -> list[str]:
         _unload()
         messages.append(f"unloaded {LABEL}")
     return messages + _remove_file(plist_path())
+
+
+def _retire_agent() -> list[str]:
+    """Homebrew's service takes over from a LaunchAgent of ours (an earlier install's `start`).
+
+    Two KeepAlive jobs on one port would fight: the older recorder keeps the port and answers, and
+    the other restarts in a loop."""
+    messages = _teardown_agent()
+    if not messages:
+        return []
+    return [
+        "replacing the LaunchAgent of an earlier install (two recorders cannot share the port):",
+        *messages,
+    ]
 
 
 def _teardown_brew(manager: Manager) -> list[str]:

@@ -255,6 +255,12 @@ def check_service(ctx: Context) -> Finding:
     state = ctx.state
     if state is None:
         return fail(f"cannot read the service state: {ctx.state_error}")
+    if state.agent_loaded:
+        return fail(
+            f"{state.manager.name} and AgentFly's own LaunchAgent {service.LABEL} are both loaded, "
+            f"so two recorders fight over port {service.HEALTH_PORT}; run `agentfly start`, "
+            "which removes ours"
+        )
     if state.running:
         return ok(f"{state.manager.name}: {state.summary}")
     return fail(f"{state.manager.name}: {state.summary}; run `agentfly start`")
@@ -312,14 +318,24 @@ def _shebang_python(script: Path) -> Path | None:
     return Path(words[0]) if words else None
 
 
+def _environment(python: Path) -> Path:
+    """The environment `python` runs in: its venv, else the installation it belongs to.
+
+    A venv's `python` is a symlink to the base Python, so two venvs resolve to one interpreter.
+    `pyvenv.cfg` beside the unresolved path (or in its parent) is what tells them apart.
+    """
+    for folder in (python.parent, python.parent.parent):
+        if os.path.isfile(folder / "pyvenv.cfg"):
+            return Path(os.path.realpath(folder))
+    return Path(os.path.realpath(python))
+
+
 def _is_ours(found: Path, ctx: Context) -> bool | None:
     """True or False when the command is provably ours or not, None when it cannot be told."""
     if ctx.own_script is not None and os.path.realpath(found) == os.path.realpath(ctx.own_script):
         return True
     interpreter = _shebang_python(found)
-    if interpreter is not None and os.path.realpath(interpreter) == os.path.realpath(
-        sys.executable
-    ):
+    if interpreter is not None and _environment(interpreter) == _environment(Path(sys.executable)):
         return True
     if ctx.own_script is None:
         return None

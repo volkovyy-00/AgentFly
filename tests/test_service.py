@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+import agentfly
 import agentfly.recorder.rules as rules
 from agentfly.cli import main
 from agentfly.install import InstallError, service
@@ -369,8 +370,57 @@ def test_a_homebrew_install_starts_and_stops_through_brew_services(
         ["services", "info", "agentfly", "--json"],
         ["services", "stop", "agentfly"],
     ]
-    assert launchd.calls() == []  # no LaunchAgent of ours
+    assert "bootstrap" not in launchd.verbs()  # no LaunchAgent of ours is loaded
     assert not plist_file(isolated_home).exists()
+
+
+def start_as_a_plain_install(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """`agentfly start` of an earlier, non-Homebrew install, then back to the Homebrew keg."""
+    keg = service.PACKAGE_FILE
+    monkeypatch.setattr(service, "PACKAGE_FILE", Path(agentfly.__file__))
+    messages = service.start()
+    monkeypatch.setattr(service, "PACKAGE_FILE", keg)
+    return messages
+
+
+def test_a_homebrew_start_replaces_the_launch_agent_of_an_earlier_install(
+    brewed: Brew, launchd: Launchd, isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_as_a_plain_install(monkeypatch)
+    assert launchd.loaded() == [service.LABEL] and plist_file(isolated_home).exists()
+    messages = service.start()
+    assert launchd.loaded() == [] and not plist_file(isolated_home).exists()
+    assert brewed.calls()[-1] == ["services", "start", "agentfly"]
+    said = "\n".join(messages)
+    assert service.LABEL in said and "unloaded" in said and "removed" in said
+    assert "brew services start agentfly" in said
+
+
+def test_a_homebrew_start_removes_a_launch_agent_file_that_is_not_loaded(
+    brewed: Brew, launchd: Launchd, isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_as_a_plain_install(monkeypatch)
+    launchd.update(jobs={})  # booted out by hand; the file would load again at the next login
+    service.start()
+    assert not plist_file(isolated_home).exists()
+
+
+def test_a_homebrew_start_without_a_launch_agent_of_ours_says_nothing_about_one(
+    brewed: Brew, launchd: Launchd
+) -> None:
+    messages = service.start()
+    assert len(messages) == 1 and service.LABEL not in messages[0]
+    assert launchd.verbs() == ["print"]  # looked, found nothing
+
+
+def test_the_state_of_a_homebrew_install_shows_a_loaded_launch_agent_of_ours(
+    brewed: Brew, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.start()  # Homebrew's job alone
+    assert not service.inspect().agent_loaded
+    start_as_a_plain_install(monkeypatch)  # an earlier install's `start` loads ours as well
+    state = service.inspect()
+    assert state.agent_loaded and service.LABEL in state.summary
 
 
 def test_a_homebrew_status_comes_from_brew_services_info(brewed: Brew) -> None:

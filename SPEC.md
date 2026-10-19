@@ -474,7 +474,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
     (`RunAtLoad`, `KeepAlive`; it runs `serve` from the same install) and loads
     it into your login session, then waits for `/health`. Run again, it changes
     nothing, or reloads the job if the file would differ. It needs no `sudo`
-    and refuses to run under it.
+    and refuses to run under it. In a Homebrew install it first unloads and
+    removes a LaunchAgent of its own that an earlier install left, because two
+    jobs would fight over port 8787.
   - `stop` unloads the job and deletes the file, as `brew services stop` does,
     so the recorder stays down at the next login too; `start` brings it back.
   - `status` names the manager, says whether the job is loaded and running, and
@@ -487,7 +489,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   in AgentFly's system folder can be written by your user, and it is owned by
   the system user (D5); AgentFly's entries in the system `hooks.json` are the
   ones `init -g` wrote; the service is loaded and running, its file is what
-  `start` writes, and `KeepAlive` is set (D4); `agentfly` on `PATH` is ours.
+  `start` writes, and `KeepAlive` is set (D4), and in a Homebrew install no
+  LaunchAgent of ours is loaded next to Homebrew's job; `agentfly` on `PATH` is
+  ours (the same environment, not another venv on the same Python).
   It also compares the registered events with the known list, and reads
   Cursor's Hooks log for "Invalid … config" or "Failed to parse" lines about
   AgentFly's file, or "No enterprise hooks configuration found" (Cursor has not
@@ -500,12 +504,11 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   Homebrew leaves the service file behind. Uninstall removes AgentFly's hook
   entries and the system folder (under `sudo`, asked once), then, as your own
   user, stops and removes the service. Run it without `sudo`: the service
-  belongs to your login session. If the system part fails the service is left
-  running, because the hooks are still registered. Only after that does the
-  hook client stop guarding. If
-  you run `brew uninstall` first, the system-owned hook client stays behind,
-  keeps denying outbound commands, and tells you to run `agentfly start`, which no
-  longer exists; remove the entries by hand or reinstall and uninstall properly.
+  belongs to your login session. If the system part fails the service is not
+  touched; run `agentfly uninstall` again. If you run `brew uninstall` first,
+  the system-owned hook client stays behind, keeps denying outbound commands,
+  and tells you to run `agentfly start`, which no longer exists; remove the
+  entries by hand or reinstall and uninstall properly.
 - **Publishing.** Pushing to PyPI or a Homebrew tap is outward-facing; the owner
   approves each release, and the PyPI name is re-checked first.
 - **Developers** can still run the recorder from a clone; AGENTS.md has the

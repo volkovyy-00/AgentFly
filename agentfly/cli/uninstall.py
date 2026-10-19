@@ -35,8 +35,8 @@ def _as_user() -> int:
         code = elevate.run_elevated(["uninstall"])
         if code != 0:
             print(
-                "agentfly uninstall: the recorder service was left running, because the hooks "
-                "are still registered; run `agentfly uninstall` again",
+                f"agentfly uninstall: the sudo part failed (exit {code}); the service was not "
+                "touched; run `agentfly uninstall` again",
                 file=sys.stderr,
             )
             return code

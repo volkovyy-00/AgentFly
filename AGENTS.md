@@ -222,14 +222,18 @@ lines for them (R0 and normalisation: V5).
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
-  a Homebrew keg with a stub `brew` runs `brew services` and writes no LaunchAgent; `uninstall`
-  removes the service (`tests/test_install_cli.py`). An autouse fixture in `tests/conftest.py`
-  gives every test a stub `launchctl` and a closed health port, so no test reaches the real
-  launchd or port 8787. The service labels are guard paths for R0 and the offline guard
-  (`tests/cases.py`), and `_R0_PATHS` must equal `_GUARD_PATHS` (`tests/test_r0.py`).
+  a Homebrew keg with a stub `brew` runs `brew services`, writes no LaunchAgent and removes the
+  one an earlier install left; `uninstall` removes the service and, when its system part fails,
+  says only that and leaves the service alone (`tests/test_install_cli.py`). An autouse fixture
+  in `tests/conftest.py` gives every test a stub `launchctl` and a closed health port, so no test
+  reaches the real launchd or port 8787. The service labels are guard paths for R0 and the
+  offline guard (`tests/cases.py`), and `_R0_PATHS` must equal `_GUARD_PATHS`
+  (`tests/test_r0.py`).
 - Doctor (`tests/test_doctor.py`): a clean install is all ok; each listed fault turns only its
-  own line to fail; a warning alone exits 0; the Hooks log is matched on the lines Cursor
-  3.25.9 wrote (the wording of an error about the system file itself has not been seen).
+  own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
+  Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
+  Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
+  file itself has not been seen).
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole

@@ -92,7 +92,8 @@ had access to.
 
 **The recorder as a service.** `agentfly start` runs the recorder in the background and starts it
 at every login. It restarts by itself within seconds if it is killed (launchd `KeepAlive`). For an
-install from Homebrew it uses `brew services`; otherwise it writes
+install from Homebrew it uses `brew services` (and unloads and removes the LaunchAgent below if an
+earlier, non-Homebrew install left one); otherwise it writes
 `~/Library/LaunchAgents/dev.agentfly.recorder.plist` and loads it, then waits until
 `127.0.0.1:8787/health` answers. It needs no password; do not run it with `sudo`.
 
@@ -108,7 +109,8 @@ AgentFly's own files (the offline guard) and tells you to run `agentfly start`.
 `agentfly doctor` compares the installed Python and hook client with the hashes recorded at
 install, checks that nothing in AgentFly's system folder can be written by your user, that
 AgentFly's entries in Cursor's hooks file are the ones `init -g` wrote, that the service is running
-with `KeepAlive`, that `agentfly` on your `PATH` is this one, and that Cursor's Hooks log says it
+with `KeepAlive` (and, for Homebrew, that no LaunchAgent of AgentFly's is loaded next to it), that
+`agentfly` on your `PATH` is this install's (not another venv's), and that Cursor's Hooks log says it
 loaded the hooks (so it fails until you restart Cursor after `init -g`). It warns when
 `~/.claude/settings.json` has hooks on an event that can allow or deny an action. It needs no
 password.
@@ -122,8 +124,8 @@ agentfly uninstall                  # asks for your password once; do not run it
 It removes AgentFly's hook entries first, then moves its system folder out of the way and
 deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
 user, it stops the recorder service and deletes its file (`launchctl list | grep agentfly` prints
-nothing afterwards). If the system part fails, the service is left running, because the hooks are
-still registered. Other tools' entries
+nothing afterwards). If the system part fails, the service is not touched; run `agentfly uninstall`
+again. Other tools' entries
 are left alone, and if the file is unchanged since `init -g` it is given back byte for byte. It
 refuses, and changes nothing, if another entry still runs files from AgentFly's folder or the
 hooks file cannot be read as JSON but names that folder. A file-system error ends with a

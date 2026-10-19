@@ -11,6 +11,7 @@ import os
 import plistlib
 import shutil
 import stat
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -24,7 +25,7 @@ from agentfly.install import checks, cursor, installer, pythons, service
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
 from tests.install_helpers import fake_python_tar, make_cursor_app, make_layout, write_archive
-from tests.service_helpers import Launchd
+from tests.service_helpers import Brew, Launchd, homebrew_package
 
 IDS = [
     "record",
@@ -481,12 +482,99 @@ def test_a_python_script_of_another_install_is_not_ours(world: World, tmp_path: 
     assert world.levels("fail") == {"path"}
 
 
+def make_venv(root: Path, base: Path) -> Path:
+    """A venv the way `python -m venv` and `uv` make one: `bin/python` is a symlink to `base`."""
+    (root / "bin").mkdir(parents=True)
+    (root / "pyvenv.cfg").write_text(f"home = {base.parent}\n", encoding="utf-8")
+    (root / "bin" / "python").symlink_to(base)
+    fake_command(root / "bin", f"#!{root / 'bin' / 'python'}\nprint('agentfly')\n")
+    return root / "bin"
+
+
+@pytest.fixture
+def venvs(world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Two venvs on one base Python; this run is from the first. Returns their `bin` folders."""
+    base = tmp_path / "base" / "python3.12"
+    base.parent.mkdir()
+    base.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    ours, other = make_venv(tmp_path / "ours", base), make_venv(tmp_path / "other", base)
+    monkeypatch.setattr(sys, "executable", str(ours / "python"))
+    seed_service(world.launchd)  # the service file names the interpreter that runs this
+    return ours, other
+
+
+def test_an_agentfly_of_another_venv_on_the_same_base_python_is_not_ours(
+    world: World, venvs: tuple[Path, Path]
+) -> None:
+    ours, other = venvs
+    assert os.path.realpath(ours / "python") == os.path.realpath(other / "python")
+    world.search_path = [str(other), str(ours)]
+    assert world.levels("fail") == {"path"}
+
+
+def test_an_agentfly_of_this_venv_is_ours_even_when_it_is_not_the_recorded_script(
+    world: World, venvs: tuple[Path, Path]
+) -> None:
+    ours, other = venvs
+    world.search_path = [str(ours), str(other)]
+    assert world.results()["path"].level == "ok"
+
+
+def test_two_commands_on_a_python_without_a_venv_share_its_environment(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base" / "python3.12"
+    base.parent.mkdir()
+    base.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tmp_path / "usr_bin").mkdir()
+    (tmp_path / "usr_bin" / "python3").symlink_to(base)
+    monkeypatch.setattr(sys, "executable", str(base))
+    command = tmp_path / "global"
+    fake_command(command, f"#!{tmp_path / 'usr_bin' / 'python3'}\nprint('agentfly')\n")
+    world.search_path = [str(command)]
+    assert world.results()["path"].level == "ok"
+
+
 def test_a_symlink_to_our_command_is_ours(world: World, tmp_path: Path) -> None:
     link_dir = tmp_path / "links"
     link_dir.mkdir()
     (link_dir / "agentfly").symlink_to(world.bin / "agentfly")
     world.search_path = [str(link_dir)]
     assert world.results()["path"].level == "ok"
+
+
+# ---------------------------------------------------------------- Homebrew and our own LaunchAgent
+
+
+def become_a_homebrew_install(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Brew:
+    """`brew services` runs the recorder; the world's LaunchAgent of ours is still loaded."""
+    prefix = tmp_path / "homebrew"
+    brew = Brew(prefix, world.home)
+    monkeypatch.setattr(service, "PACKAGE_FILE", homebrew_package(prefix))
+    subprocess.run([str(brew.path), "services", "start", "agentfly"], check=True)
+    return brew
+
+
+def test_a_homebrew_service_alone_is_ok(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    become_a_homebrew_install(world, tmp_path, monkeypatch)
+    world.launchd.update(jobs={})
+    service.plist_path().unlink()
+    assert world.levels("fail") == set()
+    assert world.results()["service"].level == "ok"
+
+
+def test_a_homebrew_service_and_our_own_launch_agent_together_fail_the_service_line(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    become_a_homebrew_install(world, tmp_path, monkeypatch)
+    assert service.LABEL in world.launchd.loaded()
+    assert world.levels("fail") == {"service"}, world.results()
+    text = world.results()["service"].text
+    assert service.LABEL in text and "agentfly start" in text
 
 
 # ---------------------------------------------------------------- a check cannot stop doctor
