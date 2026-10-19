@@ -26,7 +26,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from agentfly.install import InstallError, cursor, hooks_file, pythons, records
+from agentfly.install import InstallError, cursor, hooks_file, packages, pythons, records
 from agentfly.install.hooks_file import HookEntry
 from agentfly.install.layout import INTERPRETER_REL, Layout
 from agentfly.install.pythons import PythonBuild
@@ -124,20 +124,38 @@ def _read_hooks(layout: Layout) -> str | None:
 # ---------------------------------------------------------------- is it installed and intact
 
 
-def status(layout: Layout, build: PythonBuild, source: Path) -> set[str]:
-    """Which parts are missing or differ: any of "python", "client", "hooks"; empty when intact."""
+def _python_matches(layout: Layout, python: dict[str, Any]) -> bool:
+    """The bundled Python is there and equals the record's hashes (pinned or not)."""
+    return (
+        layout.interpreter.is_file()
+        and pythons.file_sha256(layout.interpreter) == python["interpreter_sha256"]
+        and pythons.tree_digest(layout.python_dir) == python["tree_sha256"]
+    )
+
+
+def python_intact(layout: Layout) -> bool:
+    """Root may run on the bundled Python: it is installed and matches the record (V3c)."""
     record = records.read(layout)
+    try:
+        return record is not None and _python_matches(layout, record["python"])
+    except (KeyError, TypeError, OSError):
+        return False
+
+
+def status(layout: Layout, build: PythonBuild, source: Path, current: packages.Check) -> set[str]:
+    """Which parts are missing or differ: any of "python", "client", "hooks", "packages".
+
+    Empty when intact. "packages" is the record's package hashes differing from `current`, the
+    check of the tool environment: an upgrade is not "intact".
+    """
+    record = records.read(layout)
+    everything = {"python", "client", "hooks", "packages"}
     if record is None:
-        return {"python", "client", "hooks"}
+        return everything
     bad: set[str] = set()
     try:
         python = record["python"]
-        if (
-            python["archive_sha256"] != build.sha256
-            or not layout.interpreter.is_file()
-            or pythons.file_sha256(layout.interpreter) != python["interpreter_sha256"]
-            or pythons.tree_digest(layout.python_dir) != python["tree_sha256"]
-        ):
+        if python["archive_sha256"] != build.sha256 or not _python_matches(layout, python):
             bad.add("python")
         wanted = pythons.file_sha256(source)
         if (
@@ -147,7 +165,9 @@ def status(layout: Layout, build: PythonBuild, source: Path) -> set[str]:
         ):
             bad.add("client")
     except (KeyError, TypeError, OSError):
-        return {"python", "client", "hooks"}
+        return everything
+    if record.get("packages") != packages.to_record(current.distributions):
+        bad.add("packages")
     try:
         text = _read_hooks(layout)
         found = hooks_file.our_entries(text, prefix(layout)) if text is not None else []
@@ -447,12 +467,15 @@ def install(
 ) -> Outcome:
     """Install or repair. `archive` is a downloaded copy of the build (re-checked here)."""
     _check_paths(layout)
-    bad = status(layout, build, source)
+    previous = records.read(layout)
+    # Root hashes the tool environment again: this is what the record gets. It is not a second
+    # defence, root has imported that code already; the check that matters ran before the password.
+    current = packages.require(previous, "agentfly init -g")
+    bad = status(layout, build, source, current)
     if not bad:
         return Outcome(False, ["already installed and intact; nothing changed"])
     if layout.system_root.is_symlink():
         raise InstallError(f"{layout.system_root} is a symbolic link; remove it first")
-    previous = records.read(layout)
     created_hooks = _read_hooks(layout) is None or bool(
         previous and previous.get("hooks_file", {}).get("created")
     )
@@ -523,9 +546,12 @@ def install(
             entries=[asdict(e) for e in entries],
             created_hooks_file=created_hooks,
             layout=layout,
+            packages=packages.to_record(current.distributions),
         )
         record["hooks_file"].update(hooks_info)
         _write_atomic(layout.record, records.dumps(record).encode(), layout)
+        if "packages" in bad:
+            messages.append(f"recorded the hashes of {len(current.distributions)} packages")
         if _apply_hooks(layout, entries, existing, merged):
             messages.append(f"registered {len(entries)} hooks in {layout.hooks_file}")
         return Outcome(True, messages or ["repaired"])

@@ -32,6 +32,7 @@ def build(
     entries: list[dict[str, Any]],
     created_hooks_file: bool,
     layout: Layout,
+    packages: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema": SCHEMA,
@@ -50,6 +51,7 @@ def build(
             "entries": entries,
             "created": created_hooks_file,
         },
+        "packages": packages,  # every installed distribution: version and file hashes (V3c)
     }
 
 

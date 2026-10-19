@@ -18,7 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from agentfly.install import InstallError, cursor, hooks_file, hookslog, installer, records, service
+from agentfly.install import (
+    InstallError,
+    cursor,
+    hooks_file,
+    hookslog,
+    installer,
+    packages,
+    records,
+    service,
+)
 from agentfly.install.hooks_file import HookEntry
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild, file_sha256, tree_digest
@@ -69,6 +78,8 @@ class Context:
     cursor_version: str | None
     state: service.State | None
     state_error: str
+    environment: packages.Environment | None  # the tool environment this AgentFly runs from
+    environment_error: str
 
     @property
     def valid_events(self) -> frozenset[str] | None:
@@ -100,6 +111,11 @@ def build_context(
         state = service.inspect()
     except InstallError as exc:
         error = str(exc)
+    try:
+        environment: packages.Environment | None = packages.tool_environment()
+        environment_error = ""
+    except InstallError as exc:
+        environment, environment_error = None, str(exc)
     return Context(
         layout=layout,
         build=build,
@@ -110,6 +126,8 @@ def build_context(
         cursor_version=version,
         state=state,
         state_error=error,
+        environment=environment,
+        environment_error=environment_error,
     )
 
 
@@ -183,6 +201,24 @@ def check_client(ctx: Context) -> Finding:
             "the installed hook client is older than this AgentFly's; run `agentfly init -g`"
         )
     return ok("the hook client matches the record")
+
+
+def check_package(ctx: Context) -> Finding:
+    """The package root runs on `init -g` and `uninstall` is what `init -g` hashed (V3c)."""
+    record = records.read(ctx.layout)
+    if record is None:
+        return _not_checked("no hash record")
+    if ctx.environment is None:
+        return _not_checked(ctx.environment_error)
+    if packages.stored_from(record) is None:
+        return fail("the hash record has no package hashes; run `agentfly init -g`")
+    check = packages.inspect(ctx.environment, record)
+    if check.problems:
+        fix = packages.advice(check)
+        return fail(f"{packages.lead(check.problems)}; {fix}, then run `agentfly init -g`")
+    if check.changes:
+        return warn(f"{packages.lead(check.changes)}; run `agentfly init -g` to record it")
+    return ok(f"AgentFly and its {len(check.distributions) - 1} dependencies match the record")
 
 
 # ---------------------------------------------------------------- the hooks file (D2, D23)
@@ -426,6 +462,7 @@ CHECKS: list[Callable[[Context], Finding]] = [
     check_python,
     check_lock,
     check_client,
+    check_package,
     check_hooks,
     check_events,
     check_service,

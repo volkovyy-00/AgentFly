@@ -82,6 +82,13 @@ _GUARD_PATHS: tuple[str, ...] = (  # the same list as `_R0_PATHS` in agentfly/re
     "dev.agentfly.recorder",
     "homebrew.mxcl.agentfly",
     "sh.brew.agentfly",
+    "uv/tools/agentfly-recorder",
+    "pipx/venvs/agentfly-recorder",
+    "site-packages/agentfly",
+    "/cellar/agentfly",
+    "/homebrew/opt/agentfly",
+    "/local/opt/agentfly",
+    ".local/bin/agentfly",
 )
 
 

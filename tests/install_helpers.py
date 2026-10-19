@@ -7,12 +7,14 @@ path); the system file here is `<tmp>/Library/Application Support/Cursor/hooks.j
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import io
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -22,6 +24,7 @@ from types import TracebackType
 from typing import Any
 from unittest import mock
 
+from agentfly.install import installer, packages, records
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
 from tests.helpers import client_env
@@ -165,3 +168,105 @@ def run_hook_command(command: str, home: Path, event: str = "beforeShellExecutio
         env=client_env(home),
         check=False,
     )
+
+
+# ---------------------------------------------------------------- a fake tool environment (V3c)
+
+# name -> (version, {path as RECORD writes it: content}); `../../../bin/` is the venv's bin folder
+TOOL_DISTS: dict[str, tuple[str, dict[str, bytes]]] = {
+    "agentfly-recorder": (
+        "0.1.0",
+        {
+            "agentfly/__init__.py": b"",
+            "agentfly/module.py": b"VALUE = 1\n",
+            "../../../bin/agentfly": b"#!/bin/sh\nexit 0\n",
+        },
+    ),
+    "fakedep": ("1.0", {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.so": b"\x7fELF"}),
+}
+
+
+MODULE = "agentfly/module.py"
+NEW_AGENTFLY = {**TOOL_DISTS["agentfly-recorder"][1], MODULE: b"VALUE = 2\n"}
+# fakedep reinstalled under another Python: the same version, an extension named for it
+ANOTHER_PYTHON = {"fakedep/__init__.py": b"X = 1\n", "fakedep/_speed.cpython-313.so": b"\x7fELF"}
+# (name, files) of a distribution reinstalled at the version it has, with other files
+REBUILDS = [("agentfly-recorder", NEW_AGENTFLY), ("fakedep", ANOTHER_PYTHON)]
+
+
+def path_of(env: packages.Environment, rel: str) -> Path:
+    """Where a path written as RECORD writes it is on disk."""
+    return Path(os.path.normpath(env.site / rel))
+
+
+def record_hash(data: bytes) -> str:
+    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
+    return "sha256=" + digest.decode()
+
+
+def write_dist(env: packages.Environment, name: str, version: str, files: dict[str, bytes]) -> Path:
+    """One installed distribution: its files, `METADATA` and a `RECORD` that hashes them all."""
+    info = env.site / f"{name.replace('-', '_')}-{version}.dist-info"
+    info.mkdir(parents=True)
+    own = {
+        "METADATA": f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
+        "INSTALLER": b"uv\n",
+    }
+    rows = []
+    for rel, data in files.items():
+        target = path_of(env, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        rows.append(f"{rel},{record_hash(data)},{len(data)}")
+    for rel, data in own.items():
+        (info / rel).write_bytes(data)
+        rows.append(f"{info.name}/{rel},{record_hash(data)},{len(data)}")
+    rows.append(f"{info.name}/RECORD,,")
+    (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return info
+
+
+def upgrade(env: packages.Environment, name: str, version: str, files: dict[str, bytes]) -> None:
+    """What `uv tool upgrade` leaves: old files gone, a new dist-info with its own RECORD."""
+    for old in env.site.glob(f"{name.replace('-', '_')}-*.dist-info"):
+        for line in (old / "RECORD").read_text(encoding="utf-8").splitlines():
+            path_of(env, line.split(",")[0]).unlink(missing_ok=True)
+        shutil.rmtree(old)
+    write_dist(env, name, version, files)
+
+
+def make_tool_env(
+    root: Path, dists: dict[str, tuple[str, dict[str, bytes]]] | None = None
+) -> packages.Environment:
+    """A clean virtual environment of the shape `uv tool install` leaves: pyvenv.cfg, bin, site."""
+    root = root.resolve()  # the check resolves paths once; messages then match these
+    site = root / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "pyvenv.cfg").write_text("home = /nowhere/bin\n", encoding="utf-8")
+    env = packages.Environment(root, site)
+    for name, (version, files) in (dists or TOOL_DISTS).items():
+        write_dist(env, name, version, files)
+    return env
+
+
+def install_system(layout: Layout, tmp: Path) -> PythonBuild:
+    """`installer.install` into `layout` with the fake Python build; returns the build."""
+    path, build = write_archive(tmp / "dl", fake_python_tar())
+    installer.install(
+        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+    )
+    return build
+
+
+def status_of(layout: Layout, build: PythonBuild, source: Path | None = None) -> set[str]:
+    """`installer.status` with the check of the (fake) tool environment, as the CLI makes it."""
+    check = packages.inspect(packages.tool_environment(), records.read(layout))
+    return installer.status(layout, build, source or installer.client_source(), check)
+
+
+def hashes_of(env: packages.Environment) -> dict[str, Any]:
+    """The record `init -g` would write for `env` as it is now (only its `packages` section)."""
+    check = packages.inspect(env, None)
+    assert not check.problems, check.problems
+    return {"packages": packages.to_record(check.distributions)}
