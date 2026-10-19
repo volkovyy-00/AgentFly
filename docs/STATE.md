@@ -1,6 +1,6 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-19 10:00 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
-Phase: S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b, V5a, V6, V3a, F3, F5, F6 ✅ (2026-10-18). V2c ✅ merged fb72286 (2026-10-19; 3×2164 passed, 5 skipped; lead probes 5/5). V6b brief ready (pass 2 done 2026-10-19).
+Updated: 2026-10-19 10:50 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Phase: V2c-merged. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b, V5a, V6, V3a, F3, F5, F6 ✅ (2026-10-18). V2c ✅ merged fb72286 (2026-10-19; 3×2164 passed, 5 skipped; lead probes 5/5). V6b brief ready (pass 2 done 2026-10-19).
 Pending decisions: D16
 
 ## Spikes and cards
@@ -15,10 +15,10 @@ Pending decisions: D16
 ## In flight
 none
 
-## Machine state (verified 2026-10-18 21:08 CEST; worktrees and disk 22:50)
+## Machine state (verified 2026-10-19 10:48 CEST)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent (V3a installed, then uninstalled). Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
 - `uv tool` has agentfly-recorder 0.1.0 (`~/.local/bin/agentfly`, `agentfly-hook`) from V3a's manual checks; it predates the V3a follow-ups. Reinstall from main before any new manual check.
-- Recorder: running on 8787 (owner started it for the V2c capture; verified 2026-10-18 after the capture). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
+- Recorder: not running (no listener on 8787, /health no answer). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files: ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly (logs, sessions.json). After V6, Neo4j gets nothing without `neo4j = true` in ~/.config/agentfly/config.toml (absent). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees: main only (V2c and lead-trial worktrees removed 2026-10-19; branches ag-v2c-step-merge and F* kept). Disk 32 GiB free (2026-10-19 10:00).
 - Git: origin/main = b6e51cc (owner pushed 2026-10-18 22:55); later commits are local only (owner pushes with `AGENTFLY_ALLOW_PUSH=1`). Origin repo is PUBLIC. core.hooksPath absolute; `.claude/settings.json` denies `git push`.

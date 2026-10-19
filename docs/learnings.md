@@ -33,6 +33,7 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Check each criterion against the SPEC section it cites.** The lead's V2b brief allowed `python3 -c 'print(1)'` offline against SPEC §9; the worker caught it (2026-10-16).
 - **Ask what a second start of a service does to shared files.** A second `agentfly serve` rewrote the token before failing to bind, and the running recorder then rejected every hook, which the client answered with allow (V8 worker, 2026-10-16; fixed in V2b).
 - **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.
+- **Read what a value means in the code before a brief states it.** The V6b draft said `apply_mark`'s `marks` is true for marks through a parent; it is true only for the chat's own read or command (links resolve first). Pass 2 caught it (2026-10-19).
 
 ## Merging parallel cards
 - **Green tests on each branch do not prove the merge.** V6 answered session events before `apply_rules`, so V5a's `subagentStart` link never ran; the trial merge passed 1900 tests while a probe showed the subagent send allowed (2026-10-18). Before merging cards that share a merge point, trial-merge them and probe the cross-card behaviour.
