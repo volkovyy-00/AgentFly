@@ -1,9 +1,28 @@
 # V3b: Service and `doctor`: `start`, `stop`, `status`, `doctor`
-Status: done, except the manual checks on the owner's Mac (as of 2026-10-19 12:10)
-Result: start/stop/status (own LaunchAgent, or brew services in a keg), uninstall removes the service, doctor (12 lines), guard lists cover the service labels. Tested with stubs and two throwaway real-launchd runs. Not run on the owner's Mac: the real label, init -g, doctor after a Cursor restart.
+Status: done (as of 2026-10-19 13:26)
+Result: start/stop/status (own LaunchAgent or brew services), uninstall removes the service, doctor (12 lines), guard lists cover the labels. All acceptance checks passed, the manual ones on the owner's Mac too (init -g, start, kill -9, stop, Cursor deny, doctor, uninstall).
 Evidence: 8 commits on ag-v3b-service after e1d4aeb; `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` = 2490 passed, 5 skipped (before: 2158 passed, 5 skipped without test_package). Tests: test_service.py, test_doctor.py, test_install_cli.py, tests/cases.py.
-Needs owner: run the checklist below on your Mac after merging (it changes login items and needs `agentfly init -g`). Recommended: yes, once; it is the only part not tested against the real service.
-Details: see "## 2026-10-19 12:10" below.
+Needs owner: none. Quit and reopen Cursor once more: the manual run ended with `uninstall`, which removed the hooks. The installed `agentfly` is this branch's build; reinstall from main after the merge.
+Details: see "## 2026-10-19 13:26" below (manual run); the build notes are in the section under it.
+
+## 2026-10-19 13:26
+
+### Manual run on the owner's Mac (Intel, macOS 15.7, Cursor 3.25.9, `uv tool install --force` of this branch, then real `agentfly init -g`)
+| Step | Result |
+|---|---|
+| `doctor` after `init -g` and a Cursor restart | `record python lock client hooks events path hooks-log claude-settings` ok (`lock` on the real root-owned tree, `hooks-log`: "Cursor loaded AgentFly's 8 hooks"); `service` fail, `service-file` and `keepalive` warn |
+| `agentfly start` | `loaded dev.agentfly.recorder`, "recorder answers on 127.0.0.1:8787", one `launchctl list` row; `/health` was `{"ok":true,"offline_guard_count":7}`: the offline guard had handled 7 hook calls since the Cursor restart |
+| `kill -9` of the recorder | `/health` failed 0.05 s later and answered again after **1.2 s** (new pid; criterion 15 s) |
+| `agentfly stop` | "unloaded", plist removed, `launchctl list \| grep agentfly` empty, still no answer 8 s later; `status` exit 1; `doctor` fails only `service` |
+| Cursor agent runs `curl https://example.invalid` with the service stopped | **Blocked**; the agent answers "AgentFly's recorder is not running ... until you start it with `agentfly start`" (screenshot from the owner). The registered hook command, run by hand, also denied it and allowed `ls`, both exit 0 |
+| `agentfly start`, then `doctor` | all 12 lines ok, exit 0 |
+| `plutil -replace KeepAlive -bool NO` on the plist, then `doctor` | exactly one non-ok line: `fail keepalive`; `agentfly start` printed "the loaded job differs from its service file; reloaded it"; `doctor` back to 0 non-ok lines |
+| `agentfly uninstall` (owner's Terminal, one password prompt) | hooks.json and `/Library/Application Support/AgentFly` removed, then "unloaded dev.agentfly.recorder" and the plist removed; afterwards no `launchctl` row, no plist, no folders, no leftover `.AgentFly-removing-*`; `doctor` says "not installed"; a second `uninstall` prints "nothing of AgentFly's is installed" and asks for no password |
+
+Notes from the run
+- `agentfly init -g` run through the Claude Code `!` prompt fails with "sudo: a terminal is required" and writes nothing (checked); it needs a real Terminal.
+- The Cursor-restart reminder prints twice on `uninstall`: once by the sudo child, once by the parent. This was already so before V3b (`uninstall.py` printed it on a zero exit and the child on `changed`); the order is now child hint, service lines, parent hint. Not changed here.
+- The installed `agentfly` is now this branch's build (`uv tool install --force`), and the leftover override entry `dev.agentfly.v3bprobe54766 => enabled` from my first probe is still in launchd's list.
 
 ## 2026-10-19 12:10
 
@@ -44,11 +63,11 @@ Details: see "## 2026-10-19 12:10" below.
 ### Acceptance criteria
 | Criterion | State |
 |---|---|
-| `start` leaves a loaded LaunchAgent with `KeepAlive`; `/health` back within 15 s after `kill -9`; `stop` keeps it down; `status` correct (stub tests + manual) | Stub tests pass. Real launchd, throwaway job: new process 4.0 s and 5.1 s after `kill -9`. **Manual on the real label: not run.** |
+| `start` leaves a loaded LaunchAgent with `KeepAlive`; `/health` back within 15 s after `kill -9`; `stop` keeps it down; `status` correct (stub tests + manual) | Stub tests pass. Real launchd, throwaway job: new process 4.0 s and 5.1 s after `kill -9`. **Real label on the owner's Mac: `/health` back after 1.2 s; `stop` stayed down (manual run above).** |
 | Stub `brew`, package in a Homebrew prefix: `brew services`, no LaunchAgent written | Done (`test_a_homebrew_install_starts_and_stops_through_brew_services`). |
-| After clean `init -g`, `start`, Cursor restart: all ok; each listed fault fails only its own line; gate hook in `~/.claude/settings.json` is a warn | Clean case and 20 faults tested on a temporary root (`test_doctor.py`). **Real `init -g` + Cursor restart: not run.** |
+| After clean `init -g`, `start`, Cursor restart: all ok; each listed fault fails only its own line; gate hook in `~/.claude/settings.json` is a warn | Clean case and 20 faults tested on a temporary root (`test_doctor.py`). **Real `init -g` + Cursor restart: all ok once the service ran; a tampered `KeepAlive` failed only `keepalive` (manual run above).** |
 | After `uninstall`: `launchctl list \| grep agentfly` empty, plist gone; plist read/write/delete denied by R0 and the offline guard | Done in tests (`test_uninstall_also_stops_and_removes_the_service`; `tests/cases.py` `GUARD_PATHS` feeds both guards). |
-| Service stopped: `doctor` fails the service line; offline guard still denies `curl https://example.invalid` with "agentfly start" (manual) | `doctor` part tested. **Manual part: not run.** |
+| Service stopped: `doctor` fails the service line; offline guard still denies `curl https://example.invalid` with "agentfly start" (manual) | `doctor` part tested. **Manual part done: Cursor blocked `curl https://example.invalid` and named `agentfly start` (manual run above).** |
 
 ### Real launchd, throwaway job (macOS 15.7, no AgentFly label used)
 Shell probe with a `sleep` job, then the `service` module with a patched label, a temporary HOME and `/bin/sleep` as the program:
@@ -65,7 +84,7 @@ launchctl list | grep probe -> nothing
 Left behind: one entry `"dev.agentfly.v3bprobe54766" => enabled` in launchd's override list, from my first shell probe, which ran `launchctl enable`
 (that is why the code no longer does unless needed). Harmless; it cannot be removed without root.
 
-### Manual checklist for the owner (after merge)
+### Manual checklist for the owner (all steps were run on 2026-10-19, see the section above)
 1. `uv build && uv tool install --force dist/*.whl`; `agentfly init -g` (needed: the hook client changed; until then `agentfly doctor` warns on `client`); quit and reopen Cursor.
 2. `agentfly start` prints "recorder answers on 127.0.0.1:8787". `launchctl list | grep agentfly` shows one row. Stop a recorder you run by hand first.
 3. `kill -9 $(pgrep -f 'agentfly.cli serve')`; `curl -s localhost:8787/health` answers again within 15 s.
