@@ -282,7 +282,10 @@ Blocked always, even before any secret is read, and no rules file can remove or
 weaken it:
 
 - touching AgentFly's config, data and system folders, any `hooks.json` (user,
-  system or project), the rules file or the token;
+  system or project), the rules file or the token, or the recorder's service file
+  in `~/Library/LaunchAgents` (named by its launchd label, with or without
+  `.plist`: `dev.agentfly.recorder`, and Homebrew's `sh.brew.agentfly` and older
+  `homebrew.mxcl.agentfly`);
 - commands that stop, unload or remove the recorder (`kill`, `pkill`,
   `launchctl`, `agentfly stop` and `agentfly uninstall`, `brew services`) or
   that name its port;
@@ -464,19 +467,42 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
   every event arrives twice.
 - **Run (D8).** `agentfly start`, `stop` and `status` use `brew services` for a
-  Homebrew install and AgentFly's own LaunchAgent otherwise. `agentfly serve`
-  runs the recorder in the foreground, which is how developers run it.
-- **`agentfly doctor`** checks everything installed: the hooks file and hook
-  client are intact and match their recorded hashes (D1), the bundled Python is
-  not writable by your user (D5), `KeepAlive` is set (D4), and `agentfly` on
-  `PATH` is ours. It also compares the registered events with the known list,
-  and reads Cursor's Hooks log for "Invalid … config" or "Failed to parse"
-  lines about AgentFly's file; either finding is a failure, not a warning
-  (D23). A missing hook client file turns it red (D5). It warns when
-  `~/.claude/settings.json` holds hooks on a gate event (D24, section 8).
+  Homebrew install (the package sits in `<prefix>/Cellar/agentfly/`) and
+  AgentFly's own LaunchAgent otherwise. `agentfly serve` runs the recorder in
+  the foreground, which is how developers run it.
+  - `start` writes `~/Library/LaunchAgents/dev.agentfly.recorder.plist`
+    (`RunAtLoad`, `KeepAlive`; it runs `serve` from the same install) and loads
+    it into your login session, then waits for `/health`. Run again, it changes
+    nothing, or reloads the job if the file would differ. It needs no `sudo`
+    and refuses to run under it.
+  - `stop` unloads the job and deletes the file, as `brew services stop` does,
+    so the recorder stays down at the next login too; `start` brings it back.
+  - `status` names the manager, says whether the job is loaded and running, and
+    shows what `GET /health` on port 8787 answers (exit 0 only when it answers).
+  - The recorder's access log is not kept; its start-up messages and errors go
+    to `~/.local/share/agentfly/logs/recorder.log`.
+- **`agentfly doctor`** prints one line per check (ok, warn or fail) and exits 1
+  if any fails. It needs no password. The checks: the hash record exists; the
+  bundled Python and the hook client match their recorded hashes (D1); nothing
+  in AgentFly's system folder can be written by your user, and it is owned by
+  the system user (D5); AgentFly's entries in the system `hooks.json` are the
+  ones `init -g` wrote; the service is loaded and running, its file is what
+  `start` writes, and `KeepAlive` is set (D4); `agentfly` on `PATH` is ours.
+  It also compares the registered events with the known list, and reads
+  Cursor's Hooks log for "Invalid … config" or "Failed to parse" lines about
+  AgentFly's file, or "No enterprise hooks configuration found" (Cursor has not
+  been restarted since `init -g`); each is a failure, not a warning (D23). A
+  missing hook client file turns it red (D5). It warns when
+  `~/.claude/settings.json` holds hooks on a gate event (D24, section 8). Each
+  fault turns its own line to fail: a check that depends on something another
+  line already fails on says "not checked".
 - **Uninstall (D8).** Run `agentfly uninstall` *before* `brew uninstall`:
   Homebrew leaves the service file behind. Uninstall removes AgentFly's hook
-  entries and the service. Only after that does the hook client stop guarding. If
+  entries and the system folder (under `sudo`, asked once), then, as your own
+  user, stops and removes the service. Run it without `sudo`: the service
+  belongs to your login session. If the system part fails the service is left
+  running, because the hooks are still registered. Only after that does the
+  hook client stop guarding. If
   you run `brew uninstall` first, the system-owned hook client stays behind,
   keeps denying outbound commands, and tells you to run `agentfly start`, which no
   longer exists; remove the entries by hand or reinstall and uninstall properly.
