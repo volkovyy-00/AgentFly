@@ -1,9 +1,20 @@
 # V8b: Recorder fields for the Why card and health strip
-Status: done (as of 2026-10-19 16:12)
+Status: done (as of 2026-10-19 16:37)
 Result: A blocked step on /api/steps now has rule_text, user_message and agent_message (the deny answer's own strings); a warned step has rule_text only; /health has last_hook_at; ?all=1 has marked_order. All in memory; answers, history.db and Neo4j unchanged. The page was not touched.
-Evidence: code commit c14c92e on ag-v8b-recorder-fields. Full check: ruff clean, 2557 passed, 5 skipped. New: tests/test_step_fields.py (18 tests) plus tests in test_memory, test_localstore, test_store. Live run on a throwaway HOME matched.
+Evidence: commits c14c92e (code) and d0f2a67 (simplify) on ag-v8b-recorder-fields. Check on d0f2a67: ruff clean, 2555 passed, 5 skipped. tests/test_step_fields.py: 16 tests. Page checked in Chrome: Why card shows all three fields, health strip shows the last hook. Cold audit: no findings.
 Needs owner: none
-Details: see "## 2026-10-19 16:12" below.
+Details: see "## 2026-10-19 16:37" below.
+
+## 2026-10-19 16:37
+Final verification of c14c92e + e28d705, then one simplify commit, d0f2a67. No behavior change.
+
+- **Smoke, real server.** A recorder from this branch on a free port under a throwaway HOME (port 8787 untouched). Two sessions posted: a merged R0-vs-R1 pair (kept R0 and its messages, the earlier half) and the `demo/scenario.json` replay. `/health` said `last_hook_at: null` at start, then a UTC millisecond time. `?all=1` and `?limit=1` both said `marked_order: 2`.
+- **Smoke, the page.** In Chrome, `/` showed the blocked step's Why card with a "Messages sent" block (rule text, `user_message`, `agent_message`, equal to the deny answer) and the health strip "Recorder up · last hook 16:14:54 · offline guard 0" (local time of `14:14:54Z`). No console messages across a reload. The page's own `parseSnapshot` on the live bodies gave the three fields and `markedOrder` 2.
+- **Suite.** `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`, run with `uv run` in this branch's own environment: 2557 passed, 5 skipped before the simplify pass, 2555 passed, 5 skipped after (two redundant tests removed).
+- **Simplify (four reviewers: reuse, simplification, efficiency, altitude).** Applied: `build_step_record` takes the two messages (no second record copy per hook); the new test file imports the helpers it had copied from `test_step_merge.py` and reads the scenario once; the demo replays under a `/w` workspace, because `Path.resolve` on macOS's autofs `/home` costs about 90 ms an event (measured); two tests that repeated others and one assertion removed; a docstring cut to one line.
+- **Simplify, skipped on purpose.** Deriving the two messages from `(verdict, rule_id)` instead of carrying them (two reviewers asked): SPEC §8 "The answers" makes the answer depend on the hook event (messages "where the event accepts both"; a shell warn answers `ask`), and a merged record no longer knows which half's event it is, so V5b's warn answers would break it. Also kept: the wrong-token test's `offline_guard_count` check and the Neo4j parameter-name list (both are brief criteria), a cache for `agent_message` (about 100 KB at the cap, stale once V5b loads rules from a file), storing `time.time()` for `last_hook_at` (4 µs a hook).
+- **Cold audit.** One agent with only the diff and the correctness brief: no findings. It probed merge order (a warned half then a blocked half; a blocked half then an `afterFileEdit` deny) with its own script.
+- **Not run.** The web check and stale-build check: `ui/` is untouched.
 
 ## 2026-10-19 16:12
 Done against `docs/briefs/V8b.md`. One code commit, c14c92e (code, tests, HOOKS.md, AGENTS.md "Testing"); this report is the second commit.
