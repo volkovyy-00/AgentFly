@@ -1,5 +1,5 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-19 14:40 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-19 14:50 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: V3b-V6b-merged. S1–S5, V1a, V2, V8, V2b ✅ (2026-10-16); V1b, V5a, V6, V3a, F3, F5, F6 ✅ (2026-10-18). V2c ✅ merged fb72286 (2026-10-19; 3×2164 passed, 5 skipped; lead probes 5/5). V3b ✅ ba6f488 and V6b ✅ a9b753f merged 2026-10-19 (lead /code-review high: 3 V3b fixes + 1 V6b SPEC line done by the workers; trial merge 3×2534 passed, 5 skipped; lead probes 16/16).
 Pending decisions: D16
 
@@ -15,7 +15,7 @@ Pending decisions: D16
 ## In flight
 none
 
-## Machine state (verified 2026-10-19 14:35 CEST)
+## Machine state (verified 2026-10-19 14:48 CEST)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent (V3a installed, then uninstalled). Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
 - `uv tool` agentfly-recorder 0.1.0 is the V3b branch build (V3b manual run); reinstall from main before any new manual check. V3b's run ended with `uninstall`: no LaunchAgent, no launchd row; one harmless override entry `dev.agentfly.v3bprobe54766 => enabled` stays (launchd cannot drop it).
 - Recorder: not running (no listener on 8787, /health no answer). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
