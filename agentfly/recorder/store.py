@@ -365,6 +365,12 @@ def build_step_record(
                 file_path = relative_file_path(token, root)
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
+        tool_input: Any = payload.get("tool_input")
+        written: Any = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+        if tool.casefold() == "write" and isinstance(written, str) and written:
+            # V2c: a Write that no specific hook follows still says which file it wrote.
+            file_path = relative_file_path(written, root)
+            file_sensitive = is_sensitive(written)
 
     if kind == "shell" and not file_sensitive:
         # The rule engine's own test, whatever this chat's mark is: the history and R1 agree.

@@ -16,7 +16,7 @@ import posixpath
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agentfly.recorder.store import StepRecord
@@ -26,6 +26,7 @@ WAIT_CAP: int = 32  # waiting preToolUse Read/Write entries per chat; the oldest
 IDS_CAP: int = 2000  # remembered (chat, tool_use_id) pairs; the oldest is forgotten
 UNKNOWN_CHAT: str = "unknown"  # shared name for events with no conversation id: no path fallback
 
+_PATHED: frozenset[str] = frozenset({"preToolUse", "beforeReadFile", "afterFileEdit"})
 _SPECIFIC: frozenset[str] = frozenset(
     {"beforeShellExecution", "beforeReadFile", "afterFileEdit", "beforeMCPExecution"}
 )
@@ -52,12 +53,10 @@ class Joined:
     """One step and the halves it was built from."""
 
     first: StepRecord  # the earliest half: order, time and link to the previous step
-    record: StepRecord  # the merged record last saved
     specific: StepRecord | None = None  # the latest half from a specific hook
     best: StepRecord | None = None  # the strictest half from a gate hook (not afterFileEdit)
     wrote: bool = False
-    before_read: bool = False  # a beforeReadFile is part of it
-    after_edit: bool = False  # an afterFileEdit is part of it
+    events: set[str] = field(default_factory=set)  # the hook events folded in so far
 
     def add(self, event: str, record: StepRecord, writes: bool) -> StepRecord:
         """Fold one more half in; return the merged record to save."""
@@ -68,12 +67,10 @@ class Joined:
         ):
             self.best = record
         self.wrote = self.wrote or writes
-        self.before_read = self.before_read or event == "beforeReadFile"
-        self.after_edit = self.after_edit or event == "afterFileEdit"
-        self.record = self._merged()
-        return self.record
+        self.events.add(event)
+        return self.merged()
 
-    def _merged(self) -> StepRecord:
+    def merged(self) -> StepRecord:
         base: StepRecord = self.specific or self.first
         verdict: StepRecord = self.best or base
         merged: StepRecord = replace(
@@ -120,21 +117,20 @@ class StepMerger:
         self._expire(now)
 
         step: Joined | None = self._ids.get((chat, call)) if call else None
-        path: str | None = action_path(payload) if chat != UNKNOWN_CHAT else None
+        path: str | None = None
+        if event in _PATHED and chat != UNKNOWN_CHAT:
+            path = action_path(payload)
         if step is None and not call and path is not None:
             step = self._pair(chat, event, path)
+        previous: StepRecord | None = step.merged() if step is not None else None
         if step is None:
-            step = Joined(first=record, record=record)
-            step.add(event, record, writes)
+            step = Joined(first=record)
             if call:
                 self._remember(chat, call, step)
-            previous = None
-        else:
-            previous = step.record
-            step.add(event, record, writes)
+        merged: StepRecord = step.add(event, record, writes)
         if event == "preToolUse" and path is not None and tool in {"read", "write"}:
             self._wait(chat, _Waiting(now, tool, path, step))
-        return step.record, previous
+        return merged, previous
 
     def _remember(self, chat: str, call: str, step: Joined) -> None:
         self._ids[(chat, call)] = step
@@ -155,16 +151,12 @@ class StepMerger:
     def _pair(self, chat: str, event: str, path: str) -> Joined | None:
         """The waiting preToolUse an id-less beforeReadFile / afterFileEdit belongs to."""
         entries: deque[_Waiting] | None = self._waiting.get(chat)
-        if not entries:
+        if not entries or event not in {"beforeReadFile", "afterFileEdit"}:
             return None
-        if event == "beforeReadFile":  # the oldest unpaired Read
-            for entry in entries:
-                if entry.kind == "read" and entry.path == path and not entry.step.before_read:
-                    entries.remove(entry)
-                    return entry.step
-        elif event == "afterFileEdit":  # the latest unconsumed Write
-            for entry in reversed(entries):
-                if entry.kind == "write" and entry.path == path and not entry.step.after_edit:
+        read: bool = event == "beforeReadFile"  # the oldest unpaired Read, else the latest Write
+        for entry in entries if read else reversed(entries):
+            if entry.kind == ("read" if read else "write") and entry.path == path:
+                if event not in entry.step.events:
                     entries.remove(entry)
                     return entry.step
         return None

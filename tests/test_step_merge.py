@@ -198,7 +198,29 @@ def test_an_after_edit_after_6_seconds_is_its_own_step(client: TestClient, clock
     post(client, pre("Write", "t1", path="/w/a.txt"))
     clock.now += 6.0
     post(client, edited("/w/a.txt"))
-    assert kinds(saved(client)) == ["edit", "edit"]  # the lone Write is an edit too: it writes
+    steps = saved(client)
+    assert kinds(steps) == ["edit", "edit"]  # the lone Write is an edit too: it writes
+    assert [s["file"] for s in steps] == ["a.txt", "a.txt"]
+
+
+@pytest.mark.parametrize(
+    ("chat", "path", "file", "sensitive"),
+    [
+        ("c", "/w/.env", ".env", True),
+        ("c", "rel/a.txt", "a.txt", False),
+        (None, "/w/a.txt", "a.txt", False),
+    ],
+    ids=["secret", "relative", "no-chat-id"],
+)
+def test_a_lone_write_names_its_file(
+    chat: str | None, path: str, file: str, sensitive: bool, client: TestClient
+) -> None:
+    body = pre("Write", "t1", path=path)
+    if chat is None:
+        del body["conversation_id"]
+    post(client, body)
+    [step] = live(client)
+    assert (step["kind"], step["file"], step["sensitive"]) == ("edit", file, sensitive)
 
 
 def test_each_after_edit_takes_the_latest_unused_write(client: TestClient) -> None:

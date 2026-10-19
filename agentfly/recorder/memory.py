@@ -104,12 +104,13 @@ class _Session:
         only: the cap is far above what two halves of one action are apart.
         """
         order: int = new["order"]
+        retained: bool = False
         for steps in (self.steps, self.evicted_flagged):
             for index in range(len(steps) - 1, -1, -1):
                 if steps[index]["order"] == order:
                     steps[index] = new
+                    retained = retained or steps is self.steps
                     break
-        retained: bool = any(step is new for step in self.steps)
         if not retained and not (self.steps and order < self.steps[0]["order"]):
             return False
         _count(self.counts, old, -1)
