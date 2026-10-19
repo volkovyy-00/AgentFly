@@ -104,6 +104,8 @@ V7 and V9 can run in parallel.
 - V2c ✅ 2026-10-19 · docs/reports/V2c.md · merged fb72286 · one step per action (id merge, path fallback); flaky history test fixed; history "marked" gap for edit steps accepted → V6b (owner 2026-10-19) · body: git show e2da26b:docs/BOARD.md
 - V3b ✅ 2026-10-19 · docs/reports/V3b.md · merged ba6f488 · start/stop/status (own LaunchAgent or brew services), doctor (12 lines), guards cover dev.agentfly.recorder, homebrew.mxcl.agentfly, sh.brew.agentfly; `stop` deletes the plist; lead review fixed doctor `path`, Homebrew `start`, uninstall message · body: git show e1d4aeb:docs/BOARD.md
 - V6b ✅ 2026-10-19 · docs/reports/V6b.md · merged a9b753f · history stores the marked flag (chat) and marking step (step); a fallback chat that later marks itself names that step (SPEC §4) · body: git show e1d4aeb:docs/BOARD.md
+- V8b ✅ 2026-10-19 · docs/reports/V8b.md · merged 9b2e00e · steps carry rule_text and the deny's messages (memory only), /health last_hook_at, ?all=1 marked_order; 2 low test/doc leftovers → fix card; UI notes (ui/README, useTrail comment) → UI card · body: git show 441ddd4:docs/BOARD.md
+- V3c ✅ 2026-10-19 · docs/reports/V3c.md · merged 07a8d7f · package check before sudo (links, extra files, own RECORD), same-version rebuild and upgrade ask (owner 2026-10-19), root -I -S -B on bundled Python, R0 guards tool env and uv/pipx/brew, doctor package line; leftovers → fix card · body: git show 441ddd4:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -112,11 +114,6 @@ V7 and V9 can run in parallel.
 ---
 
 ## v1 cards
-
-### V3c · Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
-- **Brief:** `docs/briefs/V3c.md` (authoritative). Package check (V3b's) and install-folder guard (moved from V5b to V3b by the owner 2026-10-18); split out of V3b (owner 2026-10-18). R0 also blocks reinstalling AgentFly; a version change needs the owner's confirm (owner 2026-10-18).
-- **Status:** in flight 2026-10-19 · worktree `.claude/worktrees/ag-v3c-package-check` · branch `ag-v3c-package-check` · report `docs/reports/V3c.md`
-- **Lane:** backend, next (V3b ✅); before V5b · **Depends on:** V3b ✅
 
 ### V4 · Homebrew formula and release workflow
 - **Owner:** worker-backend
@@ -168,17 +165,6 @@ V7 and V9 can run in parallel.
   - `ROUTE_WHITELIST` in `tests/test_app.py` is unchanged by this card.
   - Plain-language drafting is not included unless D13 is approved.
 
-### V8b · Recorder fields for the Why card and health strip
-- **Brief:** `docs/briefs/V8b.md` (authoritative; pass 2 done 2026-10-19). Adds `marked_order` to `?all=1` (V8 report's ask). Fields live in memory only.
-- **Status:** worker reports done 2026-10-19 16:37 (lead review pending; merge with V3c after a trial merge) · worktree `.claude/worktrees/ag-v8b-recorder-fields` · branch `ag-v8b-recorder-fields` · report `docs/reports/V8b.md` (shared with V3c: AGENTS.md "Testing" only)
-- **Lane:** backend, next (V6b ✅; same recorder files).
-- **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
-- **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.
-- **Done when:** each step on `/api/steps` carries `rule_text`, `user_message`
-  and `agent_message` when a rule fired, (the `highlighted` verdict comes from V5b), and `/health` carries `last_hook_at`
-  and `offline_guard_count`, under the names V8's page reads; nothing stored
-  gains content (SPEC §4); the route whitelist test is unchanged.
-
 ### V9 · UI: History and Rules tabs
 - **Owner:** worker-ui
 - **Lane:** UI, after V8; ∥ V7
@@ -196,7 +182,7 @@ V7 and V9 can run in parallel.
 ---
 
 ### F7 · Test speed and CI
-- **Owner:** worker-backend · brief written (docs/briefs/F7.md, pass 2 2026-10-19); the lead re-checks it after V3c and V8b merge · next after that merge, before V5b
+- **Owner:** worker-backend · brief written (docs/briefs/F7.md, pass 2 2026-10-19); the lead re-checks it against 07a8d7f before dispatch · next, before V5b (owner 2026-10-19)
 - **Scope (owner 2026-10-19: pytest-xdist approved, CI yes; CI on main pushes and pull requests only, macOS only; a red main blocks merges):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` on one worker; `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), actions pinned by SHA, `permissions: contents: read`, Node 22; arm64-only failures fixed in F7.
 - **Done when:** full suite passes 3 runs in a row under xdist, at most half the serial wall time; CI green on the owner's draft pull request.
 

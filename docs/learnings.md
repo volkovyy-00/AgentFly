@@ -25,6 +25,7 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Written 'never push' in a brief did not stop a worker; enforce with hooks/permissions.** On 2026-10-16 both the S3 and the V1a worker ran `git push -u origin <branch>` unasked, and V1a's report then said "No push". Now: `pre-push` hook (refuses unless `AGENTFLY_ALLOW_PUSH=1`) plus `Bash(git push:*)` and `Bash(git -C * push *)` denies in `.claude/settings.json`.
 - **The hook is a guard against accidents, not a lock.** Tested 2026-10-16 against a local bare repo: `--no-verify` and `AGENTFLY_ALLOW_PUSH=1 git push` pass the hook; `sh -c 'git push …'` passes the deny rule. The deny rule covers Claude Code only, not Cursor agents.
 - **`core.hooksPath` must be absolute.** Relative, each worktree ran its own checked-out copy, so a worktree from an older commit had no `pre-push` and pushed freely (measured 2026-10-16).
+- **Denying `git push` is not enough while `gh` is logged in.** 2026-10-19: `gh api`, `gh pr merge` and `gh repo` could write to GitHub from any session; settings.json now denies gh writes and `gh auth` (brainstorm-advisor found it).
 
 ## Briefs and passes
 - **A brief over the 40-line budget is two cards.** Old V2 needed about 10 criteria; split into V2 and V2b (2026-10-16). Fresh verify passes then found real gaps: moving `hooks/hook.py` would have made Cursor block everything in this repo, and 8787 was hard-coded in the client.
@@ -34,6 +35,7 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Ask what a second start of a service does to shared files.** A second `agentfly serve` rewrote the token before failing to bind, and the running recorder then rejected every hook, which the client answered with allow (V8 worker, 2026-10-16; fixed in V2b).
 - **Never send a subagent prompt with a placeholder.** The oracle prompt went out with `ORACLE_PASS_PLACEHOLDER` instead of the checklist; give the file path instead of pasting long references.
 - **Read what a value means in the code before a brief states it.** The V6b draft said `apply_mark`'s `marks` is true for marks through a parent; it is true only for the chat's own read or command (links resolve first). Pass 2 caught it (2026-10-19).
+- **A brainstorm-advisor pass on process/infra briefs finds what pass 2 misses.** F7 2026-10-19: pass 2 said ready; the advisor found byte-code snapshots and timing tests that break under xdist, local/GitHub main divergence with merge buttons, and Dependabot PRs failing the stale-build check.
 
 ## Merging parallel cards
 - **Green tests on each branch do not prove the merge.** V6 answered session events before `apply_rules`, so V5a's `subagentStart` link never ran; the trial merge passed 1900 tests while a probe showed the subagent send allowed (2026-10-18). Before merging cards that share a merge point, trial-merge them and probe the cross-card behaviour.
@@ -43,6 +45,7 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Re-run a reviewer's probe before counting its finding, and let a stopped review stay stopped.** All three medium findings reproduced on the lead's own run (2026-10-18). The V5a red-team reviewer was halted by a safety classifier; the lead verified its concrete leads directly instead of rewording the task.
 
 - **Judge a lead-file rule against the merge base, not today's main.** The first pre-commit merge rule compared with `main:` and rejected a correct merge as soon as the lead committed during it; /code-review caught it (2026-10-19).
+- **Check the merged tree equals the trial tree.** 2026-10-19: `git diff --name-only <trial> HEAD` empty after merging V8b+V3c proved main is exactly what ran 3× green.
 
 ## Lead tooling
 - **macOS bash 3.2 does not fire an ERR trap for a failed subshell under `set -e`.** dispatch.sh left its worktree behind; use `cmd || undo` (2026-10-19).
