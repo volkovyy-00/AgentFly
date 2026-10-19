@@ -37,10 +37,17 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 
 ## Merging parallel cards
 - **Green tests on each branch do not prove the merge.** V6 answered session events before `apply_rules`, so V5a's `subagentStart` link never ran; the trial merge passed 1900 tests while a probe showed the subagent send allowed (2026-10-18). Before merging cards that share a merge point, trial-merge them and probe the cross-card behaviour.
-- **A worker's merge-main commit can carry old lead files.** The pre-commit hook made the V3a worker unstage STATE/BOARD, so its merge commit kept old copies, and merging it into main would have reverted them. Merge such a branch with `--no-commit`, `git checkout HEAD -- docs/STATE.md docs/BOARD.md`, check the lead files' diff is empty, then commit (2026-10-18).
+- **A worker's merge-main commit can carry old lead files.** The V3a worker's merge commit kept old STATE/BOARD copies (2026-10-18). Since 42bfe0a the pre-commit hook lets a merge of a main commit carry that commit's copies, which equal the later merge base; still merge worker branches with `--no-commit` and check the lead files' diff is empty.
 - **Review each branch before the trial merge, and send the fixes back to its worker.** On 2026-10-19 a `/code-review high` of V3b and V6b raised 7 findings; checked against the code, 3 fixes and 1 SPEC line were kept. The one real bug (`doctor path` passing another venv's `agentfly`) had passed every test the worker wrote. The owner chose that workers make the fixes; trial-merge only after the fix commits.
 - **Check free disk before trial worktrees.** Each worktree's `.venv` plus a scratch trial filled the disk mid-test; pytest errors then looked like code failures (2026-10-18). `df -h /` first; remove merged worktrees.
 - **Re-run a reviewer's probe before counting its finding, and let a stopped review stay stopped.** All three medium findings reproduced on the lead's own run (2026-10-18). The V5a red-team reviewer was halted by a safety classifier; the lead verified its concrete leads directly instead of rewording the task.
+
+- **Judge a lead-file rule against the merge base, not today's main.** The first pre-commit merge rule compared with `main:` and rejected a correct merge as soon as the lead committed during it; /code-review caught it (2026-10-19).
+
+## Lead tooling
+- **macOS bash 3.2 does not fire an ERR trap for a failed subshell under `set -e`.** dispatch.sh left its worktree behind; use `cmd || undo` (2026-10-19).
+- **Check a scratch test reached the step it tests.** Two of the 2026-10-19 tooling tests stopped early (a `//` in `$TMPDIR`, a wrong slug) and looked like passes or fails of the code. Resolve paths with `pwd -P`; print each case's outcome.
+- **Hook output of 10,000 chars or more becomes a 2,000-char preview.** lead-context.sh builds the whole output and shortens its tail before that cap (2026-10-19).
 
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).

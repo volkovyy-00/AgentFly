@@ -170,7 +170,7 @@ V7 and V9 can run in parallel.
 
 ### V8b · Recorder fields for the Why card and health strip
 - **Brief:** `docs/briefs/V8b.md` (authoritative; pass 2 done 2026-10-19). Adds `marked_order` to `?all=1` (V8 report's ask). Fields live in memory only.
-- **Status:** in flight 2026-10-19 ∥ V3c · worktree `.claude/worktrees/ag-v8b-recorder-fields` · branch `ag-v8b-recorder-fields` · report `docs/reports/V8b.md` (shared with V3c: AGENTS.md "Testing" only)
+- **Status:** worker reports done 2026-10-19 16:37 (lead review pending; merge with V3c after a trial merge) · worktree `.claude/worktrees/ag-v8b-recorder-fields` · branch `ag-v8b-recorder-fields` · report `docs/reports/V8b.md` (shared with V3c: AGENTS.md "Testing" only)
 - **Lane:** backend, next (V6b ✅; same recorder files).
 - **Depends on:** V2b (it adds the offline-guard count to `/health`), V8 (field names)
 - **May touch:** the recorder's step record, `/api/steps` and `/health`; tests.

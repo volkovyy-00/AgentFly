@@ -56,5 +56,6 @@ In Codex or Cursor (no hook, no system prompt) the owner pastes: "You are the Ag
 - A worker writes `docs/reports/<card>.md` per `docs/reports/README.md`. Lines 2–6 are Status, Result, Evidence, Needs owner, Details. Spikes keep `docs/spikes/<id>.md` with the same top block.
 - The lead reads only `head -n 6` unless something needs checking. Evidence means pasted command output, file paths, test names.
 - The owner pastes "V2 report ready", never a transcript.
+- Unasked, before every dispatch (owner 2026-10-19): write the brief, or re-check an existing one against main, with the agent-ready-tickets skill and a fresh-context pass-2 reviewer, then re-stamp "Written against". Tell the owner in 2–3 lines what changed. The owner still says "go".
 - Dispatch a card with `docs/roles/dispatch.sh <card> <slug>`: it makes the worktree and branch and prints the owner's start command.
 - Worker brief, line 1: "You are a worker on card <ID> in <worktree>. Follow AGENTS.md and this brief; report per docs/reports/README.md. Never push; commit on your branch only, the lead merges."
