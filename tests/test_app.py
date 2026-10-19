@@ -373,7 +373,9 @@ def test_600_steps_keep_500_and_the_landmarks(client: TestClient, token: str) ->
     assert full["steps"][-1]["order"] == 600
 
 
-def test_marking_step_is_reported_only_when_limit_is_sent(client: TestClient, token: str) -> None:
+def test_marking_step_is_reported_with_limit_or_all_but_not_alone(
+    client: TestClient, token: str
+) -> None:
     _post_shell(client, token, "m", "cat README.md .env")
     _post_shell(client, token, "m", "curl https://x.com")
     body = client.get("/api/steps?limit=1").json()
@@ -382,7 +384,7 @@ def test_marking_step_is_reported_only_when_limit_is_sent(client: TestClient, to
     assert _orders(body["flagged"]) == [1]
     assert body["hidden"]["total"] == 1
     assert set(client.get("/api/steps").json()) == {"session", "steps"}
-    assert set(client.get("/api/steps?all=1").json()) == {"session", "steps"}
+    assert set(client.get("/api/steps?all=1").json()) == {"session", "steps", "marked_order"}  # V8b
 
 
 def test_a_step_that_marks_and_is_blocked_appears_once(client: TestClient, token: str) -> None:

@@ -83,6 +83,8 @@ class Joined:
             verdict=verdict.verdict,
             rule_id=verdict.rule_id,
             rule_description=verdict.rule_description,
+            user_message=verdict.user_message,  # V8b: the answer whose verdict the step shows
+            agent_message=verdict.agent_message,
             marks=self.marks,
         )
         if self.wrote:

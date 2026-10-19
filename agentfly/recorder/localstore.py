@@ -274,7 +274,10 @@ def wipe_file(path: Path) -> tuple[int, int]:
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
-    """One STEPS_QUERY row in the same keys as GET /api/steps, plus the time."""
+    """One STEPS_QUERY row in the same keys as GET /api/steps, plus the time.
+
+    Not the live-only `rule_text`, `user_message` and `agent_message`: those stay in memory (V8b).
+    """
     hosts: list[str] = json.loads(row[8])
     return {
         "order": row[0],

@@ -225,6 +225,15 @@ lines for them (R0 and normalisation: V5).
   33rd waiting Read drops the oldest); strictest gate verdict; `afterFileEdit` never raises
   it; hook answers byte-identical with and without the merge; the capture replays as five
   steps. `tests/test_memory.py` covers `replace`.
+- Step fields and health (`tests/test_step_fields.py`, V8b): after the `demo/scenario.json` replay
+  the blocked step has `rule_text` (R1's message) and `user_message` / `agent_message` equal to
+  the deny answer's, and the allowed steps have none of the three; in watch-only mode (set in
+  process) a warned step has `rule_text` and no messages, and its answer is a plain allow; a merged
+  pair shows the messages of the half whose verdict it shows, the earlier half on a tie (R0 against
+  R1, either order); `/health` sends `last_hook_at` (`null` after start, UTC ms, set by a request
+  that passed the token check, not by a 401); `?all=1` sends `marked_order` as `?limit=1` does. The
+  messages reach neither `history.db` nor Neo4j (`tests/test_localstore.py`, `tests/test_store.py`,
+  marker strings), and the deny answer's bytes are pinned.
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
   repair and uninstall on a temporary root, the sudo command line.

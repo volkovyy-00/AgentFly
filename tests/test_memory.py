@@ -268,3 +268,62 @@ def test_replace_of_an_unknown_step_is_added() -> None:
     memory = MemorySteps()
     memory.replace_from_record(rec(4), rec(4, "read"))
     assert [s["order"] for s in memory.snapshot(all_steps=True)["steps"]] == [4]
+
+
+# ---------------------------------------------------------------- V8b: rule text, messages, marker
+
+
+def test_a_step_a_rule_fired_on_carries_its_text_and_an_allowed_one_carries_nothing() -> None:
+    memory = MemorySteps()
+    memory.append_from_record(rec(1, "shell"))
+    memory.append_from_record(
+        rec(
+            2,
+            "shell",
+            "blocked",
+            rule_id="R1",
+            rule_description="why",
+            user_message="u",
+            agent_message="a",
+        )
+    )
+    memory.append_from_record(rec(3, "shell", "warned", rule_id="R1", rule_description="why"))
+    plain, blocked, warned = memory.snapshot(all_steps=True)["steps"]
+    keys = {"rule_text", "user_message", "agent_message"}
+    assert keys.isdisjoint(plain)
+    assert (blocked["rule_text"], blocked["user_message"], blocked["agent_message"]) == (
+        "why",
+        "u",
+        "a",
+    )
+    assert warned["rule_text"] == "why"
+    assert "user_message" not in warned and "agent_message" not in warned
+
+
+def test_the_fields_travel_with_flagged_and_replaced_steps() -> None:
+    memory = MemorySteps(cap=2)
+    memory.append_from_record(
+        rec(1, "shell", "blocked", rule_id="R1", rule_description="why", user_message="u")
+    )
+    for order in (2, 3):
+        memory.append_from_record(rec(order, "shell"))  # step 1 leaves the window for `flagged`
+    [flagged] = window(memory, 1)["flagged"]
+    assert (flagged["rule_text"], flagged["user_message"]) == ("why", "u")
+    memory.replace_from_record(
+        rec(3, "shell"), rec(3, "shell", "blocked", rule_id="R0", rule_description="w3")
+    )
+    assert memory.snapshot(all_steps=True)["steps"][-1]["rule_text"] == "w3"
+
+
+def test_all_steps_snapshot_names_the_marking_step() -> None:
+    memory = MemorySteps()
+    assert memory.snapshot(all_steps=True) == {"session": None, "steps": [], "marked_order": None}
+    memory.append_step("s", make_step(1))
+    assert memory.snapshot(all_steps=True)["marked_order"] is None
+    memory.append_step("s", make_step(2), marks=True)
+    memory.append_step("s", make_step(3))
+    assert memory.snapshot(all_steps=True)["marked_order"] == 2
+    assert (
+        memory.snapshot(all_steps=True)["marked_order"] == memory.snapshot(limit=1)["marked_order"]
+    )
+    assert set(memory.snapshot()) == {"session", "steps"}

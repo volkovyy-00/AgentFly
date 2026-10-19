@@ -186,7 +186,11 @@ def test_serve_answers_health_and_serves_the_page_from_the_wheel(
     installed: Installed, running_recorder: tuple[int, Path]
 ) -> None:
     port, home = running_recorder
-    assert json.loads(fetch(port, "/health")[1]) == {"ok": True, "offline_guard_count": 0}
+    assert json.loads(fetch(port, "/health")[1]) == {
+        "ok": True,
+        "offline_guard_count": 0,
+        "last_hook_at": None,
+    }
     status, page = fetch(port, "/")
     assert status == 200 and b'<div id="root"' in page
     asset = re.search(rb'/assets/[^"\']+', page)

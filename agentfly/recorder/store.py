@@ -51,6 +51,10 @@ class StepRecord:
     # The command as typed, only when CLEAN_COMMANDS is off. Neo4j's Command node reads it;
     # `command` (history, live trail) is always the cleaned text.
     raw_command: str | None = field(default=None, repr=False, compare=False)
+    # V8b: the deny answer's messages, for the live page's Why card. Memory only: no store writes
+    # these (the rule's own text is `rule_description`).
+    user_message: str | None = field(default=None, repr=False, compare=False)
+    agent_message: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def step_id(self) -> str:

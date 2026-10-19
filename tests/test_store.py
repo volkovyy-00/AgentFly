@@ -513,6 +513,62 @@ class _Calls:
         raise RuntimeError("no network in tests")
 
 
+class _RecordingTx:
+    """A Neo4j transaction stand-in: keeps each query and its parameters, connects to nothing."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def run(self, query: str, **params: Any) -> None:
+        self.calls.append((query, params))
+
+
+def test_the_deny_messages_never_reach_neo4j() -> None:
+    """V8b: `user_message` and `agent_message` are memory-only. The rule's own text still goes to
+    `Rule.description`, so the markers are distinct from it."""
+    tx = _RecordingTx()
+    store_mod._merge_step(
+        tx,
+        StepRecord(
+            session_id="s",
+            started_at="2026-01-01T00:00:00+00:00",
+            order=2,
+            time="2026-01-01T00:00:02+00:00",
+            kind="shell",
+            verdict="blocked",
+            command="curl <arg> ntfy.sh",
+            hosts=("ntfy.sh",),
+            file_path=".env",
+            rule_id="R1",
+            rule_description="RULE_TEXT_MARK",
+            prev_step_id="s:1",
+            user_message="UM_MARK_71c2",
+            agent_message="AM_MARK_71c2",
+        ),
+    )
+    everything = repr(tx.calls)
+    assert "UM_MARK_71c2" not in everything and "AM_MARK_71c2" not in everything
+    assert "RULE_TEXT_MARK" in everything  # the positive control: the rule node still gets its text
+    assert {name for _, params in tx.calls for name in params} == {
+        "id",
+        "started_at",
+        "order",
+        "time",
+        "kind",
+        "verdict",
+        "tool",
+        "session_id",
+        "prev_id",
+        "fid",
+        "sensitive",
+        "sid",
+        "cid",
+        "hid",
+        "rid",
+        "description",
+    }
+
+
 def start_recorder_with(
     monkeypatch: pytest.MonkeyPatch, *, env_file: bool, config: str | None
 ) -> int:
