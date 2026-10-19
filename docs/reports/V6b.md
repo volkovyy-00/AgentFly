@@ -1,9 +1,19 @@
 # V6b: History shows which chats were marked, and by which step
-Status: done (as of 2026-10-19 12:10)
+Status: done (as of 2026-10-19 12:11)
 Result: History lists a chat as marked whenever the rules did (Read+Write of .env, subagent, parent marked by its subagent, 30-minute fallback) and /api/sessions/{id}/steps names the marking step (marked_order). Old history.db opens with no loss. Hook answers unchanged.
-Evidence: commit e1f42ff on ag-v6b-history-mark. Full check: 2198 passed, 5 skipped (baseline 2164 before the card). New tests/test_history_mark.py has 27. Upgrade smoke on a file written by the real fb72286 code: all rows kept, same flags.
+Evidence: commits e1f42ff, d3514e4 on ag-v6b-history-mark. Full check: 2196 passed, 5 skipped (baseline 2164). Real-server smoke: bug seen on the base commit, fixed on the branch, same after a restart. Upgrade smoke on a file written by the real fb72286 code.
 Needs owner: none
-Details: see "## 2026-10-19 12:10" below.
+Details: see "## 2026-10-19 12:11" below.
+
+## 2026-10-19 12:11
+Final verification (smoke, full check, simplify, independent audit) on e1f42ff + af3c012. Fixes are in d3514e4.
+
+- **Smoke, real servers.** Same 18 hook events replayed over HTTP to `agentfly serve` built from the base commit e1d4aeb and from the branch. Base: `edit-env`, `parent`, `mp-child` and `fallback-chat` listed as not marked, and `/steps` has no `marked_order`. Branch: all four marked; `cat-env`, `edit-env`, `child`, `mp`, `fp` name step 1; `parent`, `mp-child`, `fallback-chat` have no marking step; `lone-write`, `example`, `other-workspace` not marked. The table is the same after a recorder restart. Hook answers are identical on both (one deny, the `curl` after `cat .env`).
+- **Audit finding, confirmed and fixed.** The marking step (`steps.marks`) and its chat's flag (`sessions.marked`) were two queue items. With exactly one free slot the step was accepted and the flag dropped, so a chat whose last event was the marking one stayed "not marked" while `/steps` named its marking step. A failing test came first (`test_a_marking_step_marks_its_chat_in_the_same_write`); the step's own transaction now also sets the flag. The separate item stays for flags that come through links.
+- **Audit, no other findings.** 300 random event sequences, and 200 with two restarts each, matched an oracle taken from `SessionStore`: history `marked_order` = live memory order, at most one marking step per chat, `marks` implies `marked`. Eight processes opened one old-schema file at once without a failure and without losing a row.
+- **Simplify (behavior unchanged).** One listing template for the current and the pre-V6b query; one atomic upgrade check instead of per-column steps; `mark_sessions` drops quietly on a full queue (`flag_marked` already guards the call); the new tests import the helpers they had copied and use one deterministic route-level test for the first read after an upgrade. Removed: a merger unit test covered by the Read+Write tests (replacing the OR with a plain assignment still fails 4 tests, re-run on the final tree), and an old test that could not fail. `tests/test_history_mark.py` now has 26 tests.
+- **Checks on the final tree.** `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 2196 passed, 5 skipped.
+- **Skipped on purpose.** Dropping the `marks=` argument from `memory.py` (the step record now carries the same flag): it is outside this card's files and differs in one edge case; worth doing in V8b, which changes the step record again.
 
 ## 2026-10-19 12:10
 Done against `docs/briefs/V6b.md`. One commit, e1f42ff (code, tests, SPEC §4, AGENTS.md "Testing").
