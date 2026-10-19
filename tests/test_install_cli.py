@@ -12,10 +12,11 @@ from typing import IO
 import pytest
 
 from agentfly.cli import build_parser, init, main, uninstall
-from agentfly.install import elevate, installer, pythons
+from agentfly.install import elevate, installer, pythons, service
 from agentfly.install.layout import SYSTEM, Layout
 from tests.helpers import REPO
 from tests.install_helpers import fake_python_tar, make_cursor_app, make_layout, write_archive
+from tests.service_helpers import Launchd
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
@@ -215,3 +216,133 @@ def test_an_oserror_that_escapes_the_installer_is_still_one_line(
     assert main(["uninstall"]) == 1
     err = capsys.readouterr().err.strip()
     assert len(err.splitlines()) == 1 and "Permission denied" in err and "Traceback" not in err
+
+
+# ---------------------------------------------------------------- the service goes too (V3b)
+
+
+def install_system(system: Layout, tmp_path: Path) -> None:
+    path, build = write_archive(tmp_path / "dl", fake_python_tar())
+    installer.install(
+        system, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+    )
+
+
+def install_and_start(system: Layout, tmp_path: Path) -> None:
+    install_system(system, tmp_path)
+    service.start()
+
+
+def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None) -> int:
+        installer.uninstall(system)
+        return 0
+
+    monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
+
+
+def test_uninstall_also_stops_and_removes_the_service(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_and_start(system, tmp_path)
+    plist = service.plist_path()
+    assert launchd.loaded() == [service.LABEL] and plist.exists()
+    uninstall_through_a_fake_sudo(system, monkeypatch)
+    assert main(["uninstall"]) == 0
+    assert (
+        launchd.loaded() == [] and not plist.exists()
+    )  # `launchctl list | grep agentfly` is empty
+    out = capsys.readouterr().out
+    assert "unloaded" in out and out.rstrip().endswith(uninstall.RESTART_HINT)
+
+
+def test_uninstall_leaves_the_service_alone_when_the_system_part_fails(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_and_start(system, tmp_path)
+    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: 1)
+    assert main(["uninstall"]) == 1
+    assert launchd.loaded() == [service.LABEL]  # the service part never ran
+    err = capsys.readouterr().err
+    assert len(err.splitlines()) == 1
+    assert "sudo part failed" in err and "exit 1" in err
+    assert "service was not touched" in err and "agentfly uninstall" in err
+
+
+def test_a_failed_system_part_does_not_claim_what_it_cannot_know(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The elevated part removed the hook entries, then failed on the folder: the hooks are gone."""
+    install_and_start(system, tmp_path)
+
+    def removes_the_entries_then_fails(tail: list[str], stdin: IO[bytes] | None = None) -> int:
+        installer.uninstall(system)
+        return 1
+
+    monkeypatch.setattr(elevate, "run_elevated", removes_the_entries_then_fails)
+    assert main(["uninstall"]) == 1
+    err = capsys.readouterr().err
+    assert "still registered" not in err and "left running" not in err
+    assert launchd.loaded() == [service.LABEL]  # untouched, as the message says
+
+
+def test_a_cancelled_password_prompt_with_no_service_installed_says_the_same(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_system(system, tmp_path)
+    assert launchd.loaded() == []
+    monkeypatch.setattr(elevate, "run_elevated", lambda tail, stdin=None: 1)
+    assert main(["uninstall"]) == 1
+    err = capsys.readouterr().err
+    assert "sudo part failed" in err and "service was not touched" in err
+    assert "left running" not in err and "still registered" not in err
+
+
+def test_uninstall_removes_a_service_even_when_nothing_else_is_installed(
+    system: Layout,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service.start()  # `start` without `init -g`
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["uninstall"]) == 0
+    out = capsys.readouterr().out
+    assert launchd.loaded() == [] and "unloaded" in out
+    assert "nothing of AgentFly's is installed" not in out
+
+
+def test_a_service_that_will_not_unload_is_one_line_and_a_second_run_finishes_it(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_and_start(system, tmp_path)
+    uninstall_through_a_fake_sudo(system, monkeypatch)
+    launchd.update(bootout_lag=10_000)
+    monkeypatch.setattr(service, "UNLOAD_TIMEOUT", 0.05)
+    assert main(["uninstall"]) == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and "service" in err and "agentfly uninstall" in err
+    launchd.update(bootout_lag=0, jobs={})
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["uninstall"]) == 0
+    assert not service.plist_path().exists()

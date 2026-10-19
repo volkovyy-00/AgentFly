@@ -15,7 +15,6 @@ moves toward it card by card. So:
 The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 
 ## Commands
-These are today's commands; `start`, `stop`, `status` and `doctor` (V3b) add to them.
 - Install deps: `uv sync`
 - Install for every project (one `sudo`; bundled Python and hook client in
   `/Library/Application Support/AgentFly/`, tagged entries in
@@ -23,6 +22,12 @@ These are today's commands; `start`, `stop`, `status` and `doctor` (V3b) add to 
   `agentfly uninstall` (our entries first, then the folder). Quit and reopen Cursor after
   either: it reads the system file only at start-up. The installed client is a copy, so a
   hook client change needs `init -g` again.
+- Run the recorder as a service (no `sudo`): `agentfly start` writes and loads
+  `~/Library/LaunchAgents/dev.agentfly.recorder.plist` (`KeepAlive`; `brew services` inside a
+  Homebrew keg) and waits for `/health`; `agentfly stop` unloads it and deletes the file;
+  `agentfly status` says who runs it and what `/health` answers. `agentfly uninstall` removes it
+  too. A dev checkout runs `uv run agentfly serve` instead; both on port 8787 do not work.
+- Check an install: `agentfly doctor` (one line per check, exit 1 on any fail, no password).
 - Dev-only wiring (writes gitignored `.cursor/hooks.json`): `./install.sh`. With `init -g`
   also installed, every event arrives twice.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
@@ -214,6 +219,21 @@ lines for them (R0 and normalisation: V5).
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
   repair and uninstall on a temporary root, the sudo command line.
+- Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
+  `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
+  it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
+  a Homebrew keg with a stub `brew` runs `brew services`, writes no LaunchAgent and removes the
+  one an earlier install left; `uninstall` removes the service and, when its system part fails,
+  says only that and leaves the service alone (`tests/test_install_cli.py`). An autouse fixture
+  in `tests/conftest.py` gives every test a stub `launchctl` and a closed health port, so no test
+  reaches the real launchd or port 8787. The service labels are guard paths for R0 and the
+  offline guard (`tests/cases.py`), and `_R0_PATHS` must equal `_GUARD_PATHS`
+  (`tests/test_r0.py`).
+- Doctor (`tests/test_doctor.py`): a clean install is all ok; each listed fault turns only its
+  own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
+  Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
+  Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
+  file itself has not been seen).
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole

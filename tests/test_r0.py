@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+import agentfly.hook_client as hook_client
 import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
 from agentfly.recorder.paths import config_dir
@@ -65,6 +66,11 @@ def test_r0_is_the_first_rule_and_a_block() -> None:
 
 
 # ---------------------------------------------------------------- guard paths
+
+
+def test_the_recorder_and_the_hook_client_guard_the_same_paths() -> None:
+    # SPEC section 9: the offline guard is a copy of R0's path list; the two must not drift.
+    assert rules_mod._R0_PATHS == hook_client._GUARD_PATHS
 
 
 @pytest.mark.parametrize("path", GUARD_PATHS)

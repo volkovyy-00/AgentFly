@@ -167,6 +167,17 @@ GUARD_PATHS: list[str] = [
     "~/.config/./agentfly/token",
     "~/.config/x/../agentfly/token",
     "/Users/me/./.local/share/agentfly/../agentfly/sessions.json",
+    # the recorder's service file, and the label itself (`defaults` adds `.plist` on its own)
+    "~/Library/LaunchAgents/dev.agentfly.recorder.plist",
+    "/Users/me/Library/LaunchAgents/dev.agentfly.recorder.plist",
+    "$HOME/Library/LaunchAgents/dev.agentfly.recorder.plist",
+    "~/Library/LaunchAgents/dev.agentfly.recorder",
+    "~/Library/LaunchAgents/homebrew.mxcl.agentfly.plist",
+    "~/Library/LaunchAgents/sh.brew.agentfly.plist",
+    "/Library/LaunchAgents/sh.brew.agentfly.plist",
+    "~/LIBRARY/LAUNCHAGENTS/DEV.AGENTFLY.RECORDER.PLIST",
+    "~/Library//LaunchAgents/./dev.agentfly.recorder.plist",
+    "~/Library/LaunchAgents/x/../dev.agentfly.recorder.plist",
 ]
 # Shell commands that touch a guard path; each is built from GUARD_PATHS by `path_commands`.
 SHELL_TEMPLATES: list[str] = [
@@ -226,6 +237,15 @@ R0_COMMANDS: list[str] = [
     "launchctl remove homebrew.mxcl.agentfly",
     "launchctl kill TERM gui/501/homebrew.mxcl.agentfly",
     "launchctl stop homebrew.mxcl.agentfly",
+    "launchctl bootstrap gui/501 ~/Library/LaunchAgents/dev.agentfly.recorder.plist",
+    "launchctl kickstart -k gui/501/dev.agentfly.recorder",
+    "launchctl bootout gui/501/dev.agentfly.recorder",
+    "launchctl bootout gui/501/sh.brew.agentfly",
+    "launchctl disable gui/501/dev.agentfly.recorder",
+    "defaults write ~/Library/LaunchAgents/dev.agentfly.recorder KeepAlive -bool NO",
+    "plutil -replace KeepAlive -bool NO ~/Library/LaunchAgents/dev.agentfly.recorder.plist",
+    "cd ~/Library/LaunchAgents && rm dev.agentfly.recorder.plist",  # a bare name after a `cd`
+    "cd ~/Library/LaunchAgents && rm homebrew.mxcl.agentfly.plist",
     "pkill agentfly",
     "pkill -f agentfly",
     'pkill -9 -f "agentfly serve"',
@@ -271,6 +291,7 @@ R0_ALLOWED: list[str] = [
     "kill $!",
     "agentfly doctor",
     "agentfly start",
+    "agentfly status",
     "agentfly --help",
     "agentfly-hook cursor beforeShellExecution",
     "uv run pytest -q tests/test_r0.py",
@@ -283,6 +304,8 @@ R0_ALLOWED: list[str] = [
     "brew services list",
     "brew install agentfly",
     "launchctl list",
+    "launchctl list | grep agentfly",  # the check the V3b card uses after `uninstall`
+    "ls ~/Library/LaunchAgents",
     "curl localhost:8000/health",
     "curl http://127.0.0.1:18787/x",
     "git show a8787b2",

@@ -65,11 +65,12 @@ These files count as sensitive (decided by file name only):
 ## Installation
 
 AgentFly watches every Cursor project on this Mac, and the agent cannot switch it off without
-your password. Two commands, macOS only:
+your password. Three commands, macOS only:
 
 ```bash
 uv build && uv tool install dist/*.whl   # from a clone; the PyPI and Homebrew releases come later
 agentfly init -g                          # asks for your password once
+agentfly start                            # the recorder, as a background service
 ```
 
 `agentfly init -g` downloads a pinned, checksum-verified Python and copies the hook client into
@@ -87,16 +88,44 @@ system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s
 `init -g` and `uninstall` run the installed AgentFly package as root, so they are only as
 trustworthy as that package and the Python it was installed with, which your user (and so the
 agent) can write. Run them from a tool environment you just installed, not one an agent has
-had access to. After install, `agentfly doctor` (next card) compares the recorded hashes.
+had access to.
+
+**The recorder as a service.** `agentfly start` runs the recorder in the background and starts it
+at every login. It restarts by itself within seconds if it is killed (launchd `KeepAlive`). For an
+install from Homebrew it uses `brew services` (and unloads and removes the LaunchAgent below if an
+earlier, non-Homebrew install left one); otherwise it writes
+`~/Library/LaunchAgents/dev.agentfly.recorder.plist` and loads it, then waits until
+`127.0.0.1:8787/health` answers. It needs no password; do not run it with `sudo`.
+
+```bash
+agentfly status     # who runs the recorder, whether it runs, and what /health answers
+agentfly stop       # unload it and remove the file; it stays down until `agentfly start`
+agentfly doctor     # one line per check: ok, warn or fail (exit 1 on any fail)
+```
+
+While the recorder is stopped, AgentFly's hook client still denies outbound commands and edits of
+AgentFly's own files (the offline guard) and tells you to run `agentfly start`.
+
+`agentfly doctor` compares the installed Python and hook client with the hashes recorded at
+install, checks that nothing in AgentFly's system folder can be written by your user, that
+AgentFly's entries in Cursor's hooks file are the ones `init -g` wrote, that the service is running
+with `KeepAlive` (and, for Homebrew, that no LaunchAgent of AgentFly's is loaded next to it), that
+`agentfly` on your `PATH` is this install's (not another venv's), and that Cursor's Hooks log says it
+loaded the hooks (so it fails until you restart Cursor after `init -g`). It warns when
+`~/.claude/settings.json` has hooks on an event that can allow or deny an action. It needs no
+password.
 
 To remove everything, run this **before** `uv tool uninstall`:
 
 ```bash
-agentfly uninstall                  # asks for your password once
+agentfly uninstall                  # asks for your password once; do not run it with sudo
 ```
 
 It removes AgentFly's hook entries first, then moves its system folder out of the way and
-deletes it, so an interrupted run never leaves Cursor denying every action. Other tools' entries
+deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
+user, it stops the recorder service and deletes its file (`launchctl list | grep agentfly` prints
+nothing afterwards). If the system part fails, the service is not touched; run `agentfly uninstall`
+again. Other tools' entries
 are left alone, and if the file is unchanged since `init -g` it is given back byte for byte. It
 refuses, and changes nothing, if another entry still runs files from AgentFly's folder or the
 hooks file cannot be read as JSON but names that folder. A file-system error ends with a
@@ -113,8 +142,9 @@ mark it as **trusted**, and restart Cursor if the hooks do not show under **Sett
 
 ## Usage
 
-**1. Start the recorder** in a separate terminal (not Cursor's own
-terminal), so the agent cannot reach its environment.
+**1. Start the recorder.** After the installation above, `agentfly start` has already done it, and
+it keeps running. To run it in the foreground instead (development), use a separate terminal (not
+Cursor's own terminal), so the agent cannot reach its environment.
 
 ```bash
 uv run agentfly serve          # 127.0.0.1:8787; --port N picks another port
@@ -304,7 +334,7 @@ a separate credentials file for a test database, and are skipped otherwise.
 | `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, fails open |
 | `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it until `agentfly init` |
 | `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, local history (`localstore.py`, `api/`), Neo4j store, file locations (`paths.py`) |
-| `agentfly/cli/` | The `agentfly` command (`serve`, `wipe`) |
+| `agentfly/cli/` | The `agentfly` command (`serve`, `start`, `stop`, `status`, `doctor`, `init`, `uninstall`, `wipe`) |
 | `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
 | `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
