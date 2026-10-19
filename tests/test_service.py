@@ -75,7 +75,11 @@ def test_start_writes_a_keepalive_plist_and_loads_it(isolated_home: Path, launch
     assert plist["StandardOutPath"] == "/dev/null"  # the access log is one line per hook
     assert plist["StandardErrorPath"].endswith(".local/share/agentfly/logs/recorder.log")
     assert stat.S_IMODE(plist_file(isolated_home).stat().st_mode) == 0o644
-    assert launchd.verbs() == ["print", "enable", "bootstrap"]
+    assert launchd.verbs() == [
+        "print",
+        "print-disabled",
+        "bootstrap",
+    ]  # no `enable`: it is for good
     assert launchd.loaded() == [LABEL]
     assert any("loaded" in line for line in messages)
 
@@ -103,9 +107,16 @@ def test_start_with_a_changed_plist_reloads_it(isolated_home: Path, launchd: Lau
     launchd.forget_calls()
     service.start()
     assert launchd.verbs()[:2] == ["print", "bootout"]
-    assert launchd.verbs()[-2:] == ["enable", "bootstrap"]
+    assert launchd.verbs()[-2:] == ["print-disabled", "bootstrap"]
     assert plist_on_disk(isolated_home)["KeepAlive"] is True
     assert launchd.loaded() == [LABEL]
+
+
+def test_start_enables_a_label_that_was_switched_off(launchd: Launchd) -> None:
+    launchd.update(disabled=[LABEL])  # under System Settings > Login Items
+    service.start()
+    assert launchd.verbs() == ["print", "print-disabled", "enable", "bootstrap"]
+    assert launchd.state()["disabled"] == []
 
 
 def test_start_waits_while_launchd_tears_the_old_job_down(

@@ -5,7 +5,8 @@ code uses and prints what the real tool printed on macOS 15.7 (`print` of a miss
 `bootout` of a missing job exits 3, a loaded KeepAlive job shows `properties = keepalive | ...`).
 `bootout_lag` makes a booted-out job linger for that many `print` calls, as launchd's teardown does,
 and `bootout_code` is the exit code of the first `bootout` (Homebrew sees 36 while it is going).
-`bootstrap_code`, when not 0, makes every `bootstrap` fail with that code.
+`bootstrap_code`, when not 0, makes every `bootstrap` fail with that code. `disabled` lists labels
+that `print-disabled` reports as switched off until `enable` is run for them.
 """
 
 from __future__ import annotations
@@ -46,7 +47,13 @@ def run(state: dict[str, Any], args: list[str]) -> tuple[int, str, str]:
     jobs: dict[str, dict[str, Any]] = state["jobs"]
     verb, rest = (args[0] if args else ""), args[1:]
     if verb == "enable":
+        label = label_of(rest[0])
+        state["disabled"] = [name for name in state["disabled"] if name != label]
         return 0, "", ""
+    if verb == "print-disabled":
+        rows = ['\t\t"com.example.other" => enabled']
+        rows += [f'\t\t"{name}" => disabled' for name in state["disabled"]]
+        return 0, "\tdisabled services = {\n" + "\n".join(rows) + "\n\t}\n", ""
     if verb == "bootstrap":
         plist = rest[-1]
         data = plistlib.loads(Path(plist).read_bytes())

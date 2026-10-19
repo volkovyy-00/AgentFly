@@ -280,10 +280,20 @@ def start(manager: Manager | None = None) -> list[str]:
         _unload()
         messages.append("the service file changed; reloaded it")
     _write_plist(plist_path(), wanted)
-    _launchctl("enable", f"{_domain()}/{LABEL}")  # a label switched off under Login Items
+    _enable_if_disabled()
     _launchctl_ok("bootstrap", _domain(), str(plist_path()))
     messages.append(f"loaded {LABEL} (restarts itself, starts at login)")
     return messages
+
+
+def _enable_if_disabled() -> None:
+    """A label switched off (Login Items) cannot be loaded. `enable` writes launchd's override
+    database for good, with no way to take the entry out again, so it runs only when needed."""
+    result = _launchctl("print-disabled", _domain())
+    if result.returncode == 0 and re.search(
+        rf'"{re.escape(LABEL)}"\s*=>\s*disabled', result.stdout
+    ):
+        _launchctl("enable", f"{_domain()}/{LABEL}")
 
 
 def _write_plist(path: Path, data: dict[str, Any]) -> None:

@@ -62,6 +62,7 @@ class Launchd(Stub):
                 "bootout_lag": 0,
                 "bootout_code": 0,
                 "bootstrap_code": 0,
+                "disabled": [],
             },
         )
 
