@@ -1,9 +1,20 @@
 # V3c: Root never runs a changed AgentFly: package check before `sudo`, R0 guards the install folder
-Status: done (as of 2026-10-19 18:37)
+Status: done (as of 2026-10-19 19:29)
 Result: init -g/uninstall stop on a file failing its own RECORD, a link, an extra file or an unlistable folder; they ask on an upgrade or on a same-version rebuild (owner decision). Root runs -I -S -B, no byte-code, on the bundled Python. R0 guards the environment. doctor: package line.
-Evidence: 4962f39 on ag-v3c-package-check. `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 3392 passed, 5 skipped (baseline 2534). Real uv env (20 packages, 1378 files) and real pipx venv (32 packages): no problem. Real sudo and Homebrew not tried.
+Evidence: a88c49a on ag-v3c-package-check. `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 3398 passed, 5 skipped (baseline 2534). Smoke test on a real built wheel under uv tool, 8 scenarios, sudo never reached on a bad package. Real sudo and Homebrew not tried.
 Needs owner: none.
-Details: see "## 2026-10-19 18:37" below.
+Details: see "## 2026-10-19 19:29" below.
+
+## 2026-10-19 19:29
+
+### Final verification of the lead-review round (smoke test, simplify, independent audit)
+- **Smoke test, real wheel** (built with `uv build`, installed with `uv tool` under a throwaway HOME, driven by the installed tool's own Python; only `sudo` and the owner's keyboard are stand-ins). A rebuild of a dependency (`idna` 3.20, one file and its RECORD row changed) and of AgentFly itself prints the owner's wording, "same version X, files differ from install but match RECORD (1): expected only if you reinstalled or rebuilt"; a no exits 1 with no password asked, a yes reaches sudo (`init -g` and `uninstall`). A rebuild plus a second file that fails its RECORD, a symlinked module, a plain tamper, a package with no `Version`, and a symlinked `RECORD` each stop before sudo and name the file. A record whose `packages` section is damaged asks about all 20 packages. With a `.pth` and an unchecked-hash `.pyc` planted in that real environment the old root command wrote both markers and the new one wrote none and still ran the package. Also measured on the real uv 0.9.5: `uv tool install --force <wheel>` does restore a tampered module and replaces a symlink with a regular file, so the stop message's advice holds for those.
+- **Simplify** (4 reviewers, scoped to the round): one `Distribution` type with the RECORD comparison done while the file is read (`_Found` and `_against_record` gone), `_changes` extracted, the link check does `lstat` on the file plus one `realpath` per folder per run (the real tool environment: 229 ms to 180 ms, 1378 files, 20 packages, same result), shared test constants and helpers (`ANOTHER_PYTHON`, `REBUILDS`, `Sudo.installs`, `owner_answers`), one duplicate test merged. Left alone: splitting `inspect` in two and typing `changes` (API redesigns), dropping the symlink branch of `_not_plain` (the speed-up needs it, and the lead's test pins its wording).
+- **Independent audit** (3 findings, each reproduced before fixing): (1) a distribution whose METADATA has no `Version:` was recorded as `null`, and one unreadable entry made `stored_from` drop the whole section, so the prompt vanished for good: after an AgentFly upgrade the owner was asked about 0 things. Now a missing Name or Version is a problem, and a damaged section or entry reads as empty or missing so everything it fails to describe is asked about (only a record with no `packages` key means "nothing to differ from"). (2) SPEC said links above `site-packages` are trusted; it is links above the environment's root, a link inside it (for example `lib/python3.12`) stops; wording fixed. (3) a symlinked `RECORD` or `METADATA` passed, and a link to `/dev/zero` would hang the user's own command; both are refused as non-plain files before anything is read.
+- Checks: `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`: 3398 passed, 5 skipped.
+
+### Still true
+Real `sudo`, Homebrew and `uninstall` deleting the interpreter it runs on are untried; the exact trial commands are in the 16:42 entry. Not touched, as the lead said these belong to later cards: R0 false positives (`uv tool ... --with ./x`, `brew upgrade --dry-run`, `ls` of a `.venv` dist-info), no package-command rule in the offline guard, and root running the bundled 3.12 against the environment's `site-packages`.
 
 ## 2026-10-19 18:37
 
