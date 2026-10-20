@@ -32,10 +32,11 @@ WORDS = 300
 CLIENT_WAIT = 0.5  # hooks/hook_client.py: the recorder gets this long
 
 
-def match_rule(i: int, body: str) -> str:
+def match_rule(i: int, body: str, severity: str = "highlight", event: str = "shell") -> str:
     return (
-        f'\n[[rule]]\nid = "m{i}"\nkind = "match"\nseverity = "highlight"\nmessage = "x"\n'
-        f'event = ["shell"]\n{body}\n  [[rule.test]]\n  steps = ["shell: ls"]\n  expect = "allow"\n'
+        f'\n[[rule]]\nid = "m{i}"\nkind = "match"\nseverity = "{severity}"\nmessage = "x"\n'
+        f'event = ["{event}"]\n{body}\n  [[rule.test]]\n  steps = ["shell: ls"]\n'
+        '  expect = "allow"\n'
     )
 
 

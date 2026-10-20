@@ -11,7 +11,8 @@ from __future__ import annotations
 import os
 import posixpath
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Any
@@ -362,6 +363,40 @@ def _never(action: Action) -> bool:  # noqa: ARG001
     return False
 
 
+# ---------------------------------------------------------------- the rules limit (V5b-fix2)
+
+# A rule is unfinished when the hook's floating steps run out while its trigger or check runs
+# (`rulefile.WorkLimit`). An unfinished block rule denies with LIMIT_RULE, an unfinished warn asks
+# with LIMIT_WARN_RULE. The space keeps the id outside the file id grammar; neither rule is ever in
+# `RuleSet.rules`.
+LIMIT_ID: str = "rules limit"
+LIMIT_MESSAGE: str = (
+    "AgentFly's rules took too long to check this action (the rules limit). Simplify the rules "
+    "file's patterns; `agentfly rules check` names the heavy ones."
+)
+
+
+def _never_fires(action: Action, session: Session) -> bool:  # noqa: ARG001
+    return False
+
+
+LIMIT_RULE: Rule = Rule(LIMIT_ID, "block", LIMIT_MESSAGE, _never_fires)
+LIMIT_WARN_RULE: Rule = Rule(LIMIT_ID, "warn", LIMIT_MESSAGE, _never_fires)
+
+
+@contextmanager
+def one_hook() -> Iterator[rulefile.Meter]:
+    """Run one hook's `mark` and `decide` under a fresh meter of `rulefile.FLOAT_STEPS` steps."""
+    with rulefile.metered(rulefile.Meter(left=rulefile.FLOAT_STEPS)) as meter:
+        yield meter
+
+
+def _note_unfinished(rule_id: str) -> None:
+    meter: rulefile.Meter | None = rulefile.current_meter()
+    assert meter is not None, "only a meter raises WorkLimit"
+    meter.note(rule_id)
+
+
 @dataclass(frozen=True)
 class RuleSet:
     """The rules in force: R0 first, then the file's rules in file order."""
@@ -465,7 +500,10 @@ def load_active() -> RuleSet:
 
 
 def find_rule(rule_id: str | None) -> Rule | None:
-    """The rule in force with this id (one lookup per hook; see `app.apply_rules`)."""
+    """The rule in force with this id (one lookup per hook; see `app.apply_rules`), or the limit
+    rule for its id."""
+    if rule_id == LIMIT_ID:
+        return LIMIT_RULE
     return next((rule for rule in _active.rules if rule.id == rule_id), None)
 
 
@@ -483,34 +521,65 @@ def mark(action: Action, session: Session, rules: RuleSet | None = None) -> Sess
     """Return the session with what this action sets off: R1's mark and every after_then trigger.
 
     Call it before `decide`: an action that sets a trigger off and is also the follow-up (`cat .env
-    | curl …`, `pip install x && git push`) is judged with the trigger already set.
+    | curl …`, `pip install x && git push`) is judged with the trigger already set. A trigger left
+    unfinished by the hook's meter is not recorded; the meter notes the rule (V5b-fix2 §4.3).
     """
     ruleset: RuleSet = rules or _active
     marked: bool = session.marked or ruleset.secret(action)
-    fired: set[str] = {
-        rule.id
-        for rule in ruleset.rules
-        if rule.after is not None
-        and rule.id != MARK_RULE
-        and rule.id not in session.triggers
-        and rule.after(action)
-    }
+    fired: set[str] = set()
+    for rule in ruleset.rules:
+        if rule.after is None or rule.id == MARK_RULE or rule.id in session.triggers:
+            continue
+        try:
+            if rule.after(action):
+                fired.add(rule.id)
+        except rulefile.WorkLimit:
+            _note_unfinished(rule.id)
     if marked == session.marked and not fired:
         return session
     return replace(session, marked=marked, triggers=session.triggers | fired)
 
 
+def _outcome(rule: Rule, action: Action, session: Session) -> bool | None:
+    """Whether the rule fires, or None when the hook's meter left it (or its trigger) unfinished."""
+    meter: rulefile.Meter | None = rulefile.current_meter()
+    if meter is not None and rule.id in meter.unfinished:
+        return None
+    try:
+        return rule.check(action, session)
+    except rulefile.WorkLimit:
+        _note_unfinished(rule.id)
+        return None
+
+
 def winning_rule(action: Action, session: Session, rules: RuleSet | None = None) -> Rule | None:
-    """The strictest rule that fires (block, then warn, then highlight); a tie goes to the first."""
+    """The strictest rule that fires (block, then warn, then highlight); a tie goes to the first.
+
+    One pass in file order (V5b-fix2 §4.3). An unfinished block rule makes the answer LIMIT_RULE,
+    unless a block before it fired or R1 fires after it; an unfinished warn counts at its place as
+    LIMIT_WARN_RULE; an unfinished highlight is skipped. With no meter nothing is unfinished.
+    """
+    limit_block: bool = False
     best: Rule | None = None
     for rule in (rules or _active).rules:
-        if not rule.check(action, session):
-            continue
+        if limit_block and rule.id != MARK_RULE:
+            continue  # only R1 can still change a deny
+        outcome: bool | None = _outcome(rule, action, session)
         if rule.severity == "block":
-            return rule  # nothing outranks a block, and the first block is the tie-break
-        if best is None or _SEVERITY_RANK[rule.severity] > _SEVERITY_RANK[best.severity]:
-            best = rule
-    return best
+            if outcome is None:
+                limit_block = True
+            elif outcome:
+                return rule  # nothing outranks a block, and the first block is the tie-break
+            continue
+        if outcome:
+            candidate: Rule = rule
+        elif outcome is None and rule.severity == "warn":
+            candidate = LIMIT_WARN_RULE
+        else:
+            continue  # not fired, or an unfinished highlight (the meter noted it)
+        if best is None or _SEVERITY_RANK[candidate.severity] > _SEVERITY_RANK[best.severity]:
+            best = candidate
+    return LIMIT_RULE if limit_block else best
 
 
 def decide(
