@@ -203,6 +203,11 @@ V7 and V9 can run in parallel.
 - **Scope (owner 2026-10-19: CodeQL and Dependabot yes; alerts, security updates and Actions updates only, no uv/npm version-update PRs):** CodeQL default setup (an owner click in repo settings: no workflow file, no write permission in our workflows; runs on GitHub's Linux runners, which "macOS only" does not cover; it is a scanner, not the test CI). Dependabot alerts and security updates (settings) plus `.github/dependabot.yml` for GitHub Actions version updates only; no uv/npm version-update PRs (they bypass the lead and fail the stale-build check); `@xyflow/react` and `motion` stay pinned. Dependabot PRs are never merged on GitHub: the lead folds them into a card.
 - **Done when:** a CodeQL run on main and the alert settings on; findings triaged (fixed, or a later card).
 
+### F13 · Package check: escape names in its messages
+- **Owner:** worker-backend · brief docs/briefs/F13.md (pass 2 against f6bc22b) · after V5b (shares `agentfly/install/checks.py`); may run alongside F9; before F12 (shares `packages.py`) · approved by the owner 2026-10-20
+- **Scope:** names the agent's user controls (site-packages paths, dist-info names, RECORD rows, METADATA Name/Version) reach the refusal, the confirm question and `doctor` raw; control characters can repaint the text shown before the sudo password prompt (F10 report, reviewer agreed).
+- **Done when:** the brief's acceptance criteria hold.
+
 ## Not on the board (on purpose)
 - **Publishing to PyPI and the Homebrew tap:** the lead does it, after your OK
   on each release. It is outward-facing.

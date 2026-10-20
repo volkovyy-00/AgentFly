@@ -1,12 +1,12 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 12:55 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 13:10 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10 merged, V5b in flight. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7, F10 ✅ (BOARD Done; last merge F10 5239e96 = trial 74acb5b tree, 3× 3529 passed, 5 skipped, 143–206 s with V5b's worker running).
 Pending decisions: D16
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
-- Order (owner 2026-10-19/20): F10 ∥ V5b (in flight) → F9 → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F11 after V5b (shares `sessions.py`, `app.py`); F12 after V5c (shares `agentfly/install/`). V8b's highlighted verdict comes from V5b.
-- Briefs: F10 (pass 2 against b84e2ca), V5b (pass 2 against dd44029; owner 2026-10-20: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). F9 (pass 2 against 333f665; dispatch after F10 and V5b merge, once the owner's settings are on and a CodeQL run on main has finished). V5c (pass 2, 2026-10-18; re-check before dispatch). V7, V9, F8, F11, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly (one command per `run:`, allow-listed actions and inputs), so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`; the owner starts each worker.
+- Order (owner 2026-10-19/20): F10 ✅ ∥ V5b (in flight) → F9 → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F11 after V5b (shares `sessions.py`, `app.py`); F13 after V5b, may run alongside F9, before F12 (owner approved 2026-10-20); F12 after V5c (shares `agentfly/install/`). V8b's highlighted verdict comes from V5b.
+- Briefs: F10 (pass 2 against b84e2ca), V5b (pass 2 against dd44029; owner 2026-10-20: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). F9 (pass 2 against 333f665; dispatch after F10 and V5b merge, once the owner's settings are on and a CodeQL run on main has finished). V5c (pass 2, 2026-10-18; re-check before dispatch). F13 (pass 2 against f6bc22b). V7, V9, F8, F11, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly (one command per `run:`, allow-listed actions and inputs), so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`; the owner starts each worker.
 - Worker closing rule (owner 2026-10-19, docs/reports/README.md): `/final-verification` on main...HEAD, commit, then `/code-review high`; verdict in the report.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT. CI runs on GitHub's macos-15 (arm64); V4 may use a runner for its checks; rework then.
 - Merge: trial-merge in a scratch worktree, 3× full check (~2 min each; no other suite running while timed), a fresh reviewer per branch, fixes back to the worker, merge with `--no-commit`, keep main's STATE/BOARD, check merged tree = trial tree. F10 and V5b: merge the first to finish, then trial the second on top (expected conflicts: `tests/test_package.py`, AGENTS.md "Testing", SPEC.md). D26 (batch PR, lead `--ff-only`, owner pushes) starts after CI is green on main a few times (3 so far). Before every trial merge: `git fetch`, then the push run for origin/main's exact SHA must be green.
@@ -26,7 +26,7 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Approve a follow-up card (lead proposes F13): escape RECORD/METADATA file and distribution names wherever `packages.require`/`confirm` print, before the sudo password prompt (F10 report, "Outside the card"; reviewer agrees). Pre-existing, low.
+none
 
 ## Decisions changed since last handoff (b84e2ca; earlier: git show b84e2ca:docs/STATE.md)
 - Owner 2026-10-20: F10 dispatched (fix card); F11 and F12 approved as cards.
