@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from agentfly.recorder import rulefile
@@ -34,6 +35,11 @@ def default_with(lists: str = "", *rules: str, drop_r1: bool = False) -> str:
 def default_as(severity: str) -> str:
     """The packaged default with R1's severity changed: a file that makes R1 gentler."""
     return rulefile.default_text().replace('severity = "block"', f'severity = "{severity}"', 1)
+
+
+def list_line(name: str, *entries: str) -> str:
+    """A `[lists]` line; a JSON array of plain strings is also a TOML array."""
+    return f"{name} = {json.dumps(list(entries))}\n"
 
 
 def ruleset_of(text: str) -> RuleSet:

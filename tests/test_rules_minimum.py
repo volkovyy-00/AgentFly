@@ -17,7 +17,7 @@ import pytest
 import agentfly.recorder.rules as rules_mod
 from agentfly.cli import main
 from agentfly.recorder import rulefile
-from tests.rules_helpers import R0_ENTRY, default_as, default_with
+from tests.rules_helpers import R0_ENTRY, default_as, default_with, list_line
 
 BASE = rulefile.default_text()
 OK_LINE = 'secret_names_ok = [".env*.example", ".env*.sample", ".env*.template", "id_rsa*.pub"]'
@@ -36,11 +36,11 @@ def changed(old: str, new: str) -> str:
 
 def with_exemptions(*entries: str) -> str:
     kept = [".env*.example", ".env*.sample", ".env*.template", "id_rsa*.pub", *entries]
-    return changed(OK_LINE, f"secret_names_ok = {kept!r}".replace("'", '"'))
+    return changed(OK_LINE, list_line("secret_names_ok", *kept).rstrip("\n"))
 
 
 def with_names(*names: str) -> str:
-    return changed(NAMES_LINE, f"secret_names = {list(names)!r}".replace("'", '"'))
+    return changed(NAMES_LINE, list_line("secret_names", *names).rstrip("\n"))
 
 
 def r1_errors(text: str) -> list[str]:

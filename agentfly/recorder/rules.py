@@ -397,13 +397,7 @@ def _compose(spec: RuleSpec) -> Rule:
     return Rule(spec.id, spec.severity, spec.message, check_then, kind="after_then", after=trigger)
 
 
-def build_ruleset(
-    file: RuleFile,
-    *,
-    source: str,
-    path: str,
-    problem: str | None = None,
-) -> RuleSet:
+def build_ruleset(file: RuleFile, *, source: str, path: str) -> RuleSet:
     """Rules from a file that `rulefile.load_bytes` accepted. R0 is added in front; it is never
     in a file.
 
@@ -412,12 +406,12 @@ def build_ruleset(
     without one never gets here, and asking for its rules is a mistake in the caller.
     """
     composed: tuple[Rule, ...] = tuple(_compose(spec) for spec in file.rules)
-    r1: Rule | None = next(
-        (rule for rule in composed if rule.id == MARK_RULE and rule.after is not None), None
+    secret: Callable[[Action], bool] | None = next(
+        (rule.after for rule in composed if rule.id == MARK_RULE and rule.after is not None), None
     )
-    if r1 is None or r1.after is None:
+    if secret is None:
         raise ValueError(f"a rules file without {MARK_RULE} was not checked by load_bytes")
-    return RuleSet((R0_RULE, *composed), source, path, problem, r1.after)
+    return RuleSet((R0_RULE, *composed), source, path, None, secret)
 
 
 def _load_default() -> RuleSet:

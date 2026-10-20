@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from agentfly.install import InstallError, installer, packages, records
+from agentfly.install import InstallError, installer, packages, pythons, records
 from agentfly.install.layout import SYSTEM, Layout
 from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
@@ -35,6 +35,14 @@ from tests.rules_helpers import BROKEN_TOML, default_as
 EDITED = "# edited by the owner\n" + rulefile.default_text()
 SHIPPED = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))
 RECORD_PATH = installer.DEFAULT_RECORD_PATH
+
+
+@pytest.fixture(autouse=True)
+def quick_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The install's own checks (a smoke run of every hook command, byte-compiling the Python) are
+    # tests/test_install_flow.py's business; none of these tests looks at them (~1.5 s each).
+    monkeypatch.setattr(installer, "smoke", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pythons, "compile_stdlib", lambda *args, **kwargs: None)
 
 
 @pytest.fixture

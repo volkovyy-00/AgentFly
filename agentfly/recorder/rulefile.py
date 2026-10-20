@@ -411,7 +411,7 @@ def refusal(path: Path | str, errors: tuple[str, ...]) -> str:
     if len(shown) > 150:
         shown = "..." + shown[-147:]
     tail: str = f"; {DEFAULT_IN_FORCE}"
-    room: int = max(MAX_PROBLEM_CHARS - len(shown) - len(": ") - len(tail), 40)
+    room: int = MAX_PROBLEM_CHARS - len(shown) - len(": ") - len(tail)  # at least 200
     return f"{shown}: {summary(errors, room)}{tail}"
 
 
@@ -467,6 +467,11 @@ def _lists(raw: Any, problems: _Problems) -> dict[str, tuple[str, ...]]:
     return found
 
 
+# One `fnmatch` class: `[`, an optional `!`, an optional first `]` (a member, not the end), then up
+# to the closing `]`. Possessive, so a `[` that never closes stays a plain character.
+_CLASS = re.compile(r"\[!?+\]?+[^\]]*+\]")
+
+
 def _wildcards_only(raw: str) -> bool:
     """Is every character of this pattern a wildcard, so that it matches nearly every name?
 
@@ -475,28 +480,8 @@ def _wildcards_only(raw: str) -> bool:
     pattern with a `*` or a `[...]` in it counts (`???` matches names of three characters, no
     more); `/` only separates folders. `[!x]*` and `*[a-z]*` have nothing a name must contain.
     """
-    wild: bool = False
-    i, n = 0, len(raw)
-    while i < n:
-        char = raw[i]
-        if char == "[":
-            end = i + 1
-            if end < n and raw[end] == "!":
-                end += 1
-            if end < n and raw[end] == "]":  # a first `]` is a member, not the end
-                end += 1
-            while end < n and raw[end] != "]":
-                end += 1
-            if end >= n:  # never closed: `[` is just a character
-                return False
-            wild, i = True, end + 1
-            continue
-        if char == "*":
-            wild = True
-        elif char not in "?/":
-            return False
-        i += 1
-    return wild
+    reduced: str = _CLASS.sub("*", raw)
+    return "*" in reduced and not reduced.strip("*?/")
 
 
 def _path_pattern(where: str, raw: str, problems: _Problems) -> Pattern | None:
@@ -918,7 +903,7 @@ def default_path() -> Path:
 
 
 def default_text() -> str:
-    """The default file's text, for `init -g` to install. Raises OSError if it is missing."""
+    """The default file's text. Raises OSError if it is missing. (`init -g` reads the bytes.)"""
     return default_path().read_text(encoding="utf-8")
 
 
@@ -931,14 +916,17 @@ def load_bytes(raw: bytes) -> RuleFile:
 
     Every reader of a rules file in the program comes through here, so no reader can skip a check.
     """
-    digest: str = sha256_of(raw)
+    return replace(_checked(raw), sha256=sha256_of(raw))
+
+
+def _checked(raw: bytes) -> RuleFile:
     if len(raw) > MAX_FILE_BYTES:
-        return replace(_refused(f"too large (over {MAX_FILE_BYTES} bytes)"), sha256=digest)
+        return _refused(f"too large (over {MAX_FILE_BYTES} bytes)")
     try:
         text: str = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return replace(_refused("not UTF-8 text"), sha256=digest)
-    return replace(_with_minimum(parse(text)), sha256=digest)
+        return _refused("not UTF-8 text")
+    return _with_minimum(parse(text))
 
 
 def load_file(path: Path) -> RuleFile:

@@ -24,16 +24,12 @@ from agentfly.cli import main
 from agentfly.recorder import rulefile
 from tests.helpers import wallclock
 from tests.recorder_harness import Recorder
-from tests.rules_helpers import default_with
+from tests.rules_helpers import default_with, list_line, ruleset_of
 
 DEFAULT_WORK = rulefile.file_work(rulefile.load_default().rules)
 ROOM = rulefile.MAX_WORK - DEFAULT_WORK  # what an owner's own rules may use
 WORDS = 300
 CLIENT_WAIT = 0.5  # hooks/hook_client.py: the recorder gets this long
-
-
-def lst(name: str, entries: list[str]) -> str:
-    return f"{name} = {entries!r}\n".replace("'", '"')
 
 
 def match_rule(i: int, body: str) -> str:
@@ -43,39 +39,49 @@ def match_rule(i: int, body: str) -> str:
     )
 
 
+def name_list_file(count: int) -> str:
+    """The packaged default plus one rule that holds a list of `count` name patterns."""
+    names = [f"p{i}*.pem" for i in range(count)]
+    return default_with(list_line("l", *names), match_rule(0, 'path = "l"'))
+
+
 def one_pattern_rules() -> tuple[str, list[str]]:
     n = ROOM // (rulefile.WORK_CLAUSE + rulefile.WORK_NAME)
-    return lst("l", ["p0*.pem"]), [match_rule(i, 'path = "l"') for i in range(n)]
+    return list_line("l", "p0*.pem"), [match_rule(i, 'path = "l"') for i in range(n)]
 
 
 def long_name_list() -> tuple[str, list[str]]:
     n = ROOM - rulefile.WORK_CLAUSE
-    return lst("l", [f"p{i}*.pem" for i in range(n)]), [match_rule(0, 'path = "l"')]
+    return list_line("l", *[f"p{i}*.pem" for i in range(n)]), [match_rule(0, 'path = "l"')]
 
 
 def anchored_stars() -> tuple[str, list[str]]:
     n = (ROOM - rulefile.WORK_CLAUSE) // (rulefile.WORK_SLASH + rulefile.WORK_STAR)
-    return lst("l", [f"/opt/p{i}/**/x{i}.txt" for i in range(n)]), [match_rule(0, 'path = "l"')]
+    return list_line("l", *[f"/opt/p{i}/**/x{i}.txt" for i in range(n)]), [
+        match_rule(0, 'path = "l"')
+    ]
 
 
 def floating_stars() -> tuple[str, list[str]]:
     n = (ROOM - rulefile.WORK_CLAUSE) // (rulefile.WORK_SLASH + 2 * rulefile.WORK_STAR)
-    return lst("l", [f"p{i}/**/x{i}.txt" for i in range(n)]), [match_rule(0, 'path = "l"')]
+    return list_line("l", *[f"p{i}/**/x{i}.txt" for i in range(n)]), [match_rule(0, 'path = "l"')]
 
 
 def deep_floating() -> tuple[str, list[str]]:
     n = (ROOM - rulefile.WORK_CLAUSE) // (rulefile.WORK_SLASH + 4 * rulefile.WORK_STAR)
-    return lst("l", [f"**/a{i}/**/b/**/c/x.txt" for i in range(n)]), [match_rule(0, 'path = "l"')]
+    return list_line("l", *[f"**/a{i}/**/b/**/c/x.txt" for i in range(n)]), [
+        match_rule(0, 'path = "l"')
+    ]
 
 
 def outbound_rules() -> tuple[str, list[str]]:
     body = 'command_class = "outbound"\nhost_not_in = "l"'
-    return lst("l", ["localhost"]), [match_rule(i, body) for i in range(100)]
+    return list_line("l", "localhost"), [match_rule(i, body) for i in range(100)]
 
 
 def command_lists() -> tuple[str, list[str]]:
     entries = [f"prog{i} sub{i}" for i in range(rulefile.MAX_LIST_ENTRIES)]
-    return lst("l", entries), [match_rule(i, 'command = "l"') for i in range(150)]
+    return list_line("l", *entries), [match_rule(i, 'command = "l"') for i in range(150)]
 
 
 SHAPES: dict[str, Callable[[], tuple[str, list[str]]]] = {
@@ -176,10 +182,7 @@ def test_the_shapes_that_cost_something_fill_the_limit(shape: str) -> None:
 
 
 def test_one_unit_over_is_refused_and_names_the_heaviest_rule() -> None:
-    names = [f"p{i}*.pem" for i in range(ROOM - rulefile.WORK_CLAUSE + 1)]
-    loaded = rulefile.load_bytes(
-        default_with(lst("l", names), match_rule(0, 'path = "l"')).encode()
-    )
+    loaded = rulefile.load_bytes(name_list_file(ROOM - rulefile.WORK_CLAUSE + 1).encode())
     (error,) = loaded.errors
     assert rulefile.WORK_ERROR in error and "rule m0" in error
     assert f"{rulefile.MAX_WORK + 1} units; at most {rulefile.MAX_WORK}" in error
@@ -187,8 +190,7 @@ def test_one_unit_over_is_refused_and_names_the_heaviest_rule() -> None:
 
 def test_the_work_of_a_file_that_is_refused_is_not_also_judged_by_the_r1_grid() -> None:
     rulefile._unmarked.cache_clear()
-    names = [f"p{i}*.pem" for i in range(ROOM)]
-    rulefile.load_bytes(default_with(lst("l", names), match_rule(0, 'path = "l"')).encode())
+    rulefile.load_bytes(name_list_file(ROOM).encode())
     assert rulefile._unmarked.cache_info().misses == 0
 
 
@@ -199,18 +201,14 @@ def test_rules_check_refuses_a_file_over_the_limit_and_accepts_one_at_it(
     at.write_text(text_of("one long list of names"), encoding="utf-8")
     assert main(["rules", "check", str(at)]) == 0
     over = tmp_path / "over.toml"
-    names = [f"p{i}*.pem" for i in range(ROOM)]
-    over.write_text(default_with(lst("l", names), match_rule(0, 'path = "l"')), encoding="utf-8")
+    over.write_text(name_list_file(ROOM), encoding="utf-8")
     capsys.readouterr()
     assert main(["rules", "check", str(over)]) == 1
     assert rulefile.WORK_ERROR in capsys.readouterr().err
 
 
 def test_a_refused_active_file_runs_the_default_and_says_why(active_rules: Path) -> None:
-    names = [f"p{i}*.pem" for i in range(ROOM)]
-    active_rules.write_text(
-        default_with(lst("l", names), match_rule(0, 'path = "l"')), encoding="utf-8"
-    )
+    active_rules.write_text(name_list_file(ROOM), encoding="utf-8")
     loaded = rules_mod.load_active()
     assert loaded.source == "default" and rulefile.WORK_ERROR in (loaded.problem or "")
 
@@ -222,13 +220,9 @@ def test_a_word_is_worked_out_once_however_many_clauses_look_at_it() -> None:
     for memo in (rulefile._candidates, rulefile._folded_name, rulefile._folded_segments):
         memo.cache_clear()
     clauses, words = 30, 40
-    lists = lst("l", ["secret*.pem"])
-    ruleset = rules_mod.build_ruleset(
-        rulefile.load_bytes(
-            default_with(lists, *[match_rule(i, 'path = "l"') for i in range(clauses)]).encode()
-        ),
-        source="t",
-        path="t",
+    lists = list_line("l", "secret*.pem")
+    ruleset = ruleset_of(
+        default_with(lists, *[match_rule(i, 'path = "l"') for i in range(clauses)])
     )
     line = "cat " + " ".join(f"/p/{i}.py" for i in range(words))
     action = {"hook_event_name": "beforeShellExecution", "command": line}
@@ -265,8 +259,7 @@ def test_a_hook_at_the_limit_makes_no_more_pattern_tests_than_the_units_allow(
 ) -> None:
     """A unit is at most three tests of one pattern on one word (the word, and what follows its
     last `=` and its last `@`): the weights stay honest if this count stays under the cap."""
-    loaded = rulefile.load_bytes(text_of(shape).encode())
-    rules_mod.activate(rules_mod.build_ruleset(loaded, source="t", path="t"))
+    rules_mod.activate(ruleset_of(text_of(shape)))
     calls = 0
     real = rulefile.Pattern.matches
 
@@ -289,8 +282,7 @@ def test_the_whole_hook_at_the_limit_is_well_inside_the_clients_wait(
     command with the work at its limit. About 0.1 s on the author's Mac; the bound is the
     client's own wait, so only a weight that is wrong by a factor of several can fail it, loaded
     machine or not. Best of three, after a first run that fills the caches."""
-    loaded = rulefile.load_bytes(text_of(shape).encode())
-    rules_mod.activate(rules_mod.build_ruleset(loaded, source="t", path="t"))
+    rules_mod.activate(ruleset_of(text_of(shape)))
     line = command()
     rec.run("warm", line)
     best = min(_timed(rec, f"c{n}", line) for n in range(3))

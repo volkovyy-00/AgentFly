@@ -15,6 +15,7 @@ from agentfly.cli import serve
 from agentfly.recorder import rulefile
 from agentfly.recorder.rulefile import Clause, RuleFile
 from tests.helpers import wallclock
+from tests.rules_helpers import list_line
 
 BASE_LISTS = (
     "[lists]\n"
@@ -94,11 +95,6 @@ def clause_of(text: str) -> Clause:
     clause = good(text).rules[0].clause
     assert clause is not None
     return clause
-
-
-def list_line(name: str, *entries: str) -> str:
-    """A `[lists]` line; a JSON array of plain strings is also a TOML array."""
-    return f"{name} = {json.dumps(list(entries))}\n"
 
 
 # ---------------------------------------------------------------- the packaged default

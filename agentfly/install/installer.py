@@ -11,7 +11,6 @@ leave the interpreter in place while the client is gone.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -375,7 +374,7 @@ def _backup(layout: Layout, text: str) -> Path:
 
 
 def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return rulefile.sha256_of(text.encode("utf-8"))
 
 
 def _apply_hooks(

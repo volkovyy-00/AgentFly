@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_module
 from agentfly.recorder.api import rules as rules_api
 from agentfly.recorder.api import sessions as sessions_api
@@ -153,7 +154,7 @@ async def health() -> dict[str, Any]:
     }
     problem: str | None = rules_module.current().problem
     if problem:  # only when the active rules file was rejected; `doctor` reads it from here
-        answer["rules_problem"] = problem[:400]
+        answer["rules_problem"] = problem[: rulefile.MAX_PROBLEM_CHARS]
     return answer
 
 
