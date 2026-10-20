@@ -286,7 +286,38 @@ instead of a third kind. Each is one named pure check in Python:
   program in the list (covers `| sh`, `sh -c "$(curl …)"`, `bash <(curl …)`).
 
 "After reading `.env`" means the whole `.env` family, as in the sensitive-file
-list below. The field names beyond these are fixed when the rules card is built.
+list below. The three additions are not built yet (card V5c); the rest of this
+section's file format is what V5b built.
+
+**The file format (V5b).** `schema = 1`, one `[lists]` table of named arrays of
+strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
+
+| Field | Where | Meaning |
+|---|---|---|
+| `id`, `kind`, `severity`, `message` | every rule | `kind` is `match` or `after_then`; `severity` is `block`, `warn` or `highlight`; `id` is unique and never `R0` |
+| `event` | `match`, and inside `after` / `then` | a list of `read` (`beforeReadFile`), `shell` (`beforeShellExecution`) and `write` (`preToolUse` of the Write tool) |
+| `path`, `path_except` | same | the name of a list of path patterns. A pattern without `/` matches the file *name* (`.env`, `*.pem`); with `/` the whole path (`**` crosses folders, `~/` is the home folder). In a shell command a path condition looks at every word, and at the text after the last `=` or `@` of a word |
+| `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order |
+| `command_class` | same, `event = ["shell"]` | a class built into the program: `outbound` (R1's definition, below) |
+| `host_not_in` | same, `event = ["shell"]` | the name of a list of host names; true when the command names a host not in it |
+| `after`, `then` | `after_then` | tables of the fields above; the follow-up fires only after the `after` table matched once in this chat |
+| `steps`, `expect` | `[[rule.test]]` | steps are `"read: PATH"`, `"shell: COMMAND"`, `"write: PATH"`; `expect` is what the last step gets: `block`, `warn`, `highlight` or `allow` |
+
+When several rules fire, the strictest wins (block, then warn, then highlight); a
+tie goes to the rule that comes first in the file. R0 is always first and only in
+code. A trigger is kept per chat like R1's mark (it survives a restart and
+reaches subagents and parents, D21) and counts before the check on the same
+command.
+
+**Which file is in force.** The recorder reads `/Library/Application Support/AgentFly/rules.toml`
+(root-owned, written by `init -g` only when missing, removed by `uninstall`) once, at
+start. Without it (a developer `serve`) it runs the default file inside the package.
+A file that cannot be used (a syntax error, an unknown field, an entry for R0) is not
+loaded: the default runs, and `/health` (`rules_problem`), `GET /api/rules` and
+`agentfly doctor` say so. `agentfly rules check [FILE]` prints every problem of a
+file, each naming its rule, and exits 1 if there is one; `agentfly rules test [FILE]`
+runs every inline test (the rule that wins must be the rule the test belongs to).
+With no FILE both read the file the recorder would load.
 
 ### R0: protect AgentFly itself (in code only)
 
@@ -329,8 +360,8 @@ The exact guard list is fixed when the R0 card is built.
 - any file ending in `.pem` or `.key`;
 - any file whose name starts with `id_rsa` (but not `.pub`) or `credentials`.
 
-These lists move into the rules file (G2); their exact field names are fixed
-when the rules card is built.
+These lists are in the default rules file (G2) as `secret_names` and
+`secret_names_ok`; R1 is its first rule.
 
 **Marking a session** ("has seen a secret"):
 - when the file-read tool opens a sensitive file; or

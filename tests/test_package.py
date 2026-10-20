@@ -283,6 +283,57 @@ def test_the_installed_tool_checks_and_tests_the_default_rules_it_carries(
     assert str(default) in result.stdout and result.stderr == ""
 
 
+def hook_bytes(port: int, home: Path, body: dict[str, object]) -> bytes:
+    """POST one event as the hook client would (it only ever talks to port 8787, so not it)."""
+    token = (home / ".config/agentfly/token").read_text(encoding="utf-8").strip()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/hook",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Recorder-Token": token},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        answer: bytes = response.read()
+    return answer
+
+
+def test_the_demo_replays_with_byte_identical_answers_from_the_wheel(
+    running_recorder: tuple[int, Path],
+) -> None:
+    """R1 is loaded from the default rules file inside the wheel; the answers do not change."""
+    port, home = running_recorder
+    scenario = json.loads((REPO / "demo" / "scenario.json").read_text(encoding="utf-8"))
+    sent = [
+        {**{k: v for k, v in item["event"].items() if k != "content"}, "conversation_id": "wheel"}
+        for item in scenario["demo"]["events"]
+    ]
+    answers = [hook_bytes(port, home, body) for body in sent]
+    assert answers[:2] == [b'{"permission":"allow"}'] * 2
+    assert answers[2] == (
+        b'{"permission":"deny","user_message":"Blocked by rule R1: a secret was read earlier in '
+        b'this session, and now data is being sent out.","agent_message":"Blocked by rule R1: a '
+        b"secret was read earlier in this session, and now data is being sent out. Do not retry "
+        b'with another tool or language. Stop and tell the user."}'
+    )
+    # The chat read .env: the entry that ships beside R1 now denies `npm publish` in it.
+    publish = {**sent[2], "command": "npm publish"}
+    assert json.loads(hook_bytes(port, home, publish))["user_message"] == (
+        "Blocked: a .env file was read earlier in this session, so npm publish is off."
+    )
+    fresh = {**publish, "conversation_id": "wheel-fresh", "workspace_roots": ["/elsewhere"]}
+    assert hook_bytes(port, home, fresh) == b'{"permission":"allow"}'
+
+
+def test_the_wheels_recorder_lists_the_default_rules_it_carries(
+    installed: Installed, running_recorder: tuple[int, Path]
+) -> None:
+    port, _ = running_recorder
+    listing = json.loads(fetch(port, "/api/rules")[1])
+    assert listing["source"] == "default" and listing["problem"] is None
+    assert listing["file"] == str(installed.package_dir / "rules" / "default.toml")
+    assert [r["id"] for r in listing["rules"]][:3] == ["R0", "R1", "npm-publish-after-env"]
+    assert "rules_problem" not in json.loads(fetch(port, "/health")[1])
+
+
 def test_serve_answers_health_and_serves_the_page_from_the_wheel(
     installed: Installed, running_recorder: tuple[int, Path]
 ) -> None:

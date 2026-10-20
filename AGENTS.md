@@ -31,6 +31,9 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 - Dev-only wiring (writes gitignored `.cursor/hooks.json`): `./install.sh`. With `init -g`
   also installed, every event arrives twice.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
+- Rules: `agentfly rules check [FILE]` and `agentfly rules test [FILE]` (no FILE: the file the
+  recorder would load, the active `/Library/Application Support/AgentFly/rules.toml` if it exists,
+  else `agentfly/rules/default.toml`). The recorder reads the active file once, at start.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; the `env` keeps byte-code out (another worker's `.pyc` would
   break `test_nothing_is_written_next_to_the_client`). The flags stay on the command line,
@@ -91,12 +94,18 @@ CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (o
   or delete data (SPEC section 11). A new route is a read-only GET and gets a
   line in the API whitelist test in the same change.
 - Rule shape: `Rule(id, severity, message, check)`. `severity` is `block`,
-  `warn` or `highlight`. `check` is a small named pure function
-  `(action, session) -> bool`. A rule *kind* is one such function in Python; the
-  rules file (TOML) only supplies a kind's parameters and named lists. Do not
-  build an expression language: a new kind is Python, a new rule is a file
-  entry. R0 lives in code and no rules file can switch it off. Until the rules
-  card lands, rules are one list in `agentfly/recorder/rules.py`.
+  `warn` or `highlight`; the strictest firing rule wins and a tie goes to file order.
+  `check` is a small named pure function `(action, session) -> bool`. A rule *kind*
+  (`match`, `after_then`) is such a function in Python; the rules file (TOML) only
+  supplies a kind's parameters and named lists. Do not build an expression language:
+  a new kind is Python, a new rule is a file entry. R0 lives in code and no rules file
+  can switch it off or name it. R1 and its sensitive-name lists are the first entry of
+  `agentfly/rules/default.toml`; only its engine-only outbound cases stay in Python
+  (`command_class = "outbound"`). `agentfly/recorder/rulefile.py` reads and checks the
+  file (it never raises and reads no environment); `rules.py` composes the rules.
+  `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
+  in `Session.triggers`. No flag or variable moves the active file: tests set
+  `rulefile.ACTIVE_RULES`.
 
 ## Hook client rules
 (`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is a shim for it
@@ -234,16 +243,36 @@ lines for them (R0 and normalisation: V5).
   steps. `tests/test_memory.py` covers `replace`.
 - Step fields and health (`tests/test_step_fields.py`, V8b): after the `demo/scenario.json` replay
   the blocked step has `rule_text` (R1's message) and `user_message` / `agent_message` equal to
-  the deny answer's, and the allowed steps have none of the three; in watch-only mode (set in
-  process) a warned step has `rule_text` and no messages, and its answer is a plain allow; a merged
+  the deny answer's, and the allowed steps have none of the three; a warned step on a shell
+  command (answer `ask`) carries the answer's messages, a warned step on another event has
+  `rule_text` and no messages (its answer is a plain allow); a merged
   pair shows the messages of the half whose verdict it shows, the earlier half on a tie (R0 against
   R1, either order); `/health` sends `last_hook_at` (`null` after start, UTC ms, set by a request
   that passed the token check, not by a 401); `?all=1` sends `marked_order` as `?limit=1` does. The
   messages reach neither `history.db` nor Neo4j (`tests/test_localstore.py`, `tests/test_store.py`,
   marker strings), and the deny answer's bytes are pinned.
+- Rules file (`tests/test_rulefile.py`, `tests/test_rules_load.py`, `tests/test_rules_cli.py`,
+  `tests/test_rules_api.py`, V5b): R1's name lists answer as the old `is_sensitive` did over about
+  6,000 generated names; every kind of fault is refused with a message naming the rule (and
+  `tomllib` oddities such as deep nesting never crash); the recorder runs the default when the
+  active file is missing or invalid and says why in `/health` (`rules_problem`, only then) and
+  `GET /api/rules`; a damaged packaged default leaves only R0, does not stop `uninstall` from
+  importing and stops the recorder from starting; `rules check` / `rules test` exit 1 and name the
+  rule. Tests never read the real rules file: the conftest redirects `rulefile.ACTIVE_RULES`, and
+  `RECORDER_CODE` does it in a child recorder.
+- Severities and triggers (`tests/test_severities.py`, `tests/test_after_then.py`,
+  `tests/test_session_triggers.py`, `tests/test_npm_publish_entry.py`): the strictest rule wins in
+  every file order; a warn on a shell command answers `ask` with the text in both messages, a warn
+  elsewhere and every highlight answer `{"permission":"allow"}` (bytes pinned); the page and the
+  history show warned and highlighted steps; a trigger survives a restart, reaches subagents and
+  parents, is inherited for 30 minutes through the workspace fallback, never marks R1, and counts
+  before the check on the same command; `npm publish` after `cat .env` is denied, in a fresh chat
+  it is not.
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
-  repair and uninstall on a temporary root, the sudo command line.
+  repair and uninstall on a temporary root, the sudo command line. The rules file
+  (`tests/test_install_rules.py`) is written once, mode 644, never overwritten by a repair or a
+  second `init -g`, refused when a link or folder is in its place, and removed by `uninstall`.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
@@ -258,7 +287,9 @@ lines for them (R0 and normalisation: V5).
   own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
   Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
-  file itself has not been seen).
+  file itself has not been seen). The `rules` line warns on a missing rules file, fails on a link,
+  an invalid file or a recorder that rejected the file (the default is in force), asks for a
+  restart after a fix, and never fails because the recorder is down.
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
   its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
   20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by
@@ -308,8 +339,9 @@ lines for them (R0 and normalisation: V5).
   - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
     `X-Recorder-Token` (from `~/.config/agentfly/token`); offline guard if
     the server is down, slow or answers 401/403.
-  - R1 (`agentfly/recorder/rules.py`): mark on sensitive read/shell word, then block
-    outbound sends; sessions in `~/.local/share/agentfly/sessions.json`.
+  - R1 (first entry of `agentfly/rules/default.toml`, engine in `agentfly/recorder/rules.py`):
+    mark on a sensitive read/shell word, then block outbound sends; sessions in
+    `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
   - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrived on
     `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it from 3.25.9, see
