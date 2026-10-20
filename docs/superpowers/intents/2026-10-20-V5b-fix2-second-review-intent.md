@@ -1,5 +1,5 @@
 # Intent: V5b-fix2, second review round for V5b
-Ticket: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`) | Author: the owner | Date: 2026-10-20 | Status: approved (2026-10-20)
+Ticket: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`) | Author: the owner | Date: 2026-10-20 | Status: approved (2026-10-20); revised and re-approved 2026-10-20 (criterion 3, triggers)
 
 ## Problem
 See V5b-fix2 Summary. A rules file `rules check` accepts can still slow a hook past the client's
@@ -17,8 +17,14 @@ See V5b-fix2 Acceptance criteria. Added by the interview:
    (including `~/`, `/`, `..`, `//`, case).
 2. A test that counts real matching steps fails when the counter is removed; its shape is one the
    faster matcher cannot flatten.
-3. An accepted full-size file (at `MAX_WORK`) never reaches the counter's cap on a 300-word command
-   20 folders deep (the calibrated shape); at 60 deep only time is checked.
+3. A file at `MAX_WORK` with no floating folder pattern (folder names between two `**`) and no
+   command list whose entries share a program and first word never reaches the meter's budget on a
+   command where every name-and-pattern test has length product n×m < 256 and each simple command
+   names at most one listed program, at any depth, also one that parses only partly: counted steps
+   are at most `MAX_WORK` × candidates (the budget is derived from the command). Other files may
+   reach it on long, deep or many-command input; they fail closed and `rules check` warns. (Narrowed
+   2026-10-20: five floating patterns cost 239k steps at 20 deep; re-pricing would only move the
+   breaking depth.)
 4. Under the default rules, `bash -c` naming 300 paths 60 deep is answered in under 0.2 s
    (measured and reported; about 146 ms expected once long words are guarded).
 5. The exact R1 check agrees with brute-force enumeration on toy families and with today's sample
@@ -37,10 +43,13 @@ SPEC §7/§8 are the lead's. `check(action, session)` keeps its shape. `MAX_WORK
 - Cost: a matcher whose cost does not grow with folder depth unless a run of parts sits between two
   `**` (an unanchored pattern counts the implicit leading one), plus a per-hook step counter as the
   guarantee.
-- At the cap: R0 and R1 run outside the counter; an unfinished `block` rule gives a deny with the
-  limit text (a real rule object, not R1's text); an unfinished `warn`/`highlight` is skipped and
-  logged; an unfinished `after` of any other rule counts as fired (a trigger is never lost); `block`
-  rules are evaluated first, in `mark()` too; `/health` gets a field only after a hit.
+- At the cap: R0 and R1 are never stopped by the counter; an unfinished `block` rule gives a deny
+  with the limit text (a real rule object, not R1's text); an unfinished `warn`/`highlight` is
+  skipped and logged. An unfinished `after` (trigger) of a block rule counts as fired; one of a
+  warn or highlight rule is skipped and logged. A trigger's loss lasts the chat, so a block
+  trigger fails closed, and a lost warn or highlight costs little. (Changed 2026-10-20 from "any
+  other rule counts as fired".) `block` rules, their triggers included, run before the rest;
+  `/health` gets a field only after a hit.
 - R1 folder patterns whose cost grows with depth are refused (anchor it or use a separate rule);
   depth-free ones like `~/.aws/config` stay. The reason is cost.
 - R1 minimum: an exact check that R1's names minus its exceptions contain every SPEC §5 secret name,
@@ -62,9 +71,9 @@ See V5b-fix2 "Not included". Cost growing with the number of words (reported). `
 bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh: fix if cheap, else note.
 
 ## Risks
-- The cap's window is narrow (about 0.43 µs a step): at least about 150k steps (a full-size file of
-  167 names on 300 words) and at most about 200k (98 ms baseline at 60 deep plus the cap under
-  0.2 s). Aim 170-180k.
+- The time window is narrow: the budget (180k steps at 300 words) plus the cleaning baseline must
+  stay under 0.2 s at 60 deep. The design removes the charge overhead, hoists `expanduser` and trims
+  `clean.py` as planned steps, and stops to ask if the measured worst case stays over 0.2 s.
 - The new matcher could quietly change what matches. A bug in the exact check. Hostile `?`/`[…]`
   patterns could make the exact check slow. The `bash -c` margin is about 54 ms.
 
@@ -72,5 +81,6 @@ bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh:
 - (you) The R1 narrowings: depth-growing folder patterns refused (Option C vs. names only) and
   degenerate misses like `.env.`. Recommended C as built; in the report's "Needs owner" (300-char
   pointer, detail under Details).
-- (spec) The exact cap inside 170-180k; the exact check's work cap (about 300k steps); the `/health`
-  field's name.
+- (spec, resolved in the design) The budgets (derived from the command; 180k pattern steps at 300
+  words), the exact check's work cap (2M state-steps, with a fast path for default spellings), the
+  `/health` field (`rules_limit`).
