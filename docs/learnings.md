@@ -55,6 +55,8 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **Pushing main marks a draft PR "merged" when main gets its head commit.** PR #6 (2026-10-20) closed itself as merged on the owner's push of ae5dd0e. Close a CI-only draft PR before pushing main if it should read "closed".
 - **Do not time a trial while another full suite runs on the Mac.** 2026-10-20: the F7 trial's third run took 202 s (vs 129 s) while the reviewer ran the suite. Run reviewer suites after the timed trial, or ignore times from overlapping runs.
 - **`! VAR=1` alone sets nothing.** Each `!` command has its own shell; the owner writes `! AGENTFLY_ALLOW_PUSH=1 git push …` on one line (2026-10-20).
+- **A dispatch is two steps; the owner starts the worker.** 2026-10-20: F10's worktree sat unused while the lead re-checked V5b; say "start it now" in the dispatch reply, and STATE's waiting item names every unstarted worker.
+- **Ask the owner product behaviour that a brief leaves open, as behaviour.** V5b pass 2 (2026-10-20) found the warn `ask` message unspecified; one AskUserQuestion with three outcomes settled it.
 
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).
