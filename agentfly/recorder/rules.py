@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import posixpath
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT
-from agentfly.recorder.names import host_of, is_local_host, is_sensitive
+from agentfly.recorder.names import hosts_in_command, is_local_host, is_sensitive
 from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter, normalize
 
 Action = dict[str, Any]
@@ -56,46 +56,6 @@ class Rule:
     check: Callable[[Action, Session], bool]
 
 
-def _looks_like_host_token(token: str) -> str | None:
-    """Return a hostname if token looks like a URL, host:path, or bare host.
-
-    Also finds a URL glued to an option: `--url=https://host`, `--url=host`, `-d@https://host`.
-    """
-    if "://" in token:
-        return host_of("//" + token.split("://", 1)[1])
-    if token.startswith("-") and "=" in token:
-        return _looks_like_host_token(token.split("=", 1)[1])
-
-    # scp/rsync style user@host:path or host:path (not a bare flag)
-    if ":" in token and not token.startswith("-"):
-        left: str = token.split(":", 1)[0]
-        if "@" in left:
-            left = left.rsplit("@", 1)[-1]
-        # Avoid treating port-only or Windows drives; require a hostname-ish left.
-        if left and not left.isdigit() and "/" not in left:
-            return left
-
-    # bare hostname / IP (wget x.com, nc x.com 80, ssh x.com)
-    if token.startswith("-") or "/" in token or "=" in token:
-        return None
-    if "." in token or token in {"localhost"} or token.count(":") >= 1:
-        # IPv6 or dotted name; reject pure numbers
-        if token.replace(".", "").isdigit():
-            return token  # IPv4
-        if any(c.isalpha() for c in token) or ":" in token:
-            return token
-    return None
-
-
-def _hosts_in_command(argv: Iterable[str]) -> list[str]:
-    found: list[str] = []
-    for token in argv:
-        host: str | None = _looks_like_host_token(token)
-        if host is not None:
-            found.append(host)
-    return found
-
-
 def _shell_command(action: Action) -> str | None:
     if str(action.get("hook_event_name", "")) != "beforeShellExecution":
         return None
@@ -116,7 +76,7 @@ def _argv_is_outbound(argv: tuple[str, ...]) -> bool:
         return True
 
     if any(name in _HOSTED_OUTBOUND for name in base_names):
-        hosts: list[str] = _hosts_in_command(argv)
+        hosts: list[str] = hosts_in_command(argv)
         if not hosts:
             # Tool present but no host parsed — treat as outbound (safe for demo).
             return True

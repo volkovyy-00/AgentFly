@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentfly.install import packages, service
+from agentfly.recorder import rulefile
 from tests.helpers import copy_client, free_port
 from tests.install_helpers import make_tool_env
 from tests.service_helpers import Launchd
@@ -46,6 +47,19 @@ def tool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> packages.Enviro
     env = make_tool_env(tmp_path / "toolenv")
     monkeypatch.setattr(packages, "tool_environment", lambda: env)
     return env
+
+
+@pytest.fixture(autouse=True)
+def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """No test reads the real /Library/Application Support/AgentFly/rules.toml (V5b).
+
+    The recorder reads `rulefile.ACTIVE_RULES` once at start; here it is a file that does not
+    exist, so the packaged default is in force. A test that wants other rules writes this path.
+    A recorder started as a child process gets the same by its launch snippet (`RECORDER_CODE`).
+    """
+    path = tmp_path / "no-active-rules.toml"
+    monkeypatch.setattr(rulefile, "ACTIVE_RULES", path)
+    return path
 
 
 @pytest.fixture

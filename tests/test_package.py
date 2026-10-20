@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from agentfly.install import elevate
-from tests.helpers import free_port, make_legacy, package_files
+from tests.helpers import RECORDER_CODE, free_port, make_legacy, package_files
 from tests.test_hook_client import EVENT, check_allow_and_log, run_client
 
 REPO = Path(__file__).resolve().parents[1]
@@ -105,6 +105,8 @@ def test_wheel_carries_the_page_and_nothing_private(installed: Installed) -> Non
         "agentfly/cli/__main__.py",
         "agentfly/install/installer.py",
         "agentfly/recorder/app.py",
+        "agentfly/recorder/rulefile.py",
+        "agentfly/rules/default.toml",
     ):
         assert needed in names, needed
     assert any(n.startswith("agentfly/ui_dist/assets/") for n in names)
@@ -217,8 +219,11 @@ def running_recorder(installed: Installed, tmp_path: Path) -> Iterator[tuple[int
     make_legacy(home)
     port = free_port()
     env = {**installed.env, "HOME": str(home)}
+    # The wheel's own modules, not the repo's `agentfly/` (see `test_the_child_..._wheel`), and a
+    # rules file that does not exist: `RECORDER_CODE` never lets a child read the real one.
     process = subprocess.Popen(
-        [str(installed.bin / "agentfly"), "serve", "--port", str(port)],
+        [str(installed.python), "-I", "-B", "-c", RECORDER_CODE, "serve", "--port", str(port)],
+        cwd=tmp_path,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -237,6 +242,28 @@ def running_recorder(installed: Installed, tmp_path: Path) -> Iterator[tuple[int
     finally:
         process.terminate()
         process.wait(timeout=10)
+
+
+def test_the_child_recorder_imports_the_wheel_and_not_the_source_tree(
+    installed: Installed, tmp_path: Path
+) -> None:
+    """Without `-I` the repo's `agentfly/` would shadow the wheel and these tests would test it."""
+    code = (
+        "import agentfly, agentfly.recorder.rulefile as r; print(agentfly.__file__, r.ACTIVE_RULES)"
+    )
+    result = subprocess.run(
+        [str(installed.python), "-I", "-B", "-c", code],
+        cwd=REPO,
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    where, rules = result.stdout.split(maxsplit=1)
+    assert Path(where).resolve().is_relative_to(installed.package_dir.resolve()), where
+    assert (installed.package_dir / "rules" / "default.toml").is_file()
+    assert rules.strip() == "/Library/Application Support/AgentFly/rules.toml"
 
 
 def test_serve_answers_health_and_serves_the_page_from_the_wheel(

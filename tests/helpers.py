@@ -210,7 +210,14 @@ class StubRecorder:
 
 
 # What `agentfly serve ...` runs as; tests start the recorder from the repo, not from an install.
-RECORDER_CODE = "import sys; from agentfly.cli import main; sys.exit(main(sys.argv[1:]))"
+# It points the recorder at `<HOME>/test-rules.toml` first (a file that does not exist unless the
+# test writes it), so a child recorder never reads the real /Library/Application Support/AgentFly
+# rules file (V5b). A launch snippet is the only way: no flag or variable moves the rules file.
+RECORDER_CODE = (
+    "import sys; from pathlib import Path; import agentfly.recorder.rulefile as rf; "
+    "rf.ACTIVE_RULES = Path.home() / 'test-rules.toml'; "
+    "from agentfly.cli import main; sys.exit(main(sys.argv[1:]))"
+)
 
 
 def start_recorder(
