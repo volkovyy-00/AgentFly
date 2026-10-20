@@ -13,19 +13,20 @@ Pending decisions: D16
 
 ## In flight
 - F10 · Claude Code worker · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f10-review-fixes · ag-f10-review-fixes · docs/reports/F10.md · docs/briefs/F10.md
+- V5b · Claude Code worker · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b.md · docs/briefs/V5b.md
 
 ## Machine state (verified 2026-10-20 08:28 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job; harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main, ag-f10-review-fixes (F10, from d536d39, uv synced). Disk 27 GiB free. F7 worker session can be closed.
+- Worktrees and branches: main, ag-f10-review-fixes (F10, from d536d39), ag-v5b-rules-file (V5b, from df617fe); both uv synced. Disk 27 GiB free. F7 worker session can be closed.
 - Git: origin/main = b84e2ca (owner pushed 2026-10-20); later commits are local only (owner pushes with `AGENTFLY_ALLOW_PUSH=1 git push origin main`). Remote F7 branch deleted. PR #6 shows "merged" (GitHub marked it when main got its head commit). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes, Read ~/.config/agentfly. Guards, not locks.
-- GitHub: `.github/workflows/ci.yml` on main since ae5dd0e (push to main, pull requests; macos-15). First main run 39380422658 on ae5dd0e: green (1 of the few D26 needs). Fork PR workflows need approval (owner 2026-10-19).
+- GitHub: `.github/workflows/ci.yml` on main since ae5dd0e (push to main, pull requests; macos-15). Main push runs green: 39380422658 (ae5dd0e), 39396576611 (b84e2ca); 2 of the few D26 needs. Fork PR workflows need approval (owner 2026-10-19).
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Start the F10 worker: `cd .claude/worktrees/ag-f10-review-fixes && claude --permission-mode plan`, paste line 3 of docs/briefs/F10.md.
+1. Start the V5b worker: `cd .claude/worktrees/ag-v5b-rules-file && claude --permission-mode plan`, paste line 3 of docs/briefs/V5b.md (F10 worker too, if not started).
 
 ## Decisions changed since last handoff (e48d7ee; earlier: git show e48d7ee:docs/STATE.md)
 - Owner 2026-10-19: workers close with /final-verification then /code-review high (docs/reports/README.md).
@@ -48,7 +49,7 @@ Pending decisions: D16
 
 ## Next 3 actions
 1. Track F10 (dispatched 2026-10-20 from d536d39; head -n 6 docs/reports/F10.md when it reports). Verified and dropped 2026-10-20: flag_marked re-queue (by design); mark() twice (wasted work); memory.clear and /health test fine.
-2. Re-check V5b's brief against main; dispatch V5b (and the fix card if files do not overlap) on the owner's go.
+2. Track V5b (dispatched 2026-10-20 from df617fe; brief pass 2 against dd44029; owner: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). Expect merge conflicts with F10 in tests/test_package.py, AGENTS.md "Testing", SPEC.md.
 3. Then: F9 brief; move AGENTS.md "Testing" to tests/README.md.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.

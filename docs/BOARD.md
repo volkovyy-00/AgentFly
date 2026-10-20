@@ -137,7 +137,7 @@ V7 and V9 can run in parallel.
     has no publish step until you approve publishing.
 
 ### V5b · Rules file and severities: R1 in TOML, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
-- **Brief:** `docs/briefs/V5b.md` (authoritative; the lead re-checks it against main before dispatch). Split from V5 (owner 2026-10-18). "Block npm publish after .env" ships in the default rules (owner 2026-10-18).
+- **Brief:** `docs/briefs/V5b.md` (authoritative; pass 2 against dd44029) · dispatched 2026-10-20 (worktree ag-v5b-rules-file, from df617fe), alongside F10. Split from V5 (owner 2026-10-18). "Block npm publish after .env" ships in the default rules (owner 2026-10-18).
 - **Lane:** backend, after V3c · **Depends on:** V5a ✅, V3a ✅, F5 ✅, V3b, V3c
 
 ### V5c · S3 rule additions and the owner's ten rules, with bypass tests
