@@ -189,7 +189,7 @@ V7 and V9 can run in parallel.
 - **Done when:** a hook answer no longer waits on a whole-file rewrite; marks and step order survive a crash and a restart; the file stays bounded.
 
 ### F12 · Package check: linked folders inside the tool environment
-- **Owner:** worker-backend · brief not written · after V5c (shares `agentfly/install/`) · approved by the owner 2026-10-20
+- **Owner:** worker-backend · brief not written · after V5c and F13 (shares `agentfly/install/`, `packages.py`) · approved by the owner 2026-10-20
 - **Scope:** `agentfly/install/packages.py` § `inspect` resolves the whole site-packages path, so a linked folder between the environment root and site-packages is either reported as "outside the environment" or not at all (SPEC §7: a file behind a linked folder inside the environment is a mismatch).
 - **Done when:** any linked folder from the environment root down is a named mismatch, and the wording names the link.
 
@@ -199,7 +199,7 @@ V7 and V9 can run in parallel.
 - **Done when:** pyright clean locally and in CI; F7's `ci.yml` test covers the new step.
 
 ### F9 · Security scans: CodeQL and Dependabot
-- **Owner:** the owner (repo settings) + worker for one YAML file · after F7
+- **Owner:** the owner (repo settings, on 2026-10-20) + worker for one YAML file · brief docs/briefs/F9.md (pass 2 against 333f665) · after V5b merges; may run alongside F13
 - **Scope (owner 2026-10-19: CodeQL and Dependabot yes; alerts, security updates and Actions updates only, no uv/npm version-update PRs):** CodeQL default setup (an owner click in repo settings: no workflow file, no write permission in our workflows; runs on GitHub's Linux runners, which "macOS only" does not cover; it is a scanner, not the test CI). Dependabot alerts and security updates (settings) plus `.github/dependabot.yml` for GitHub Actions version updates only; no uv/npm version-update PRs (they bypass the lead and fail the stale-build check); `@xyflow/react` and `motion` stay pinned. Dependabot PRs are never merged on GitHub: the lead folds them into a card.
 - **Done when:** a CodeQL run on main and the alert settings on; findings triaged (fixed, or a later card).
 

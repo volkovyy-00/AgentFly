@@ -54,9 +54,12 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **A fresh lead reviewer still finds what the worker's own gates miss.** F7 2026-10-20: after the worker's second opinion, audit and /code-review, the lead's cold reviewer showed `tests/test_ci_workflow.py` passed a multi-line `run: |` step where `bash -e` runs past a failed `&&` link. Keep the per-branch fresh review even when the report lists many reviews.
 - **Pushing main marks a draft PR "merged" when main gets its head commit.** PR #6 (2026-10-20) closed itself as merged on the owner's push of ae5dd0e. Close a CI-only draft PR before pushing main if it should read "closed".
 - **Do not time a trial while another full suite runs on the Mac.** 2026-10-20: the F7 trial's third run took 202 s (vs 129 s) while the reviewer ran the suite. Run reviewer suites after the timed trial, or ignore times from overlapping runs.
-- **`! VAR=1` alone sets nothing.** Each `!` command has its own shell; the owner writes `! AGENTFLY_ALLOW_PUSH=1 git push …` on one line (2026-10-20).
+- **`! VAR=1` alone sets nothing, and a command without `!` is only a message.** Each `!` command has its own shell; the owner writes `! AGENTFLY_ALLOW_PUSH=1 git push …` on one line. 2026-10-20: the push typed without `!` ran nowhere; check `origin/main` before saying a push landed.
 - **A dispatch is two steps; the owner starts the worker.** 2026-10-20: F10's worktree sat unused while the lead re-checked V5b; say "start it now" in the dispatch reply, and STATE's waiting item names every unstarted worker.
 - **Ask the owner product behaviour that a brief leaves open, as behaviour.** V5b pass 2 (2026-10-20) found the warn `ask` message unspecified; one AskUserQuestion with three outcomes settled it.
+
+- **One red CI run on a timing test is not yet a red main.** b342323 (2026-10-20) failed one `@wallclock` bound (1.28 s vs 1.0 s) and passed on rerun. Check the failure is outside the pushed diff, have the owner rerun (`gh run rerun --failed`; gh writes are denied to the lead), and count main red until a run on that SHA is green.
+- **GitHub's docs pages lag its changelog; ask the repo itself.** 2026-10-20: the dependency-graph docs omitted uv while the changelog (2025-12-16) and the repo's SBOM (29 pkg:pypi = `uv.lock`) showed it covered.
 
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).
