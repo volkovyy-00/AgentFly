@@ -116,7 +116,7 @@ class _Session:
         """
         order: int = new["order"]
         retained: bool = _swap(self.steps, new)
-        listed: bool = _swap(self.evicted_flagged, new)
+        listed: bool = not retained and _swap(self.evicted_flagged, new)
         evicted: bool = not retained and bool(self.steps) and order < self.steps[0]["order"]
         if not (retained or evicted):
             return False

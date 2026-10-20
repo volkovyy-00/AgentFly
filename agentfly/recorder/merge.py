@@ -34,6 +34,7 @@ _SPECIFIC: frozenset[str] = frozenset(
 )
 # The id-less hook a waiting preToolUse Read / Write is kept for; once its step has it, no wait.
 _AWAITS: dict[str, str] = {"read": "beforeReadFile", "write": "afterFileEdit"}
+_AWAITED: frozenset[str] = frozenset(_AWAITS.values())
 _RANK: dict[str, int] = {"allowed": 0, "highlighted": 1, "warned": 2, "blocked": 3}
 
 
@@ -137,7 +138,8 @@ class StepMerger:
             if call:
                 self._remember(chat, call, step)
         merged: StepRecord = step.add(event, record, writes)
-        self._release(chat, step)
+        if event in _AWAITED:  # only these can give a step the hook an entry waits for
+            self._release(chat, step)
         if (
             event == "preToolUse"
             and path is not None
@@ -175,7 +177,7 @@ class StepMerger:
     def _pair(self, chat: str, event: str, path: str) -> Joined | None:
         """The waiting preToolUse an id-less beforeReadFile / afterFileEdit belongs to."""
         entries: deque[_Waiting] | None = self._waiting.get(chat)
-        if not entries or event not in _AWAITS.values():
+        if not entries or event not in _AWAITED:
             return None
         read: bool = event == "beforeReadFile"  # the oldest unpaired Read, else the latest Write
         for entry in entries if read else reversed(entries):
