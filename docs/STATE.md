@@ -1,5 +1,5 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 12:10 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 12:25 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10-V5b-dispatched. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7 ✅ (BOARD Done; last merge F7 ae5dd0e = trial 368ab22 tree, 3× 3504 passed, 5 skipped, 111–131 s each).
 Pending decisions: D16
 
@@ -20,7 +20,7 @@ Pending decisions: D16
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job (08:28); harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main; ag-f10-review-fixes (from d536d39) and ag-v5b-rules-file (from df617fe), both uv synced, workers running (owner 11:14), no commits yet. Disk 27 GiB free.
+- Worktrees and branches: main; ag-f10-review-fixes (from d536d39) and ag-v5b-rules-file (from df617fe), both uv synced, workers running (owner 11:14). F10 reported done 12:05 (head 461d8a9, code fed7426); lead trial-merging. V5b: 1 commit (cebe720), running. Disk 27 GiB free.
 - Git: origin/main = 3316ee3 (owner pushed 2026-10-20); later commits are local only (owner pushes with `AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes, Read ~/.config/agentfly. Guards, not locks.
 - GitHub: ci.yml on main since ae5dd0e. Main push runs green: 39380422658 (ae5dd0e), 39396576611 (b84e2ca), 39398305268 (3316ee3). Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on (first scan running).
@@ -35,7 +35,7 @@ none
 - Lead 2026-10-20 (verified by running): flag_marked re-queue is by design; mark() twice per shell event is wasted work only; memory.clear and the wrong-token /health test are fine. F10 takes the rest.
 
 ## Open risks and findings
-- F9: Dependabot raises no alerts for SHA-pinned actions ; `uv.lock` is covered (SBOM: 29 pkg:pypi = uv.lock, owner ran it 2026-10-20); the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
+- F9: Dependabot raises no alerts for SHA-pinned actions; `uv.lock` is covered (SBOM: 29 pkg:pypi = uv.lock, owner ran it 2026-10-20); the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - V3c later-card items: a `.pth` runs in the checking process (root-side verification); R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a `.venv` dist-info); offline guard has no package-command rule; root runs bundled 3.12 against the env's site-packages.
 - UI card: ui/README.md and useTrail comment about `?limit=1` (V8b).
 - F7 leftovers: hook-client tests vs a real recorder rely on the 0.5 s wait (watch arm64); Check is one chained CI step (a ruff failure hides test results); uv and Node float in CI (pin needs the owner's say); `UV is None` skip in tests/test_package.py stays green on CI; two suites at once on one Mac can share a test port (~1%, accepted).
