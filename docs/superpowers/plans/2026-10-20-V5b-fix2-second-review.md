@@ -16,8 +16,8 @@
 `git show main:docs/briefs/V5b-fix2.md`. Executors read the spec. Section numbers below (§4.2 …)
 are the spec's.
 
-**For the lead's check (one choice outside the brief's file list):** Task 11 puts the D27 coverage
-engine in a new module, `agentfly/recorder/namecover.py`. The brief's Touches names
+**For the lead's check (one choice outside the brief's file list):** Task 9 creates a new module,
+`agentfly/recorder/namecover.py`, and Tasks 10 and 11 put the D27 coverage engine in it. The brief's Touches names
 `agentfly/recorder/` with a list of files that does not include it. If the lead prefers, the same
 code goes at the end of `rulefile.py` under a `# ---- D27 coverage` banner, with no other change to
 the plan.
@@ -50,7 +50,8 @@ the plan.
 - **Spec values:**
   - `DIV = 256`, `HOOK_WORDS = 300`, `HOOK_CANDIDATES = 900`;
   - pattern budget `MAX_WORK × max(C, 900)`; command budget `2 × MAX_RULES × max(W, 300)`;
-  - `D27_STEPS = 600_000`; `LIMIT_ID = "rules limit"`; `/health` field `rules_limit`.
+  - `D27_STEPS` starts at 600,000 and is calibrated in Task 11; `LIMIT_ID = "rules limit"`;
+    `/health` field `rules_limit`.
 
 ## Review Focus
 
@@ -190,7 +191,7 @@ that owns it.
     and name lengths 1 to 300, the clause's charge for length `n` is
     `sum(test_cost(n, len(p)) for p in names)`.
   - `test_a_partly_parsed_command_is_walked_once_per_distinct_candidate`: `cat 'x ; cat a b` (an
-    unbalanced quote). Count `Pattern.matches` calls with a monkeypatch: one per distinct candidate
+    unbalanced quote). Start with `distinct_candidates.cache_clear()`. Count `Pattern.matches` calls with a monkeypatch: one per distinct candidate
     per pattern.
   - `test_unstoppable_charges_count_but_never_raise`: a meter of 1. Inside `unstoppable()`, charge
     5: no raise, and `pattern_left == -4`. A later stoppable charge raises `WorkLimit`.
@@ -200,6 +201,7 @@ that owns it.
     - Of a 600-word command: `pattern_left == MAX_WORK * C`, with
       `C = len(distinct_candidates(normalize(cmd)))`.
     - Of a Read: `MAX_WORK * 900` and `2 * MAX_RULES * 300`.
+    - `W` counts word occurrences: `cat a; cat a` has `W == 4`.
   - `test_an_unparseable_command_naming_env_still_marks` (Review Focus 3): the default R1's `after`
     matches `cat 'x .env`.
 - [ ] **Update this existing test in this task:**
@@ -217,6 +219,9 @@ that owns it.
     charges once per candidate (§4.2). The dict is a dataclass field with `field(default_factory=
     dict, hash=False, compare=False, repr=False)`, because `Clause` is hashed by `_unmarked`'s
     `lru_cache`;
+  - `Pattern.matches` still calls `_folded_segments` once per pattern: only `expanduser` is hoisted.
+    `tests/test_rulefile.py::test_one_path_is_resolved_once_however_many_patterns_look_at_it`
+    counts 49 memo hits and must pass unchanged;
   - slash patterns add their actual segment charges to a local counter, and middle-block starts
     charge 1 each;
   - one `charge_patterns` call per candidate per clause.
@@ -252,7 +257,9 @@ that owns it.
     `rules.one_hook`, no `WorkLimit` is raised and the answer is allow.
 - [ ] **Step 2: Run them and see them fail.** Run `uv run pytest tests/test_rules_meter.py -q`.
 - [ ] **Step 3: Implement the index** of §4.5, as a `Clause` field with `hash=False,
-  compare=False`, built in `_clause`:
+  compare=False`. Build it in `Clause.__post_init__` (with `object.__setattr__`, since `Clause` is
+  frozen), not in `_clause`: `tests/test_rulefile.py` (about line 506) and
+  `tests/test_rules_cost.py` (about line 278) build `Clause` directly.
   - the map is program → first extra word (or `None`) → entries;
   - per simple command and per listed program at its first position, iterate the smaller of that
     program's keys and the distinct words after it;
@@ -324,10 +331,12 @@ return None
     the tail matches and the middle walk runs.
   - `test_outside_a_hook_the_engine_answers_as_before`: the default's inline tests and
     `tests/test_severities.py`'s file orders are unchanged.
-  - `test_r0_and_r1_answer_as_usual_at_the_limit`:
-    - with `heavy("block")`, a marked chat on the heavy command plus `curl https://x.com` gives
-      `rule.id == "R1"`;
-    - an R0 guard path in the heavy command gives `"R0"`.
+  - `test_r0_and_r1_answer_as_usual_at_the_limit`. The heavy block rule is placed **before** R1 in
+    the file text: split the default at R1's `[[rule]]` and insert it there, so that it is
+    evaluated, and left unfinished, before R1.
+    - A marked chat on the heavy command plus `curl https://x.com` gives `rule.id == "R1"`, and the
+      heavy rule's id is in `hook.meter.unfinished`.
+    - An R0 guard path in the heavy command gives `"R0"`.
   - `test_an_unfinished_block_rule_gives_the_limit_rule`: an unmarked chat with `heavy("block")`
     gives `LIMIT_RULE`, and `hook.meter.limit_deny` is true.
   - `test_an_unfinished_warn_or_highlight_is_skipped`: with `heavy("warn")` and
@@ -385,8 +394,12 @@ Steps 2 to 5 run inside `with one_hook(payload) as hook`. `build_step_record` us
     `agent_message` of `LIMIT_MESSAGE + BLOCK_TAIL`.
   - `test_health_says_rules_limit_only_after_a_hit`:
     - before the hit, the keys are exactly `{"ok", "offline_guard_count", "last_hook_at"}`;
-    - after it, `rules_limit` starts with `"the rules limit was reached on 1 hooks"` and names the
-      rule id;
+    - after it, `rules_limit` starts with `"rules limit reached by 1 hook(s)"` and names the rule
+      id;
+    - the client is `with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:`,
+      since a bare `TestClient(app)` does not run `lifespan`;
+    - `lifespan` activates the rules it loads, so `heavy(...)` is activated after the client is
+      entered;
     - the line is at most 400 characters.
   - `test_the_log_line_names_the_chat_and_rules_and_no_command_text`: with `caplog`, one warning
     naming the chat and the rule id. The marker word `zz-secret-marker`, planted in the command,
@@ -400,8 +413,9 @@ Steps 2 to 5 run inside `with one_hook(payload) as hook`. `build_step_record` us
     `preToolUse` Shell, then `beforeShellExecution` with one `tool_use_id`, as
     `tests/test_step_merge.py` does, under `heavy("block")`. The single step's `rule_id ==
     "rules limit"`, and its messages are the limit's.
-  - `test_a_fresh_start_forgets_the_limit_hit` (Review Focus 5): after a hit, a new
-    `TestClient(app)` (which runs `lifespan`) answers `/health` with exactly the three keys.
+  - `test_a_fresh_start_forgets_the_limit_hit` (Review Focus 5): after a hit inside one `with
+    TestClient(app_module.app, base_url="http://127.0.0.1:8787")` block, a second such block, which
+    runs `lifespan` again, answers `/health` with exactly the three keys.
 - [ ] **Step 2: Run them and see them fail.** Run `uv run pytest tests/test_rules_limit.py -q`.
 - [ ] **Step 3: Implement** the `apply_rules` order above, the counter and its `lifespan` reset, and
   the `/health` field.
@@ -444,8 +458,12 @@ Steps 2 to 5 run inside `with one_hook(payload) as hook`. `build_step_record` us
     - the counted real calls are at most `MAX_WORK * 900`;
     - with `rulefile.charge_patterns` and `rulefile.charge_commands` monkeypatched to no-ops (the
       bound removed), the count is over `MAX_WORK * 900`.
-  - `test_a_non_floating_file_never_reaches_the_budget`, parametrized over every existing `FULL`
-    shape plus `/opt/p{i}/x{i}.txt` and unanchored `p{i}/x{i}.txt`. At 300 words, at 20 and 60
+  - `test_a_non_floating_file_never_reaches_the_budget`. It is parametrized over the `FULL` shapes
+    that are not floating, plus `/opt/p{i}/x{i}.txt` and unanchored `p{i}/x{i}.txt`:
+    - included: "many rules with one name pattern", "one long list of names", "slash patterns
+      with one **" (anchored, head and tail) and "long slash patterns" (tail only);
+    - excluded: "floating slash patterns" and "floating patterns with several **". A test asserts
+      that `floating` is true for every pattern of those two shapes. At 300 words, at 20 and 60
     deep, and on a partly parsed form of `command()` (append ` 'x`):
     - no rule is left unfinished;
     - the counted steps are at most `MAX_WORK * C`.
@@ -558,6 +576,12 @@ Steps 2 to 5 run inside `with one_hook(payload) as hook`. `build_step_record` us
   - `spec_secret(name: str) -> bool`, reading the table.
   - `EXEMPTIONS`, derived from the table, with the same value as today.
 
+- [ ] **Keep, in this task:**
+  - `rulefile.SECRET_NAMES` and `spec_secret` (`tests/test_rules_minimum.py` lines 61, 65 and 69
+    use them, and the grid stays a second opinion);
+  - the markers `the minimum for R1 (D27)` and `---- files` in `rulefile.py`
+    (`test_the_minimum_does_not_read_default_toml` slices between them). Extend that test to also
+    scan all of `namecover.py`.
 - [ ] **Step 1: Write the test.** `test_spec_secret_from_the_table_answers_as_before`: a copy of
   today's `spec_secret` goes into the test file. The two agree on `SECRET_NAMES`, on every name of
   today's `_secret_names` grid built without the filter, and on 20,000 seeded random names drawn
@@ -626,30 +650,40 @@ All steps count against `limit`.
     - marks and exceptions of 1 to 4 random patterns over `abcde*?[`;
     - brute force over every string of up to 7 letters.
 
-    `check(...).witness is None` exactly when brute force finds no miss. A found witness is a real
-    miss, and is no longer than the shortest brute-force miss.
+    `check(...).witness is None` exactly when brute force finds no miss, and any witness is a real
+    miss. There is no "shortest" claim across families: the pinned order returns the first family
+    with a miss.
   - `test_the_three_dodges_are_found` (the brief's files):
     - the `.env.[!s]*` chain gives the witness `.env.` or a name starting `.env.s`;
     - `credentials` + `credentials[!$ ]*` gives a name starting `credentials`;
     - `.env.?` … up to 15 `?` gives a name starting `.env.`.
-  - `test_a_hostile_pattern_is_too_complex_at_the_limit` (no seconds bound):
-    - the marks are the default's six names with `.env.*` replaced by `*a` followed by 150 `?`, so
-      the `.env.` family needs the union search;
-    - `check(..., limit=5_000)` gives `too_complex`, and `steps` is between 5,000 and 5,000 plus one
-      deterministic state's width.
+  - `test_a_hostile_pattern_is_too_complex_at_the_limit` (no seconds bound). The marks are `.env`,
+    `.env.`, `.env.?` up to 15 `?`, `*a` followed by 150 `?`, `*.pem`, `*.key`, `id_rsa*` and
+    `credentials*`, with the default's exceptions (the owner's re-run file).
+    - `check(..., limit=50_000)` gives `too_complex`, with `steps >= 50_000`.
+    - The control (the same marks without the hostile pattern) at `limit=D27_STEPS` gives a witness
+      starting `.env.`, not `too_complex`.
   - `test_the_default_plus_30_names_and_the_dot_env_rewrite_finish_under_the_cap`, forced past the
     fast path by calling `check` directly:
     - the default's marks plus 30 realistic names (`*.p12`, `*.pfx`, `secrets.*`, `*.jks`,
       `*.keystore`, `*.ovpn`, `.npmrc`, `.pypirc`, …);
     - the same with `.env.*` replaced by `.env.?*` and `.env.`.
 
-    Both have no witness, are not `too_complex`, and have `steps < 600_000`; the owner's prototype
-    measured about 26k and 340k. **If either fails, stop and ask the lead with the step count.**
+    Both have no witness, are not `too_complex`, and have `steps < D27_STEPS`. **If either fails,
+    stop and ask the lead with the step count.**
 - [ ] **Step 2: Run them and see them fail.** Run `uv run pytest tests/test_namecover.py -q`.
-- [ ] **Step 3: Implement** the three-phase search in the pinned order, with the two prunings, and
-  the witness as the shortest miss.
-- [ ] **Step 4: Pass the tests.**
-- [ ] **Step 5: Commit.** Message: `V5b-fix2: an exact search for a secret name R1 leaves unmarked`.
+- [ ] **Step 3: Implement** the three-phase search of §6.3:
+  - the pinned order;
+  - the unit `width + 3` per expansion of a state by one alphabet class;
+  - the alphabet built once per call, merged into equivalence classes;
+  - both prunings in phases 2 and 3;
+  - the witness as the first miss found (the shortest within its family).
+- [ ] **Step 4: Calibrate the cap.** In a scratch script, time `check` on the hostile file and on
+  the two realistic files, each at `limit=600_000`, best of three. Set `D27_STEPS` so that the
+  slowest stops in at most 1.0 s on this Mac. The realistic files must still finish under it. If
+  they cannot, **stop and ask the lead with the numbers**. Record the times for the report.
+- [ ] **Step 5: Pass the tests.**
+- [ ] **Step 6: Commit.** Message: `V5b-fix2: an exact search for a secret name R1 leaves unmarked`.
 
 ### Task 12: Wire D27. Fast path, exact check, R1's folder patterns, messages, SPEC §5
 
@@ -667,7 +701,7 @@ All steps count against `limit`.
 **Interfaces:**
 - Consumes: Task 11's `namecover.check`, and Task 1's `floating`.
 - Produces (in `rulefile`): `COVERING: dict[Family, frozenset[str]]`, `SAFE_EXCEPTIONS:
-  frozenset[str]` and `D27_STEPS: int = 600_000`.
+  frozenset[str]` and `D27_STEPS: int`, the value calibrated in Task 11.
 
   Error strings start `rule R1: `:
   - one for a miss, naming the bullet and the witness;
@@ -679,8 +713,9 @@ All steps count against `limit`.
     Each exits 1, and stderr has `rule R1:` with the family's bullet.
   - `test_files_that_only_add_names_or_respell_load` keeps every existing `ACCEPTED` entry, and adds
     the default plus 30 realistic names (fast path) and `.env*` for `.env` and `.env.*`.
-  - `test_the_fast_path_tables_are_proved`: for every family and every spelling in `COVERING`, and
-    every subset of `SAFE_EXCEPTIONS`, `namecover.check` finds no witness.
+  - `test_the_fast_path_tables_are_proved`: for every family and every spelling in `COVERING`,
+    with each single exception of `SAFE_EXCEPTIONS` in turn, `namecover.check` finds no witness.
+    Exceptions are checked one at a time, so the 8 single exceptions prove every subset.
   - `test_the_fast_path_runs_no_search`: monkeypatch `namecover.check` to raise. The default and a
     names-only extension still load.
   - `test_the_sample_grid_agrees_with_the_exact_check`: for every `ACCEPTED` and refused fixture,

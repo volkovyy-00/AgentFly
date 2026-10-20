@@ -82,6 +82,6 @@ bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh:
   degenerate misses like `.env.`. Recommended C as built; in the report's "Needs owner" (300-char
   pointer, detail under Details).
 - (spec, resolved in the design) The budgets (derived from the command; 180k pattern steps at 300
-  words), the exact check's work cap (600k state-steps, with a fast path for default spellings and a
-  per-family, one-pattern-first search), the
+  words), the exact check's work cap (calibrated so the worst file stops within 1 s, starting from 600k;
+  with a fast path for default spellings and a per-family, one-pattern-first search), the
   `/health` field (`rules_limit`).

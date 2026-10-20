@@ -3,7 +3,7 @@
 Card: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`, read at main bcb9e9d). Intent:
 `docs/superpowers/intents/2026-10-20-V5b-fix2-second-review-intent.md` (approved by the owner
 2026-10-20, revised the same day). Branch `ag-v5b-rules-file`. Author: the worker, for the owner.
-Status: approved by the owner 2026-10-20 (revision 2, after the builder check and the owner's measurement review).
+Status: approved by the owner 2026-10-20 (revision 2, after the builder check and the owner's measurement review); corrections from the two plan reviews (§4.1 order, §4.2 `W`, §6.3 search, unit and cap, §6.5) awaiting the owner's re-approval.
 
 The brief and the intent are the authority; this document says how. Where it would differ from the
 brief, the builder stops and asks. "My call" marks a choice the owner did not make.
@@ -95,7 +95,8 @@ by R1's refusal (§6.4), the `rules check` lint (§4.3) and the tests.
 out of the per-test path:
 - `Pattern.matches` takes the folded home folder from its caller, as an optional parameter
   (existing tests wrap it with two arguments). `os.path.expanduser` is called once per clause
-  evaluation, not once per pattern test, which saves about 1.7 µs per slash test;
+  evaluation, not once per pattern test, which saves about 1.7 µs per slash test. The segments are
+  not hoisted: each pattern still asks the `_folded_segments` memo, which a test counts;
 - the old `_glob` moves to `tests/` as the oracle (§8).
 
 ### 4.2 The meter
@@ -135,7 +136,8 @@ out of the per-test path:
   `W` its words, over `Parsed.all_commands()` with duplicates removed (a command that parses only
   partly no longer counts its words twice):
   - pattern budget: `MAX_WORK × max(C, 900)`;
-  - command budget: `2 × MAX_RULES × max(W, 300)`.
+  - command budget: `2 × MAX_RULES × max(W, 300)`, where `W` counts word occurrences over all simple
+    commands, not distinct words. A repeated simple command pays its look-ups again.
 
   A short command still gets the full 300-word allowance. Cost may grow with command size, as
   cleaning and R1 already do (§9).
@@ -215,8 +217,8 @@ anchor it if you can". The file still loads.
   whether the limit deny went out (no command text), and adds to a process counter. `lifespan`
   resets the counter, as it resets `_last_hook_at`;
 - `/health` then sends `rules_limit`, one line of at most `MAX_PROBLEM_CHARS`, absent until the
-  first hit: "the rules limit was reached on N hooks since the recorder started; last at <UTC ms>,
-  rules <ids>".
+  first hit: "rules limit reached by N hook(s) since the recorder started; last at <UTC ms>, rules
+  <ids>".
 
 ### 4.4 The bound, and why it holds
 
@@ -364,7 +366,16 @@ names in a single union search):
    matches.
 
 The owner's prototype of this order measured about 26k steps for the default plus 30 names, and
-about 340k for the `.env.?*` + `.env.` rewrite.
+about 340k for the `.env.?*` + `.env.` rewrite (before the unit below, which raises both counts).
+A witness is the first miss found, in family order: within a family it is the shortest, but across
+families it need not be.
+
+**Shared work, built once per file:**
+- the alphabet: the representatives below, merged into equivalence classes, so that characters
+  with the same `accepts` answer for every token of the file are one class;
+- each pattern's tokens.
+
+Both pruning rules apply in phases 2 and 3, and the dead-family rule applies in phase 1.
 
 **Pruning** (the builder may add more, if a test shows it exact):
 - a state whose family automaton is dead is dropped;
@@ -384,13 +395,20 @@ no name that can exist.
 `fnmatch.fnmatchcase(c, token)`.
 
 **The work cap.**
-- *The unit:* one NFA state-step, that is, one position of one pattern advanced by one representative
-  character. A deterministic state of k positions costs k per character.
-- *The cap:* `D27_STEPS = 600_000` across all three phases, with the per-try budget counted inside
-  it. At the owner's measured 0.55–0.67 µs per state-step, the cap is about 0.4 s of load time. Its
-  test asserts `too_complex` and the step count with a small test-only `limit`, not seconds: a
-  seconds bound near 0.5 s flakes under a second running suite. A hostile pattern is tested
-  alongside the default's names; alone, it misses `.env` at once.
+- *The unit:* one expansion of one product state by one alphabet class. It costs `width + 3`, where
+  `width` is the number of pattern positions in the state and 3 covers the fixed work of an
+  expansion. The owner's review showed that a plain count of positions does not track time on
+  narrow states: 26k steps took 235 ms and 70k took 2.3 s.
+- *The cap:* `D27_STEPS` is set by measurement on the real code, so that the slowest file the tests
+  build (hostile and realistic) stops at the cap in at most 1.0 s on this Mac. The start value is
+  600,000. Its cost is start-up time and `rules check` time, not hook latency (the start-up timeout
+  is 10 s).
+- *The test:* it asserts `too_complex` and the step count with a small test-only `limit`, not
+  seconds. A seconds bound near the cap flakes under a second running suite.
+- *The hostile file:* its marks are `.env`, `.env.`, `.env.?` up to 15 `?`, the hostile pattern
+  (`*a` followed by 150 `?`), `*.pem`, `*.key`, `id_rsa*` and `credentials*`. At a small limit it
+  is `too_complex`. The same marks without the hostile pattern give a witness, not `too_complex`,
+  at `D27_STEPS`.
 - *Past it,* R1 is refused: "rule R1: its 'after' lists are too complex to check against SPEC section
   5's names; use simpler patterns (D27)". This is the one place the check is not exact, and it fails
   closed.
