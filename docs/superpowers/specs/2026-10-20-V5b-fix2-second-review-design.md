@@ -77,6 +77,12 @@ an implicit `**` in front. A match then checks three kinds of block:
 - **Middle blocks** (a run with a `**` on each side): each found left to right at the earliest place
   after the previous one. Greedy leftmost placement is correct for fixed-length blocks between `**`.
 
+The order is pinned: the head first, then the tail, then the middle blocks. A path whose tail does
+not fit is refused after a few comparisons. With the middle blocks first, today's floating shapes
+cost about 390k steps at 60 deep instead of about 4.5k (measured by the owner's review).
+`_glob(pattern, segments, blocks=None)` keeps its two-argument form for callers and tests that pass
+parts. `Pattern` passes its precomputed blocks as the third argument.
+
 A bare `*` part matches any one segment without `fnmatch`.
 
 `rulefile.floating(pattern) -> bool` is true when the pattern has a middle block. Examples of
@@ -138,8 +144,9 @@ out of the per-test path:
   - the pass (§4.3);
   - R1's answer for this action (below).
 
-  `cli/rules_test.py` uses it for each inline test step, so `rules test` judges as the recorder
-  does.
+  `rules test` runs outside a hook, unchanged. `cli/rules_test.py` is outside the brief's Touches.
+  Inline steps are at most 2,000 characters, too short to reach a budget, and with no hook the
+  engine runs every severity, as today.
 - **R0 and R1 are counted but never stopped** (my call). R1's `after` and `check` (and
   `RuleSet.secret`) run inside `rulefile.unstoppable()`. Their charges add to the budgets, so the
   hook's total stays bounded, but they never raise. A rule metered later gets only what is left. R0
@@ -165,6 +172,8 @@ A rule's `then` depends only on its own trigger, so the hook runs in two passes:
 - Pass 2's checks run only when pass 1 found no block.
 - The winner is unchanged: the first block in file order, else the first warn, else the first
   highlight.
+- Outside a hook (pure tests, `rules test`), `mark` and `winning_rule` run every severity at once,
+  with no meter, as today.
 
 **When the meter runs out in a trigger** (`WorkLimit` inside a non-R1 `after`):
 - *A block rule's trigger counts as fired.* A lost trigger is lost for the rest of the chat, while a
@@ -203,7 +212,8 @@ anchor it if you can". The file still loads.
 
 **Reporting.** After the hook, `app.apply_rules` reads the meter:
 - if anything was unfinished, it logs one warning line with the chat id, the unfinished rule ids and
-  whether the limit deny went out (no command text), and adds to a process counter;
+  whether the limit deny went out (no command text), and adds to a process counter. `lifespan`
+  resets the counter, as it resets `_last_hook_at`;
 - `/health` then sends `rules_limit`, one line of at most `MAX_PROBLEM_CHARS`, absent until the
   first hit: "the rules limit was reached on N hooks since the recorder started; last at <UTC ms>,
   rules <ids>".
@@ -332,14 +342,29 @@ as the brief requires.
 
 ### 6.3 The exact check (every other file)
 
-**What it searches.** R1 marks a name when the name matches a name pattern in `after.path` and none
-in `after.path_except` (names case-folded). Slash patterns only add marks, so the proof ignores
-them. A breadth-first search looks for the shortest secret name left unmarked, over the product of:
-- the family table, as small automata;
-- the set of positions reached in the `path` patterns (an NFA made deterministic on the fly);
-- the same for the `path_except` patterns.
+**What it proves.** R1 marks a name when the name matches a name pattern in `after.path` and none in
+`after.path_except` (names case-folded). Slash patterns only add marks, so the proof ignores them.
+Every family F must satisfy two conditions:
+- F ⊆ L(marks), where L(…) is the set of names the patterns match;
+- F ∩ L(exceptions) = ∅.
 
-A state is a miss when a family accepts and either no `path` pattern accepts or an exception does.
+The two together are exactly F ⊆ L(marks) \ L(exceptions).
+
+**How it searches** (revised after the owner's review measured 6.9M steps for the default plus 30
+names in a single union search):
+1. **Exceptions, one at a time.** For each family and each exception, a product search of the
+   family's automaton and that one pattern finds the shortest name in both. A hit is a miss.
+2. **One pattern at a time.** For each family, try each mark pattern alone: a product search of the
+   family's automaton and that one pattern, looking for a family name the pattern does not match.
+   The first pattern that covers the whole family settles it. Each try has its own small budget
+   (`D27_TRY_STEPS = 20_000`), so one hostile pattern cannot use up the whole cap.
+3. **The union, only for a family no single pattern covers.** A breadth-first search over the
+   product of the family's automaton and the set of positions reached in all the mark patterns (an
+   NFA made deterministic on the fly). It looks for the shortest family name that no mark pattern
+   matches.
+
+The owner's prototype of this order measured about 26k steps for the default plus 30 names, and
+about 340k for the `.env.?*` + `.env.` rewrite.
 
 **Pruning** (the builder may add more, if a test shows it exact):
 - a state whose family automaton is dead is dropped;
@@ -361,9 +386,11 @@ no name that can exist.
 **The work cap.**
 - *The unit:* one NFA state-step, that is, one position of one pattern advanced by one representative
   character. A deterministic state of k positions costs k per character.
-- *The cap:* `D27_STEPS = 600_000`. At the owner's measured 0.55–0.67 µs per state-step, a hostile
-  `?`/`[…]` pattern is refused in under 0.5 s. The builder re-measures, and lowers the cap if needed
-  to keep that gate.
+- *The cap:* `D27_STEPS = 600_000` across all three phases, with the per-try budget counted inside
+  it. At the owner's measured 0.55–0.67 µs per state-step, the cap is about 0.4 s of load time. Its
+  test asserts `too_complex` and the step count with a small test-only `limit`, not seconds: a
+  seconds bound near 0.5 s flakes under a second running suite. A hostile pattern is tested
+  alongside the default's names; alone, it misses `.env` at once.
 - *Past it,* R1 is refused: "rule R1: its 'after' lists are too complex to check against SPEC section
   5's names; use simpler patterns (D27)". This is the one place the check is not exact, and it fails
   closed.
@@ -402,10 +429,12 @@ unless the owner says otherwise.
 
 ### 6.5 SPEC §5
 
-Three sentences:
+Two sentences, both D27's (the brief allows SPEC §5 edits only where D27's wording changes):
 - R1's names are checked exactly against the bullets, up to a work limit past which R1 is refused;
-- R1 may not hold floating folder patterns;
-- the rules limit fails closed for block rules.
+- R1 may not hold floating folder patterns.
+
+The rules limit (it fails closed for block rules) goes to the report as a gap for the lead, together
+with HOOKS.md's `rules_limit` line.
 
 ## 7. Part 4: install
 
@@ -494,8 +523,8 @@ as §4.4 says, and answers as the old loop does.
 - An unfinished warn or highlight is skipped.
 - A block trigger counts as fired; a warn trigger does not.
 - A heavy highlight cannot starve a block rule.
-- `/health` has `rules_limit` only after a hit, and the log line holds no command text.
-- `rules test` uses the same meter and passes.
+- `/health` has `rules_limit` only after a hit, and a fresh recorder start has exactly three keys
+  again. The log line holds no command text.
 - A marked chat's shell step still gets `file_sensitive`.
 
 **Long words.**
@@ -512,8 +541,9 @@ as §4.4 says, and answers as the old loop does.
 - The fast-path tables are proved by the automaton.
 - The three dodges are refused, and the accepted variants load.
 - The grid agrees with the exact check on every accepted and refused fixture.
-- A hostile pattern is refused at the cap in under 0.5 s.
-- The 30-name rewrite finishes under the cap.
+- A hostile pattern, with the default's names, is `too_complex` at a small test `limit`, with the
+  step count asserted (no seconds).
+- The 30-name file and the `.env.?*` rewrite finish under the cap.
 
 **R1 folder patterns.** These are refused: `.ssh/**`, `a/**/b`, `**/x/**`. These load: `~/.aws/config`,
 `~/.aws/**`, `/etc/ssl/private/*`.

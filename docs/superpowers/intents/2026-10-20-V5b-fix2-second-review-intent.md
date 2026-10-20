@@ -33,7 +33,7 @@ See V5b-fix2 Acceptance criteria. Added by the interview:
 
 ## Affected users and systems
 `agentfly/recorder/` (rulefile, rules, clean, store, app), `agentfly/install/` (installer, checks),
-`agentfly/cli/` (init, rules_check), their tests, AGENTS.md "Testing", one SPEC §5 sentence.
+`agentfly/cli/` (init, rules_check), their tests, AGENTS.md "Testing", two SPEC §5 sentences (D27).
 
 ## Constraints
 Branch `ag-v5b-rules-file` only, no push, no merge of main. D27/D28 text unchanged. HOOKS.md and
@@ -82,5 +82,6 @@ bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh:
   degenerate misses like `.env.`. Recommended C as built; in the report's "Needs owner" (300-char
   pointer, detail under Details).
 - (spec, resolved in the design) The budgets (derived from the command; 180k pattern steps at 300
-  words), the exact check's work cap (2M state-steps, with a fast path for default spellings), the
+  words), the exact check's work cap (600k state-steps, with a fast path for default spellings and a
+  per-family, one-pattern-first search), the
   `/health` field (`rules_limit`).
