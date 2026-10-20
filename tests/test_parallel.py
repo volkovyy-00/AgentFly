@@ -32,14 +32,18 @@ def test_the_package_tests_share_one_worker() -> None:
     assert groups == {"package"}
 
 
-def timed_tests(sources: dict[Path, str] = SOURCES) -> list[tuple[Path, ast.FunctionDef]]:
+def timed_tests(
+    sources: dict[Path, str] = SOURCES,
+) -> list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]]:
     """The test functions whose own body names `perf_counter` or `monotonic`."""
     found = []
     for path, source in sources.items():
         if not TIMED.search(source):
             continue  # most files: no need to parse them
         for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
+                "test_"
+            ):
                 if TIMED.search(ast.get_source_segment(source, node) or ""):
                     found.append((path, node))
     return found
@@ -108,6 +112,11 @@ def test_the_clock_scan_reads_the_lines_python_counts() -> None:
     # A form feed ends a line for `str.splitlines` but not for the parser: the scan must not shift.
     source = "import time\n\n\ndef test_x():\n    pass\x0c\n    t = time.perf_counter()\n"
     assert [node.name for _, node in timed_tests({Path("test_x.py"): source})] == ["test_x"]
+
+
+def test_the_clock_scan_sees_an_async_test() -> None:
+    source = "import time\n\n\nasync def test_y():\n    t = time.monotonic()\n"
+    assert [node.name for _, node in timed_tests({Path("test_y.py"): source})] == ["test_y"]
 
 
 def test_a_serial_run_gets_any_port_of_the_range(monkeypatch: pytest.MonkeyPatch) -> None:
