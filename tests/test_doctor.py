@@ -290,6 +290,21 @@ def test_a_fixed_file_with_a_recorder_still_on_the_default_asks_for_a_restart(
     assert check.level == "fail" and "restart" in check.text and "agentfly start" in check.text
 
 
+def test_an_unedited_older_default_is_only_a_warning_that_names_init(world: World) -> None:
+    older = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))[0]
+    world.layout.rules.write_bytes(older.read_bytes())
+    check = world.results()["rules"]
+    assert check.level == "warn" and "agentfly init -g" in check.text and "restart" in check.text
+    assert world.levels("fail") == set()
+
+
+def test_an_edited_file_is_fine_even_if_it_started_from_an_older_default(world: World) -> None:
+    older = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))[0]
+    world.layout.rules.write_text("# mine\n" + older.read_text(encoding="utf-8"), encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "ok" and "all valid" in check.text
+
+
 def test_a_rules_file_the_recorder_would_refuse_for_its_owner_fails_the_rules_line_only(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:

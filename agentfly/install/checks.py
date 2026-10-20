@@ -494,6 +494,11 @@ def check_rules(ctx: Context) -> Finding:
             f"{path} is valid now, but the recorder started without it and runs the default "
             "rules; restart it (`agentfly stop`, `agentfly start`)"
         )
+    if rulefile.is_older_default(loaded.sha256):  # the owner never edited it (D28)
+        return warn(
+            f"{path} is an older default than this version carries; run `agentfly init -g` to "
+            "replace it, then restart the recorder"
+        )
     return ok(f"{path}: {rulefile.rules_word(len(loaded.rules))}, plus R0, all valid")
 
 

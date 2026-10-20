@@ -777,6 +777,24 @@ def _with_minimum(parsed: RuleFile) -> RuleFile:
 # ---------------------------------------------------------------- files
 
 
+# The sha256 of every `default.toml` the package has carried, oldest first, the current one last
+# (D28). `init -g` replaces the installed rules file only when it is byte for byte one of these:
+# nobody edited it. Add the new hash here, and keep the old ones, whenever `default.toml` changes;
+# `tests/test_rules_shipped.py` fails until you do. The three earlier files are kept under
+# `tests/fixtures/shipped_defaults/` so the hashes can be checked against the text.
+SHIPPED_DEFAULTS: tuple[str, ...] = (
+    "1b066ff522dd2f00cfaa451f62a1dc88071198b98d2296cbf4671fb85fe3beb9",  # V5b, R1 only
+    "185c15585c6646cb25e146eeca328051b5ec714daf992436437784222f357d8d",  # V5b, + npm publish
+    "50872ebe24b5cf25fb580523f2f541cd9a1dd0c92629d3accb5f86a873c93912",  # V5b, audit fixes
+    "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
+)
+
+
+def is_older_default(sha: str) -> bool:
+    """Is this the hash of a default the package once carried and no longer does? (D28)"""
+    return sha in SHIPPED_DEFAULTS[:-1]
+
+
 def default_path() -> Path:
     """The default rules inside the package (the wheel carries it)."""
     return Path(__file__).resolve().parent.parent / "rules" / "default.toml"

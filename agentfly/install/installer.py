@@ -109,24 +109,81 @@ def _write_atomic(path: Path, data: bytes, layout: Layout, mode: int = 0o644) ->
         temp.unlink(missing_ok=True)
 
 
-def _install_rules(layout: Layout) -> bool:
-    """Write the packaged default rules unless a rules file is there. True if it was written.
+DEFAULT_RECORD_PATH = "agentfly/rules/default.toml"  # as the wheel's RECORD writes it
 
-    Never overwrites: what is there is the owner's, edited or not (D3). Refuses a link or a
-    folder in its place, where `os.replace` would clobber or fail.
+
+def _packaged_default(current: packages.Check) -> bytes:
+    """The packaged default rules, read once, checked, and nothing else is ever written.
+
+    `packages.require` hashed the tool environment at the start; the file is read again here, so
+    its bytes are compared with that RECORD hash and must parse cleanly under the rules the
+    recorder applies (D27). What is returned is what gets written.
     """
-    if layout.rules.is_symlink():
-        raise InstallError(f"{layout.rules} is a symbolic link; remove it first")
-    if layout.rules.exists():
-        if not layout.rules.is_file():
-            raise InstallError(f"{layout.rules} is not a regular file; remove it first")
-        return False
+    wanted = packages.recorded_hash(current, DEFAULT_RECORD_PATH)
+    if wanted is None:
+        raise InstallError(
+            f"{DEFAULT_RECORD_PATH} is not listed in AgentFly's RECORD, so the default rules "
+            "cannot be checked; nothing was changed"
+        )
     try:
-        data = rulefile.default_text().encode("utf-8")
+        data = rulefile.default_path().read_bytes()
     except OSError as exc:
         raise InstallError(f"cannot read the packaged default rules ({exc})") from exc
+    if rulefile.sha256_of(data) != wanted:
+        raise InstallError(
+            "the packaged default rules are not the file that was checked a moment ago; nothing "
+            "was changed. Reinstall AgentFly from a source you trust, then run `agentfly init -g`"
+        )
+    loaded = rulefile.load_bytes(data)
+    if loaded.errors:
+        raise InstallError(
+            f"the packaged default rules cannot be used ({rulefile.summary(loaded.errors)}); "
+            "nothing was changed"
+        )
+    return data
+
+
+def rules_state(layout: Layout, wanted: str | None) -> str:
+    """What is at the rules file's place: `missing`, `current` (this version's default), `older`
+    (a default the package once carried, never edited), `edited` (anything else, the owner's) or
+    `blocked` (a link or a folder, which `init -g` will not write through).
+
+    `wanted` is the sha256 of this version's default. A file too big to be a rules file, or one
+    that cannot be read, is `edited`: it is not ours to replace.
+    """
+    path = layout.rules
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return "blocked"
+    if not path.exists():
+        return "missing"
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(rulefile.MAX_FILE_BYTES + 1)
+    except OSError:
+        return "edited"
+    if len(raw) > rulefile.MAX_FILE_BYTES:
+        return "edited"
+    digest = rulefile.sha256_of(raw)
+    if digest == wanted:
+        return "current"
+    return "older" if rulefile.is_older_default(digest) else "edited"
+
+
+def _blocked(layout: Layout) -> InstallError:
+    if layout.rules.is_symlink():
+        return InstallError(f"{layout.rules} is a symbolic link; remove it first")
+    return InstallError(f"{layout.rules} is not a regular file; remove it first")
+
+
+def _write_rules(layout: Layout, data: bytes, state: str) -> str:
+    """Put the checked default in place (atomic, 0644, the system user's); say what was done."""
     _write_atomic(layout.rules, data, layout)
-    return True
+    if state == "older":
+        return (
+            f"replaced the unedited default rules in {layout.rules} with this version's; "
+            "restart the recorder (`agentfly stop`, `agentfly start`) to apply them"
+        )
+    return f"wrote the default rules to {layout.rules}"
 
 
 def _read_hooks(layout: Layout) -> str | None:
@@ -168,15 +225,20 @@ def status(layout: Layout, build: PythonBuild, source: Path, current: packages.C
 
     Empty when intact. "packages" is the record's package hashes differing from `current`, the
     check of the tool environment: an upgrade is not "intact". "rules" is a missing rules file
-    (an install from before V5b has none); a file that is there is never "different": it is the
-    owner's, whatever it says, and no hash of it is kept.
+    (an install from before V5b has none), a link or folder in its place, or an unedited default
+    from before this version's (D28). A file the owner edited is never "different": it is theirs,
+    whatever it says, and no hash of it is kept.
     """
     record = records.read(layout)
     everything = {"python", "client", "hooks", "packages", "rules"}
     if record is None:
         return everything
     bad: set[str] = set()
-    if layout.rules.is_symlink() or not layout.rules.is_file():
+    if rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH)) in {
+        "missing",
+        "older",
+        "blocked",
+    }:
         bad.add("rules")
     try:
         python = record["python"]
@@ -501,6 +563,10 @@ def install(
         return Outcome(False, ["already installed and intact; nothing changed"])
     if layout.system_root.is_symlink():
         raise InstallError(f"{layout.system_root} is a symbolic link; remove it first")
+    rules = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
+    if rules == "blocked":
+        raise _blocked(layout)  # before anything is changed, not halfway through
+    rules_data = _packaged_default(current) if rules in {"missing", "older"} else None
     created_hooks = _read_hooks(layout) is None or bool(
         previous and previous.get("hooks_file", {}).get("created")
     )
@@ -549,8 +615,8 @@ def install(
                 shutil.copy2(layout.client, graveyard / "hook_client.py")
             os.replace(staged_client, layout.client)
         shutil.rmtree(staging, ignore_errors=True)
-        if "rules" in bad and _install_rules(layout):
-            messages.append(f"wrote the default rules to {layout.rules}")
+        if rules_data is not None:
+            messages.append(_write_rules(layout, rules_data, rules))
         assert_locked(layout)
         for event in cursor.EVENTS:  # every command as registered, through `sh -c` (S2 F1)
             smoke(command_for(layout.interpreter, layout.client, event), event, run_as)
@@ -581,7 +647,13 @@ def install(
             messages.append(f"recorded the hashes of {len(current.distributions)} packages")
         if _apply_hooks(layout, entries, existing, merged):
             messages.append(f"registered {len(entries)} hooks in {layout.hooks_file}")
-        return Outcome(True, messages or ["repaired"])
+        done = messages or ["repaired"]
+        if rules == "edited":
+            done.append(
+                f"kept your edited rules file {layout.rules}; this version's default rules "
+                "were not applied"
+            )
+        return Outcome(True, done)
     except BaseException as failure:
         # A hook entry must never outlive the files it runs (S2 F1): entries go before the folder,
         # and a repair puts the old Python and client back. If this cleanup itself fails, the

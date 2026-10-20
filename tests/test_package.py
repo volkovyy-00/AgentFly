@@ -5,6 +5,7 @@ Needs `uv`, and the network the first time (hatchling is fetched into uv's cache
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -185,6 +186,35 @@ def test_a_real_uv_tool_environment_passes_the_package_check(installed: Installe
     found = package_check(installed)
     assert found["problems"] == [], found["problems"]  # only _virtualenv.* is unlisted, and allowed
     assert "agentfly-recorder" in found["dists"] and len(found["dists"]) > 5
+
+
+DEFAULT_SCRIPT = (
+    "import json; from agentfly.install import installer, packages; "
+    "check = packages.inspect(packages.tool_environment(), None); "
+    "data = installer._packaged_default(check); "
+    "print(json.dumps({'problems': check.problems, 'bytes': len(data), "
+    "'recorded': packages.recorded_hash(check, installer.DEFAULT_RECORD_PATH)}))"
+)
+
+
+def test_the_wheels_record_lists_the_default_rules_and_init_would_write_them(
+    installed: Installed,
+) -> None:
+    """D28 on the real wheel: RECORD lists `agentfly/rules/default.toml` with its hash, and the
+    installer's check of that file (RECORD hash, then a clean parse) passes in the installed
+    tool."""
+    result = subprocess.run(
+        [str(installed.python), "-I", "-B", "-c", DEFAULT_SCRIPT],
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    found = json.loads(result.stdout)
+    default = installed.package_dir / "rules" / "default.toml"
+    assert found["problems"] == [] and found["bytes"] == default.stat().st_size
+    assert found["recorded"] == hashlib.sha256(default.read_bytes()).hexdigest()
 
 
 def test_a_planted_file_and_a_changed_file_in_a_real_environment_are_named(
