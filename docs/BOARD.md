@@ -183,7 +183,7 @@ V7 and V9 can run in parallel.
 ---
 
 ### F10 · Review fixes: uninstall, package check, step merge
-- **Owner:** worker-backend · brief docs/briefs/F10.md (pass 2 2026-10-20, against b84e2ca) · waits for the owner's go; may run alongside V5b (no shared files except new tests in tests/test_install_cli.py)
+- **Owner:** worker-backend · brief docs/briefs/F10.md (pass 2 2026-10-20, against b84e2ca) · dispatched 2026-10-20 (worktree ag-f10-review-fixes, from d536d39); may run alongside V5b (no shared files except new tests in tests/test_install_cli.py)
 - **Scope:** findings the lead verified 2026-10-20: uninstall service message under hand-typed sudo and single restart hint; same-version question names files; direct_url.json regular-file check; merge waiting slot freed on id join; evicted alarm in `flagged`; package tests fail on a network error under CI; `git rm result`. Not: links inside the tool env, sessions.json save per hook (own cards, proposed).
 - **Done when:** the brief's acceptance criteria hold.
 
