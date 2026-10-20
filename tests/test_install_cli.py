@@ -15,18 +15,22 @@ from agentfly.install import elevate, installer, packages, pythons, records, ser
 from agentfly.install.layout import SYSTEM, Layout
 from tests.helpers import REPO
 from tests.install_helpers import (
+    DIRECT_URL_KINDS,
     MODULE,
     NEW_AGENTFLY,
     REBUILDS,
     TOOL_DISTS,
+    call_unless_it_hangs,
     fake_python_tar,
     install_system,
     make_cursor_app,
     make_layout,
+    plant_direct_url,
     upgrade,
     write_archive,
 )
 from tests.service_helpers import Launchd
+from tests.test_install_packages import REAL_TOOL_ENVIRONMENT, fake_agentfly
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
@@ -662,3 +666,26 @@ def test_a_damaged_package_section_in_the_record_asks_instead_of_going_quiet(
     asked = owner_answers(monkeypatch, True)
     assert main(["init", "-g"]) == 0
     assert len(asked) == 1 and len(sudo.calls) == 1  # asked first, then the password
+
+
+# ---------------------------------------------------------------- a direct_url.json that is no file
+
+
+@pytest.mark.parametrize("kind", DIRECT_URL_KINDS)
+def test_uninstall_stops_before_the_password_on_a_direct_url_that_is_not_a_plain_file(
+    kind: str,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    info = next(tool_env.site.glob("agentfly_recorder-*.dist-info"))
+    target, fifo = plant_direct_url(info, kind, tmp_path / "scratch", listed=False)
+    fake_agentfly(monkeypatch, tool_env.site / "agentfly" / "__init__.py")
+    monkeypatch.setattr(packages, "tool_environment", REAL_TOOL_ENVIRONMENT)  # the real lookup
+    assert call_unless_it_hangs(lambda: main(["uninstall"]), fifo) == 1
+    err = capsys.readouterr().err
+    assert str(target) in err and "No password was asked for" in err
+    assert sudo.calls == []  # nothing was asked, nothing removed

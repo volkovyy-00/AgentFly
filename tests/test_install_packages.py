@@ -18,11 +18,14 @@ import pytest
 from agentfly.install import InstallError, packages
 from tests.install_helpers import (
     ANOTHER_PYTHON,
+    DIRECT_URL_KINDS,
     MODULE,
     NEW_AGENTFLY,
+    call_unless_it_hangs,
     hashes_of,
     make_tool_env,
     path_of,
+    plant_direct_url,
     record_hash,
     upgrade,
     write_dist,
@@ -456,6 +459,21 @@ def test_a_wheel_install_with_a_plain_direct_url_is_not_editable(
     assert REAL_TOOL_ENVIRONMENT().site == made.site
 
 
+@pytest.mark.parametrize("listed", [False, True], ids=["unlisted", "in-record"])
+@pytest.mark.parametrize("kind", DIRECT_URL_KINDS)
+def test_a_direct_url_that_is_not_a_plain_file_is_a_problem_and_is_never_read(
+    kind: str, listed: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_tool_env(tmp_path / "other")
+    info = next(made.site.glob("agentfly_recorder-*.dist-info"))
+    target, fifo = plant_direct_url(info, kind, tmp_path / "scratch", listed=listed)
+    fake_agentfly(monkeypatch, made.site / "agentfly" / "__init__.py")
+    monkeypatch.setattr(packages, "tool_environment", REAL_TOOL_ENVIRONMENT)
+    with pytest.raises(InstallError) as caught:
+        call_unless_it_hangs(lambda: packages.require(None, "agentfly uninstall"), fifo)
+    assert str(target) in str(caught.value) and "No password was asked for" in str(caught.value)
+
+
 # ---------------------------------------------------------------- the owner's answer
 
 
@@ -522,7 +540,7 @@ def test_a_rebuild_of_agentfly_at_the_same_version_asks_instead_of_stopping(
     assert packages.inspect(env, None).changes == []  # with no record there is nothing to ask
     assert check.problems == []
     assert check.changes == [
-        "agentfly-recorder: " + REBUILT.format("0.1.0") + " (1): expected only if you "
+        "agentfly-recorder: " + REBUILT.format("0.1.0") + f" (1: {MODULE}): expected only if you "
         "reinstalled or rebuilt"
     ]
 
@@ -532,10 +550,38 @@ def test_a_dependency_reinstalled_under_another_python_asks_too(env: packages.En
     upgrade(env, "fakedep", "1.0", ANOTHER_PYTHON)  # the .so is named for another interpreter
     check = packages.require(record, "agentfly uninstall")
     assert check.changes == [
-        "fakedep: " + REBUILT.format("1.0") + " (2): expected only if you reinstalled or rebuilt"
+        "fakedep: "
+        + REBUILT.format("1.0")
+        + " (2: fakedep/_speed.cpython-313.so, fakedep/_speed.so): expected only if you "
+        "reinstalled or rebuilt"
     ]
     recorded = {"packages": packages.to_record(check.distributions)}  # what a yes writes
     assert packages.inspect(env, recorded).changes == []
+
+
+def test_a_rebuild_names_the_first_three_changed_files_and_counts_the_rest(
+    env: packages.Environment,
+) -> None:
+    record = hashes_of(env)
+    upgrade(
+        env, "fakedep", "1.0", {DEP_FILE: b"X = 1\n", **{f"fakedep/m{i}.py": b"" for i in range(5)}}
+    )
+    [line] = packages.require(record, "agentfly init -g").changes
+    assert line == (
+        "fakedep: " + REBUILT.format("1.0") + " (6: fakedep/_speed.so, fakedep/m0.py, "
+        "fakedep/m1.py and 3 more): expected only if you reinstalled or rebuilt"
+    )  # the removed _speed.so counts as changed, and sorts first
+
+
+def test_a_changed_path_with_a_control_character_is_shown_escaped(
+    env: packages.Environment,
+) -> None:
+    """RECORD is writable by the agent's user, and `confirm()` prints the list to the owner."""
+    record = hashes_of(env)
+    hostile = "fakedep/\x1b[2Jgone.py"
+    upgrade(env, "fakedep", "1.0", {DEP_FILE: b"X = 1\n", hostile: b""})
+    [line] = packages.require(record, "agentfly init -g").changes
+    assert "\x1b" not in line and repr(hostile) in line
 
 
 def test_a_rebuild_with_a_file_that_fails_its_own_record_still_stops(
