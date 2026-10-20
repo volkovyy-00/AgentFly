@@ -48,6 +48,7 @@ IDS = [
     "python",
     "lock",
     "client",
+    "rules",
     "package",
     "hooks",
     "events",
@@ -209,6 +210,116 @@ def test_a_clean_install_is_all_ok(
 
 def test_every_line_says_what_it_found(world: World) -> None:
     assert all(check.text and "\n" not in check.text for check in world.results().values())
+
+
+# ---------------------------------------------------------------- the rules file (V5b)
+
+
+def serve_health(monkeypatch: pytest.MonkeyPatch, answer: dict[str, Any] | None) -> None:
+    monkeypatch.setattr(service, "health", lambda timeout=2.0: answer)
+
+
+HEALTHY = {"ok": True, "offline_guard_count": 0, "last_hook_at": None}
+
+
+def test_the_rules_line_is_ok_for_the_file_init_wrote(world: World) -> None:
+    check = world.results()["rules"]
+    assert check.level == "ok" and str(world.layout.rules) in check.text
+
+
+def test_a_recorder_that_does_not_answer_never_fails_the_rules_line(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_health(monkeypatch, None)
+    assert world.results()["rules"].level == "ok"
+
+
+def test_a_missing_rules_file_is_a_warning_that_names_init(world: World) -> None:
+    world.layout.rules.unlink()
+    check = world.results()["rules"]
+    assert check.level == "warn" and "agentfly init -g" in check.text and "default" in check.text
+    assert world.levels("fail") == set(), "one fault turns one line"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["schema = 1\n[[rule]\n", "not toml", "", "schema = 2\n"],
+)
+def test_an_invalid_rules_file_fails_only_the_rules_line_and_says_the_default_runs(
+    world: World, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    world.layout.rules.write_text(text, encoding="utf-8")
+    serve_health(monkeypatch, {**HEALTHY, "rules_problem": "rules.toml: not valid TOML"})
+    check = world.results()["rules"]
+    assert check.level == "fail" and "default rules are in force" in check.text
+    assert world.levels("fail") == {"rules"}
+
+
+def test_an_entry_for_r0_fails_the_rules_line(world: World) -> None:
+    text = world.layout.rules.read_text(encoding="utf-8") + (
+        '\n[[rule]]\nid = "R0"\nkind = "match"\nseverity = "warn"\nmessage = "x"\n'
+        'event = ["shell"]\ncommand_class = "outbound"\n'
+    )
+    world.layout.rules.write_text(text, encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "fail" and "R0" in check.text
+
+
+def test_an_invalid_file_that_a_running_recorder_has_not_read_yet_still_fails(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.layout.rules.write_text("garbage", encoding="utf-8")
+    serve_health(monkeypatch, HEALTHY)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "restart" in check.text and "next start" in check.text
+
+
+def test_an_invalid_file_with_the_recorder_down_says_what_will_happen_at_its_start(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.layout.rules.write_text("garbage", encoding="utf-8")
+    serve_health(monkeypatch, None)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "default" in check.text
+
+
+def test_a_fixed_file_with_a_recorder_still_on_the_default_asks_for_a_restart(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_health(monkeypatch, {**HEALTHY, "rules_problem": "rules.toml: not valid TOML"})
+    check = world.results()["rules"]
+    assert check.level == "fail" and "restart" in check.text and "agentfly start" in check.text
+
+
+def test_a_link_in_place_of_the_rules_file_fails_the_rules_line(
+    world: World, tmp_path: Path
+) -> None:
+    target = tmp_path / "elsewhere.toml"
+    target.write_text(world.layout.rules.read_text(encoding="utf-8"), encoding="utf-8")
+    world.layout.rules.unlink()
+    world.layout.rules.symlink_to(target)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "symbolic link" in check.text
+
+
+def test_the_rules_line_is_one_line_however_many_problems_there_are(world: World) -> None:
+    world.layout.rules.write_text(
+        "schema = 1\n[[rule]]\nid = 1\n[[rule]]\nid = 2\n[[rule]]\nid = 3\n", encoding="utf-8"
+    )
+    check = world.results()["rules"]
+    assert check.level == "fail" and "\n" not in check.text and "more" in check.text
+
+
+def test_a_rules_file_the_user_could_not_read_is_a_lock_fault_not_a_rules_crash(
+    world: World,
+) -> None:
+    world.layout.rules.chmod(0o000)
+    try:
+        results = world.results()
+    finally:
+        world.layout.rules.chmod(0o644)
+    assert results["lock"].level == "fail"
+    assert results["rules"].level == "fail"
 
 
 # ---------------------------------------------------------------- one fault, one failing line

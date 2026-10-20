@@ -30,6 +30,7 @@ from agentfly.install import InstallError, cursor, hooks_file, packages, pythons
 from agentfly.install.hooks_file import HookEntry
 from agentfly.install.layout import INTERPRETER_REL, Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 
 # Cursor's timeout is in seconds. With the recorder down the client answers in about 0.57 s; with
 # it up, in about 60 ms. A Cursor timeout fails open, so there is headroom for a busy machine.
@@ -108,6 +109,26 @@ def _write_atomic(path: Path, data: bytes, layout: Layout, mode: int = 0o644) ->
         temp.unlink(missing_ok=True)
 
 
+def _install_rules(layout: Layout) -> bool:
+    """Write the packaged default rules unless a rules file is there. True if it was written.
+
+    Never overwrites: what is there is the owner's, edited or not (D3). Refuses a link or a
+    folder in its place, where `os.replace` would clobber or fail.
+    """
+    if layout.rules.is_symlink():
+        raise InstallError(f"{layout.rules} is a symbolic link; remove it first")
+    if layout.rules.exists():
+        if not layout.rules.is_file():
+            raise InstallError(f"{layout.rules} is not a regular file; remove it first")
+        return False
+    try:
+        data = rulefile.default_text().encode("utf-8")
+    except OSError as exc:
+        raise InstallError(f"cannot read the packaged default rules ({exc})") from exc
+    _write_atomic(layout.rules, data, layout)
+    return True
+
+
 def _read_hooks(layout: Layout) -> str | None:
     try:
         data = layout.hooks_file.read_bytes()
@@ -143,16 +164,20 @@ def python_intact(layout: Layout) -> bool:
 
 
 def status(layout: Layout, build: PythonBuild, source: Path, current: packages.Check) -> set[str]:
-    """Which parts are missing or differ: any of "python", "client", "hooks", "packages".
+    """Which parts are missing or differ: any of "python", "client", "hooks", "packages", "rules".
 
     Empty when intact. "packages" is the record's package hashes differing from `current`, the
-    check of the tool environment: an upgrade is not "intact".
+    check of the tool environment: an upgrade is not "intact". "rules" is a missing rules file
+    (an install from before V5b has none); a file that is there is never "different": it is the
+    owner's, whatever it says, and no hash of it is kept.
     """
     record = records.read(layout)
-    everything = {"python", "client", "hooks", "packages"}
+    everything = {"python", "client", "hooks", "packages", "rules"}
     if record is None:
         return everything
     bad: set[str] = set()
+    if layout.rules.is_symlink() or not layout.rules.is_file():
+        bad.add("rules")
     try:
         python = record["python"]
         if python["archive_sha256"] != build.sha256 or not _python_matches(layout, python):
@@ -524,6 +549,8 @@ def install(
                 shutil.copy2(layout.client, graveyard / "hook_client.py")
             os.replace(staged_client, layout.client)
         shutil.rmtree(staging, ignore_errors=True)
+        if "rules" in bad and _install_rules(layout):
+            messages.append(f"wrote the default rules to {layout.rules}")
         assert_locked(layout)
         for event in cursor.EVENTS:  # every command as registered, through `sh -c` (S2 F1)
             smoke(command_for(layout.interpreter, layout.client, event), event, run_as)
