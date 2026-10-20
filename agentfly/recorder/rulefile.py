@@ -268,10 +268,7 @@ def _folded_name(text: str) -> str:
     return PurePosixPath(text).name.casefold()
 
 
-# The three memos below hold 512 simple commands, not 64: a long line is many of them (`a ; b ; …`),
-# and every clause that has a command list reads each one, so a smaller memo is worked out again
-# for each clause (spec §4.7).
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=64)
 def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
     """Where each program name first appears in a command (read only; shared by every clause)."""
     first: dict[str, int] = {}
@@ -280,21 +277,11 @@ def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return first
 
 
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=64)
 def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     """Where each case-folded word of a command last stands (read only; shared by every clause),
     so that "this word comes after position p" is one comparison, not a scan of the rest."""
     return {word.casefold(): index for index, word in enumerate(argv)}
-
-
-@lru_cache(maxsize=512)
-def _words_by_last(argv: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[int, ...]]:
-    """The distinct case-folded words of a command, the one that stands last earliest first, and
-    where each stands (read only). The words after position p are the tail from
-    `bisect_right(positions, p)`, so how many there are is one search, not a scan."""
-    last: dict[str, int] = _last_positions(argv)
-    words: list[str] = sorted(last, key=last.__getitem__)
-    return tuple(words), tuple(last[word] for word in words)
 
 
 @lru_cache(maxsize=64)
@@ -534,22 +521,50 @@ def _entry_follows(last: Mapping[str, int], at: int, extras: tuple[str, ...]) ->
     return all(last.get(extra, -1) > at for extra in extras)
 
 
+class _Simple(NamedTuple):
+    """One simple command as the command lists read it (read only): the command, where each
+    program first stands, where each case-folded word last stands, and those words ordered by
+    where they last stand with the positions. The words after position p are the tail from
+    `bisect_right(positions, p)`, so how many there are is one search, not a scan."""
+
+    argv: tuple[str, ...]
+    first: dict[str, int]
+    last: dict[str, int]
+    words: tuple[str, ...]
+    positions: tuple[int, ...]
+
+
+def _simple_view(argv: tuple[str, ...]) -> _Simple:
+    last: dict[str, int] = _last_positions(argv)
+    ordered: list[str] = sorted(last, key=last.__getitem__)
+    return _Simple(
+        argv, _first_positions(argv), last, tuple(ordered), tuple(last[word] for word in ordered)
+    )
+
+
+@lru_cache(maxsize=4)  # as `normalize`: mark, decide and the history flag read one line
+def _simple_commands(parsed: Parsed) -> tuple[_Simple, ...]:
+    """The views of a line's distinct simple commands, built once for all the clauses of the hook
+    (a memo per simple command would be worked out again for every clause on a line with more
+    of them than it holds). Equal simple commands share a view."""
+    return tuple(_simple_view(argv) for argv in dict.fromkeys(parsed.all_commands()))
+
+
 def _bucket_hit(bucket: tuple[tuple[str, ...], ...], last: Mapping[str, int], at: int) -> bool:
     return any(_entry_follows(last, at, rest) for rest in bucket)
 
 
-def _program_hit(keys: _Keys, argv: tuple[str, ...], at: int) -> bool:
+def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
     """One listed program, first standing at `at` in a simple command: some entry holds. Of the
     program's keys and the distinct words after `at`, the smaller side is walked."""
     if None in keys:  # an entry with no extra word fires on the program alone
         return True
-    last: dict[str, int] = _last_positions(argv)
+    last: dict[str, int] = view.last
     if len(keys) > 1:  # one key is looked up at once; more are weighed against the words after
-        words, positions = _words_by_last(argv)
-        start: int = bisect_right(positions, at)
-        if len(words) - start < len(keys):
-            _key_lookups(len(words) - start)
-            for word in words[start:]:
+        start: int = bisect_right(view.positions, at)
+        if len(view.words) - start < len(keys):
+            _key_lookups(len(view.words) - start)
+            for word in view.words[start:]:
                 bucket = keys.get(word)
                 if bucket is not None and _bucket_hit(bucket, last, at):
                     return True
@@ -601,21 +616,22 @@ class Clause:
 
         Only the first word that is the program needs a look: what follows a later one is a
         part of what follows the first. So a simple command is read once, however often it
-        repeats the program or stands in the line (this runs on the event loop, under the hook
-        client's 0.5 s wait). `_index` says which entries to look at.
+        repeats the program or stands in the line, and its views are built once for the hook
+        (this runs on the event loop, under the hook client's 0.5 s wait). `_index` says which
+        entries to look at.
         """
         listed: _Index = self._index
-        for argv in dict.fromkeys(parsed.all_commands()):
-            first: dict[str, int] = _first_positions(argv)
+        for view in _simple_commands(parsed):
+            first: dict[str, int] = view.first
             if len(listed) <= len(first):  # walk the smaller side, look up the other
                 for program, keys in listed.items():
                     at: int | None = first.get(program)
-                    if at is not None and _program_hit(keys, argv, at):
+                    if at is not None and _program_hit(keys, view, at):
                         return True
             else:
                 for program, at in first.items():
                     found: _Keys | None = listed.get(program)
-                    if found is not None and _program_hit(found, argv, at):
+                    if found is not None and _program_hit(found, view, at):
                         return True
         return False
 

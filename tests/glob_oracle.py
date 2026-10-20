@@ -5,9 +5,9 @@ V5b-fix, copied word for word (the method takes its pattern as the first argumen
 in pattern times path, which is the cost the new matcher drops for patterns that do not float
 (`tests/test_rules_matcher.py`).
 
-`old_command_hit` is `Clause._command_hit` as it stood after the meter task (a loop over every entry
-for every simple command), with its two helpers, copied word for word; the method's `self.command`
-is its first argument (`tests/test_rules_meter.py` holds the index to it).
+`old_command_hit` is `Clause._command_hit` as at e94f446 (a loop over every entry for every simple
+command), with its two helpers, copied word for word; the method's `self.command` is its first
+argument (`tests/test_rules_meter.py` holds the index to it).
 """
 
 from __future__ import annotations

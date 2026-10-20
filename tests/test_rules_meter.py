@@ -248,16 +248,44 @@ def test_a_repeated_simple_command_is_read_once(monkeypatch: pytest.MonkeyPatch)
     assert clause.matches(shell(" ; ".join(["cat x"] * 100 + ["cat a"])), {})
 
 
-def test_a_long_line_of_simple_commands_is_worked_out_once_for_all_clauses() -> None:
-    """150 distinct simple commands are more than the old 64-entry memos held, so each clause read
-    them all again; now each is worked out once, whatever the number of clauses."""
-    memos = (rulefile._first_positions, rulefile._last_positions, rulefile._words_by_last)
-    for memo in memos:
-        memo.cache_clear()
-    line = " ; ".join(f"cat z{i} y" for i in range(150))
+@pytest.mark.parametrize("count", [150, 600, 2000])
+def test_a_long_line_of_simple_commands_is_worked_out_once_for_all_clauses(
+    count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The views of a line's simple commands are held for the hook, not in a memo of fixed size:
+    however many distinct simple commands the line has, each is built once for all the clauses."""
+    builds = 0
+    real = rulefile._simple_view
+
+    def counting(argv: tuple[str, ...]) -> rulefile._Simple:
+        nonlocal builds
+        builds += 1
+        return real(argv)
+
+    monkeypatch.setattr(rulefile, "_simple_view", counting)
+    rulefile._simple_commands.cache_clear()
+    line = " ; ".join(f"cat z{i} y" for i in range(count))
     for i in range(20):
         assert not command_clause(("cat", f"w{i}"), ("cat", f"v{i}")).matches(shell(line), {})
-    assert [memo.cache_info().misses for memo in memos] == [150, 150, 150]
+    assert builds == count
+
+
+def test_a_line_that_repeats_a_simple_command_builds_its_view_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builds = 0
+    real = rulefile._simple_view
+
+    def counting(argv: tuple[str, ...]) -> rulefile._Simple:
+        nonlocal builds
+        builds += 1
+        return real(argv)
+
+    monkeypatch.setattr(rulefile, "_simple_view", counting)
+    rulefile._simple_commands.cache_clear()
+    line = " ; ".join(["cat x y", "ls", "cat x y", "cat x y", "ls"])
+    assert not command_clause(("cat", "w")).matches(shell(line), {})
+    assert builds == 2
 
 
 def test_the_index_is_not_part_of_the_clauses_identity() -> None:

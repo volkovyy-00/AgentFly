@@ -265,14 +265,17 @@ def test_a_word_is_worked_out_once_however_many_clauses_look_at_it() -> None:
 
 def test_where_a_word_last_stands_is_worked_out_once_however_many_entries_ask() -> None:
     """A command entry `prog word` asks whether `word` comes after `prog`: that is one look-up in
-    a table made once per command, not a scan of the rest of the command for every entry."""
+    a table made once per command (and held for the hook, for all its clauses), not a scan of the
+    rest of the command for every entry."""
     rulefile._last_positions.cache_clear()
+    rulefile._simple_commands.cache_clear()
     lists, rules = command_list_on_one_program()
     ruleset = ruleset_of(default_with(lists, *rules))
     action = {"hook_event_name": "beforeShellExecution", "command": command()}
     session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
     rules_mod.decide(action, rules_mod.mark(action, session, ruleset), ruleset)
-    info = rulefile._last_positions.cache_info()
+    assert rulefile._last_positions.cache_info().misses == 1
+    info = rulefile._simple_commands.cache_info()
     assert info.misses == 1 and info.hits >= len(rules) - 1, info
 
 
