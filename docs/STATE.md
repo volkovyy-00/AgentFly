@@ -1,5 +1,5 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 11:55 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 12:10 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10-V5b-dispatched. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7 ✅ (BOARD Done; last merge F7 ae5dd0e = trial 368ab22 tree, 3× 3504 passed, 5 skipped, 111–131 s each).
 Pending decisions: D16
 
@@ -27,7 +27,7 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Python dependency alerts: GitHub's changelog (2025-12-16) says Dependabot alerts support uv; its dependency-graph page lists no uv. Check whether the graph shows `uv.lock` (Insights → Dependency graph, or `! gh api repos/volkovyy-00/AgentFly/dependency-graph/sbom --jq '[.sbom.packages[].name] | length'`). If missing: accept for v1 (SPEC known gap) plus a by-hand `uv audit` before each release (lead's advice, via brainstorm-advisor), or a CI step that can turn main red?
+none
 
 ## Decisions changed since last handoff (b84e2ca; earlier: git show b84e2ca:docs/STATE.md)
 - Owner 2026-10-20: F10 dispatched (fix card); F11 and F12 approved as cards.
@@ -35,7 +35,7 @@ Pending decisions: D16
 - Lead 2026-10-20 (verified by running): flag_marked re-queue is by design; mark() twice per shell event is wasted work only; memory.clear and the wrong-token /health test are fine. F10 takes the rest.
 
 ## Open risks and findings
-- F9: Dependabot raises no alerts for SHA-pinned actions (uv.lock coverage unconfirmed); `uv audit` is preview-only and needs uv newer than this Mac's 0.9.5; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
+- F9: Dependabot raises no alerts for SHA-pinned actions ; `uv.lock` is covered (SBOM: 29 pkg:pypi = uv.lock, owner ran it 2026-10-20); the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - V3c later-card items: a `.pth` runs in the checking process (root-side verification); R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a `.venv` dist-info); offline guard has no package-command rule; root runs bundled 3.12 against the env's site-packages.
 - UI card: ui/README.md and useTrail comment about `?limit=1` (V8b).
 - F7 leftovers: hook-client tests vs a real recorder rely on the 0.5 s wait (watch arm64); Check is one chained CI step (a ruff failure hides test results); uv and Node float in CI (pin needs the owner's say); `UV is None` skip in tests/test_package.py stays green on CI; two suites at once on one Mac can share a test port (~1%, accepted).
