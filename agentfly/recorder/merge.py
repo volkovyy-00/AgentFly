@@ -4,7 +4,9 @@ Cursor can fire a general `preToolUse` and a specific hook (`beforeShellExecutio
 `beforeReadFile`, `afterFileEdit`) for one action. Events of one chat with the same
 `tool_use_id` become one step. Two id-less cases have a path fallback: a `beforeReadFile`
 joins the oldest unpaired `preToolUse` Read, an `afterFileEdit` the latest `preToolUse` Write
-(same chat, same absolute path, within `WAIT_S`). Nothing here changes what a hook answers:
+(same chat, same absolute path, within `WAIT_S`). A waiting entry leaves the wait as soon as its
+step has the hook it waited for, whether it paired by path or joined by id. Nothing here changes
+what a hook answers:
 the rules still decide every event; this only decides which step it is saved into.
 
 State lives in memory only. It is called from the event loop thread, like `SessionStore`.
@@ -30,6 +32,8 @@ _PATHED: frozenset[str] = frozenset({"preToolUse", "beforeReadFile", "afterFileE
 _SPECIFIC: frozenset[str] = frozenset(
     {"beforeShellExecution", "beforeReadFile", "afterFileEdit", "beforeMCPExecution"}
 )
+# The id-less hook a waiting preToolUse Read / Write is kept for; once its step has it, no wait.
+_AWAITS: dict[str, str] = {"read": "beforeReadFile", "write": "afterFileEdit"}
 _RANK: dict[str, int] = {"allowed": 0, "highlighted": 1, "warned": 2, "blocked": 3}
 
 
@@ -133,7 +137,13 @@ class StepMerger:
             if call:
                 self._remember(chat, call, step)
         merged: StepRecord = step.add(event, record, writes)
-        if event == "preToolUse" and path is not None and tool in {"read", "write"}:
+        self._release(chat, step)
+        if (
+            event == "preToolUse"
+            and path is not None
+            and tool in _AWAITS
+            and _AWAITS[tool] not in step.events
+        ):
             self._wait(chat, _Waiting(now, tool, path, step))
         return merged, previous
 
@@ -144,6 +154,15 @@ class StepMerger:
 
     def _wait(self, chat: str, entry: _Waiting) -> None:
         self._waiting.setdefault(chat, deque(maxlen=WAIT_CAP)).append(entry)
+
+    def _release(self, chat: str, step: Joined) -> None:
+        """Take `step` out of the wait once it has the hook it waited for (by path or by id)."""
+        entries: deque[_Waiting] | None = self._waiting.get(chat)
+        if entries:
+            self._waiting[chat] = deque(
+                (e for e in entries if not (e.step is step and _AWAITS[e.kind] in step.events)),
+                maxlen=WAIT_CAP,
+            )
 
     def _expire(self, now: float) -> None:
         for chat in list(self._waiting):
@@ -162,8 +181,7 @@ class StepMerger:
         for entry in entries if read else reversed(entries):
             if entry.kind == ("read" if read else "write") and entry.path == path:
                 if event not in entry.step.events:
-                    entries.remove(entry)
-                    return entry.step
+                    return entry.step  # `join` takes it out of the wait once the event is folded in
         return None
 
 

@@ -274,7 +274,10 @@ def wipe_file(path: Path) -> tuple[int, int]:
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
-    """One STEPS_QUERY row in the keys of GET /api/steps, plus the time (not its rule text)."""
+    """One STEPS_QUERY row in the keys of GET /api/steps, plus the time.
+
+    Not `rule_text`, `user_message` or `agent_message`: history stores none of the three (SPEC §4).
+    """
     hosts: list[str] = json.loads(row[8])
     return {
         "order": row[0],
@@ -560,7 +563,9 @@ class LocalStore:
         """(steps in order, truncated, order of the step that marked the chat) or None if unknown.
 
         The marking step is None for a chat that was never marked, whose marking step aged out,
-        or that an older recorder saved (those steps have no flag).
+        that an older recorder saved (those steps have no flag), or that is marked through a link
+        (a subagent, a parent, the 30-minute workspace fallback): the step that marked it belongs
+        to another chat, so none of this chat's steps carries the flag.
         """
 
         def work(conn: sqlite3.Connection) -> tuple[list[dict[str, Any]], bool, int | None] | None:

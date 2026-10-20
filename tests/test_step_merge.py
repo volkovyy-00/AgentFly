@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import agentfly.recorder.app as app_module
 from agentfly.recorder import merge
 from agentfly.recorder.localstore import local_store
+from agentfly.recorder.memory import memory_steps
 from agentfly.recorder.merge import step_merger
 from agentfly.recorder.paths import config_dir
 from agentfly.recorder.store import StepRecord, graph_store
@@ -252,6 +253,36 @@ def test_the_33rd_waiting_read_drops_the_oldest(client: TestClient) -> None:
     assert (steps[0]["kind"], steps[-1]["kind"]) == ("tool", "read")
 
 
+@pytest.mark.parametrize("pre_first", [True, False], ids=["pre-first", "read-first"])
+def test_reads_joined_by_id_do_not_crowd_out_a_waiting_write(
+    pre_first: bool, client: TestClient
+) -> None:
+    post(client, pre("Write", "w1", path="/w/a.txt"))
+    for i in range(merge.WAIT_CAP):  # each pair joins by id, so none of them waits for anything
+        path = f"/w/r{i}.txt"
+        halves = [pre("Read", f"r{i}", path=path), read(path, f"r{i}")]
+        for half in halves if (i % 2 == 0) == pre_first else reversed(halves):
+            post(client, half)
+    post(client, edited("/w/a.txt"))
+    for steps in (live(client), saved(client)):
+        assert kinds(steps) == ["edit"] + ["read"] * merge.WAIT_CAP
+        assert steps[0]["file"] == "a.txt"  # the Write and its edit are one step
+
+
+def test_a_read_joined_by_id_is_not_paired_by_a_later_id_less_one(client: TestClient) -> None:
+    post(client, pre("Read", "t1", path="/w/a.txt"))
+    post(client, read("/w/a.txt", "t1"))
+    post(client, read("/w/a.txt"))
+    assert kinds(live(client)) == ["read", "read"]
+
+
+def test_a_write_that_also_read_by_id_still_waits_for_its_after_edit(client: TestClient) -> None:
+    post(client, pre("Write", "w1", path="/w/a.txt"))
+    post(client, read("/w/a.txt", "w1"))  # an edit's Read shares the Write's id
+    post(client, edited("/w/a.txt"))
+    assert kinds(live(client)) == ["edit"]
+
+
 def test_an_event_without_a_chat_id_never_pairs_by_path(client: TestClient) -> None:
     for body in (pre("Read", "t1", path="/w/a.txt"), read("/w/a.txt")):
         del body["conversation_id"]
@@ -273,6 +304,22 @@ def test_the_strictest_gate_verdict_and_its_rule_win_in_either_order(client: Tes
         ("blocked", "R1")
     ] * 2
     assert [s["verdict"] for s in live(client)] == ["allowed", "blocked", "blocked"]
+
+
+def test_an_allowed_half_evicted_from_the_trail_still_shows_when_its_step_is_blocked(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(memory_steps, "_cap", 2)  # read when a chat's memory is first made
+    post(client, shell("cat .env", chat="m"))  # marks the chat
+    post(client, pre("Shell", "s1", chat="m"))
+    post(client, read("/w/a.txt", chat="m"))
+    post(client, read("/w/b.txt", chat="m"))  # steps 1 and 2 have left the trail
+    assert post(client, shell("curl https://x.com", "s1", chat="m"))["permission"] == "deny"
+    body = client.get("/api/steps?limit=1").json()
+    marking, blocked = body["flagged"]  # the marking step first, then the step that became blocked
+    assert (marking["order"], body["marked_order"]) == (1, 1)
+    assert (blocked["order"], blocked["verdict"], blocked["rule"]) == (2, "blocked", "R1")
+    assert body["hidden"]["blocked"] == 1
 
 
 def test_an_after_edit_never_raises_the_verdict(
