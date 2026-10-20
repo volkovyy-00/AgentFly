@@ -266,6 +266,23 @@ def test_the_child_recorder_imports_the_wheel_and_not_the_source_tree(
     assert rules.strip() == "/Library/Application Support/AgentFly/rules.toml"
 
 
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_the_installed_tool_checks_and_tests_the_default_rules_it_carries(
+    installed: Installed, command: str
+) -> None:
+    """Always with an explicit FILE: a child process must never read the real rules file."""
+    default = installed.package_dir / "rules" / "default.toml"
+    result = subprocess.run(
+        [str(installed.bin / "agentfly"), "rules", command, str(default)],
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(default) in result.stdout and result.stderr == ""
+
+
 def test_serve_answers_health_and_serves_the_page_from_the_wheel(
     installed: Installed, running_recorder: tuple[int, Path]
 ) -> None:
