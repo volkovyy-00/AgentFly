@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from typing import Any
 
 from agentfly.install import InstallError, elevate, installer, packages, records, service
 from agentfly.install.layout import SYSTEM
@@ -26,6 +27,33 @@ RESTART_HINT = (
     "Quit and reopen Cursor. Until it restarts it keeps calling the removed hook client; "
     "those calls fail (exit 127) and let every action through."
 )
+
+
+SERVICE_NOT_TOUCHED = (
+    "The recorder service was not touched: sudo cannot reach your login session. If it is "
+    "running, run `agentfly uninstall` as your own user, without sudo, to stop and remove it."
+)
+
+
+def _elevated_child(flags: Any = sys.flags) -> bool:
+    """True in the root process `_as_user` started: `elevate.sudo_command` runs it as `-I -S`.
+
+    A `sudo agentfly uninstall` typed by hand runs the entry script's Python with `site` on (SPEC
+    section 10), so the two differ in how Python started, not in anything on the command line.
+    """
+    return bool(flags.isolated and flags.no_site)
+
+
+def _as_root() -> int:
+    outcome = installer.uninstall(SYSTEM)
+    for line in outcome.messages:
+        print(line)
+    if _elevated_child():
+        return 0  # the user's process goes on: it removes the service and prints the hint once
+    if outcome.changed:  # typed by hand: nothing else will say these
+        print(RESTART_HINT)
+    print(SERVICE_NOT_TOUCHED)
+    return 0
 
 
 def _as_user() -> int:
@@ -72,12 +100,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         if os.geteuid() != 0:
             return _as_user()
-        outcome = installer.uninstall(SYSTEM)
-        for line in outcome.messages:
-            print(line)
-        if outcome.changed:
-            print(RESTART_HINT)
-        return 0
+        return _as_root()
     except InstallError as exc:
         print(f"agentfly uninstall: {exc}", file=sys.stderr)
         return 1

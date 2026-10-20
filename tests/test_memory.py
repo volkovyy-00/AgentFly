@@ -264,6 +264,40 @@ def test_replace_of_an_evicted_step_only_moves_the_counts() -> None:
     assert [s["order"] for s in memory.snapshot(all_steps=True)["steps"]] == [2, 3]
 
 
+@pytest.mark.parametrize("verdict", ["blocked", "warned"])
+def test_an_evicted_step_that_merges_into_an_alarm_is_flagged_as_hidden_counts_it(
+    verdict: str,
+) -> None:
+    memory = MemorySteps(cap=2)
+    for order in (1, 2, 3):
+        memory.append_from_record(rec(order))  # step 1 leaves the trail as an allowed step
+    memory.replace_from_record(rec(1), rec(1, "shell", verdict, rule_id="R1"))
+    body = window(memory, 1)
+    assert [s["order"] for s in body["flagged"]] == [1]
+    assert body["hidden"][verdict] == 1
+
+
+def test_a_late_alarm_is_listed_in_order_with_those_already_evicted() -> None:
+    memory = MemorySteps(cap=2)
+    memory.append_from_record(rec(1))
+    memory.append_from_record(rec(2, "shell", "blocked", rule_id="R1"))
+    for order in (3, 4, 5):
+        memory.append_from_record(rec(order))  # 2 leaves as an alarm, 1 as an allowed step
+    memory.replace_from_record(rec(1), rec(1, "shell", "blocked", rule_id="R1"))
+    assert [s["order"] for s in window(memory, 1)["flagged"]] == [1, 2]
+
+
+def test_late_alarms_keep_only_the_newest_flag_cap() -> None:
+    memory = MemorySteps(cap=1)
+    for order in range(1, 10):
+        memory.append_from_record(rec(order))
+    for order in range(1, 8):
+        memory.replace_from_record(rec(order), rec(order, "shell", "blocked", rule_id="R1"))
+    body = window(memory, 1)
+    assert [s["order"] for s in body["flagged"]] == [3, 4, 5, 6, 7]
+    assert body["hidden"]["blocked"] == 7  # the counts still hold every one
+
+
 def test_replace_of_an_unknown_step_is_added() -> None:
     memory = MemorySteps()
     memory.replace_from_record(rec(4), rec(4, "read"))

@@ -510,7 +510,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   a changed version ("changed from X to Y"), a new or removed dependency, and a
   distribution at the recorded version whose files differ from the stored hashes
   (a rebuild, or a reinstall under another Python: "same version X, files differ
-  from install but match RECORD: expected only if you reinstalled or rebuilt").
+  from install but match RECORD (2: a.py, b.py): expected only if you reinstalled or
+  rebuilt", which names the first three changed files).
   The commands go on only after you confirm in a terminal. With no record yet (a
   first install, or one from before V3c) there is nothing to differ from. An
   editable install, or a run from a source checkout, is refused; install the

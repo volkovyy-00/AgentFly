@@ -10,3 +10,4 @@ logs/
 build/
 .DS_Store
 .claude/worktrees/
+/result

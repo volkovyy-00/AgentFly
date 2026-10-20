@@ -11,7 +11,7 @@ first, and:
 - what differs from the root-owned record made at the last `init -g` is listed for the owner to
   confirm: a version that changed, a distribution that came or went, and a distribution at the
   recorded version whose files differ from the stored hashes yet match its `RECORD` (a rebuild, or
-  a reinstall under another Python);
+  a reinstall under another Python), with the first three changed paths named;
 - with no record yet (a first install, or one from before V3c) there is nothing to differ from.
 
 The base Python (uv's or Homebrew's, which other projects use) is never read. SPEC section 10 says
@@ -43,6 +43,7 @@ from agentfly.install import InstallError
 from agentfly.install.pythons import file_sha256
 
 WHEEL_HINT = "uv build && uv tool install dist/*.whl"
+SHOWN_PATHS = 3  # changed files a same-version question names; the rest are counted
 # Files the tools that build environments leave in `site-packages` without listing them in a
 # RECORD. Root runs `-S`, so it never reads a `.pth`; the owner's user may.
 UNLISTED_OK: frozenset[str] = frozenset(
@@ -76,6 +77,16 @@ def lead(items: list[str]) -> str:
     return f"{items[0]} (and {len(items) - 1} more)" if len(items) > 1 else items[0]
 
 
+def _first(paths: list[str]) -> str:
+    """The first `SHOWN_PATHS` paths as the owner reads them, and how many more there are.
+
+    A path comes from a RECORD the agent's user can write and is printed to the owner's terminal,
+    so one with a control character is shown as its `repr`.
+    """
+    shown = ", ".join(p if p.isprintable() else repr(p) for p in paths[:SHOWN_PATHS])
+    return f"{shown} and {len(paths) - SHOWN_PATHS} more" if len(paths) > SHOWN_PATHS else shown
+
+
 # ---------------------------------------------------------------- the environment
 
 
@@ -100,8 +111,16 @@ def tool_environment() -> Environment:
 
 
 def _editable(dist_info: Path) -> bool:
+    """Whether `direct_url.json` says editable. Only a plain file is read: a FIFO would hang here.
+
+    A link or a FIFO is not an editable install as far as this goes; `inspect` reports it as a
+    problem (RECORD lists a plain file, or no RECORD lists it), before any password is asked for.
+    """
+    path = dist_info / "direct_url.json"
     try:
-        data = json.loads((dist_info / "direct_url.json").read_text(encoding="utf-8"))
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     return isinstance(data, dict) and bool((data.get("dir_info") or {}).get("editable"))
@@ -312,14 +331,15 @@ def _changes(
         if old is None or old[0] != dist.version:
             changes.append(f"{name}: changed from {old[0] if old else 'none'} to {dist.version}")
         elif old[1] != dist.files:
-            differ = sum(
-                1
+            differ = sorted(
+                rel
                 for rel in old[1].keys() | dist.files.keys()
                 if old[1].get(rel) != dist.files.get(rel)
             )
             changes.append(
                 f"{name}: same version {dist.version}, files differ from install but match "
-                f"RECORD ({differ}): expected only if you reinstalled or rebuilt"
+                f"RECORD ({len(differ)}: {_first(differ)}): expected only if you reinstalled or "
+                "rebuilt"
             )
     changes += [
         f"{name}: changed from {version} to none"

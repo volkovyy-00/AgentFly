@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO
 
 import pytest
@@ -15,18 +18,22 @@ from agentfly.install import elevate, installer, packages, pythons, records, ser
 from agentfly.install.layout import SYSTEM, Layout
 from tests.helpers import REPO
 from tests.install_helpers import (
+    DIRECT_URL_KINDS,
     MODULE,
     NEW_AGENTFLY,
     REBUILDS,
     TOOL_DISTS,
+    call_unless_it_hangs,
     fake_python_tar,
     install_system,
     make_cursor_app,
     make_layout,
+    plant_direct_url,
     upgrade,
     write_archive,
 )
 from tests.service_helpers import Launchd
+from tests.test_install_packages import REAL_TOOL_ENVIRONMENT, fake_agentfly
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
@@ -212,10 +219,14 @@ def install_and_start(system: Layout, tmp_path: Path) -> None:
     service.start()
 
 
-def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
+def uninstall_through_a_fake_sudo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the sudo: the child is the real root path, as `-I -S` Python runs it."""
+
     def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
-        installer.uninstall(system)
-        return 0
+        with monkeypatch.context() as child:  # only while it runs: the parent is the user's
+            child.setattr(uninstall.os, "geteuid", lambda: 0)
+            child.setattr(uninstall, "_elevated_child", lambda: True)
+            return main(tail)
 
     monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
 
@@ -230,12 +241,13 @@ def test_uninstall_also_stops_and_removes_the_service(
     install_and_start(system, tmp_path)
     plist = service.plist_path()
     assert launchd.loaded() == [service.LABEL] and plist.exists()
-    uninstall_through_a_fake_sudo(system, monkeypatch)
+    uninstall_through_a_fake_sudo(monkeypatch)
     assert main(["uninstall"]) == 0
     assert (
         launchd.loaded() == [] and not plist.exists()
     )  # `launchctl list | grep agentfly` is empty
     out = capsys.readouterr().out
+    assert out.count(uninstall.RESTART_HINT) == 1  # the child leaves it to the user's process
     assert "unloaded" in out and out.rstrip().endswith(uninstall.RESTART_HINT)
 
 
@@ -317,7 +329,7 @@ def test_a_service_that_will_not_unload_is_one_line_and_a_second_run_finishes_it
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_and_start(system, tmp_path)
-    uninstall_through_a_fake_sudo(system, monkeypatch)
+    uninstall_through_a_fake_sudo(monkeypatch)
     launchd.update(bootout_lag=10_000)
     monkeypatch.setattr(service, "UNLOAD_TIMEOUT", 0.05)
     assert main(["uninstall"]) == 1
@@ -662,3 +674,73 @@ def test_a_damaged_package_section_in_the_record_asks_instead_of_going_quiet(
     asked = owner_answers(monkeypatch, True)
     assert main(["init", "-g"]) == 0
     assert len(asked) == 1 and len(sudo.calls) == 1  # asked first, then the password
+
+
+# ---------------------------------------------------------------- a direct_url.json that is no file
+
+
+@pytest.mark.parametrize("kind", DIRECT_URL_KINDS[:2])  # the two that hung; the unit tests have all
+def test_uninstall_stops_before_the_password_on_a_direct_url_that_is_not_a_plain_file(
+    kind: str,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    info = next(tool_env.site.glob("agentfly_recorder-*.dist-info"))
+    target, fifo = plant_direct_url(info, kind, tmp_path / "scratch", listed=False)
+    fake_agentfly(monkeypatch, tool_env.site / "agentfly" / "__init__.py")
+    monkeypatch.setattr(packages, "tool_environment", REAL_TOOL_ENVIRONMENT)  # the real lookup
+    assert call_unless_it_hangs(lambda: main(["uninstall"]), fifo) == 1
+    err = capsys.readouterr().err
+    assert str(target) in err and "No password was asked for" in err
+    assert sudo.calls == []  # nothing was asked, nothing removed
+
+
+# ---------------------------------------------------------------- uninstall as root: sudo or hand
+
+
+def test_a_hand_typed_sudo_uninstall_leaves_the_service_running_and_says_so(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_and_start(system, tmp_path)
+    user = os.geteuid
+    monkeypatch.setattr(uninstall.os, "geteuid", lambda: 0)  # `sudo agentfly uninstall`: site is on
+    assert main(["uninstall"]) == 0
+    out = capsys.readouterr().out
+    assert launchd.loaded() == [service.LABEL] and service.plist_path().exists()  # still running
+    assert not system.system_root.exists()  # the system part is done
+    assert out.count(uninstall.RESTART_HINT) == 1
+    assert "service was not touched" in out and "without sudo" in out
+    assert "`agentfly uninstall`" in out
+    monkeypatch.setattr(uninstall.os, "geteuid", user)  # now as the user, as the message says
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["uninstall"]) == 0
+    assert launchd.loaded() == [] and not service.plist_path().exists()
+
+
+def test_the_root_child_is_told_from_a_hand_typed_sudo_by_how_python_started() -> None:
+    assert uninstall._elevated_child() is False  # the test run has site on and no -I
+    assert uninstall._elevated_child(SimpleNamespace(isolated=1, no_site=1)) is True
+    for one in (SimpleNamespace(isolated=1, no_site=0), SimpleNamespace(isolated=0, no_site=1)):
+        assert uninstall._elevated_child(one) is False
+
+
+def test_the_flags_sudo_starts_python_with_are_the_ones_the_child_looks_for() -> None:
+    command = elevate.sudo_command(["uninstall"], site=Path("/site"), python=Path(sys.executable))
+    flags = command[2 : command.index("-c")]  # what follows the interpreter: -I -S -B -X ...
+    probe = "import sys; print(int(bool(sys.flags.isolated and sys.flags.no_site)))"
+
+    def started(*args: str) -> str:
+        run = subprocess.run(
+            [sys.executable, *args, "-c", probe], capture_output=True, text=True, check=False
+        )
+        return run.stdout.strip()
+
+    assert (started(*flags), started()) == ("1", "0")

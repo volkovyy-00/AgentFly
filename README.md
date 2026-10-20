@@ -95,8 +95,9 @@ run it again (for an extra file, delete it or run
 dependency) they list what changed ("changed from 0.1.0 to 0.2.0") and go on only after you answer
 `y` in a terminal; the new hashes replace the old. The same question comes when a package keeps its
 version but its files differ from install and match their own `RECORD` ("same version 0.1.0, files
-differ from install but match RECORD: expected only if you reinstalled or rebuilt"): a rebuild, or a
-reinstall under another Python. A file that fails its own `RECORD`, a link, an extra file or a
+differ from install but match RECORD (2: agentfly/a.py, agentfly/b.py): expected only if you
+reinstalled or rebuilt", naming the first three changed files): a rebuild, or a reinstall under
+another Python. A file that fails its own `RECORD`, a link, an extra file or a
 folder your user cannot list always stops it. Root then runs on the
 bundled, root-owned Python, with no `.pth`, no `sitecustomize` and no cached byte-code. A
 first install, which has no bundled Python yet, runs on the tool environment's base Python. Run

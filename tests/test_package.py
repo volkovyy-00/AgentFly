@@ -1,6 +1,7 @@
 """Build the wheel, install it with `uv tool` under a temporary HOME and run it (card V2).
 
-Needs `uv`, and the network the first time (hatchling is fetched into uv's cache).
+Needs `uv`, and the network the first time (hatchling is fetched into uv's cache). Offline, the
+tests skip; with `CI` set they fail, so a runner that lost the network cannot pass by skipping.
 """
 
 from __future__ import annotations
@@ -68,8 +69,49 @@ def run_uv(args: list[str], env: dict[str, str]) -> None:
     )
     if result.returncode != 0:
         if any(hint in result.stderr for hint in _OFFLINE_HINTS):
-            pytest.skip(f"uv could not reach the network: {result.stderr.strip()[-300:]}")
+            reason = f"uv could not reach the network: {result.stderr.strip()[-300:]}"
+            if os.environ.get("CI"):
+                pytest.fail(reason)
+            pytest.skip(reason)
         pytest.fail(f"uv {' '.join(args)} failed:\n{result.stderr}")
+
+
+def fake_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str) -> None:
+    """Make `run_uv` run a `uv` that exits 1 with `stderr` (no build, no network)."""
+    script = tmp_path / "uv"
+    script.write_text(f"#!/bin/sh\necho '{stderr}' >&2\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setattr(sys.modules[__name__], "UV", str(script))
+
+
+NETWORK_ERROR = "error sending request for url (https://pypi.org/simple/)"
+
+
+@pytest.mark.parametrize(
+    ("ci", "stderr", "outcome", "shown"),
+    [
+        (None, NETWORK_ERROR, pytest.skip.Exception, "could not reach the network"),
+        ("true", NETWORK_ERROR, pytest.fail.Exception, "could not reach the network"),
+        (None, "error: build backend failed", pytest.fail.Exception, "build backend failed"),
+        ("true", "error: build backend failed", pytest.fail.Exception, "build backend failed"),
+    ],
+    ids=["offline", "offline-on-ci", "other-failure", "other-failure-on-ci"],
+)
+def test_a_uv_failure_skips_only_offline_and_off_ci(
+    ci: str | None,
+    stderr: str,
+    outcome: type[BaseException],
+    shown: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if ci is None:
+        monkeypatch.delenv("CI", raising=False)
+    else:
+        monkeypatch.setenv("CI", ci)
+    fake_uv(tmp_path, monkeypatch, stderr)
+    with pytest.raises(outcome, match=shown):
+        run_uv(["build"], {})
 
 
 @pytest.fixture(scope="module")

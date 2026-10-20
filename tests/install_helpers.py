@@ -18,11 +18,14 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any
 from unittest import mock
+
+import pytest
 
 from agentfly.install import installer, packages, records
 from agentfly.install.layout import Layout
@@ -263,6 +266,65 @@ def status_of(layout: Layout, build: PythonBuild, source: Path | None = None) ->
     """`installer.status` with the check of the (fake) tool environment, as the CLI makes it."""
     check = packages.inspect(packages.tool_environment(), records.read(layout))
     return installer.status(layout, build, source or installer.client_source(), check)
+
+
+DIRECT_URL_KINDS = ("a FIFO", "a link to a FIFO", "a link to a file")
+HANG_AFTER_S = 5.0
+
+
+def plant_direct_url(
+    info: Path, kind: str, scratch: Path, *, listed: bool
+) -> tuple[Path, Path | None]:
+    """Make `info/direct_url.json` one of `DIRECT_URL_KINDS`, in RECORD or not.
+
+    Returns the file and the FIFO behind it (None for a link to a plain file).
+    """
+    target = info / "direct_url.json"
+    scratch.mkdir(parents=True, exist_ok=True)
+    fifo: Path | None = None
+    if kind == "a FIFO":
+        os.mkfifo(target)
+        fifo = target
+    elif kind == "a link to a FIFO":
+        fifo = scratch / "pipe"
+        os.mkfifo(fifo)
+        target.symlink_to(fifo)
+    else:
+        plain = scratch / "plain.json"
+        plain.write_text('{"url": "file:///w.whl", "archive_info": {}}', encoding="utf-8")
+        target.symlink_to(plain)
+    if listed:
+        with (info / "RECORD").open("a", encoding="utf-8") as record:
+            record.write(f"{info.name}/direct_url.json,sha256=AAAA,0\n")
+    return target, fifo
+
+
+def call_unless_it_hangs(call: Callable[[], Any], fifo: Path | None) -> Any:
+    """Run `call` in a daemon thread; fail the test if it has not returned after `HANG_AFTER_S`.
+
+    A reader stuck on `fifo` is let go by opening the write end without blocking (no reader
+    means ENXIO, which is fine: nothing is stuck). What `call` returns or raises comes back.
+    """
+    outcome: list[tuple[bool, Any]] = []
+
+    def work() -> None:
+        try:
+            outcome.append((True, call()))
+        except BaseException as exc:  # handed back to the test below
+            outcome.append((False, exc))
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(HANG_AFTER_S)
+    if thread.is_alive():
+        if fifo is not None:
+            with contextlib.suppress(OSError):
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        pytest.fail(f"hung for {HANG_AFTER_S} s on {fifo}")
+    ok, value = outcome[0]
+    if not ok:
+        raise value
+    return value
 
 
 def hashes_of(env: packages.Environment) -> dict[str, Any]:
