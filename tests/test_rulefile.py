@@ -409,6 +409,10 @@ def path_rule_file(pattern: str) -> str:
         "[]]*",  # a class that holds `]`
         "[!]x]*",
         "*[a-z]*[0-9]*",
+        "/",  # the root folder and everything in it
+        "//",
+        "./",
+        "./.",
     ],
 )
 def test_a_path_pattern_that_matches_everything_is_refused(pattern: str) -> None:
@@ -428,6 +432,9 @@ def test_a_path_pattern_that_matches_everything_is_refused(pattern: str) -> None
         "???",  # no `*` and no class: names of three characters, nothing wider
         "~/[a-z]*",  # anchored at the home folder by its `~`
         "cfg/[!x]*",
+        "~/",  # the home folder and all in it: a folder, not every path
+        "/etc/",
+        "cfg/",
     ],
 )
 def test_a_pattern_with_something_a_name_must_contain_is_accepted(pattern: str) -> None:

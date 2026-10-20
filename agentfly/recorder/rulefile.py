@@ -508,8 +508,20 @@ def _path_pattern(where: str, raw: str, problems: _Problems) -> Pattern | None:
     elif _wildcards_only(raw):
         problems.add(where, f"pattern {raw!r} matches every path")
     else:
-        return compile_pattern(raw)
+        pattern: Pattern = compile_pattern(raw)
+        if not _every_path(pattern):
+            return pattern
+        problems.add(where, f"pattern {raw!r} matches every path")
     return None
+
+
+def _every_path(pattern: Pattern) -> bool:
+    """`/`, `./` and `./.` have no `*` in them, yet a trailing slash means "the folder and all in
+    it", and a pattern that may start anywhere and names no folder is every path. (`~/` is the
+    home folder, not every path.)"""
+    if pattern.name_only or pattern.anchor == "home":
+        return False
+    return pattern.parts == ("**",) or (not pattern.anchor and not pattern.parts)
 
 
 def _command_entry(where: str, raw: str, problems: _Problems) -> tuple[str, ...] | None:
