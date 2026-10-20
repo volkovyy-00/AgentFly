@@ -1,12 +1,12 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 11:14 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 11:40 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10-V5b-dispatched. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7 ✅ (BOARD Done; last merge F7 ae5dd0e = trial 368ab22 tree, 3× 3504 passed, 5 skipped, 111–131 s each).
 Pending decisions: D16
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
 - Order (owner 2026-10-19/20): F10 ∥ V5b (in flight) → F9 → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F11 after V5b (shares `sessions.py`, `app.py`); F12 after V5c (shares `agentfly/install/`). V8b's highlighted verdict comes from V5b.
-- Briefs: F10 (pass 2 against b84e2ca), V5b (pass 2 against dd44029; owner 2026-10-20: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). V5c (pass 2, 2026-10-18; re-check before dispatch). V7, V9, F8, F9, F11, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly (one command per `run:`, allow-listed actions and inputs), so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`; the owner starts each worker.
+- Briefs: F10 (pass 2 against b84e2ca), V5b (pass 2 against dd44029; owner 2026-10-20: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). F9 (pass 2 against 333f665; dispatch after F10 and V5b merge, once the owner's settings are on and a CodeQL run on main has finished). V5c (pass 2, 2026-10-18; re-check before dispatch). V7, V9, F8, F11, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly (one command per `run:`, allow-listed actions and inputs), so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>`; the owner starts each worker.
 - Worker closing rule (owner 2026-10-19, docs/reports/README.md): `/final-verification` on main...HEAD, commit, then `/code-review high`; verdict in the report.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT. CI runs on GitHub's macos-15 (arm64); V4 may use a runner for its checks; rework then.
 - Merge: trial-merge in a scratch worktree, 3× full check (~2 min each; no other suite running while timed), a fresh reviewer per branch, fixes back to the worker, merge with `--no-commit`, keep main's STATE/BOARD, check merged tree = trial tree. F10 and V5b: merge the first to finish, then trial the second on top (expected conflicts: `tests/test_package.py`, AGENTS.md "Testing", SPEC.md). D26 (batch PR, lead `--ff-only`, owner pushes) starts after CI is green on main a few times (3 so far). Before every trial merge: `git fetch`, then the push run for origin/main's exact SHA must be green.
@@ -26,7 +26,8 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-none
+1. GitHub Settings → Code security: turn on CodeQL default setup, Dependabot alerts and Dependabot security updates (F9 starts from these; any time, independent of F10/V5b).
+2. Python dependency alerts: GitHub's dependency graph does not read `uv.lock` (docs checked 2026-10-20), so Dependabot will raise no Python alerts. Accept that gap for v1, or add a later card (an exported requirements file, or dependency submission, which needs a workflow)?
 
 ## Decisions changed since last handoff (b84e2ca; earlier: git show b84e2ca:docs/STATE.md)
 - Owner 2026-10-20: F10 dispatched (fix card); F11 and F12 approved as cards.
@@ -34,6 +35,7 @@ none
 - Lead 2026-10-20 (verified by running): flag_marked re-queue is by design; mark() twice per shell event is wasted work only; memory.clear and the wrong-token /health test are fine. F10 takes the rest.
 
 ## Open risks and findings
+- F9: Dependabot raises no alerts for SHA-pinned actions or `uv.lock`; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - V3c later-card items: a `.pth` runs in the checking process (root-side verification); R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a `.venv` dist-info); offline guard has no package-command rule; root runs bundled 3.12 against the env's site-packages.
 - UI card: ui/README.md and useTrail comment about `?limit=1` (V8b).
 - F7 leftovers: hook-client tests vs a real recorder rely on the 0.5 s wait (watch arm64); Check is one chained CI step (a ruff failure hides test results); uv and Node float in CI (pin needs the owner's say); `UV is None` skip in tests/test_package.py stays green on CI; two suites at once on one Mac can share a test port (~1%, accepted).
