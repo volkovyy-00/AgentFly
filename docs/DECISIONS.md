@@ -724,14 +724,14 @@ A GitHub ruleset requiring a PR on main is not compatible with B's push of main 
 bypasses it; the owner's later choice.
 
 ## D27. A rules file cannot drop or weaken R1
-Status: **approved (2026-10-20), as written** · Cards: V5b-fix · Tested by: V5b-fix
+Status: **approved (2026-10-20); changed by the owner 2026-10-20: R1 may not hold floating folder patterns, and the check is structural (V5b-fix2 brief)** · Cards: V5b-fix, V5b-fix2 · Tested by: V5b-fix, V5b-fix2
 SPEC §5 makes R0 and R1 the two rules v1 must have; R0 is in code, R1 sits in the rules file. An
 active file whose R1 is missing or weaker than a minimum written in code (next to R0) is refused
 like an entry for R0: the packaged default runs and `/health`, `/api/rules`, `doctor`, `agentfly
 start` and `agentfly status` say why. The minimum: an `R1` entry, kind `after_then`, severity
 `block`; `after` fires on read and shell with a secret-name list that holds at least SPEC §5's names
 and exceptions no wider than SPEC §5's; `then` fires on shell with `command_class = "outbound"` and
-no further condition. Widening and rewording the message are allowed. Measured against the code's
+no further condition. Widening and rewording the message are allowed, except a floating folder pattern (`.ssh/**`; an anchored `~/.ssh/**` is fine) in R1, whose cost grows with path depth while R1 is never cut short (owner 2026-10-20). Measured against the code's
 minimum, not `default.toml`, so a wider later default never refuses an older file. Cost: a local
 exception (e.g. a company host) waits for V7's reviewed path.
 

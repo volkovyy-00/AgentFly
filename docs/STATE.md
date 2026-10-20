@@ -30,11 +30,11 @@ Pending decisions: D16
 none
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
-- Owner 2026-10-20: D30 (uninstall keeps a copy of an edited rules.toml; in V5c) approved; V5b gets a second fix round (docs/briefs/V5b-fix2.md, incl. the long-word crash) before merging.
+- Owner 2026-10-20: D27 changed (R1: no floating folder patterns; structural check). D30 (uninstall keeps an edited rules.toml; V5c) approved; V5b gets a second fix round (docs/briefs/V5b-fix2.md, incl. the long-word crash) before merging.
 - Owner 2026-10-20: D29 (keep a chat's session note 29 idle days; marked chats, their parents and links kept) approved.
 - Owner 2026-10-20: D27 (a rules file cannot drop or weaken R1) and D28 (`init -g` refreshes an unedited rules file) approved; V5b fixes go to a fresh worker; plan + subagent-driven-development for workers rejected.
 - Owner 2026-10-20: GitHub security settings on (above); `uv.lock` is in the dependency graph, question closed.
-- Owner 2026-10-20: F10 merged (5239e96) and pushed; F13 approved as a card (escape names in package-check messages).
+- Owner 2026-10-20: F10 merged (5239e96), pushed; F13 approved (escape names in package-check messages).
 - Lead 2026-10-20: F10's two 5 s hang guards without `@wallclock` accepted.
 
 ## Open risks and findings
@@ -44,7 +44,7 @@ none
 - V3c later-card items: `.pth` runs in the checking process; R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a dist-info); no offline-guard package rule; root runs bundled 3.12 on the env's site-packages.
 - UI card: ui/README.md and useTrail `?limit=1` comment (V8b). SPEC known gaps: same-step read .env + curl order.
 - F7 leftovers: hook-client tests rely on the 0.5 s wait (watch arm64); Check is one chained CI step; uv and Node float in CI (pin needs the owner); two suites at once can share a port (~1%, accepted).
-- Missing interpreter → exit 127 → fails open; missing client → exit 2 → deny-all.
+- Missing interpreter: exit 127, fails open; missing client: exit 2, deny-all.
 - R0 gaps (V5a): `pkill python`; ruby/perl -e; relative paths after `cd`, globs, braces, variables; ~/.claude/settings.json unguarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md lacks `/api/sessions` (V9); Neo4j Session lacks workspace_root; no card owns SPEC §10's per-session hash check.
@@ -52,8 +52,8 @@ none
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. V5b-fix2 plan (1f33d06) checked by the lead 2026-10-20: covers the criteria; `namecover.py` allowed; owner to rule on R1 refusing floating folder patterns (D27 change). then re-trial, 3× check, fresh reviewers.
+1. V5b-fix2: advisor review of plan 1f33d06 → owner accepted 5 changes + D27 change (brief updated 2026-10-20). Worker revises spec and plan, stops; lead re-checks. then re-trial, 3× check, fresh reviewers.
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; drop `docs/superpowers/*V5b-fix2*` (owner 2026-10-20); build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. Leftovers → V5c brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
-Rehearsal model: Grok 4.7 High in Cursor.
+Rehearsals: Grok 4.7 High in Cursor.
