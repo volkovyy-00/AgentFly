@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import islice
@@ -28,6 +28,30 @@ _UNKNOWN: str = "unknown"  # `apply_rules` maps a missing conversation id to thi
 
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _ids(value: Any) -> frozenset[str]:
+    """Trigger ids from a saved row; anything that is not a list of strings is left out."""
+    return (
+        frozenset(v for v in value if isinstance(v, str))
+        if isinstance(value, list)
+        else frozenset()
+    )
+
+
+def _windows(value: Any) -> dict[str, float]:
+    """Trigger id -> end time from a saved row; damaged entries are left out."""
+    if not isinstance(value, dict):
+        return {}
+    found: dict[str, float] = {}
+    for key, until in value.items():
+        if isinstance(key, str) and isinstance(until, int | float) and not isinstance(until, bool):
+            found[key] = float(until)
+    return found
+
+
+def _longer(first: Mapping[str, float], second: Mapping[str, float]) -> dict[str, float]:
+    return {k: max(first.get(k, 0.0), second.get(k, 0.0)) for k in first.keys() | second.keys()}
 
 
 def _roots(payload: dict[str, Any]) -> list[str]:
@@ -75,6 +99,8 @@ class SessionStore:
                 parent_call=_text(item.get("parent_call")),
                 parent_id=_text(item.get("parent_id")),
                 inherited_until=float(item.get("inherited_until", 0.0) or 0.0),
+                triggers=_ids(item.get("triggers")),
+                inherited_triggers=_windows(item.get("inherited_triggers")),
             )
         self.load_links()
 
@@ -97,6 +123,10 @@ class SessionStore:
                         "parent": _text(item.get("parent")),
                         "roots": [str(r) for r in item["roots"]],
                         "t0": float(item.get("t0", 0.0) or 0.0),
+                        # V5b: what the chat that started the Task hands on. Before V5b only the
+                        # R1 mark was kept here, so a missing `marked` means it was set.
+                        "marked": bool(item.get("marked", True)),
+                        "triggers": sorted(_ids(item.get("triggers"))),
                     }
 
     def save(self) -> None:
@@ -110,6 +140,8 @@ class SessionStore:
                 "parent_call": s.parent_call,
                 "parent_id": s.parent_id,
                 "inherited_until": s.inherited_until,
+                "triggers": sorted(s.triggers),
+                "inherited_triggers": dict(sorted(s.inherited_triggers.items())),
             }
             for s in self._sessions.values()
         ]
@@ -169,8 +201,8 @@ class SessionStore:
     def put(self, session: Session) -> None:
         """Replace session and persist (call when marked/next_step change).
 
-        Marks only get stricter: a stale copy never clears a mark, shortens a fallback or
-        replaces a parent link that is already set.
+        Marks only get stricter: a stale copy never clears a mark or a trigger, shortens a fallback
+        or replaces a parent link that is already set.
         """
         old: Session | None = self._sessions.get(session.id)
         if old is not None:
@@ -180,6 +212,8 @@ class SessionStore:
                 inherited_until=max(session.inherited_until, old.inherited_until),
                 parent_call=old.parent_call or session.parent_call,
                 parent_id=old.parent_id or session.parent_id,
+                triggers=session.triggers | old.triggers,
+                inherited_triggers=_longer(session.inherited_triggers, old.inherited_triggers),
             )
         self._sessions[session.id] = session
         self.save()
@@ -210,6 +244,7 @@ class SessionStore:
                 next_step=1,
                 parent_call=call,
                 inherited_until=self.fallback_until(payload) if linkable and not call else 0.0,
+                inherited_triggers=self.fallback_triggers(payload) if linkable and not call else {},
             )
             self._sessions[sid] = session
             changed = True
@@ -254,13 +289,18 @@ class SessionStore:
             self.forget_old_calls(keep=call)
         started: Session | None = self._sessions.get(parent)
         linked: bool = any(s.parent_call == call for s in self._sessions.values())
-        if call not in self.pending and not linked and started and self.effective_marked(started):
-            self.pending[call] = {
-                "parent": parent,
-                "roots": _roots(payload),
-                "t0": self.clock(),
-            }
-            changed = True
+        if call not in self.pending and not linked and started:
+            marked: bool = self.effective_marked(started)
+            triggers: frozenset[str] = self.effective_triggers(started)
+            if marked or triggers:
+                self.pending[call] = {
+                    "parent": parent,
+                    "roots": _roots(payload),
+                    "t0": self.clock(),
+                    "marked": marked,
+                    "triggers": sorted(triggers),
+                }
+                changed = True
         return self.prune_pending() or changed
 
     def forget_old_calls(self, keep: str) -> None:
@@ -292,8 +332,20 @@ class SessionStore:
         now: float = self.clock()
         until: float = 0.0
         for entry in self.pending.values():
+            if entry["marked"] and now - entry["t0"] <= FALLBACK_SECONDS:
+                if roots & set(entry["roots"]):
+                    until = max(until, entry["t0"] + FALLBACK_SECONDS)
+        return until
+
+    def fallback_triggers(self, payload: dict[str, Any]) -> dict[str, float]:
+        """For a new chat with no parent link: each trigger it inherits and when that ends."""
+        roots: set[str] = set(_roots(payload))
+        now: float = self.clock()
+        until: dict[str, float] = {}
+        for entry in self.pending.values():
             if now - entry["t0"] <= FALLBACK_SECONDS and roots & set(entry["roots"]):
-                until = max(until, entry["t0"] + FALLBACK_SECONDS)
+                for trigger in entry["triggers"]:
+                    until[trigger] = max(until.get(trigger, 0.0), entry["t0"] + FALLBACK_SECONDS)
         return until
 
     def parent_of(self, session: Session) -> Session | None:
@@ -314,21 +366,37 @@ class SessionStore:
         now: float = self.clock()
         return any(s.marked or s.inherited_until > now for s in self.chain(session))
 
+    def effective_triggers(self, session: Session) -> frozenset[str]:
+        """Triggers of the chat, of its parents, and those inherited through the fallback."""
+        now: float = self.clock()
+        found: set[str] = set()
+        for s in self.chain(session):
+            found |= s.triggers
+            found |= {t for t, until in s.inherited_triggers.items() if until > now}
+        return frozenset(found)
+
     def effective(self, session: Session) -> Session:
-        """The session as the rules should see it: marked if a parent chat is."""
-        if not session.marked and self.effective_marked(session):
-            return replace(session, marked=True)
-        return session
+        """The session as the rules should see it: marked and triggered as its parents are."""
+        marked: bool = session.marked or self.effective_marked(session)
+        triggers: frozenset[str] = self.effective_triggers(session)
+        if marked == session.marked and triggers == session.triggers:
+            return session
+        return replace(session, marked=marked, triggers=triggers)
 
     def propagate(self) -> bool:
-        """A mark set inside a subagent marks its parents. True if any session changed."""
+        """A mark or trigger set inside a subagent reaches its parents. True if any changed."""
         changed: bool = False
         for session in list(self._sessions.values()):
-            if not session.marked:
+            if not (session.marked or session.triggers):
                 continue
             for ancestor in islice(self.chain(session), 1, None):
-                if not ancestor.marked:
-                    self._sessions[ancestor.id] = replace(ancestor, marked=True)
+                grown = replace(
+                    ancestor,
+                    marked=ancestor.marked or session.marked,
+                    triggers=ancestor.triggers | session.triggers,
+                )
+                if grown != ancestor:
+                    self._sessions[ancestor.id] = grown
                     changed = True
         return changed
 
@@ -336,12 +404,19 @@ class SessionStore:
         """Run the marking rule for one event: (session to save, session the rules see, marks).
 
         A secret read in this chat marks it and its parents for good, even if a parent already
-        marked it. The caller saves the returned session with `put`, which writes the parents too.
-        `marks` is true when the chat became marked on this event, itself or through a parent.
+        marked it; a trigger that fires is kept the same way. The caller saves the returned session
+        with `put`, which writes the parents too. `marks` is true when the chat became marked on
+        this event, itself or through a parent (a trigger is not a secret read).
         """
         was_marked: bool = self.effective_marked(stored)
-        if mark(payload, stored).marked and not stored.marked:
-            self._sessions[stored.id] = stored = replace(stored, marked=True)
+        fired: Session = mark(payload, stored)
+        if (fired.marked and not stored.marked) or fired.triggers - stored.triggers:
+            stored = replace(
+                stored,
+                marked=stored.marked or fired.marked,
+                triggers=stored.triggers | fired.triggers,
+            )
+            self._sessions[stored.id] = stored
             self.propagate()
         session: Session = self.effective(stored)
         return stored, session, session.marked and not was_marked

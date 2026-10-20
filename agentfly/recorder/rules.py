@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import posixpath
 import re
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT
@@ -46,6 +46,11 @@ class Session:
     parent_id: str = ""
     # D21 fallback: the mark this chat inherited from its workspace holds until this time (epoch).
     inherited_until: float = 0.0
+    # V5b: ids of the `after_then` rules (other than R1, whose trigger is `marked`) that fired in
+    # this chat, and, per id, the time a trigger inherited through the workspace fallback ends.
+    # `inherited_triggers` is replaced, never changed in place.
+    triggers: frozenset[str] = frozenset()
+    inherited_triggers: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
