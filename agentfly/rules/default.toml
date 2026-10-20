@@ -34,6 +34,11 @@ schema = 1
 secret_names = [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "credentials*"]
 secret_names_ok = [".env*.example", ".env*.sample", ".env*.template", "id_rsa*.pub"]
 
+# The .env family only (not every secret): rule npm-publish-after-env below.
+dotenv_names = [".env", ".env.*"]
+dotenv_names_ok = [".env*.example", ".env*.sample", ".env*.template"]
+publish_tools = ["npm publish"]
+
 # Example of a rule to add (remove the leading "# "): warn before a force-push.
 #
 # [lists]
@@ -84,4 +89,35 @@ then = { event = ["shell"], command_class = "outbound" }
   expect = "allow"
   [[rule.test]]
   steps = ["read: .env", "shell: ls -la"]
+  expect = "allow"
+
+# Block `npm publish` once a .env file has been read in this chat (or in a chat it belongs to).
+[[rule]]
+id = "npm-publish-after-env"
+kind = "after_then"
+severity = "block"
+message = "Blocked: a .env file was read earlier in this session, so npm publish is off."
+after = { event = ["read", "shell"], path = "dotenv_names", path_except = "dotenv_names_ok" }
+then = { event = ["shell"], command = "publish_tools" }
+
+  [[rule.test]]
+  steps = ["read: .env", "shell: npm publish"]
+  expect = "block"
+  [[rule.test]]
+  steps = ["shell: cat .env && npm publish --access public"]
+  expect = "block"
+  [[rule.test]]
+  steps = ["read: config/.env.local", "shell: sudo npm publish --tag next"]
+  expect = "block"
+  [[rule.test]]
+  steps = ["shell: npm publish"]
+  expect = "allow"
+  [[rule.test]]
+  steps = ["read: .env.example", "shell: npm publish"]
+  expect = "allow"
+  [[rule.test]]
+  steps = ["read: .env", "shell: npm install"]
+  expect = "allow"
+  [[rule.test]]
+  steps = ["read: id_rsa", "shell: npm publish"]
   expect = "allow"
