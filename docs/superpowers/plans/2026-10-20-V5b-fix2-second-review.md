@@ -220,10 +220,13 @@ that owns it.
   `uv run pytest tests/test_rules_meter.py tests/test_rules_matcher.py tests/test_rulefile.py tests/test_rules_cost.py -q`.
   Expected: all pass.
 - [ ] **Step 5: Price the budget.** A scratch script (not committed) measures µs per step, best of
-  three, idle, with an unlimited meter, on 300 words at 60 deep under:
-  - 5 × `d*/d*/d*/zN/**` with words that end `…/d1/d2/d3/z0/f.py` (the walk runs);
-  - 5 × `p{i}/**/x{i}.txt` with matching tails (literal middle parts);
-  - one `*a*b*c/**/z` on segments of 255 characters (long `fnmatch` compares).
+  three, idle, with an unlimited meter, on 300 words at 60 deep under (in each, no pattern matches,
+  so every walk runs to the end; a matching pattern would stop the clause at its first candidate):
+  - 5 × `d*/d*/d*/zN/**` on `tests.test_rules_cost.command(60)` (`d…` folders, no `zN` folder);
+  - 5 × `p{i}/**/x{i}.txt` on words whose last segment is `x{i}.txt` and that hold no `p{i}` folder
+    (the tail fits, the literal middle part is looked for at every folder);
+  - one `*a*b*c/**/z` on words of 255-character segments ending in `z`, none of which fits
+    `*a*b*c` (long `fnmatch` compares).
 
   Set `FLOAT_STEPS` to the largest multiple of 1,000 whose cost at the slowest of the three is at
   most 20 ms. If a long compare costs much over its price per step (`compare_cost` steps at the
@@ -243,7 +246,9 @@ that owns it.
 **Interfaces:**
 - Produces: `Clause.command` keeps its type, `tuple[tuple[str, ...], ...]`. The index is a private
   field built from it, with `field(hash=False, compare=False, repr=False)` (`Clause` is hashed by an
-  `lru_cache`). Answers are identical. Command lists are not metered (brief).
+  `lru_cache`). Answers are identical. Command lists are not metered (brief). The index keys each
+  entry by its rarest extra word among that program's entries (§4.7), identical entries are kept
+  once, and `_command_hit` reads each distinct simple command once.
 - The builder adds one seam a test can count: the per-entry check of the remaining extras (today's
   `_last_positions` test) as a module-level function, and index look-ups through it or a counter
   beside it.
@@ -254,8 +259,11 @@ that owns it.
     entries of 1 to 3 words from `cat a b c npm publish x`, commands of 1 to 6 simple commands
     joined by `;`), the answers are equal.
   - `test_a_command_naming_200_programs_looks_up_the_smaller_side`: a list `p0 x` … `p199 x`, and
-    a command `p0 p1 … p199 y`. At most `200 + 1` look-ups and entry checks, and the answer is no
-    match.
+    a command `p0 p1 … p199 y`. At most `200 + 1` key look-ups (finding the programs is not
+    counted), no entry check, and the answer is no match.
+  - `test_entries_that_share_a_first_word_are_keyed_apart`: the list `cat w a0` … `cat w a199` on
+    100 simple commands `cat w x`: no entry checked, and the answer is allow. With the list
+    `cat w a7` alone, `cat w x ; cat a7 w` matches.
   - `test_198_rules_of_200_cat_entries_on_150_cat_commands_check_few_entries`: the shape
     `command_list_on_one_program` of `tests/test_rules_cost.py`, on 150 `;`-joined `cat zN y`
     commands. The `zN` words match no entry, so the answer is allow, and the counted entry checks
@@ -264,13 +272,14 @@ that owns it.
 - [ ] **Step 3: Implement the index** of §4.7, built in `Clause.__post_init__` (with
   `object.__setattr__`, since `Clause` is frozen), not in `_clause`: `tests/test_rulefile.py` (about
   line 506) and `tests/test_rules_cost.py` (about line 278) build `Clause` directly.
-  - the map is program → first extra word (or `None`) → entries;
+  - the map is program → key (the entry's rarest extra word, ties to the first; `None` for no
+    extra word) → entries;
   - per simple command and per listed program at its first position, iterate the smaller of that
     program's keys and the distinct words after it.
 - [ ] **Step 4: Pass the tests.** Run
   `uv run pytest tests/test_rules_meter.py tests/test_rules_cost.py tests/test_npm_publish_entry.py -q`.
   Expected: all pass.
-- [ ] **Step 5: Commit.** Message: `V5b-fix2: command lists are looked up by program and first
+- [ ] **Step 5: Commit.** Message: `V5b-fix2: command lists are looked up by program and rarest
   word`.
 
 ### Task 4: The engine. One pass, the limit rules, unfinished rules
@@ -279,8 +288,8 @@ that owns it.
 - Modify: `agentfly/recorder/rules.py`: § `mark`, § `winning_rule`, § `find_rule`, and a
   `one_hook` helper.
 - Create: `tests/test_rules_limit.py`.
-- Modify: `tests/test_rules_cost.py::match_rule(i, body)` gains `severity: str = "highlight"`, so
-  the existing callers do not change.
+- Modify: `tests/test_rules_cost.py::match_rule(i, body)` gains `severity: str = "highlight"` and
+  `event: str = "shell"`, so the existing callers do not change.
 
 **Interfaces:**
 - Consumes: Task 2's `Meter`, `metered`, `current_meter`, `WorkLimit` and `FLOAT_STEPS`.
@@ -294,7 +303,9 @@ that owns it.
   - With no meter (pure tests, `rules test`), `mark` and `winning_rule` behave exactly as today.
     `cli/rules_test.py` does not change.
 
-`mark`, for each `after_then` rule other than R1 whose id the chat does not hold yet:
+`mark` becomes a per-rule loop with a `try` around each `after` (today's single set comprehension,
+`rules.py` § `mark`, would lose every trigger fired before the one that raised). For each
+`after_then` rule other than R1 whose id the chat does not hold yet:
 - `WorkLimit` while its `after` runs: `meter.note(rule.id)`, and the trigger is **not** recorded,
   for every severity (§4.3).
 - R1's mark is computed as today.
@@ -320,8 +331,10 @@ An unfinished highlight gives no candidate (it is skipped; the meter notes it).
   - The tests use `tests.rules_helpers.ruleset_of`, plus a fixture `heavy(severity, kind="match")`:
     the default plus one rule whose list is `d*/d*/d*/zN/**` × 5, as `match_rule(0, 'path = "l"',
     severity)` or as an `after_then` whose `after` holds the list. They run, inside `one_hook()`, on
-    a 300-word command whose words all have a `z0` folder near the end (`.../d1/d2/d3/z0/f.py`, 20
-    deep), so the middle walk runs past the budget.
+    `tests.test_rules_cost.command(20)`: its words hold `d…` folders and no `zN` folder, so every
+    middle walk runs to the end, none matches, and the budget runs out. (A word with a `z0` folder
+    would make the rule fire on its first candidate.) Each limit test also asserts the heavy rule
+    did not fire: its id is in `meter.unfinished`.
   - `test_outside_a_hook_the_engine_answers_as_before`: the default's inline tests and
     `tests/test_severities.py`'s file orders are unchanged.
   - `test_r0_and_r1_answer_as_usual_at_the_limit`. The heavy block rule is placed **before** R1 in
@@ -386,7 +399,8 @@ enqueues are unchanged.
   - `test_a_padded_shell_command_with_an_unfinished_warn_asks`: with `heavy("warn")`, `rec.run`
     gives `permission == "ask"` with `LIMIT_MESSAGE` and `LIMIT_MESSAGE + SKIP_TAIL`. With
     `rulefile.FLOAT_STEPS` monkeypatched to 10 (one path cannot spend the real budget) and the heavy
-    warn rule on `read`, a Read of a 20-deep `…/d1/d2/d3/z0/f.py` gives `{"permission":"allow"}`,
+    warn rule on `read` (`match_rule(..., event="read")`), a Read of a 20-deep `/w/d0/…/d19/f.py`
+    (no `zN` folder) gives `{"permission":"allow"}`,
     and its step has `rule_id == "rules limit"` and the verdict `warned`.
   - `test_a_limit_deny_records_no_trigger_and_a_restart_judges_as_before` (Review Focus 1): with
     `heavy("block", "after_then")` whose `then` is `curl`, a subagent linked to a parent by
@@ -479,11 +493,19 @@ enqueues are unchanged.
   - each `TIMED` shape;
   - the floating shape (the limit deny);
   - the command-list shape with 10, 50 and 150 commands;
+  - 198 rules of `cat w a0` … `cat w a199` on 100 simple commands `cat w x` (5.5 s today);
+  - 198 rules whose 200 entries are pairs from 21 words (`cat u_i u_j`), on 300 words of simple
+    commands `cat u_i u_k n_m` (each holds two common words and a word no entry has), the worst
+    bucket shape the index leaves;
   - the reviewer's `*/*/*/*/*/*/*/kN.pem` × 8 and `*/*/secretN/*.json` × 10 files;
   - the 167-name list on 300 words of 30-character names.
 
-  Each runs at 300 words and 60 deep. Record the numbers for the report. Any over 0.2 s goes to
-  Task 8 (the trim); note which.
+  Each runs at 300 words and 60 deep. Record the numbers for the report. Expect the name shapes and
+  the default to stay over 0.2 s until Task 8: the cleaner is most of the baseline (today, at 60
+  deep: the default 110 to 136 ms, the 167-name list 186 to 226 ms; `_split_keeping_seps` and
+  `shlex.split` are about 80 % of `clean_command`). Do not stop here for those. Any over 0.2 s goes to
+  Task 8 (the trim); note which. A command-list shape over 0.2 s is a stop-and-ask now, with the
+  numbers: the trim does not reach it.
 - [ ] **Step 4: Commit and run the full check.** Message: `V5b-fix2: floating exceptions are
   refused, rules check warns about floating patterns, and the count is tested`. Then run the full
   check command; expected green.
@@ -607,7 +629,8 @@ enqueues are unchanged.
 **Interfaces:**
 - Consumes: Task 9's `Family` and `SECRET_FAMILIES`, Task 1's `floating`.
 - Produces (in `rulefile`):
-  - `covers(text: str, family: Family) -> bool`: the rule of §6.2 on one case-folded name pattern.
+  - `covers(text: str, family: Family) -> bool`: the rule of §6.2 on one case-folded name pattern;
+    `_coverage_problems` passes it only `name_only` patterns.
   - `_coverage_problems(after: Clause) -> tuple[str, ...]`, `lru_cache(16)`: one error per family
     with no covering pattern in `after.path`, and one per floating pattern in `after.path`, in §6.2's
     and §6.3's wording, each starting `rule R1: `.
@@ -624,11 +647,14 @@ enqueues are unchanged.
     `~/.ssh/**`. Each has no error.
   - `test_brute_force_finds_no_accepted_r1_that_misses_a_secret_name` (the brief's test), with
     `random.Random(27)`:
-    - per family, its covering shapes from §6.2's examples; and a pool of near misses: `.env.?*`,
-      `.env.[!s]*`, `.env.s`, `?*.pem`, `*.pe?`, `prod.pem`, `id_rsa`, `id_rsa.*`, `credentials`,
-      `credentials?*`, `.env*.env`, `*.*`, `x*`;
+    - per family, its covering shapes from §6.2's examples; near misses are made by one to two
+      random one-character edits (insert, delete or replace, from
+      `. e n v p m k y i d _ r s a c l * ? [ ! ]`) of a covering shape, plus the fixed ones
+      `.env.?*`, `.env.[!s]*`, `?*.pem`, `id_rsa.*`, `credentials`;
     - 1,000 R1 name lists. Each starts with one covering shape per family, chosen at random; then 0
-      to 2 of them are swapped for a random near miss, and 0 to 3 near misses are added. Each list
+      to 2 of them are swapped for a near miss, and 0 to 3 near misses are added. (A near miss
+      that still covers, such as `*em` from `*pem`, is fine: the test judges by brute force, not by
+      the edit.) Each list
       gets the default's exceptions, or `.env.local*.example` and `id_rsa_work*.pub`, or none;
     - names: for each family, its start, then every string of up to 2 characters over `.`, `e`,
       `s`, `x`, ` ` and `_`, then its end, and the same with each `unless` ending; only those
@@ -780,7 +806,9 @@ enqueues are unchanged.
   - top block, plus a `## YYYY-MM-DD HH:MM` section;
   - "Needs owner": none expected (the owner settled the R1 narrowings in the brief); anything the
     gates of Tasks 2, 6 and 8 stopped on goes here;
-  - every gap and residual;
+  - every gap and residual, including that `init -g`'s `untrusted` (not exactly the owner's and
+    0644) is stricter than the recorder's trust rule, so it may rewrite known bytes `doctor` calls
+    fine;
   - gaps for the lead: HOOKS.md's `rules_limit` line, and SPEC §5's "What a file may cost" (the
     rules limit, with its deny and ask, and `path_except` refusing floating patterns);
   - the margin at 60 deep against 0.2 s, from the measurements.

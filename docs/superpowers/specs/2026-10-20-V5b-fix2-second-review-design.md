@@ -209,12 +209,13 @@ stopped, as the brief requires.
 
 **Floating patterns** add at most `FLOAT_STEPS` plus one block's walk, priced at 20 ms.
 
-**Command lists** are not metered (brief). With the index (§4.7), a clause costs, per simple
-command, the sum over its listed programs of `min(first-word keys of that program, distinct words
-after it)`, plus one check per entry under a key that holds. On the brief's command (one simple
-command of 300 words) that is at most about `rules × (200 + 200)`, which is dictionary work. A
-crafted list whose entries share a program and first word, on a command of many simple commands
-that each repeat that pair, can still be slow; this is a residual, reported (§9).
+**Command lists** are not metered (brief). With the index (§4.7), a clause costs, per distinct
+simple command, the sum over its listed programs of `min(keys of that program, distinct words after
+it)`, plus one check per entry under a key that holds. On the brief's command (one simple command of
+300 words) that is at most about `rules × (200 + 200)`, which is dictionary work. Entries that share
+a program and first word no longer share a key. What is left is lists built from a few common words
+(for example every pair of 21 words), measured by the gate; if one stays over 0.2 s, the builder
+stops and asks.
 
 **Time** (300 words, 60 deep, idle): cleaning and parsing (the baseline, about 0.1 s today), plus at
 most `MAX_WORK × C` short tests (180k at 900 candidates, about 70 ms; less once a file spends units
@@ -237,16 +238,25 @@ Today `Clause._command_hit` loops over every entry for every simple command: abo
 accepted file of 198 rules × 200 `cat wN` entries on 10 joined `cat` commands, and 5.1 s at 150.
 The fix:
 - **An index.** Built in `Clause.__post_init__`, so clauses that tests build directly have it too.
-  Each clause's command list becomes a map: program → (first extra word, or none) → entries. Per
+  Identical entries are kept once. Each clause's command list becomes a map: program → key → entries,
+  where an entry's **key is its rarest extra word** among that program's entries (ties go to the
+  first in the entry's order), or none for an entry with no extra word. Keying on the first extra
+  word instead puts every entry of `cat w a0` … `cat w a199` under `(cat, w)`, and an accepted file
+  of 198 such rules takes 5.5 s on 100 simple commands `cat w x` (measured by the review). Per
   simple command, the clause looks up each program the command holds, at its first position `at`:
   - an entry with no extra word fires at once;
-  - otherwise the clause iterates **the smaller of** that program's first-word keys (each checked
-    with `last.get(key, -1) > at`) and the distinct words after `at` (each looked up among the
-    keys);
+  - otherwise the clause iterates **the smaller of** that program's keys (each checked with
+    `last.get(key, -1) > at`) and the distinct words after `at` (each looked up among the keys);
   - only the entries under a key that holds then have their remaining extras checked, with today's
     `_last_positions` test.
+- **Each distinct simple command once.** A clause reads each distinct simple command (as a tuple of
+  words) once per hook, so a command that repeats one simple command pays once.
 - **The same answers.** "Program, then the extra words in any order, after it" is unchanged; an
   entry with no extra word fires on the program alone.
+- **Why this is enough.** An entry is checked only when its rarest word is in the simple command. A
+  key shared by many entries is a word that each of them holds and that is no rarer than any of
+  their other words, so a big bucket needs many entries built from a few common words; the gate
+  (Task 6) times the worst such shapes the plan can build. Command lists stay unmetered (brief).
 
 ## 5. Part 2: long words
 
@@ -296,8 +306,8 @@ the same table, with the same value.
 
 ### 6.2 The structural rule
 
-R1's `after.path` must hold, for every family, one name pattern (no `/`) that covers the whole family
-by its shape. After case folding, as the matcher folds:
+R1's `after.path` must hold, for every family, one name pattern (no `/`; only `name_only` patterns
+are looked at) that covers the whole family by its shape. After case folding, as the matcher folds:
 - **`P`**, a literal with no `*`, `?` or `[`, covers only an exact family, and only when `P` is that
   name (`.env`).
 - **`P*Q`**, one `*` and no `?` or `[`, covers a family when `P` is a prefix of the family's literal
@@ -428,8 +438,10 @@ New or changed tests. AGENTS.md "Testing" gets matching lines.
 - With no meter, nothing is charged or raised.
 
 **Counting is real.**
-- The floating shape (a block rule of `d*/d*/d*/zN/**` × 5 at `MAX_WORK`, whose tail matches the
-  test words) runs on the 300-word command at 20 deep. A test counts real steps by patching
+- The floating shape (a block rule of `d*/d*/d*/zN/**` × 5) runs on the 300-word `command(20)`,
+  whose words hold `d…` folders and no `zN` folder, so every middle walk runs to the end and none
+  matches. (A word holding `z0` would make the rule fire on the first candidate and spend almost
+  nothing.) A test counts real steps by patching
   `fnmatch.fnmatchcase` and counting bare-`*` parts and middle-block starts. The hook answers with
   the limit deny, and the count is at most `FLOAT_STEPS` plus one block's walk.
 - With the charge disabled, the count exceeds `FLOAT_STEPS`, so the test fails if the bound is
@@ -442,8 +454,9 @@ words, at 20 and 60 deep, and on a command that parses only partly: the counted 
 excluded, and a test asserts that they float.
 
 **Command index.** It gives the same answers as the old loop on seeded random lists and commands. A
-command whose simple command names 200 listed programs does at most `200 + 1` look-ups. The 198 × 200
-`cat wN` file on 150 joined commands answers allow, with entry checks counted.
+command whose simple command names 200 listed programs does at most `200 + 1` key look-ups. The
+198 × 200 `cat wN` file on 150 joined commands answers allow with no entry checked, and so does the
+198 × 200 `cat w aN` file on 100 simple commands `cat w x`.
 
 **Limit behaviour.**
 - R0's and R1's answers are unchanged at the limit: a marked chat's heavy command with `curl
@@ -478,9 +491,10 @@ command whose simple command names 200 listed programs does at most `200 + 1` lo
 - `spec_secret` from the table equals today's on the grid and on random names.
 - The three dodges are refused naming R1 and the bullet; the brief's loading list loads.
 - **Brute force** (the brief's test): a thousand seeded random R1 name lists, each built from one
-  covering shape per family with some swapped for near misses (`.env.?*`, `.env.[!s]*`, `?*.pem`,
-  `*.pe?`, `id_rsa.*`, `credentials`, …) and some near misses added, with exceptions drawn from the
-  safe ones. For every list the file accepts, every secret name built from a family's start, a
+  covering shape per family with some swapped for near misses, made by random one-character edits
+  (insert, delete, replace from `. e n v p m k y i d _ r s a c l * ? [ ! ]`) of the covering shapes,
+  so that a slip in `covers` (an `in` for an `endswith`, the wrong family's start) is drawn; and some
+  near misses added, with exceptions drawn from the safe ones. For every list the file accepts, every secret name built from a family's start, a
   middle of up to 2 characters from a small alphabet, and the family's end (plus the exempt endings)
   is marked. The test asserts that both accepted and refused lists occur (at least 100 of each).
 - The grid (now in `tests/r1_grid.py`) finds nothing unmarked in every accepted fixture.
@@ -510,8 +524,9 @@ On this Mac, idle, best of three:
   - cost grows with command size; the floating budget does not, so a long floating-heavy command
     reaches the limit sooner;
   - R1 and name lists are never stopped, so very long names cost what they take;
-  - command lists are not metered: a crafted shared-first-word list on many simple commands can be
-    slow;
+  - command lists are not metered: the worst list shapes the gate measured, with their times;
+  - `init -g`'s `untrusted` (not exactly the owner's and 0644) is stricter than the recorder's trust
+    rule (which loads root:admin 0640), so `init -g` may rewrite known bytes `doctor` calls fine;
   - an unfinished warn trigger is not recorded, so it is lost if the user lets the command run;
   - D27 refuses some covering unions (by design).
 
