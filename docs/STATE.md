@@ -24,7 +24,7 @@ Pending decisions: D16
 - Git: origin/main = b342323 (owner pushed 2026-10-20 ~12:23; carries F10); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
-- No Xcode Command Line Tools: `make` opens an install dialog.
+- No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
 none
@@ -53,7 +53,7 @@ none
 
 ## Next 3 actions
 1. V5b-fix2 brief done (pass 2 against efa9848; a limit hit on an unfinished file block rule denies). Owner starts the worker; then re-trial, 3× check, fresh reviewers.
-2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. V5b leftovers go into V5c's brief.
+2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; drop `docs/superpowers/*V5b-fix2*` (owner 2026-10-20); build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. Leftovers → V5c brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
 Rehearsal model: Grok 4.7 High in Cursor.
