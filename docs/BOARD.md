@@ -107,6 +107,7 @@ V7 and V9 can run in parallel.
 - V8b ✅ 2026-10-19 · docs/reports/V8b.md · merged 9b2e00e · steps carry rule_text and the deny's messages (memory only), /health last_hook_at, ?all=1 marked_order; 2 low test/doc leftovers → fix card; UI notes (ui/README, useTrail comment) → UI card · body: git show 441ddd4:docs/BOARD.md
 - V3c ✅ 2026-10-19 · docs/reports/V3c.md · merged 07a8d7f · package check before sudo (links, extra files, own RECORD), same-version rebuild and upgrade ask (owner 2026-10-19), root -I -S -B on bundled Python, R0 guards tool env and uv/pipx/brew, doctor package line; leftovers → fix card · body: git show 441ddd4:docs/BOARD.md
 - F7 ✅ 2026-10-20 · docs/reports/F7.md · merged ae5dd0e · pytest-xdist check 37–44% of serial; ci.yml (main pushes and PRs, macos-15, read-only, SHA-pinned) pinned by tests/test_ci_workflow.py; CI green on arm64 (PR #6); leftovers → fix card · body: git show ae5dd0e:docs/BOARD.md
+- F10 ✅ 2026-10-20 · docs/reports/F10.md · merged 5239e96 · 7 review defects fixed; leftovers: escape RECORD/METADATA names in package-check messages (proposed card), 5 s hang guards without @wallclock (accepted), AGENTS.md Testing lines for CI fail-not-skip and hand-typed sudo (lead) · body: git show 5239e96:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -181,11 +182,6 @@ V7 and V9 can run in parallel.
   - The web check and the stale-build check pass, and you say it is demo-ready.
 
 ---
-
-### F10 · Review fixes: uninstall, package check, step merge
-- **Owner:** worker-backend · brief docs/briefs/F10.md (pass 2 2026-10-20, against b84e2ca) · dispatched 2026-10-20 (worktree ag-f10-review-fixes, from d536d39); may run alongside V5b (no shared files except new tests in tests/test_install_cli.py)
-- **Scope:** findings the lead verified 2026-10-20: uninstall service message under hand-typed sudo and single restart hint; same-version question names files; direct_url.json regular-file check; merge waiting slot freed on id join; evicted alarm in `flagged`; package tests fail on a network error under CI; `git rm result`. Not: links inside the tool env, sessions.json save per hook (own cards, proposed).
-- **Done when:** the brief's acceptance criteria hold.
 
 ### F11 · Session state off the hook path
 - **Owner:** worker-backend · brief not written · after V5b (shares `sessions.py` and `app.py`) · approved by the owner 2026-10-20
