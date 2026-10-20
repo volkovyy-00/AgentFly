@@ -62,9 +62,7 @@ def _cut_comment(value: str) -> str:
     if value and value[0] in "'\"":
         quote, i = value[0], 1
         while i < len(value):
-            if value[i] == "\\" and quote == '"':
-                i += 2
-            elif value[i] == quote and value[i + 1 : i + 2] == quote == "'":
+            if value[i] == quote and value[i + 1 : i + 2] == quote == "'":
                 i += 2  # '' is a quote inside a single-quoted value
             elif value[i] == quote:
                 break
@@ -146,12 +144,10 @@ class _Parser:
             if found is None:
                 raise YamlError(f"line {self.i + 1}: cannot read {cur[1]!r} (quoted key?)")
             key = found.group(1)
-            if key in result or key == "<<":
-                raise YamlError(f"line {self.i + 1}: duplicate or merge key {key!r}")
+            if key in result:
+                raise YamlError(f"line {self.i + 1}: duplicate key {key!r}")
             self.i += 1
             result[key] = self.value((found.group(2) or "").strip(), indent)
-        if (cur := self.line()) is not None and cur[0] > indent:
-            raise YamlError(f"line {self.i + 1}: unexpected indent")
         return result
 
     def value(self, rest: str, indent: int) -> Any:
@@ -206,8 +202,6 @@ class _Parser:
             else:
                 self.i += 1
                 items.append(_flow_list(rest) if rest.startswith("[") else _scalar(rest))
-        if (cur := self.line()) is not None and cur[0] > indent:
-            raise YamlError(f"line {self.i + 1}: unexpected indent")
         return items
 
 

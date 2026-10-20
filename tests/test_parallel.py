@@ -17,6 +17,11 @@ from tests.helpers import REPO, client_env, free_port
 
 TESTS = Path(__file__).parent
 TIMED = re.compile(r"\b(?:perf_counter|monotonic)\b")
+SOURCES = {
+    path: path.read_text(encoding="utf-8")
+    for path in sorted(TESTS.glob("test_*.py"))
+    if path != Path(__file__)
+}
 
 
 # ---------------------------------------------------------------- worker groups
@@ -27,16 +32,17 @@ def test_the_package_tests_share_one_worker() -> None:
     assert groups == {"package"}
 
 
-def read_tests() -> list[tuple[Path, str, ast.FunctionDef]]:
+def timed_tests() -> list[tuple[Path, ast.FunctionDef]]:
+    """The test functions whose own body names `perf_counter` or `monotonic`."""
     found = []
-    for path in sorted(TESTS.glob("test_*.py")):
-        if path != Path(__file__):
-            source = path.read_text(encoding="utf-8")
-            found += [
-                (path, source, node)
-                for node in ast.walk(ast.parse(source))
-                if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
-            ]
+    for path, source in SOURCES.items():
+        if not TIMED.search(source):
+            continue  # most files: no need to parse them
+        lines = source.splitlines()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                if TIMED.search("\n".join(lines[node.lineno - 1 : node.end_lineno])):
+                    found.append((path, node))
     return found
 
 
@@ -45,19 +51,23 @@ def test_a_test_that_reads_the_clock_is_on_the_wallclock_worker() -> None:
     # one worker and do not compete with each other. This scan sees only `perf_counter` and
     # `monotonic`: in a test's own body (the test needs the mark), and anywhere in a module (the
     # module must use the mark somewhere). `time.time`, `sleep` and helpers are not scanned.
-    timers = [t for t in read_tests() if TIMED.search(ast.get_source_segment(t[1], t[2]) or "")]
+    timers = timed_tests()
     assert timers, "the scan found no test that reads the clock"
     bare = [
         f"{path.name}::{node.name}"
-        for path, _, node in timers
+        for path, node in timers
         if not any(isinstance(d, ast.Name) and d.id == "wallclock" for d in node.decorator_list)
     ]
     assert bare == [], f"these tests read the clock without @wallclock: {bare}"
-    modules = {p for p in TESTS.glob("test_*.py") if TIMED.search(p.read_text(encoding="utf-8"))}
-    unmarked = sorted(
-        p.name for p in modules - {Path(__file__)} if "@wallclock" not in p.read_text()
-    )
+    unmarked = [
+        path.name
+        for path, source in SOURCES.items()
+        if TIMED.search(source) and "@wallclock" not in source
+    ]
     assert unmarked == [], f"these modules time a test but never use @wallclock: {unmarked}"
+
+
+def test_the_wallclock_mark_names_its_group() -> None:
     # helpers.py is imported before pytest registers markers, so a typo in the mark's name would
     # pass strict_markers and silently group nothing.
     assert (helpers.wallclock.name, helpers.wallclock.kwargs) == (
@@ -74,26 +84,24 @@ def set_worker(monkeypatch: pytest.MonkeyPatch, worker: str, count: int) -> None
     monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", str(count))
 
 
-def test_a_worker_is_only_handed_ports_of_its_own_class(monkeypatch: pytest.MonkeyPatch) -> None:
-    for worker in ("gw0", "gw3", "gw7"):
-        set_worker(monkeypatch, worker, 8)
-        ports = [free_port() for _ in range(30)]
-        assert {port % 8 for port in ports} == {int(worker[2:])}
-        assert all(20000 <= port <= 32767 for port in ports)  # below where bind(0) picks
-        for port in ports[:5]:  # nothing listens there
-            with socket.socket() as sock:
-                sock.bind(("127.0.0.1", port))
+# gw9 of 8: xdist starts a crashed worker's replacement under a new number, the count stays 8.
+@pytest.mark.parametrize(("worker", "own"), [("gw0", 0), ("gw3", 3), ("gw7", 7), ("gw9", 1)])
+def test_a_worker_is_only_handed_ports_of_its_own_class(
+    monkeypatch: pytest.MonkeyPatch, worker: str, own: int
+) -> None:
+    set_worker(monkeypatch, worker, 8)
+    ports = [free_port() for _ in range(30)]
+    assert {port % 8 for port in ports} == {own}
+    assert all(20000 <= port <= 32767 for port in ports)  # below where bind(0) picks
+    for port in ports[:5]:  # nothing listens there
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", port))
 
 
-def test_a_replacement_worker_still_gets_a_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    # xdist starts a crashed worker's replacement as gw8 while the count stays 8.
-    set_worker(monkeypatch, "gw9", 8)
-    assert {free_port() % 8 for _ in range(30)} == {1}
-
-
-def test_a_serial_run_and_the_controller_get_any_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_worker(monkeypatch, "master", 1)
-    assert 0 < free_port() < 65536
+def test_a_serial_run_gets_any_port_of_the_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    monkeypatch.delenv("PYTEST_XDIST_WORKER_COUNT", raising=False)
+    assert 20000 <= free_port() <= 32767
 
 
 def test_an_impossible_class_is_an_error_not_a_hang(monkeypatch: pytest.MonkeyPatch) -> None:
