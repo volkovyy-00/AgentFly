@@ -1,0 +1,31 @@
+# V5b-fix2 · Second review round for V5b: a sound hook-cost bound, R1's minimum on every name, honest "intact", long words
+
+You are a worker on card V5b-fix2 in /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file. Follow AGENTS.md and this brief; report per docs/reports/README.md in `docs/reports/V5b-fix2.md`. Never push; commit on branch ag-v5b-rules-file only, the lead merges. This brief and D27/D28 are on main only: read them with `git show main:docs/briefs/V5b-fix2.md` and `git show main:docs/DECISIONS.md`; do not merge main into the branch.
+
+**Summary.** The first fix round's checks pass, but fresh reviewers showed that a rules file `rules check` accepts can still make one hook take 0.4 s idle and 1.4 s on a busy Mac, that R1's minimum can be dodged with unusual pattern spellings, that `init -g` calls a wrongly owned rules file intact, and that one long shell word (a commit message) makes the recorder answer with an error. Fix them on the same branch; `docs/reports/V5b-fix.md` describes the code as it stands.
+
+**Written against:** branch head efa9848; main 4c228fc merges cleanly (trial merge with af46cb3 3× green) (2026-10-20).
+
+**References**
+- `agentfly/recorder/rulefile.py` § `pattern_work`, § `file_work`, § `MAX_WORK` — a static weight fitted to timed shapes whose first literal part fails at once; a `*` part survives every folder, so real work is parts × path depth × candidates. Reviewer's accepted file: the default plus one match rule on `["*/*/*/*/*/*/*/k0.pem", …, "k7.pem"]` cost 0.37–0.40 s idle on the 300-word `tests/test_rules_cost.py` § `command` (20 folders deep; 1.1 s at 60); ten `*/*/secretN/*.json` cost 0.27 s (0.6 s at 60). The default alone takes 45 ms at 20 deep and 0.10 s at 60, most of it in `clean.py` (`_split_keeping_seps`, `shlex`), not matching.
+- `tests/test_rules_cost.py` § `test_a_hook_at_the_limit_makes_no_more_pattern_tests_than_the_units_allow` and `tests/test_rulefile.py` § `test_hundreds_of_slash_patterns_against_hundreds_of_words_do_one_test_per_pair` — both hold by construction (every pattern costs at least one unit; one `_glob` call per pair), so neither bounds work.
+- `agentfly/recorder/rulefile.py` § `_unmarked`, § `SECRET_NAMES` — D27 is judged on sample names; these load yet leave SPEC §5 secrets unmarked: `.env.[!s]*` + `.env.s` + `.env.s[!e]*` + `.env.se` + `.env.se[!c]*` (misses `.env.secret`); `credentials` + `credentials[!$ ]*` (misses `credentials copy.json`); `.env.?` … `.env.` + 15 `?` (misses `.env.production-eu-west-1`).
+- `agentfly/install/installer.py` § `rules_state`, § `status`; `agentfly/cli/init.py` — "current" looks at bytes only; the report's "Gaps" lists init.py's missing notices. `agentfly/cli/rules_check.py` § `load` with `rulefile.is_active_path` (a link to the active file is refused as a symbolic link).
+- `agentfly/recorder/clean.py` § `_project_relative` (called from `agentfly/recorder/store.py` § `build_step_record` inside `agentfly/recorder/app.py` § `apply_rules`) — `exists()` raises ENAMETOOLONG on a word with a part over 255 characters or over 1,024 in all, so `bash -c '<300 deep paths>'` fails today too; with that caught, `relative_to` (quadratic on Python 3.12) makes that hook 0.44 s at 20 folders deep and 3.1 s at 60 under the default rules.
+
+**Scope**
+- Order: the cost bound and its tests first, then the long word, then D27, then install.
+- Cost: a bound that holds for every file `rules check` accepts, by construction rather than by fit. If it is a limit checked while the hook runs, reaching it never changes R0's or R1's answer; while a file `block` rule is left unfinished the answer is a deny whose message says the rules limit was reached (fail closed, as the offline guard does); it shows in `/health` and the recorder's log.
+- D27: refuse any R1 `after` that fails to mark a name SPEC §5 counts as secret, judged by pattern structure, not samples alone; `.env*` in place of `.env` and `.env.*` still loads.
+- Touches: `agentfly/recorder/` (rulefile, rules, names, store, clean, app), `agentfly/install/` (installer, checks), `agentfly/cli/` (init, rules_check, status), their tests, AGENTS.md "Testing", SPEC §5 if D27's wording changes.
+- Not included: D30 (uninstall keeps an edited file; V5c); new `npm publish` spellings (V5c); `memory.py` `_ALARMS` and highlighted steps (page card); the folder above the rules file and ACLs; HOOKS.md and SPEC §7/§8 (lead).
+
+**Acceptance criteria**
+- With any file `rules check` accepts (the reviewer's two shapes included), a hook with a 300-word command whose paths are 60 folders deep is answered in under 0.2 s on this Mac when idle (best of three, measured and reported, not a test bound); the same holds under the default rules for `bash -c` naming 300 such paths. A test that counts real matching steps fails if the bound is removed.
+- If the bound is a limit checked while the hook runs: a hook that reaches it gets R0's and R1's usual answer, is denied with a message naming the limit when a file `block` rule was left unfinished, and `/health` and the recorder's log say the limit was reached.
+- A shell command with one quoted word of 300 or 5,000 characters (with and without `/`) gets the same answer as with a short word (R1 still blocks after a `.env` read) and its step reaches history.
+- The three dodge files above are refused with `rules check` exit 1 naming R1; the packaged default, a file that only adds names and one with `.env*` in place of `.env` and `.env.*` still load.
+- `init -g` rewrites a rules file holding the current default's bytes but not root-owned or group/other-writable (it no longer says intact), and an intact re-run with an edited file prints the one-line notice; `rules check <link to the active file>` judges the file the recorder loads.
+- The AGENTS.md check is green 3× while another copy of the suite runs; demo replay answers stay byte-identical (also from the wheel).
+
+**Dependencies:** none. The V5b-fix worker session is closed; the owner starts this worker by hand in the existing worktree.

@@ -13,7 +13,7 @@ Pending decisions: D16
 - D26 B is now in force (CI green on main 4×): V5b is the first batch. The lead builds `merge/<batch>` from main with the card merge only; the owner pushes it and opens one PR; green → lead `git merge --ff-only merge/<batch>` on main, handoff commit, owner pushes main. Red → drop the branch, worker fixes.
 
 ## In flight
-- V5b · Claude Code worker (fix round reported 2026-10-20 18:58, head efa9848; worker done) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b-fix.md · docs/briefs/V5b-fix.md
+- V5b · Claude Code worker (fix round 2, not started; the owner starts it by hand) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b-fix2.md · docs/briefs/V5b-fix2.md
 
 ## Machine state (verified 2026-10-20 13:40 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -52,7 +52,7 @@ none
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. V5b-fix2 brief in pass 2; then the owner starts a fresh worker in the V5b worktree (report docs/reports/V5b-fix2.md); then re-trial, 3× check, fresh reviewers.
+1. V5b-fix2 brief done (pass 2 against efa9848; a limit hit on an unfinished file block rule denies). Owner starts the worker; then re-trial, 3× check, fresh reviewers.
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. V5b leftovers go into V5c's brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
