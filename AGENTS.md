@@ -31,7 +31,11 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 - Dev-only wiring (writes gitignored `.cursor/hooks.json`): `./install.sh`. With `init -g`
   also installed, every event arrives twice.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
-- Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`
+- Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
+  The tests run in parallel; the `env` keeps byte-code out (another worker's `.pyc` would
+  break `test_nothing_is_written_next_to_the_client`). The flags stay on the command line,
+  never in `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line.
+- Serial test run (one core, for a failure you cannot explain in parallel): `uv run pytest -q`
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`
 - Auto-fix style: `uv run ruff check --fix . && uv run ruff format .`
@@ -43,12 +47,12 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 - UI dev server (proxies `/api` to the recorder): `npm --prefix ui run dev`
 
 ## Approved dependencies (no need to ask)
-Python: fastapi, uvicorn, httpx, neo4j (driver), pytest, ruff, and hatchling
-(build backend, D6). Standard-library `tomllib`, `sqlite3` and `argparse` need
-no approval. The **bundled Python runtime** (D5) is also approved: a relocatable
-standalone build (the kind uv downloads) that `agentfly init -g` installs for
-the hook client; the packaging card picks the exact build. Ask before adding
-anything else.
+Python: fastapi, uvicorn, httpx, neo4j (driver), pytest, pytest-xdist (with its
+`execnet`), ruff, and hatchling (build backend, D6). Standard-library
+`tomllib`, `sqlite3` and `argparse` need no approval. The **bundled Python
+runtime** (D5) is also approved: a relocatable standalone build (the kind uv
+downloads) that `agentfly init -g` installs for the hook client; the packaging
+card picks the exact build. Ask before adding anything else.
 
 JavaScript (npm **only inside `ui/`**; commit `ui/dist`, ignore
 `ui/node_modules` via `ui/.gitignore`): vite, react, react-dom, typescript,
@@ -56,6 +60,9 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 `@testing-library/react`, jsdom, `@types/node`, `@types/react`,
 `@types/react-dom`, `@xyflow/react` and `motion` (the last two are pinned in
 `ui/package.json`). The page at `/` is the Vite build in `ui/dist`.
+
+CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (owner
+2026-10-19). Ask before adding an action or another workflow.
 
 ## Working rules
 - One card at a time. Do only the card you were asked for, then STOP and say
@@ -252,6 +259,29 @@ lines for them (R0 and normalisation: V5).
   Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
   file itself has not been seen).
+- Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
+  its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
+  20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by
+  the worker count is the worker's own number (`PYTEST_XDIST_WORKER[_COUNT]`); `StubRecorder`
+  lets the system pick its port. So no other worker's `free_port` and no port-0 bind can take a
+  port between its check and the moment a subprocess binds it, and a worker does not repeat a
+  port within 64 calls (a crashed worker's replacement, gw8 of 8, can share a class with a live
+  worker; a stranger process can still win the race).
+  The package tests (one wheel build, files planted in the install and put back) carry
+  `xdist_group(name="package")`. A test that asserts a time limit or leans on a sleep carries
+  `@wallclock` (`tests/helpers.py`), put there by hand. The check sees only this: a test whose
+  own body names `perf_counter` or `monotonic` and lacks the mark fails, and so does a module
+  that names either and never uses `@wallclock`. `time.time`, `sleep`, a `join` timeout and a
+  helper that times for the test are not scanned. Each group runs on one worker, in file order.
+  `strict_markers` makes an unknown marker an error, serial or parallel.
+- CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
+  refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes
+  and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA or not one
+  of the three approved actions, a `with:` input beyond the list for that action (no token, no
+  cache, checkout keeps no credentials), a `secrets` word, a runner other than `macos-15`, or a
+  `run:` of more than one line (one command per step: `bash -e` carries on past a failed `a`
+  in `a && b`); or if it loses the cancel of an older pull-request run, `uv sync --locked` or
+  one of the three check commands above (read from this file, run in this order).
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
+import random
 import shutil
 import socket
 import subprocess
@@ -11,18 +13,52 @@ import sys
 import threading
 import time
 import urllib.request
+from collections import deque
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 NEO4J_ENV = "NEO4J_URI=neo4j+s://x.databases.neo4j.io\nNEO4J_USERNAME=u\nNEO4J_PASSWORD=pw\n"
+
+# Tests that assert a time limit run on one xdist worker, so they do not compete with each other.
+wallclock = pytest.mark.xdist_group(name="wallclock")
+
+_PORT_TRIES = 10_000
+# Above 8787 and every port a service of ours uses, below where the system picks port 0 (macOS
+# 49152-65535, Linux 32768-60999): a `StubRecorder` bind or a connection cannot take a port that
+# another worker was just handed and has not bound yet.
+_PORTS = (20000, 32767)
+_recent: deque[int] = deque(maxlen=64)  # ports this process was just handed: not handed again
 
 
 def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port: int = sock.getsockname()[1]
-    assert port != 8787
-    return port
+    """A port nothing listens on that no other xdist worker of this run is handed.
+
+    A random port of `_PORTS`, rounded up to the worker's own class: its remainder, by
+    the worker count, is the worker's number. So workers never share a port, on any system (the
+    system's own choice for port 0 can follow a pattern). A crashed worker's replacement is
+    numbered past the count (gw8 of 8), hence the remainder of that too; it can share a class with
+    a live worker until the run ends. Serial runs and the controller are one class of one. A
+    process is not handed a port it got among its last 64 calls: a test that takes two gets two.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    count = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
+    own = int(worker[2:]) % count if worker.startswith("gw") else 0
+    low, high = _PORTS
+    for _ in range(_PORT_TRIES):
+        port = random.randint(low, high)
+        port += (own - port) % count
+        if port > high or port in _recent:
+            continue
+        try:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", port))
+        except OSError:
+            continue  # in use, or still closing
+        _recent.append(port)
+        return port
+    raise RuntimeError(f"no free port of class {own} of {count} in {_PORT_TRIES} tries")
 
 
 def make_legacy(home: Path, *, marked: bool = True) -> Path:
@@ -128,7 +164,6 @@ class StubRecorder:
         raw: bytes | None = None,
     ) -> None:
         self.requests: list[dict[str, Any]] = []
-        self.port = free_port()
         stub = self
         self._stop = threading.Event()
         reply = json.dumps(answer or {"permission": "allow"}).encode() if raw is None else raw
@@ -156,7 +191,8 @@ class StubRecorder:
         class Server(http.server.ThreadingHTTPServer):
             daemon_threads = True
 
-        self._server = Server(("127.0.0.1", self.port), Handler)
+        self._server = Server(("127.0.0.1", 0), Handler)  # the system picks it: no window to lose
+        self.port: int = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def __enter__(self) -> StubRecorder:

@@ -18,6 +18,7 @@ import agentfly.recorder.localstore as ls
 from agentfly.cli import main
 from agentfly.recorder.localstore import local_store
 from agentfly.recorder.paths import config_dir, data_dir
+from tests.helpers import wallclock
 
 SECRET_WORD = "WIPE_ME_MARKER"
 
@@ -105,6 +106,7 @@ def test_wipe_asks_first_on_a_terminal(
     assert len(client.get("/api/sessions").json()["sessions"]) == left
 
 
+@wallclock
 def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
     client: TestClient,
     capsys: pytest.CaptureFixture[str],
@@ -133,6 +135,7 @@ def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
     assert history_bytes().count(SECRET_WORD.encode()) == 0
 
 
+@wallclock
 def test_wipe_does_not_hold_the_write_lock_while_it_waits_for_a_reader(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
