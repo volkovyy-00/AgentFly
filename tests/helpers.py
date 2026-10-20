@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.request
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ _PORT_TRIES = 10_000
 # 49152-65535, Linux 32768-60999): a `StubRecorder` bind or a connection cannot take a port that
 # another worker was just handed and has not bound yet.
 _PORTS = (20000, 32767)
+_recent: deque[int] = deque(maxlen=64)  # ports this process was just handed: not handed again
 
 
 def free_port() -> int:
@@ -37,7 +39,8 @@ def free_port() -> int:
     the worker count, is the worker's number. So workers never share a port, on any system (the
     system's own choice for port 0 can follow a pattern). A crashed worker's replacement is
     numbered past the count (gw8 of 8), hence the remainder of that too; it can share a class with
-    a live worker until the run ends. Serial runs and the controller are one class of one.
+    a live worker until the run ends. Serial runs and the controller are one class of one. A
+    process is not handed a port it got among its last 64 calls: a test that takes two gets two.
     """
     worker = os.environ.get("PYTEST_XDIST_WORKER", "")
     count = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
@@ -46,13 +49,14 @@ def free_port() -> int:
     for _ in range(_PORT_TRIES):
         port = random.randint(low, high)
         port += (own - port) % count
-        if port > high:
+        if port > high or port in _recent:
             continue
         try:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", port))
         except OSError:
             continue  # in use, or still closing
+        _recent.append(port)
         return port
     raise RuntimeError(f"no free port of class {own} of {count} in {_PORT_TRIES} tries")
 

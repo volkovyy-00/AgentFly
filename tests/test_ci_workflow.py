@@ -54,6 +54,8 @@ class YamlError(ValueError):
 
 
 _KEY = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?: +(.*))?$")
+# Line breaks to a YAML parser that this one does not split on: after a comment they hide a key.
+_OTHER_BREAK = re.compile("\r(?!\n)|[\x85\u2028\u2029]")
 _NOT_A_PLAIN_START = "&*!{>%@`?|[],"
 
 
@@ -101,6 +103,8 @@ def _flow_list(value: str) -> list[str]:
 
 class _Parser:
     def __init__(self, text: str) -> None:
+        if _OTHER_BREAK.search(text):
+            raise YamlError("a line break other than LF or CRLF")
         self.lines = text.split("\n")
         self.i = 0
 
@@ -288,7 +292,7 @@ def run_problems(jobs: dict[str, Any], agents: str) -> list[str]:
             for run in runs
             if not isinstance(run, str) or "\n" in run
         ]
-        lines = [" ".join(run.split()) for run in runs if isinstance(run, str)]
+        lines = [re.sub(r"[ \t]+", " ", run.strip()) for run in runs if isinstance(run, str)]
         absent = [cmd for cmd in wanted if cmd not in lines]
         found += [f"job {name} lacks the step: {cmd}" for cmd in absent]
         found += [
@@ -419,6 +423,18 @@ MUTATIONS = [
         "not approved",
     ),
     ("an unlocked sync", "- run: uv sync --locked", "- run: uv sync", "uv sync --locked"),
+    (
+        "a non-breaking space in a command",
+        "- run: uv sync --locked",
+        "- run: uv sync\xa0--locked",
+        "lacks the step",
+    ),
+    (
+        "a carriage return that hides a key",
+        "      - name: Check\n",
+        "      - name: Check # x\r        continue-on-error: true\n",
+        "line break",
+    ),
     ("an upper-case secret", "- run: uv sync --locked", ENV_SECRET, "secrets"),
     (
         "a switched-off step",
@@ -593,8 +609,15 @@ def test_the_parser_reads_nesting_lists_comments_and_block_text() -> None:
         "'a': 1\n",
         "? a\n: 1\n",
         "a: 'open\n",
+        "a: 1 # x\rb: 2\n",
+        "a: 1 # x\u2028b: 2\n",
+        "a: 1 # x\x85b: 2\n",
     ],
 )
 def test_the_parser_refuses_what_it_does_not_read(text: str) -> None:
     with pytest.raises(YamlError):
         parse(text)
+
+
+def test_the_parser_reads_windows_line_endings() -> None:
+    assert parse("a: 1\r\nb:\r\n  c: 2\r\n") == {"a": "1", "b": {"c": "2"}}

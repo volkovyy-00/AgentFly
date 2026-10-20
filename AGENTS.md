@@ -264,8 +264,9 @@ lines for them (R0 and normalisation: V5).
   20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by
   the worker count is the worker's own number (`PYTEST_XDIST_WORKER[_COUNT]`); `StubRecorder`
   lets the system pick its port. So no other worker's `free_port` and no port-0 bind can take a
-  port between its check and the moment a subprocess binds it (a crashed worker's replacement,
-  gw8 of 8, can share a class with a live worker; a stranger process can still win the race).
+  port between its check and the moment a subprocess binds it, and a worker does not repeat a
+  port within 64 calls (a crashed worker's replacement, gw8 of 8, can share a class with a live
+  worker; a stranger process can still win the race).
   The package tests (one wheel build, files planted in the install and put back) carry
   `xdist_group(name="package")`. A test that asserts a time limit or leans on a sleep carries
   `@wallclock` (`tests/helpers.py`), put there by hand. The check sees only this: a test whose

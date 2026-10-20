@@ -32,16 +32,15 @@ def test_the_package_tests_share_one_worker() -> None:
     assert groups == {"package"}
 
 
-def timed_tests() -> list[tuple[Path, ast.FunctionDef]]:
+def timed_tests(sources: dict[Path, str] = SOURCES) -> list[tuple[Path, ast.FunctionDef]]:
     """The test functions whose own body names `perf_counter` or `monotonic`."""
     found = []
-    for path, source in SOURCES.items():
+    for path, source in sources.items():
         if not TIMED.search(source):
             continue  # most files: no need to parse them
-        lines = source.splitlines()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
-                if TIMED.search("\n".join(lines[node.lineno - 1 : node.end_lineno])):
+                if TIMED.search(ast.get_source_segment(source, node) or ""):
                     found.append((path, node))
     return found
 
@@ -96,6 +95,19 @@ def test_a_worker_is_only_handed_ports_of_its_own_class(
     for port in ports[:5]:  # nothing listens there
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", port))
+
+
+def test_a_worker_does_not_hand_out_a_port_twice_in_a_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `test_the_port_option_wins_over_agentfly_port` takes two ports in one test: they must differ.
+    set_worker(monkeypatch, "gw0", 8)
+    ports = [free_port() for _ in range(400)]
+    assert all(len(set(ports[i : i + 64])) == 64 for i in range(len(ports) - 63))
+
+
+def test_the_clock_scan_reads_the_lines_python_counts() -> None:
+    # A form feed ends a line for `str.splitlines` but not for the parser: the scan must not shift.
+    source = "import time\n\n\ndef test_x():\n    pass\x0c\n    t = time.perf_counter()\n"
+    assert [node.name for _, node in timed_tests({Path("test_x.py"): source})] == ["test_x"]
 
 
 def test_a_serial_run_gets_any_port_of_the_range(monkeypatch: pytest.MonkeyPatch) -> None:
