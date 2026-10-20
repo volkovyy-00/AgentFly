@@ -78,6 +78,12 @@ def run(args: argparse.Namespace) -> int:
     if loaded is None:
         return 1
     ran, failures = run_tests(loaded, path)
+    if ran == 0:  # "all passed" would be true of nothing: say so, and fail
+        print(
+            f"agentfly rules test: {path}: no tests to run; add [[rule.test]] tables to the rules",
+            file=sys.stderr,
+        )
+        return 1
     if failures:
         for failure in failures:
             print(f"agentfly rules test: {path}: {failure}", file=sys.stderr)

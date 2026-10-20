@@ -33,7 +33,15 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
 - Rules: `agentfly rules check [FILE]` and `agentfly rules test [FILE]` (no FILE: the file the
   recorder would load, the active `/Library/Application Support/AgentFly/rules.toml` if it exists,
-  else `agentfly/rules/default.toml`). The recorder reads the active file once, at start.
+  else `agentfly/rules/default.toml`). The recorder reads the active file once, at start, and only
+  believes it if it is a plain file owned by root that group and others cannot write (D3); the
+  active file is read that way by `doctor` and by these commands too, other files are drafts.
+  `rules test` exits 1 for a file with no tests. A file must keep R1 at least as strong as the
+  program's minimum (D27) and stay under the work limit (`rulefile.MAX_WORK`, 200 units: the packaged
+  default uses 31; a name pattern is 1, a slash pattern 4 plus 12 per `**`).
+  `init -g` writes the file when missing, replaces it when it is byte for byte a default the
+  package once carried (D28; the hashes are `rulefile.SHIPPED_DEFAULTS`, the new one goes in
+  whenever `default.toml` changes), and keeps an edited one; a recorder restart applies a change.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; the `env` keeps byte-code out (another worker's `.pyc` would
   break `test_nothing_is_written_next_to_the_client`). The flags stay on the command line,
@@ -102,10 +110,14 @@ CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (o
   can switch it off or name it. R1 and its sensitive-name lists are the first entry of
   `agentfly/rules/default.toml`; only its engine-only outbound cases stay in Python
   (`command_class = "outbound"`). `agentfly/recorder/rulefile.py` reads and checks the
-  file (it never raises and reads no environment); `rules.py` composes the rules.
+  file (it never raises and reads no environment); `rules.py` composes the rules. Every reader of
+  a rules file goes through `rulefile.load_bytes`, which also holds the program's minimum for R1
+  (D27: an `after_then` block whose `after` marks every name SPEC §5 counts as secret on read and
+  shell, with exceptions only for plain `.example`/`.sample`/`.template`/`.pub` file names, and
+  whose `then` is exactly outbound shell; widening and rewording are fine) and the work budget.
   `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
-  in `Session.triggers`. No flag or variable moves the active file: tests set
-  `rulefile.ACTIVE_RULES`.
+  in `Session.triggers`. No flag or variable moves the active file or who must own it: tests set
+  `rulefile.ACTIVE_RULES` and `rulefile.ACTIVE_OWNER_UID`.
 
 ## Hook client rules
 (`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is a shim for it
@@ -211,7 +223,11 @@ lines for them (R0 and normalisation: V5).
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
   README and HOOKS.md name `/` as the trail.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
-  under a temporary HOME and runs `agentfly serve` and `agentfly-hook`.
+  under a temporary HOME and runs `agentfly serve` and `agentfly-hook`. From the wheel it also:
+  checks and tests the default rules the wheel carries (`rules check` / `rules test` on that file);
+  replays the demo with byte-identical answers (R1 comes from the file inside the wheel); lists
+  `R0, R1, npm-publish-after-env` at `/api/rules` with no `rules_problem`; and shows that the
+  wheel's RECORD lists `agentfly/rules/default.toml` with the hash `init -g` checks it against.
 - Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
   README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
   `?all=1` returns more than the default last 10; `GET /` serves the React
@@ -258,8 +274,32 @@ lines for them (R0 and normalisation: V5).
   active file is missing or invalid and says why in `/health` (`rules_problem`, only then) and
   `GET /api/rules`; a damaged packaged default leaves only R0, does not stop `uninstall` from
   importing and stops the recorder from starting; `rules check` / `rules test` exit 1 and name the
-  rule. Tests never read the real rules file: the conftest redirects `rulefile.ACTIVE_RULES`, and
-  `RECORDER_CODE` does it in a child recorder.
+  rule. Tests never read the real rules file: the conftest redirects `rulefile.ACTIVE_RULES` and
+  sets `rulefile.ACTIVE_OWNER_UID` to the test's own user (and the umask to 022), and
+  `RECORDER_CODE` does both in a child recorder. A path pattern with a `*` or a `[...]` and no
+  character a name must contain (`[!x]*`, `*[a-z]*`) is refused as matching every path.
+- Trusted file (`tests/test_rules_trust.py`, V5b-fix): a link (also a dangling one), a file that is
+  not the owner's, one group or others can write, a named pipe and a folder are each refused: the
+  default runs and `/health`, `/api/rules`, `doctor`, `agentfly start` / `status` (as one line) and
+  `rules check` / `rules test` with no FILE say why; the reason line is at most 400 characters and
+  always ends with what runs instead; `rules check FILE` is a draft check unless FILE is the
+  active file; a child recorder says it over HTTP; a fresh process shows the owner is root.
+- R1 minimum (`tests/test_rules_minimum.py`, D27): the packaged default passes; about thirty
+  weakened files (R1 missing, as a match, warn or highlight, `after` on one event, `then` with a
+  condition, lists that miss names, exceptions for a literal name, a file type or a folder) are
+  each valid TOML refused with an error that starts `rule R1`, by `rules check` (exit 1) and by the
+  recorder (the default runs); `.env*` for `.env` and `.env.*`, extra names, no exceptions, a
+  reworded message and extra rules load; another rule's error does not hide R1's, a broken R1 is
+  not also "missing". The check does not read `default.toml`.
+- Cost (`tests/test_rules_cost.py`, V5b-fix): what is worked out about a word is worked out once
+  (memo hit counts); the weights of `rulefile.pattern_work`; a file at the limit of each shape is
+  accepted and one unit over is refused naming the heaviest rule; a hook at the limit makes no more
+  pattern tests than the units allow, and the whole hook (`apply_rules`, 300 words, paths 20
+  folders deep, `=` and `@` in the words) is under the client's own 0.5 s wait (`@wallclock`, best
+  of three; about 0.1 s here, so a loaded machine passes). No other test bounds seconds.
+- Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
+  `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
+  `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
 - Severities and triggers (`tests/test_severities.py`, `tests/test_after_then.py`,
   `tests/test_session_triggers.py`, `tests/test_npm_publish_entry.py`): the strictest rule wins in
   every file order; a warn on a shell command answers `ask` with the text in both messages, a warn
@@ -271,8 +311,13 @@ lines for them (R0 and normalisation: V5).
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
   repair and uninstall on a temporary root, the sudo command line. The rules file
-  (`tests/test_install_rules.py`) is written once, mode 644, never overwritten by a repair or a
-  second `init -g`, refused when a link or folder is in its place, and removed by `uninstall`.
+  (`tests/test_install_rules.py`) is written when missing, mode 644, from the packaged default as
+  read once, compared with the wheel's RECORD hash (the fake tool environment lists it) and parsed
+  under the recorder's checks; an unedited earlier default (each fixture) is replaced and the
+  message asks for a recorder restart; an edited file, valid or not, is kept with one notice line;
+  a default changed after the check, one that does not parse or is weak, or one RECORD does not
+  list stops the install before anything is written; a link or folder in its place is refused
+  before any repair; `uninstall` removes the file with the folder.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
@@ -287,9 +332,11 @@ lines for them (R0 and normalisation: V5).
   own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
   Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
-  file itself has not been seen). The `rules` line warns on a missing rules file, fails on a link,
-  an invalid file or a recorder that rejected the file (the default is in force), asks for a
-  restart after a fix, and never fails because the recorder is down.
+  file itself has not been seen). The `rules` line warns on a missing rules file and on an
+  unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
+  link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
+  rejected the file (the default is in force), asks for a restart after a fix, and never fails
+  because the recorder is down. An edited file that started from an older default is ok.
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
   its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
   20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by

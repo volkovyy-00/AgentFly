@@ -310,14 +310,44 @@ reaches subagents and parents, D21) and counts before the check on the same
 command.
 
 **Which file is in force.** The recorder reads `/Library/Application Support/AgentFly/rules.toml`
-(root-owned, written by `init -g` only when missing, removed by `uninstall`) once, at
-start. Without it (a developer `serve`) it runs the default file inside the package.
-A file that cannot be used (a syntax error, an unknown field, an entry for R0) is not
-loaded: the default runs, and `/health` (`rules_problem`), `GET /api/rules` and
-`agentfly doctor` say so. `agentfly rules check [FILE]` prints every problem of a
-file, each naming its rule, and exits 1 if there is one; `agentfly rules test [FILE]`
-runs every inline test (the rule that wins must be the rule the test belongs to).
-With no FILE both read the file the recorder would load.
+once, at start. `init -g` writes it when it is missing, replaces it when it is byte for byte a
+default the package once carried (nobody edited it; the package keeps the hash of every default
+it has shipped, D28; a recorder restart applies the new one), keeps an edited file with a one-line
+notice, and `uninstall` removes it. What `init -g` writes is the packaged default as read once,
+compared with the hash in the wheel's `RECORD` and parsed under the checks below. Without the file
+(a developer `serve`) the recorder runs the default file inside the package.
+
+The recorder believes the file only if it is a plain file, not a link, owned by root, that group
+and others cannot write (D3): the agent's user can write none of these. A file that cannot be
+used is not loaded: the default runs, and `/health` (`rules_problem`), `GET /api/rules`,
+`agentfly doctor`, `agentfly start` and `agentfly status` say why. That covers a file that is not
+trusted, a syntax error, an unknown field, an entry for R0, an R1 below the minimum, and more
+matching work than the limit.
+
+**The least R1 may say (D27).** R0 is in code; R1 is in the file, so the program holds R1's
+minimum too, and a file whose R1 is missing or weaker is refused like an entry for R0. R1 must be
+an `after_then` rule with severity `block`. Its `after` fires on `read` and on `shell`, with a
+name list that marks at least every file *name* the "R1: secret, then network" bullets below count
+as secret, and exceptions no wider than theirs: only names ending in a plain `.example`,
+`.sample`, `.template` or `.pub`, never a folder. Its `then` is exactly `event = ["shell"]` with
+`command_class = "outbound"`, and nothing else. Judged on those names, not on how a list is
+spelled (`.env*` in place of `.env` and `.env.*` is fine), against the program's own minimum and
+not against `default.toml`, so a wider later default never refuses an older file. Widening the
+lists and rewording the message are allowed. A local exception (a company host) waits for the
+reviewed change path (V7).
+
+**What a file may cost.** Every path pattern of every clause is tried on every word of a shell
+command, inside the hook client's 0.5 s wait, so a file may ask for at most 200 units of matching
+work in all: a clause with path patterns 2, a pattern without `/` 1, a pattern with `/` 4 plus 12
+for each `**` (an unanchored pattern has one more), R1's `after` twice because it runs twice;
+command and host lists cost nothing. The packaged default uses 31. At the limit a 300-word
+command takes about 0.1 s through the whole hook on a Mac.
+
+`agentfly rules check [FILE]` prints every problem of a file, each naming its rule, and exits 1 if
+there is one; `agentfly rules test [FILE]` runs every inline test (the rule that wins must be the
+rule the test belongs to) and exits 1 if there is none to run. With no FILE both read the file the
+recorder would load, and read it the way the recorder does, owner and mode included; a FILE is a
+draft and only needs to be well formed, unless it is the active file itself.
 
 ### R0: protect AgentFly itself (in code only)
 

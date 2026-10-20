@@ -346,13 +346,55 @@ def test_a_bad_file_is_refused_with_a_message_naming_the_problem(
     assert needle.casefold() in message.casefold(), message
 
 
-@pytest.mark.parametrize("pattern", ["*", "**", "**/*", "/**", "*/*", "**/**"])
-def test_a_path_pattern_that_matches_everything_is_refused(pattern: str) -> None:
-    text = doc(
+def path_rule_file(pattern: str) -> str:
+    return doc(
         MATCH.replace('command = "cmds"', 'path = "names"').replace('["shell"]', '["read"]'),
-        lists=f'[lists]\nnames = ["{pattern}"]\n',
+        lists=f"[lists]\nnames = {json.dumps([pattern])}\n",
     )
-    assert "every" in errors_of(text).casefold()
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "*",
+        "**",
+        "**/*",
+        "/**",
+        "*/*",
+        "**/**",
+        "?*",
+        "[!x]*",  # any name that does not start with x
+        "*[a-z]*",  # any name with a lower-case letter
+        "[a-z]",
+        "[!x]",
+        "*[!.]*",
+        "**/[!x]*",
+        "[]]*",  # a class that holds `]`
+        "[!]x]*",
+        "*[a-z]*[0-9]*",
+    ],
+)
+def test_a_path_pattern_that_matches_everything_is_refused(pattern: str) -> None:
+    assert "every" in errors_of(path_rule_file(pattern)).casefold()
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "id_rsa*",
+        "*.p[e]m",  # a class beside characters a name must contain
+        "[.]env",
+        "*.[ch]",
+        "[]]x",
+        "[",  # never closed: a plain character
+        "*[",
+        "???",  # no `*` and no class: names of three characters, nothing wider
+        "~/[a-z]*",  # anchored at the home folder by its `~`
+        "cfg/[!x]*",
+    ],
+)
+def test_a_pattern_with_something_a_name_must_contain_is_accepted(pattern: str) -> None:
+    assert good(path_rule_file(pattern)).errors == ()
 
 
 def test_a_command_pattern_with_no_program_is_refused() -> None:

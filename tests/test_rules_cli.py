@@ -6,6 +6,7 @@ not exist, so "no FILE" means the packaged default unless a test writes that pat
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -259,6 +260,29 @@ def test_a_rule_without_a_test_is_a_warning_not_a_failure(
     code, out, _ = run(capsys, "check", str(rules_file(with_rule(bare))))
     assert code == 0
     assert "warn: rule no-push: no inline test" in out
+
+
+def without_tests(text: str) -> str:
+    """The text with every [[rule.test]] table taken out (they are indented, unlike the rules)."""
+    return "".join(
+        line
+        for line in text.splitlines(keepends=True)
+        if not re.match(r"\s+(\[\[rule\.test\]\]|steps = |expect = )", line)
+    )
+
+
+def test_test_on_a_file_with_no_tests_fails_because_all_passed_would_be_true_of_nothing(
+    capsys: pytest.CaptureFixture[str], rules_file: Callable[..., Path]
+) -> None:
+    path = rules_file(without_tests(DEFAULT))
+    assert not rulefile.load_file(path).errors and not any(
+        spec.tests for spec in rulefile.load_file(path).rules
+    )
+    code, out, err = run(capsys, "test", str(path))
+    assert code == 1 and "no tests to run" in err and "tests passed" not in out
+    code, out, err = run(capsys, "check", str(path))
+    assert code == 0, "check only advises: the file is usable"
+    assert "warn: rule R1: no inline test" in out
 
 
 def test_a_missing_file_is_a_message_not_a_traceback(

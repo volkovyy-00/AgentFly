@@ -467,12 +467,44 @@ def _lists(raw: Any, problems: _Problems) -> dict[str, tuple[str, ...]]:
     return found
 
 
+def _wildcards_only(raw: str) -> bool:
+    """Is every character of this pattern a wildcard, so that it matches nearly every name?
+
+    Read the way `fnmatch` reads it: `*` and `?` match anything, `[...]` is one character out of
+    a set (`[!x]` is any but one), and a `[` that never closes is a plain character. Only a
+    pattern with a `*` or a `[...]` in it counts (`???` matches names of three characters, no
+    more); `/` only separates folders. `[!x]*` and `*[a-z]*` have nothing a name must contain.
+    """
+    wild: bool = False
+    i, n = 0, len(raw)
+    while i < n:
+        char = raw[i]
+        if char == "[":
+            end = i + 1
+            if end < n and raw[end] == "!":
+                end += 1
+            if end < n and raw[end] == "]":  # a first `]` is a member, not the end
+                end += 1
+            while end < n and raw[end] != "]":
+                end += 1
+            if end >= n:  # never closed: `[` is just a character
+                return False
+            wild, i = True, end + 1
+            continue
+        if char == "*":
+            wild = True
+        elif char not in "?/":
+            return False
+        i += 1
+    return wild
+
+
 def _path_pattern(where: str, raw: str, problems: _Problems) -> Pattern | None:
     if len(raw) > MAX_PATTERN_CHARS or "\x00" in raw:
         problems.add(where, f"pattern {raw[:40]!r} is too long or holds a NUL")
     elif raw.count("*") > MAX_STARS:
         problems.add(where, f"pattern {raw!r} has more than {MAX_STARS} wildcards")
-    elif "*" in raw and not raw.strip("*?/"):
+    elif _wildcards_only(raw):
         problems.add(where, f"pattern {raw!r} matches every path")
     else:
         return compile_pattern(raw)
