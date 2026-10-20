@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agentfly.recorder import rules as rules_module
+from agentfly.recorder.api import rules as rules_api
 from agentfly.recorder.api import sessions as sessions_api
 from agentfly.recorder.localstore import DB_NAME, local_store
 from agentfly.recorder.memory import memory_steps, parse_limit
@@ -145,11 +146,15 @@ def offline_guard_count() -> int:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {
+    answer: dict[str, Any] = {
         "ok": True,
         "offline_guard_count": offline_guard_count(),
         "last_hook_at": _last_hook_at,
     }
+    problem: str | None = rules_module.current().problem
+    if problem:  # only when the active rules file was rejected: `doctor` and `status` read it
+        answer["rules_problem"] = problem[:400]
+    return answer
 
 
 @app.get("/api/steps")
@@ -198,6 +203,7 @@ def mount_v2_redirects(application: FastAPI) -> None:
 
 
 sessions_api.add_routes(app)
+rules_api.add_routes(app)
 mount_ui(app, _UI_DIST)
 mount_v2_redirects(app)
 
