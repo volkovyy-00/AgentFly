@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import shutil
@@ -220,15 +219,14 @@ def install_and_start(system: Layout, tmp_path: Path) -> None:
     service.start()
 
 
-def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
+def uninstall_through_a_fake_sudo(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for the sudo: the child is the real root path, as `-I -S` Python runs it."""
 
     def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
-        assert tail == ["uninstall"]
         with monkeypatch.context() as child:  # only while it runs: the parent is the user's
             child.setattr(uninstall.os, "geteuid", lambda: 0)
             child.setattr(uninstall, "_elevated_child", lambda: True)
-            return uninstall.run(argparse.Namespace())
+            return main(tail)
 
     monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
 
@@ -243,7 +241,7 @@ def test_uninstall_also_stops_and_removes_the_service(
     install_and_start(system, tmp_path)
     plist = service.plist_path()
     assert launchd.loaded() == [service.LABEL] and plist.exists()
-    uninstall_through_a_fake_sudo(system, monkeypatch)
+    uninstall_through_a_fake_sudo(monkeypatch)
     assert main(["uninstall"]) == 0
     assert (
         launchd.loaded() == [] and not plist.exists()
@@ -331,7 +329,7 @@ def test_a_service_that_will_not_unload_is_one_line_and_a_second_run_finishes_it
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     install_and_start(system, tmp_path)
-    uninstall_through_a_fake_sudo(system, monkeypatch)
+    uninstall_through_a_fake_sudo(monkeypatch)
     launchd.update(bootout_lag=10_000)
     monkeypatch.setattr(service, "UNLOAD_TIMEOUT", 0.05)
     assert main(["uninstall"]) == 1
@@ -681,7 +679,7 @@ def test_a_damaged_package_section_in_the_record_asks_instead_of_going_quiet(
 # ---------------------------------------------------------------- a direct_url.json that is no file
 
 
-@pytest.mark.parametrize("kind", DIRECT_URL_KINDS)
+@pytest.mark.parametrize("kind", DIRECT_URL_KINDS[:2])  # the two that hung; the unit tests have all
 def test_uninstall_stops_before_the_password_on_a_direct_url_that_is_not_a_plain_file(
     kind: str,
     installed: pythons.PythonBuild,

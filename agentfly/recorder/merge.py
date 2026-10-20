@@ -175,13 +175,12 @@ class StepMerger:
     def _pair(self, chat: str, event: str, path: str) -> Joined | None:
         """The waiting preToolUse an id-less beforeReadFile / afterFileEdit belongs to."""
         entries: deque[_Waiting] | None = self._waiting.get(chat)
-        if not entries or event not in {"beforeReadFile", "afterFileEdit"}:
+        if not entries or event not in _AWAITS.values():
             return None
         read: bool = event == "beforeReadFile"  # the oldest unpaired Read, else the latest Write
         for entry in entries if read else reversed(entries):
-            if entry.kind == ("read" if read else "write") and entry.path == path:
-                if event not in entry.step.events:
-                    return entry.step  # `join` takes it out of the wait once the event is folded in
+            if _AWAITS[entry.kind] == event and entry.path == path:
+                return entry.step  # `join` takes it out of the wait once the event is folded in
         return None
 
 

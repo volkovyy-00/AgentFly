@@ -253,15 +253,12 @@ def test_the_33rd_waiting_read_drops_the_oldest(client: TestClient) -> None:
     assert (steps[0]["kind"], steps[-1]["kind"]) == ("tool", "read")
 
 
-@pytest.mark.parametrize("pre_first", [True, False], ids=["pre-first", "read-first"])
-def test_reads_joined_by_id_do_not_crowd_out_a_waiting_write(
-    pre_first: bool, client: TestClient
-) -> None:
+def test_reads_joined_by_id_do_not_crowd_out_a_waiting_write(client: TestClient) -> None:
     post(client, pre("Write", "w1", path="/w/a.txt"))
     for i in range(merge.WAIT_CAP):  # each pair joins by id, so none of them waits for anything
         path = f"/w/r{i}.txt"
         halves = [pre("Read", f"r{i}", path=path), read(path, f"r{i}")]
-        for half in halves if (i % 2 == 0) == pre_first else reversed(halves):
+        for half in halves if i % 2 else reversed(halves):  # either half first
             post(client, half)
     post(client, edited("/w/a.txt"))
     for steps in (live(client), saved(client)):

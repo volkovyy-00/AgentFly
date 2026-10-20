@@ -269,6 +269,7 @@ def status_of(layout: Layout, build: PythonBuild, source: Path | None = None) ->
 
 
 DIRECT_URL_KINDS = ("a FIFO", "a link to a FIFO", "a link to a file")
+HANG_AFTER_S = 5.0
 
 
 def plant_direct_url(
@@ -298,8 +299,8 @@ def plant_direct_url(
     return target, fifo
 
 
-def call_unless_it_hangs(call: Callable[[], Any], fifo: Path | None, seconds: float = 5.0) -> Any:
-    """Run `call` in a daemon thread; fail the test if it has not returned after `seconds`.
+def call_unless_it_hangs(call: Callable[[], Any], fifo: Path | None) -> Any:
+    """Run `call` in a daemon thread; fail the test if it has not returned after `HANG_AFTER_S`.
 
     A reader stuck on `fifo` is let go by opening the write end without blocking (no reader
     means ENXIO, which is fine: nothing is stuck). What `call` returns or raises comes back.
@@ -314,12 +315,12 @@ def call_unless_it_hangs(call: Callable[[], Any], fifo: Path | None, seconds: fl
 
     thread = threading.Thread(target=work, daemon=True)
     thread.start()
-    thread.join(seconds)
+    thread.join(HANG_AFTER_S)
     if thread.is_alive():
         if fifo is not None:
             with contextlib.suppress(OSError):
                 os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
-        pytest.fail(f"hung for {seconds} s on {fifo}")
+        pytest.fail(f"hung for {HANG_AFTER_S} s on {fifo}")
     ok, value = outcome[0]
     if not ok:
         raise value

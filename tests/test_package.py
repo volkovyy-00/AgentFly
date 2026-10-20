@@ -70,7 +70,7 @@ def run_uv(args: list[str], env: dict[str, str]) -> None:
     if result.returncode != 0:
         if any(hint in result.stderr for hint in _OFFLINE_HINTS):
             reason = f"uv could not reach the network: {result.stderr.strip()[-300:]}"
-            if os.environ.get("CI"):  # a runner that lost PyPI must not pass by skipping everything
+            if os.environ.get("CI"):
                 pytest.fail(reason)
             pytest.skip(reason)
         pytest.fail(f"uv {' '.join(args)} failed:\n{result.stderr}")
@@ -84,34 +84,33 @@ def fake_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str) -> Non
     monkeypatch.setattr(sys.modules[__name__], "UV", str(script))
 
 
-def test_a_network_error_skips_the_package_tests_off_ci(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("CI", raising=False)
-    fake_uv(tmp_path, monkeypatch, "error sending request for url (https://pypi.org/simple/)")
-    with pytest.raises(pytest.skip.Exception, match="could not reach the network"):
-        run_uv(["build"], {})
+NETWORK_ERROR = "error sending request for url (https://pypi.org/simple/)"
 
 
-def test_a_network_error_fails_the_package_tests_on_ci(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("CI", "true")
-    fake_uv(tmp_path, monkeypatch, "error sending request for url (https://pypi.org/simple/)")
-    with pytest.raises(pytest.fail.Exception, match="could not reach the network"):
-        run_uv(["build"], {})
-
-
-@pytest.mark.parametrize("ci", [None, "true"], ids=["off-ci", "on-ci"])
-def test_any_other_uv_failure_fails_with_or_without_ci(
-    ci: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("ci", "stderr", "outcome", "shown"),
+    [
+        (None, NETWORK_ERROR, pytest.skip.Exception, "could not reach the network"),
+        ("true", NETWORK_ERROR, pytest.fail.Exception, "could not reach the network"),
+        (None, "error: build backend failed", pytest.fail.Exception, "build backend failed"),
+        ("true", "error: build backend failed", pytest.fail.Exception, "build backend failed"),
+    ],
+    ids=["offline", "offline-on-ci", "other-failure", "other-failure-on-ci"],
+)
+def test_a_uv_failure_skips_only_offline_and_off_ci(
+    ci: str | None,
+    stderr: str,
+    outcome: type[BaseException],
+    shown: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if ci is None:
         monkeypatch.delenv("CI", raising=False)
     else:
         monkeypatch.setenv("CI", ci)
-    fake_uv(tmp_path, monkeypatch, "error: build backend failed")
-    with pytest.raises(pytest.fail.Exception, match="build backend failed"):
+    fake_uv(tmp_path, monkeypatch, stderr)
+    with pytest.raises(outcome, match=shown):
         run_uv(["build"], {})
 
 

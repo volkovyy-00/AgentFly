@@ -73,6 +73,15 @@ def _count(counts: dict[str, int], step: Step, sign: int = 1) -> None:
         counts[step["verdict"]] += sign
 
 
+def _swap(steps: deque[Step], new: Step) -> bool:
+    """Put `new` where the step with its order is (the latest such one); False if none is."""
+    for index in range(len(steps) - 1, -1, -1):
+        if steps[index]["order"] == new["order"]:
+            steps[index] = new
+            return True
+    return False
+
+
 def _empty_view() -> dict[str, Any]:
     return {"hidden": _empty_counts(), "flagged": [], "marked_order": None}
 
@@ -106,17 +115,10 @@ class _Session:
         apart, but a busy chat can still push the first half out.
         """
         order: int = new["order"]
-        retained: bool = False
-        listed: bool = False
-        for steps in (self.steps, self.evicted_flagged):
-            for index in range(len(steps) - 1, -1, -1):
-                if steps[index]["order"] == order:
-                    steps[index] = new
-                    retained = retained or steps is self.steps
-                    listed = listed or steps is self.evicted_flagged
-                    break
+        retained: bool = _swap(self.steps, new)
+        listed: bool = _swap(self.evicted_flagged, new)
         evicted: bool = not retained and bool(self.steps) and order < self.steps[0]["order"]
-        if not retained and not evicted:
+        if not (retained or evicted):
             return False
         if evicted and not listed and new["verdict"] in _ALARMS:
             kept: list[Step] = sorted([*self.evicted_flagged, new], key=lambda s: s["order"])

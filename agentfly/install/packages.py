@@ -43,6 +43,7 @@ from agentfly.install import InstallError
 from agentfly.install.pythons import file_sha256
 
 WHEEL_HINT = "uv build && uv tool install dist/*.whl"
+SHOWN_PATHS = 3  # changed files a same-version question names; the rest are counted
 # Files the tools that build environments leave in `site-packages` without listing them in a
 # RECORD. Root runs `-S`, so it never reads a `.pth`; the owner's user may.
 UNLISTED_OK: frozenset[str] = frozenset(
@@ -76,14 +77,14 @@ def lead(items: list[str]) -> str:
     return f"{items[0]} (and {len(items) - 1} more)" if len(items) > 1 else items[0]
 
 
-def _first(paths: list[str], count: int = 3) -> str:
-    """The first `count` paths as the owner reads them, and how many more there are.
+def _first(paths: list[str]) -> str:
+    """The first `SHOWN_PATHS` paths as the owner reads them, and how many more there are.
 
     A path comes from a RECORD the agent's user can write and is printed to the owner's terminal,
     so one with a control character is shown as its `repr`.
     """
-    shown = ", ".join(p if p.isprintable() else repr(p) for p in paths[:count])
-    return f"{shown} and {len(paths) - count} more" if len(paths) > count else shown
+    shown = ", ".join(p if p.isprintable() else repr(p) for p in paths[:SHOWN_PATHS])
+    return f"{shown} and {len(paths) - SHOWN_PATHS} more" if len(paths) > SHOWN_PATHS else shown
 
 
 # ---------------------------------------------------------------- the environment

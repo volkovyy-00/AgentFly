@@ -564,8 +564,7 @@ class LocalStore:
 
         The marking step is None for a chat that was never marked, whose marking step aged out,
         that an older recorder saved (those steps have no flag), or that is marked through a link
-        (a subagent, a parent, the 30-minute workspace fallback): the step that marked it belongs
-        to another chat, so none of this chat's steps carries the flag.
+        (subagent, parent, workspace fallback): the step that marked it is in another chat.
         """
 
         def work(conn: sqlite3.Connection) -> tuple[list[dict[str, Any]], bool, int | None] | None:
