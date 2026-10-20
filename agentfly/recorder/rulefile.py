@@ -13,6 +13,7 @@ failure becomes a message. The program supplies the engine-only command classes 
 
 from __future__ import annotations
 
+import dataclasses
 import errno
 import fnmatch
 import hashlib
@@ -22,7 +23,9 @@ import re
 import stat
 import string
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -149,22 +152,64 @@ def _run_hit(block: Sequence[str], segments: Sequence[str], at: int) -> bool:
     return True
 
 
+def _priced_run(block: Sequence[str], segments: Sequence[str], at: int) -> tuple[bool, int, int]:
+    """`_run_hit` on the floating path: whether the block fits at `at`, what the compares made
+    cost (§4.2: `compare_cost`, a bare `*` 1) and how many of them were a bare `*`."""
+    steps: int = 0
+    stars: int = 0
+    for offset, part in enumerate(block):
+        if part == "*":
+            stars += 1
+            continue
+        segment: str = segments[at + offset]
+        steps += 1 + len(segment) * len(part) // DIV  # compare_cost, inline: this is the hot loop
+        if not fnmatch.fnmatchcase(segment, part):
+            return False, steps + stars, stars
+    return True, steps + stars, stars
+
+
 def _place_middle(
     middle: Sequence[Sequence[str]], segments: Sequence[str], start: int, end: int
 ) -> bool:
     """Find each middle block, left to right, at the earliest place from `start` to `end` that
     follows the one before. Between `**` a block has a fixed length, so the earliest place is
     always the safe one. This is the only walk through the path: every start position tried is a
-    step, and a pattern with no middle block never gets here."""
+    step, charged with the compares it made once the block's walk is done, and a pattern with no
+    middle block never gets here."""
     at: int = start
     for block in middle:
         last: int = end - len(block)  # the last place the block can start
-        while at <= last and not _run_hit(block, segments, at):
+        starts: int = 0
+        steps: int = 0
+        stars: int = 0
+        while at <= last:
+            starts += 1
+            hit, cost, star = _priced_run(block, segments, at)
+            steps += 1 + cost
+            stars += star
+            if hit:
+                break
             at += 1
+        _tally(starts, stars)
+        _charge(steps)
         if at > last:
             return False
         at += len(block)
     return True
+
+
+def _float_glob(shape: _Blocks, segments: Sequence[str], tail_at: int) -> bool:
+    """`_glob` for a pattern with a middle block: the same checks in the same order, priced.
+
+    The head and the tail are charged together before any walk, so once the meter is spent a
+    floating test raises before it walks, even when both are empty."""
+    hit, steps, stars = _priced_run(shape.head, segments, 0)
+    if hit:
+        tail_hit, tail_steps, tail_stars = _priced_run(shape.tail, segments, tail_at)
+        hit, steps, stars = tail_hit, steps + tail_steps, stars + tail_stars
+    _tally(0, stars)
+    _charge(steps)
+    return hit and _place_middle(shape.middle, segments, len(shape.head), tail_at)
 
 
 def _glob(pattern: Sequence[str], segments: Sequence[str], blocks: _Blocks | None = None) -> bool:
@@ -174,22 +219,20 @@ def _glob(pattern: Sequence[str], segments: Sequence[str], blocks: _Blocks | Non
     in a pinned order: the head at the start of the path, the tail at its end, then the middle
     blocks. A path whose end does not fit is refused after a few compares, and a pattern with no
     middle block (a head, a tail, or both) compares each part at most once, whatever the depth of
-    the path. Every part but `**` takes exactly one segment, so a path that is too short (or, with
-    no `**`, not exactly as long) is refused before any part is tried.
+    the path, and is never charged. Every part but `**` takes exactly one segment, so a path that
+    is too short (or, with no `**`, not exactly as long) is refused before any part is tried.
 
-    `blocks` is the split of `pattern`; `Pattern` passes the one it made once, and then `pattern`
-    is not read.
+    When `blocks` is given, `pattern` is not read: `Pattern` passes the blocks it made once (for
+    an unanchored pattern, those of its parts with the implicit `**` in front).
     """
     shape: _Blocks = blocks if blocks is not None else _split(pattern)
     total: int = len(segments)
     if total < shape.fixed or (not shape.star and total != shape.fixed):
         return False
-    if not _run_hit(shape.head, segments, 0):
-        return False
     tail_at: int = total - len(shape.tail)
-    if not _run_hit(shape.tail, segments, tail_at):
-        return False
-    return _place_middle(shape.middle, segments, len(shape.head), tail_at)
+    if shape.middle:  # floating: the only shape that walks, and the only one the meter sees
+        return _float_glob(shape, segments, tail_at)
+    return _run_hit(shape.head, segments, 0) and _run_hit(shape.tail, segments, tail_at)
 
 
 def _resolved(path: str, home: str) -> str:
@@ -281,7 +324,9 @@ class Pattern:
     _blocks: _Blocks | None = None
 
     def blocks(self) -> _Blocks:
-        return self._blocks or _split(_effective(self.anchor, self.parts))
+        if self._blocks is not None:
+            return self._blocks
+        return _split(_effective(self.anchor, self.parts))
 
     def matches(self, path: str, name: str | None = None, home: str | None = None) -> bool:
         """`name` is the path's folded file name when the caller has it already (one per path),
@@ -326,6 +371,92 @@ def compile_pattern(raw: str) -> Pattern:
     if text.endswith("/") and parts[-1:] != ["**"]:  # `~/.ssh/` is the folder and all in it
         parts.append("**")
     return Pattern(text, False, anchor, tuple(parts), _split(_effective(anchor, tuple(parts))))
+
+
+# ---------------------------------------------------------------- meter
+
+# What floating patterns may cost in one hook (spec §4.2). Every other pattern compares each part at
+# most once per word, which `MAX_WORK` bounds; a floating one walks the path, so its tests are
+# priced in steps and charged to the hook's meter. One `fnmatch` compare of a segment of n
+# characters with a part of m costs `1 + n * m // DIV` (n * m = 2,048 measured at most 4.1 us,
+# priced 9); a bare `*` and a start tried for a middle block cost 1. FLOAT_STEPS is priced so that a
+# whole budget of the slowest kind of step takes at most 20 ms on the author's Mac. Measured on 300
+# words 60 folders deep, best of three: short compares walking every folder (`d*/d*/d*/z0/**`) are
+# the slowest, about 0.44 us a step, and a whole budget of them took 19.7 ms; a long compare (255
+# characters against `*a*b*c`) costs about a third of its price, so DIV stays.
+DIV: int = 256
+FLOAT_STEPS: int = 45_000
+
+
+class WorkLimit(Exception):
+    """This hook's floating patterns have used up their steps; the rule being run is unfinished."""
+
+
+@dataclass
+class Meter:
+    """One hook's budget of floating steps, and the rules it left unfinished (in order, once)."""
+
+    left: int
+    unfinished: list[str] = dataclasses.field(default_factory=list)
+
+    def note(self, rule_id: str) -> None:
+        if rule_id not in self.unfinished:
+            self.unfinished.append(rule_id)
+
+
+# This hook's meter, or None: then nothing is charged (pure tests, `rules test`, `doctor`, D27).
+_METER: ContextVar[Meter | None] = ContextVar("agentfly_rules_meter", default=None)
+
+
+@contextmanager
+def metered(meter: Meter) -> Iterator[Meter]:
+    """Run the block with `meter` as the hook's meter; the one before is back afterwards."""
+    token = _METER.set(meter)
+    try:
+        yield meter
+    finally:
+        _METER.reset(token)
+
+
+def current_meter() -> Meter | None:
+    return _METER.get()
+
+
+def compare_cost(n: int, m: int) -> int:
+    """The steps one `fnmatch` compare costs: a segment of `n` characters, a part of `m`."""
+    return 1 + n * m // DIV
+
+
+def _charge(steps: int) -> None:
+    """Every charge of a floating test comes here (a test replaces it to lift the bound). A charge
+    that leaves the meter below 0 raises, so once it is spent every later charge raises too."""
+    meter: Meter | None = _METER.get()
+    if meter is None:
+        return
+    meter.left -= steps
+    if meter.left < 0:
+        raise WorkLimit
+
+
+def _tally(starts: int, stars: int) -> None:
+    """A seam for tests, called with each charge: the middle-block starts tried and the bare `*`
+    compares made since the last one (a test counts the `fnmatch` compares by wrapping
+    `fnmatch.fnmatchcase`). Does nothing."""
+
+
+@lru_cache(maxsize=64)
+def distinct_candidates(parsed: Parsed) -> tuple[str, ...]:
+    """Every word of a command and what follows its last `=` and `@` (`_candidates`), each once,
+    in first-seen order: a command that parses only partly repeats its words in the loose scan,
+    and every clause with path patterns reads this one tuple."""
+    return tuple(
+        dict.fromkeys(
+            candidate
+            for argv in parsed.all_commands()
+            for word in argv
+            for candidate in _candidates(word)
+        )
+    )
 
 
 # ---------------------------------------------------------------- clauses
@@ -375,12 +506,7 @@ class Clause:
 
     def _words_hit(self, parsed: Parsed) -> bool:
         home: str = os.path.expanduser("~")  # once for the clause, not for each pattern test
-        return any(
-            self._path_hit(candidate, home)
-            for argv in parsed.all_commands()
-            for word in argv
-            for candidate in _candidates(word)
-        )
+        return any(self._path_hit(candidate, home) for candidate in distinct_candidates(parsed))
 
     def _command_hit(self, parsed: Parsed) -> bool:
         """Some word is the program (by base name, so wrappers do not hide it) and the later

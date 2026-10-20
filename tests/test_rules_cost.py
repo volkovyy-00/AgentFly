@@ -241,7 +241,12 @@ def test_a_refused_active_file_runs_the_default_and_says_why(active_rules: Path)
 
 
 def test_a_word_is_worked_out_once_however_many_clauses_look_at_it() -> None:
-    for memo in (rulefile._candidates, rulefile._folded_name, rulefile._folded_segments):
+    for memo in (
+        rulefile._candidates,
+        rulefile._folded_name,
+        rulefile._folded_segments,
+        rulefile.distinct_candidates,
+    ):
         memo.cache_clear()
     clauses, words = 30, 40
     lists = list_line("l", "secret*.pem")
@@ -252,9 +257,9 @@ def test_a_word_is_worked_out_once_however_many_clauses_look_at_it() -> None:
     action = {"hook_event_name": "beforeShellExecution", "command": line}
     session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
     rules_mod.decide(action, rules_mod.mark(action, session, ruleset), ruleset)
-    candidates = rulefile._candidates.cache_info()
-    assert candidates.misses == words + 1  # `cat`, and each path once
-    assert candidates.hits >= (clauses - 1) * (words + 1)
+    # Every clause reads the command's distinct candidates, worked out once for the command.
+    assert rulefile._candidates.cache_info().misses == words + 1  # `cat`, and each path once
+    assert rulefile.distinct_candidates.cache_info().hits >= clauses - 1
     assert rulefile._folded_name.cache_info().misses == words + 1
 
 
