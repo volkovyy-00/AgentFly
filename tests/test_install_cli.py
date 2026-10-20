@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO
 
 import pytest
@@ -217,9 +221,14 @@ def install_and_start(system: Layout, tmp_path: Path) -> None:
 
 
 def uninstall_through_a_fake_sudo(system: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the sudo: the child is the real root path, as `-I -S` Python runs it."""
+
     def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
-        installer.uninstall(system)
-        return 0
+        assert tail == ["uninstall"]
+        with monkeypatch.context() as child:  # only while it runs: the parent is the user's
+            child.setattr(uninstall.os, "geteuid", lambda: 0)
+            child.setattr(uninstall, "_elevated_child", lambda: True)
+            return uninstall.run(argparse.Namespace())
 
     monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
 
@@ -240,6 +249,7 @@ def test_uninstall_also_stops_and_removes_the_service(
         launchd.loaded() == [] and not plist.exists()
     )  # `launchctl list | grep agentfly` is empty
     out = capsys.readouterr().out
+    assert out.count(uninstall.RESTART_HINT) == 1  # the child leaves it to the user's process
     assert "unloaded" in out and out.rstrip().endswith(uninstall.RESTART_HINT)
 
 
@@ -689,3 +699,50 @@ def test_uninstall_stops_before_the_password_on_a_direct_url_that_is_not_a_plain
     err = capsys.readouterr().err
     assert str(target) in err and "No password was asked for" in err
     assert sudo.calls == []  # nothing was asked, nothing removed
+
+
+# ---------------------------------------------------------------- uninstall as root: sudo or hand
+
+
+def test_a_hand_typed_sudo_uninstall_leaves_the_service_running_and_says_so(
+    system: Layout,
+    tmp_path: Path,
+    launchd: Launchd,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_and_start(system, tmp_path)
+    user = os.geteuid
+    monkeypatch.setattr(uninstall.os, "geteuid", lambda: 0)  # `sudo agentfly uninstall`: site is on
+    assert main(["uninstall"]) == 0
+    out = capsys.readouterr().out
+    assert launchd.loaded() == [service.LABEL] and service.plist_path().exists()  # still running
+    assert not system.system_root.exists()  # the system part is done
+    assert out.count(uninstall.RESTART_HINT) == 1
+    assert "service was not touched" in out and "without sudo" in out
+    assert "`agentfly uninstall`" in out
+    monkeypatch.setattr(uninstall.os, "geteuid", user)  # now as the user, as the message says
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["uninstall"]) == 0
+    assert launchd.loaded() == [] and not service.plist_path().exists()
+
+
+def test_the_root_child_is_told_from_a_hand_typed_sudo_by_how_python_started() -> None:
+    assert uninstall._elevated_child() is False  # the test run has site on and no -I
+    assert uninstall._elevated_child(SimpleNamespace(isolated=1, no_site=1)) is True
+    for one in (SimpleNamespace(isolated=1, no_site=0), SimpleNamespace(isolated=0, no_site=1)):
+        assert uninstall._elevated_child(one) is False
+
+
+def test_the_flags_sudo_starts_python_with_are_the_ones_the_child_looks_for() -> None:
+    command = elevate.sudo_command(["uninstall"], site=Path("/site"), python=Path(sys.executable))
+    flags = command[2 : command.index("-c")]  # what follows the interpreter: -I -S -B -X ...
+    probe = "import sys; print(int(bool(sys.flags.isolated and sys.flags.no_site)))"
+
+    def started(*args: str) -> str:
+        run = subprocess.run(
+            [sys.executable, *args, "-c", probe], capture_output=True, text=True, check=False
+        )
+        return run.stdout.strip()
+
+    assert (started(*flags), started()) == ("1", "0")
