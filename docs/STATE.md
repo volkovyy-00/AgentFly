@@ -13,7 +13,7 @@ Pending decisions: D16
 - D26 B is now in force (CI green on main 4×): V5b is the first batch. The lead builds `merge/<batch>` from main with the card merge only; the owner pushes it and opens one PR; green → lead `git merge --ff-only merge/<batch>` on main, handoff commit, owner pushes main. Red → drop the branch, worker fixes.
 
 ## In flight
-- V5b · Claude Code worker · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b.md · docs/briefs/V5b.md
+- V5b-fix · Claude Code worker (fresh; V5b's session closed) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b-fix.md · docs/briefs/V5b-fix.md
 
 ## Machine state (verified 2026-10-20 13:40 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -27,7 +27,7 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Close the V5b worker session; after the V5b-fix brief passes pass 2, say go and start the fix worker by hand in `.claude/worktrees/ag-v5b-rules-file`.
+1. Close the V5b worker session, then start the V5b-fix worker by hand in `.claude/worktrees/ag-v5b-rules-file` (start line given 2026-10-20).
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-20: D27 (a rules file cannot drop or weaken R1) and D28 (`init -g` refreshes an unedited rules file) approved; V5b fixes go to a fresh worker; plan + subagent-driven-development for workers rejected.
@@ -51,7 +51,7 @@ Pending decisions: D16
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. V5b-fix brief: pass-2 reviewer running; then owner closes the V5b session, says go, starts the worker by hand in the V5b worktree.
+1. When V5b-fix reports: `head -n 6`; re-trial on main, 3× check, fresh reviewer; then build `merge/v5b`.
 2. After the fix: re-trial, 3× check, reviewer; SPEC §7/§8 edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
