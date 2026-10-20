@@ -1,5 +1,5 @@
 # Intent: V5b-fix2, second review round for V5b
-Ticket: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`) | Author: the owner | Date: 2026-10-20 | Status: approved (2026-10-20); revised and re-approved 2026-10-20 (criterion 3, triggers)
+Ticket: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`) | Author: the owner | Date: 2026-10-20 | Status: approved (2026-10-20); revised and re-approved 2026-10-20 (criterion 3, triggers); revised 2026-10-20 to the owner's changes in the brief at main 67efc8d (meter, triggers, warn, D27), awaiting the lead's check
 
 ## Problem
 See V5b-fix2 Summary. A rules file `rules check` accepts can still slow a hook past the client's
@@ -7,8 +7,9 @@ See V5b-fix2 Summary. A rules file `rules check` accepts can still slow a hook p
 word makes the recorder answer with an error.
 
 ## Proposed outcome
-Hook cost is bounded for every accepted file by construction; R1's minimum is proven from the
-patterns, not samples; long words are handled; `init -g` never calls an untrusted file intact.
+Hook cost is bounded for every accepted file: by construction for every pattern that does not
+float, and by a per-hook meter for those that do; R1's minimum is judged by pattern structure, not
+samples; long words are handled; `init -g` never calls an untrusted file intact.
 
 ## Success criteria
 See V5b-fix2 Acceptance criteria. Added by the interview:
@@ -17,18 +18,15 @@ See V5b-fix2 Acceptance criteria. Added by the interview:
    (including `~/`, `/`, `..`, `//`, case).
 2. A test that counts real matching steps fails when the counter is removed; its shape is one the
    faster matcher cannot flatten.
-3. A file at `MAX_WORK` with no floating folder pattern (folder names between two `**`) and no
-   command list whose entries share a program and first word never reaches the meter's budget on a
-   command where every name-and-pattern test has length product n×m < 256 and each simple command
-   names at most one listed program, at any depth, also one that parses only partly: counted steps
-   are at most `MAX_WORK` × candidates (the budget is derived from the command). Other files may
-   reach it on long, deep or many-command input; they fail closed and `rules check` warns. (Narrowed
-   2026-10-20: five floating patterns cost 239k steps at 20 deep; re-pricing would only move the
-   breaking depth.)
+3. Only floating patterns (folder names between two `**`; an unanchored pattern counts a leading
+   one) are metered. Any other pattern costs at most its static work per candidate, at any depth,
+   also on a command that parses only partly: counted tests are at most `MAX_WORK` × candidates and
+   no rule is left unfinished. A file with floating patterns may reach the meter's fixed budget on
+   long, deep input; it fails closed for block rules and `rules check` warns.
 4. Under the default rules, `bash -c` naming 300 paths 60 deep is answered in under 0.2 s
    (measured and reported; about 146 ms expected once long words are guarded).
-5. The exact R1 check agrees with brute-force enumeration on toy families and with today's sample
-   grid; its load-time cost is measured and reported (aim about 20 ms for the default).
+5. A brute-force test over a small alphabet finds no R1 the structural rule accepts that misses a
+   secret name; the old sample grid, kept in the tests, agrees on every accepted fixture.
 6. An edited, untrusted rules file keeps its bytes and mode after `init -g`, exit 0, one notice line.
 
 ## Affected users and systems
@@ -40,22 +38,20 @@ Branch `ag-v5b-rules-file` only, no push, no merge of main. D27/D28 text unchang
 SPEC §7/§8 are the lead's. `check(action, session)` keeps its shape. `MAX_WORK` and weights unchanged.
 
 ## Decisions
-- Cost: a matcher whose cost does not grow with folder depth unless a run of parts sits between two
-  `**` (an unanchored pattern counts the implicit leading one), plus a per-hook step counter as the
-  guarantee.
-- At the cap: R0 and R1 are never stopped by the counter; an unfinished `block` rule gives a deny
-  with the limit text (a real rule object, not R1's text); an unfinished `warn`/`highlight` is
-  skipped and logged. An unfinished `after` (trigger) of a block rule counts as fired; one of a
-  warn or highlight rule is skipped and logged. A trigger's loss lasts the chat, so a block
-  trigger fails closed, and a lost warn or highlight costs little. (Changed 2026-10-20 from "any
-  other rule counts as fired".) `block` rules, their triggers included, run before the rest;
-  `/health` gets a field only after a hit.
-- R1 folder patterns whose cost grows with depth are refused (anchor it or use a separate rule);
-  depth-free ones like `~/.aws/config` stay. The reason is cost.
-- R1 minimum: an exact check that R1's names minus its exceptions contain every SPEC §5 secret name,
-  with a work cap (over it R1 is refused as too complex to check: fail closed), class meaning taken
-  from `fnmatch`, one table for `spec_secret` and the families, case-folded characters only, and an
-  error that names the SPEC bullet missed.
+- Cost (owner 2026-10-20, brief at 67efc8d): a matcher whose cost does not grow with folder depth
+  unless the pattern floats, and a command-list index; a meter on floating patterns only, in one
+  pass (no severity passes), with one fixed budget priced from measured time.
+- At the limit: R0 and R1 are never metered and their answers stand. A `block` rule left unfinished
+  (its trigger or its check) denies this hook with the limit message (a real rule object, not R1's
+  text) and records no trigger; a `warn` rule left unfinished answers `ask` on a shell command with
+  the limit message; an unfinished highlight is skipped and logged. `/health` gets a field only
+  after a hit. (Supersedes "a block trigger counts as fired" and the two passes.)
+- `path_except` may not hold floating patterns, in any rule.
+- R1 minimum (D27 as changed 2026-10-20): structural, no automaton. For each SPEC §5 family, R1's
+  `after.path` holds one pattern `P` or `P*Q` (no `?`, `[`, second `*`), P a prefix of the family's
+  literal start and Q a suffix of its literal end (exact `.env`: |P|+|Q| ≤ 4). R1 may not hold
+  floating folder patterns (`.ssh/**`; `~/.ssh/**` loads). One table for `spec_secret` and the
+  families; the error names the SPEC bullet missed.
 - Long words: over 1,024 characters skip the disk check, `OSError`/`ValueError` are caught, and a
   string comparison replaces `relative_to`, in `clean._project_relative`,
   `store.relative_file_path` and `store.py`'s `.exists()`. `clean.py`'s baseline
@@ -71,17 +67,15 @@ See V5b-fix2 "Not included". Cost growing with the number of words (reported). `
 bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh: fix if cheap, else note.
 
 ## Risks
-- The time window is narrow: the budget (180k steps at 300 words) plus the cleaning baseline must
-  stay under 0.2 s at 60 deep. The design removes the charge overhead, hoists `expanduser` and trims
-  `clean.py` as planned steps, and stops to ask if the measured worst case stays over 0.2 s.
-- The new matcher could quietly change what matches. A bug in the exact check. Hostile `?`/`[…]`
-  patterns could make the exact check slow. The `bash -c` margin is about 54 ms.
+- The time window is narrow: unmetered tests at `MAX_WORK` (about 70 ms at 300 words), the
+  floating budget and the cleaning baseline must stay under 0.2 s at 60 deep. The design hoists
+  `expanduser` and trims `clean.py` as planned steps, and stops to ask if the measured worst case
+  stays over 0.2 s.
+- The new matcher could quietly change what matches. Command lists are not metered: a crafted
+  shared-first-word list on many simple commands stays slow (reported). The `bash -c` margin is
+  about 54 ms.
 
 ## Open questions
-- (you) The R1 narrowings: depth-growing folder patterns refused (Option C vs. names only) and
-  degenerate misses like `.env.`. Recommended C as built; in the report's "Needs owner" (300-char
-  pointer, detail under Details).
-- (spec, resolved in the design) The budgets (derived from the command; 180k pattern steps at 300
-  words), the exact check's work cap (calibrated so the worst file stops within 1 s, starting from 600k;
-  with a fast path for default spellings and a per-family, one-pattern-first search), the
-  `/health` field (`rules_limit`).
+- (spec, resolved in the design) The floating budget (`FLOAT_STEPS`, priced at 20 ms of the slowest
+  step, start value 40,000), the unfinished warn trigger (not recorded, as for block), the `/health`
+  field (`rules_limit`).
