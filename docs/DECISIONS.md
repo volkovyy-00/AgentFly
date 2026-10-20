@@ -37,6 +37,7 @@ hand; "approved" always means the owner's explicit yes):
 - D27 approved 2026-10-20 · A rules file cannot drop or weaken R1
 - D28 approved 2026-10-20 · `init -g` refreshes an unedited rules file
 - D29 approved 2026-10-20 · How long the recorder keeps a chat's session note
+- D30 approved 2026-10-20 · `agentfly uninstall` keeps a copy of an edited rules file
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -752,3 +753,11 @@ still open, every parent chat of a kept chat, and the Task links that tie them (
 only when a new chat starts") and D14 (`wipe` never clears marks) stand. A command to forget old
 marks is a later decision if kept chats pile up (2026-10-20: 95 chats, 48 marked, mostly rehearsals).
 Known gap: Neo4j has no retention, so a reopened chat's new steps can MERGE onto old Step nodes.
+
+## D30. `agentfly uninstall` keeps a copy of an edited rules file
+Status: **approved (2026-10-20), as written** · Cards: V5c · Tested by: V5c
+Uninstall deletes the system folder, and with it `rules.toml`. When that file is not an unedited
+shipped default (its hash is not in D28's set), uninstall first copies it into the same backups
+folder that keeps the `hooks.json` backups (outside the system folder), with a time-stamped name,
+and prints where it went. An unedited default is not copied. A failed copy stops the uninstall
+before anything is removed. Restoring the copy is by hand (V7 may add more).

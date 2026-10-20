@@ -27,10 +27,10 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Go for the V5b re-trial (main + efa9848, 3× check, fresh reviewers).
-2. Worker question: should `agentfly uninstall` keep a copy of an edited rules.toml (today deleted with the folder)? Lead: yes, folded into V5c (shares install/CLI), not a new card.
+none
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
+- Owner 2026-10-20: D30 (uninstall keeps a copy of an edited rules.toml; in V5c) approved; go for the V5b re-trial.
 - Owner 2026-10-20: D29 (keep a chat's session note 29 idle days; marked chats, their parents and links kept) approved.
 - Owner 2026-10-20: D27 (a rules file cannot drop or weaken R1) and D28 (`init -g` refreshes an unedited rules file) approved; V5b fixes go to a fresh worker; plan + subagent-driven-development for workers rejected.
 - Owner 2026-10-20: GitHub security settings on (above); `uv.lock` is in the dependency graph, question closed.
@@ -52,7 +52,7 @@ Pending decisions: D16
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. On the owner's go: remove trial-v5b, re-trial main + efa9848, 3× check (nothing else running), fresh reviewers (fix-round diff fe3386e..efa9848, split lenses).
+1. Running (owner go 2026-10-20): remove trial-v5b, re-trial main + efa9848, 3× check (nothing else running), fresh reviewers (fix-round diff fe3386e..efa9848, split lenses).
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. V5b leftovers go into V5c's brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
