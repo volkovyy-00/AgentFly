@@ -52,7 +52,7 @@ none
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. V5b-fix2: advisor review of plan 1f33d06 → owner accepted 5 changes + D27 change (brief updated 2026-10-20). Worker revises spec and plan, stops; lead re-checks. then re-trial, 3× check, fresh reviewers.
+1. V5b-fix2: revised plan fd1a734 checked by the lead (matches brief 67efc8d); worker builds on the owner's go. Risk: 0.2 s rests on Task 8's cleaner trim (stop, ask). then re-trial, 3× check, fresh reviewers.
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; drop `docs/superpowers/*V5b-fix2*` (owner 2026-10-20); build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. Leftovers → V5c brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
