@@ -17,7 +17,7 @@ You are a worker on card V5b-fix2 in /Users/volkovyy/Projects/AgentFly/.claude/w
 - Order: the cost bound and its tests first, then the long word, then D27, then install.
 - Cost: a bound that holds for every file `rules check` accepts, by construction rather than by fit. If it is a limit checked while the hook runs, reaching it never changes R0's or R1's answer; while a file `block` rule is left unfinished the answer is a deny whose message says the rules limit was reached (fail closed, as the offline guard does); it shows in `/health` and the recorder's log.
 - D27: refuse any R1 `after` that fails to mark a name SPEC §5 counts as secret, judged by pattern structure, not samples alone; `.env*` in place of `.env` and `.env.*` still loads.
-- Touches: `agentfly/recorder/` (rulefile, rules, names, store, clean, app), `agentfly/install/` (installer, checks), `agentfly/cli/` (init, rules_check, status), their tests, AGENTS.md "Testing", SPEC §5 if D27's wording changes.
+- Touches: `agentfly/recorder/` (rulefile, rules, names, store, clean, app), `agentfly/install/` (installer, checks), `agentfly/cli/` (init, rules_check, status), their tests, AGENTS.md "Testing", SPEC §5 if D27's wording changes; `docs/superpowers/` for this card's intent, spec and plan (`2026-10-20-V5b-fix2-*`, owner 2026-10-20). The spec and plan follow this brief; where they would differ, stop and ask. After the plan is committed, stop until the lead has checked it against this brief.
 - Not included: D30 (uninstall keeps an edited file; V5c); new `npm publish` spellings (V5c); `memory.py` `_ALARMS` and highlighted steps (page card); the folder above the rules file and ACLs; HOOKS.md and SPEC §7/§8 (lead).
 
 **Acceptance criteria**
