@@ -51,6 +51,10 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **macOS bash 3.2 does not fire an ERR trap for a failed subshell under `set -e`.** dispatch.sh left its worktree behind; use `cmd || undo` (2026-10-19).
 - **Check a scratch test reached the step it tests.** Two of the 2026-10-19 tooling tests stopped early (a `//` in `$TMPDIR`, a wrong slug) and looked like passes or fails of the code. Resolve paths with `pwd -P`; print each case's outcome.
 - **Hook output of 10,000 chars or more becomes a 2,000-char preview.** lead-context.sh builds the whole output and shortens its tail before that cap (2026-10-19).
+- **A fresh lead reviewer still finds what the worker's own gates miss.** F7 2026-10-20: after the worker's second opinion, audit and /code-review, the lead's cold reviewer showed `tests/test_ci_workflow.py` passed a multi-line `run: |` step where `bash -e` runs past a failed `&&` link. Keep the per-branch fresh review even when the report lists many reviews.
+- **Pushing main marks a draft PR "merged" when main gets its head commit.** PR #6 (2026-10-20) closed itself as merged on the owner's push of ae5dd0e. Close a CI-only draft PR before pushing main if it should read "closed".
+- **Do not time a trial while another full suite runs on the Mac.** 2026-10-20: the F7 trial's third run took 202 s (vs 129 s) while the reviewer ran the suite. Run reviewer suites after the timed trial, or ignore times from overlapping runs.
+- **`! VAR=1` alone sets nothing.** Each `!` command has its own shell; the owner writes `! AGENTFLY_ALLOW_PUSH=1 git push …` on one line (2026-10-20).
 
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).

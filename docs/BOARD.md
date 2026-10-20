@@ -106,6 +106,7 @@ V7 and V9 can run in parallel.
 - V6b ✅ 2026-10-19 · docs/reports/V6b.md · merged a9b753f · history stores the marked flag (chat) and marking step (step); a fallback chat that later marks itself names that step (SPEC §4) · body: git show e1d4aeb:docs/BOARD.md
 - V8b ✅ 2026-10-19 · docs/reports/V8b.md · merged 9b2e00e · steps carry rule_text and the deny's messages (memory only), /health last_hook_at, ?all=1 marked_order; 2 low test/doc leftovers → fix card; UI notes (ui/README, useTrail comment) → UI card · body: git show 441ddd4:docs/BOARD.md
 - V3c ✅ 2026-10-19 · docs/reports/V3c.md · merged 07a8d7f · package check before sudo (links, extra files, own RECORD), same-version rebuild and upgrade ask (owner 2026-10-19), root -I -S -B on bundled Python, R0 guards tool env and uv/pipx/brew, doctor package line; leftovers → fix card · body: git show 441ddd4:docs/BOARD.md
+- F7 ✅ 2026-10-20 · docs/reports/F7.md · merged ae5dd0e · pytest-xdist check 37–44% of serial; ci.yml (main pushes and PRs, macos-15, read-only, SHA-pinned) pinned by tests/test_ci_workflow.py; CI green on arm64 (PR #6); leftovers → fix card · body: git show ae5dd0e:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -180,11 +181,6 @@ V7 and V9 can run in parallel.
   - The web check and the stale-build check pass, and you say it is demo-ready.
 
 ---
-
-### F7 · Test speed and CI
-- **Owner:** worker-backend · dispatched 2026-10-19 (worktree ag-f7-test-speed, from 9dbe698; brief re-checked against e48d7ee, pass 2) · next, before V5b (owner 2026-10-19)
-- **Scope (owner 2026-10-19: pytest-xdist approved, CI yes; CI on main pushes and pull requests only, macOS only; a red main blocks merges):** `pytest-xdist` in dev deps and AGENTS.md "Approved dependencies"; `-n auto` in AGENTS.md's check command, not `addopts` (`tests/test_store.py` starts a child pytest); `test_package.py` on one worker; `free_port` collisions handled; `--strict-markers`; `.github/workflows/ci.yml` only (V4 owns `release.yml`), actions pinned by SHA, `permissions: contents: read`, Node 22; arm64-only failures fixed in F7.
-- **Done when:** full suite passes 3 runs in a row under xdist, at most half the serial wall time; CI green on the owner's draft pull request.
 
 ### F8 · Type checking: pyright
 - **Owner:** worker-backend · brief not written · after F7; alone, not alongside V5b (fixing type errors touches all of `agentfly/`)

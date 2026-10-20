@@ -16,7 +16,11 @@ Details: see "## YYYY-MM-DD HH:MM" below.
 Below line 6: one `## YYYY-MM-DD HH:MM` section per update, newest first, with the full
 evidence (pasted command output, paths). Spike reports (`docs/spikes/<id>.md`) use the same top block.
 
-Before you set `Status: done`, review your own branch: in Claude Code run `/code-review high` on the
-diff `main...HEAD`. Fix a finding only inside your card's Touches/May-touch list; list every other
-finding, and any you chose not to fix, under the newest `##` section with one line on why. A Cursor
-worker without `/code-review` says so in that section.
+Before you set `Status: done`, once the implementation is complete and the AGENTS.md check passes,
+close the card in this order in Claude Code, without waiting to be asked:
+1. Run `/final-verification` on the whole branch diff (`main...HEAD`, not only uncommitted changes).
+   Its simplify step changes only files your branch already changed. Commit the result.
+2. Then run `/code-review high` on the diff `main...HEAD`.
+Fix a finding only inside your card's Touches/May-touch list; list every other finding, and any you
+chose not to fix, under the newest `##` section with one line on why. Paste the final-verification
+verdict there too. A Cursor worker without these skills says so in that section.
