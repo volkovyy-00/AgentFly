@@ -299,7 +299,7 @@ strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
 | `path`, `path_except` | same | the name of a list of path patterns. A pattern without `/` matches the file *name* (`.env`, `*.pem`); with `/` the whole path (`**` crosses folders, `~/` is the home folder). In a shell command a path condition looks at every word, and at the text after the last `=` or `@` of a word |
 | `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order |
 | `command_class` | same, `event = ["shell"]` | a class built into the program: `outbound` (R1's definition, below) |
-| `host_not_in` | same, `event = ["shell"]` | the name of a list of host names; true when the command names a host not in it |
+| `host_not_in` | same, `event = ["shell"]`, beside a `command` or `command_class` | the name of a list of host names; true when the command names a host not in it |
 | `after`, `then` | `after_then` | tables of the fields above; the follow-up fires only after the `after` table matched once in this chat |
 | `steps`, `expect` | `[[rule.test]]` | steps are `"read: PATH"`, `"shell: COMMAND"`, `"write: PATH"`; `expect` is what the last step gets: `block`, `warn`, `highlight` or `allow` |
 

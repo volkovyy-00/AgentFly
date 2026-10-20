@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import posixpath
 import re
 import tomllib
 from collections.abc import Callable, Mapping
@@ -99,6 +100,16 @@ def _glob(pattern: tuple[str, ...], segments: list[str]) -> bool:
     return len(segments) in positions
 
 
+def _resolved(path: str) -> str:
+    """A path as the shell would hand it on: a leading `~`, `$HOME` or `${HOME}` is the home
+    folder, and `..` and `//` are folded (the text only; no link is followed)."""
+    for prefix in ("~", "$HOME", "${HOME}"):
+        if path == prefix or path.startswith(prefix + "/"):
+            path = os.path.expanduser("~") + path[len(prefix) :]
+            break
+    return posixpath.normpath(path) if ".." in path or "//" in path else path
+
+
 @dataclass(frozen=True)
 class Pattern:
     """One entry of a path list, case-folded.
@@ -118,14 +129,15 @@ class Pattern:
         if self.name_only:
             folded: str = name if name is not None else PurePosixPath(path).name.casefold()
             return fnmatch.fnmatchcase(folded, self.text)
-        segments: list[str] = _segments(path.casefold())
+        resolved: str = _resolved(path)
+        segments: list[str] = _segments(resolved.casefold())
         if self.anchor == "home":
             home: list[str] = _segments(os.path.expanduser("~").casefold())
             if segments[: len(home)] != home:
                 return False
             return _glob(self.parts, segments[len(home) :])
         if self.anchor == "root":
-            return path.startswith("/") and _glob(self.parts, segments)
+            return resolved.startswith("/") and _glob(self.parts, segments)
         return _glob(("**", *self.parts), segments)
 
 
@@ -204,15 +216,28 @@ class Clause:
 
     def _command_hit(self, parsed: Parsed) -> bool:
         """Some word is the program (by base name, so wrappers do not hide it) and the later
-        words include every extra word, in any order."""
+        words include every extra word, in any order.
+
+        Only the first word that is the program needs a look: what follows a later one is a
+        part of what follows the first. So a command is read once, however often it repeats the
+        program (this runs on the event loop, under the hook client's 0.5 s wait).
+        """
         for argv in parsed.all_commands():
-            names: list[str] = [base_name(w) for w in argv]
-            lowered: list[str] = [w.casefold() for w in argv]
+            first: dict[str, int] = {}
+            for index, word in enumerate(argv):
+                first.setdefault(base_name(word), index)
             for program, *extras in self.command:
-                for index, name in enumerate(names):
-                    if name == program and all(x in lowered[index + 1 :] for x in extras):
-                        return True
+                at: int | None = first.get(program)
+                if at is not None and self._extras_after(argv, at, extras):
+                    return True
         return False
+
+    @staticmethod
+    def _extras_after(argv: tuple[str, ...], at: int, extras: list[str]) -> bool:
+        if not extras:
+            return True
+        later: set[str] = {w.casefold() for w in argv[at + 1 :]}
+        return all(extra in later for extra in extras)
 
     def _host_hit(self, parsed: Parsed) -> bool:
         return any(
@@ -401,13 +426,19 @@ def _clause(
     )
     hosts = tuple(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
     command_class: Any = table.get("command_class", "")
-    if "command_class" in table and command_class not in COMMAND_CLASSES:
+    if "command_class" in table and not (
+        isinstance(command_class, str) and command_class in COMMAND_CLASSES
+    ):
         problems.add(
             where, f"command_class {command_class!r} is not one of {sorted(COMMAND_CLASSES)}"
         )
         command_class = ""
     if path_except and not path:
         problems.add(where, "'path_except' needs a 'path'")
+    if hosts and not (command or command_class):
+        # Alone it would fire on any dotted word (`README.md`, `script.py`): a host is judged
+        # only inside a command that sends something.
+        problems.add(where, "'host_not_in' needs a 'command' or a 'command_class' beside it")
     if (command or hosts or command_class) and events and events != ["shell"]:
         problems.add(where, "'command', 'command_class' and 'host_not_in' need event = [\"shell\"]")
     if needs_condition and not (path or command or hosts or command_class):

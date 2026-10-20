@@ -300,6 +300,16 @@ def test_a_link_in_place_of_the_rules_file_fails_the_rules_line(
     assert check.level == "fail" and "symbolic link" in check.text
 
 
+def test_a_valid_file_without_r1_is_a_warning_because_nothing_blocks_a_send_after_a_secret(
+    world: World,
+) -> None:
+    default = world.layout.rules.read_text(encoding="utf-8")
+    world.layout.rules.write_text(default[: default.index('[[rule]]\nid = "R1"')], encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "warn" and "R1" in check.text
+    assert world.levels("fail") == set()
+
+
 def test_the_rules_line_is_one_line_however_many_problems_there_are(world: World) -> None:
     world.layout.rules.write_text(
         "schema = 1\n[[rule]]\nid = 1\n[[rule]]\nid = 2\n[[rule]]\nid = 3\n", encoding="utf-8"

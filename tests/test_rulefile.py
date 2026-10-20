@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 from agentfly.cli import serve
 from agentfly.recorder import rulefile
 from agentfly.recorder.rulefile import Clause, RuleFile
+from tests.helpers import wallclock
 
 BASE_LISTS = (
     "[lists]\n"
@@ -567,3 +569,79 @@ def test_serve_offers_the_port_and_nothing_that_moves_the_rules() -> None:
     serve.add_parser(commands)
     options = {s for a in commands.choices["serve"]._actions for s in a.option_strings}
     assert options == {"-h", "--help", "--port"}
+
+
+# ---------------------------------------------------------------- found by the final audit
+
+
+@wallclock
+def test_a_command_that_repeats_the_program_thousands_of_times_is_matched_in_linear_time() -> None:
+    """The decision runs on the event loop with a 0.5 s client budget: no quadratic scan."""
+    clause = command_clause("npm publish")
+    started = time.perf_counter()
+    assert not clause.matches(shell("npm " * 30000 + "x"), {})
+    assert clause.matches(shell("npm " * 30000 + "publish"), {})
+    assert time.perf_counter() - started < 2.0, "quadratic: 30000 words took seconds"
+
+
+def test_a_repeated_program_word_does_not_change_which_extra_words_are_needed() -> None:
+    clause = command_clause("git push --force")
+    assert clause.matches(shell("env git git push --force"), {})
+    assert clause.matches(shell("git git push git --force"), {})
+    assert not clause.matches(shell("git git push"), {})
+
+
+@pytest.mark.parametrize("bad", ['["outbound"]', "{}", "5", "true"])
+def test_a_command_class_of_the_wrong_type_is_reported_against_its_rule(bad: str) -> None:
+    text = doc(MATCH.replace('command = "cmds"', f"command_class = {bad}"))
+    message = errors_of(text)
+    assert "M1" in message and "command_class" in message and "TypeError" not in message
+
+
+def test_host_not_in_alone_is_refused_because_it_matches_any_dotted_word() -> None:
+    text = doc(MATCH.replace('command = "cmds"', 'host_not_in = "hosts"'))
+    message = errors_of(text)
+    assert "M1" in message and "host_not_in" in message and "command" in message
+
+
+def test_host_not_in_with_a_command_or_a_class_is_fine() -> None:
+    command_clause("curl", host_not_in=("localhost",))
+    with_class = MATCH.replace(
+        'command = "cmds"', 'command_class = "outbound"\nhost_not_in = "hosts"'
+    )
+    good(doc(with_class))
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "{home}/.aws/credentials",
+        "~/.aws/credentials",
+        "$HOME/.aws/credentials",
+        "${{HOME}}/.aws/credentials",
+        "{home}/x/../.aws/credentials",
+        "{home}//.aws/./credentials",
+    ],
+)
+def test_a_home_pattern_matches_the_usual_spellings_of_the_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, word: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    clause = path_clause("~/.aws/credentials", event="shell")
+    assert clause.matches(shell("cat " + word.format(home=tmp_path)), {})
+    assert clause.matches(read(word.format(home=tmp_path)), {}) is False, "a read is not a shell"
+
+
+@pytest.mark.parametrize(
+    "path", ["/etc/passwd", "/etc/../etc/passwd", "/etc//passwd", "/etc/./passwd"]
+)
+def test_an_absolute_pattern_sees_through_dot_dot_and_doubled_slashes(path: str) -> None:
+    clause = path_clause("/etc/passwd")
+    assert clause.matches(read(path), {})
+    assert not clause.matches(read("/etc/../var/passwd"), {})
+
+
+def test_a_relative_dot_dot_that_leaves_the_pattern_does_not_match() -> None:
+    clause = path_clause("secrets/key.txt")
+    assert clause.matches(read("app/secrets/key.txt"), {})
+    assert not clause.matches(read("app/secrets/../key.txt"), {})

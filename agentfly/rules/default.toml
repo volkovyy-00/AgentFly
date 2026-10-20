@@ -24,7 +24,7 @@
 #   command      a list name; "npm publish" = the program npm with the word publish among its
 #                arguments, found through sudo, env, bash -c, $(...) and so on
 #   command_class  "outbound": any command that sends data off this computer (built in)
-#   host_not_in  a list name; the command names a host that is not in it
+#   host_not_in  a list name; the command names a host that is not in it (with command or command_class)
 # Shell commands: a path condition looks at every word of the command, also the value after "=" or "@".
 
 schema = 1
@@ -37,7 +37,8 @@ secret_names_ok = [".env*.example", ".env*.sample", ".env*.template", "id_rsa*.p
 # The .env family only (not every secret): rule npm-publish-after-env below.
 dotenv_names = [".env", ".env.*"]
 dotenv_names_ok = [".env*.example", ".env*.sample", ".env*.template"]
-publish_tools = ["npm publish"]
+# npm runs the command that a unique prefix names (`npm pub` publishes), so the prefixes count.
+publish_tools = ["npm publish", "npm publis", "npm publi", "npm publ", "npm pub", "npm pu"]
 
 # Example of a rule to add (remove the leading "# "): warn before a force-push.
 #
@@ -108,6 +109,9 @@ then = { event = ["shell"], command = "publish_tools" }
   expect = "block"
   [[rule.test]]
   steps = ["read: config/.env.local", "shell: sudo npm publish --tag next"]
+  expect = "block"
+  [[rule.test]]
+  steps = ["read: .env", "shell: npm pub --access public"]
   expect = "block"
   [[rule.test]]
   steps = ["shell: npm publish"]
