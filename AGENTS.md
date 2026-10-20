@@ -38,7 +38,8 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
   active file is read that way by `doctor` and by these commands too, other files are drafts.
   `rules test` exits 1 for a file with no tests. A file must keep R1 at least as strong as the
   program's minimum (D27) and stay under the work limit (`rulefile.MAX_WORK`, 200 units: the packaged
-  default uses 31; a name pattern is 1, a slash pattern 4 plus 12 per `**`).
+  default uses 31; a name pattern is 1, a slash pattern 4 plus 12 per `**` plus 1 per part past the
+  fourth).
   `init -g` writes the file when missing, replaces it when it is byte for byte a default the
   package once carried (D28; the hashes are `rulefile.SHIPPED_DEFAULTS`, the new one goes in
   whenever `default.toml` changes), and keeps an edited one; a recorder restart applies a change.
@@ -113,8 +114,9 @@ CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (o
   file (it never raises and reads no environment); `rules.py` composes the rules. Every reader of
   a rules file goes through `rulefile.load_bytes`, which also holds the program's minimum for R1
   (D27: an `after_then` block whose `after` marks every name SPEC §5 counts as secret on read and
-  shell, with exceptions only for plain `.example`/`.sample`/`.template`/`.pub` file names, and
-  whose `then` is exactly outbound shell; widening and rewording are fine) and the work budget.
+  shell, with exceptions only SPEC §5's two (`.env…` ending `.example`/`.sample`/`.template`,
+  `id_rsa…` ending `.pub`), and whose `then` is exactly outbound shell; widening and rewording are
+  fine) and the work budget.
   `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
   in `Session.triggers`. No flag or variable moves the active file or who must own it: tests set
   `rulefile.ACTIVE_RULES` and `rulefile.ACTIVE_OWNER_UID`.
@@ -294,9 +296,11 @@ lines for them (R0 and normalisation: V5).
 - Cost (`tests/test_rules_cost.py`, V5b-fix): what is worked out about a word is worked out once
   (memo hit counts); the weights of `rulefile.pattern_work`; a file at the limit of each shape is
   accepted and one unit over is refused naming the heaviest rule; a hook at the limit makes no more
-  pattern tests than the units allow, and the whole hook (`apply_rules`, 300 words, paths 20
-  folders deep, `=` and `@` in the words) is under the client's own 0.5 s wait (`@wallclock`, best
-  of three; about 0.1 s here, so a loaded machine passes). No other test bounds seconds.
+  pattern tests than the units allow, a command entry is looked up in a table made once per
+  command, and the whole hook (`apply_rules`, 300 words, paths 20 folders deep, `=` and `@` in the
+  words; also 198 rules whose command lists all name the program in the command) is under the
+  client's own 0.5 s wait (`@wallclock`, best of three; about 0.1 s here, so a loaded machine
+  passes). No other test bounds seconds.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.

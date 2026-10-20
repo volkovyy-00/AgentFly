@@ -328,8 +328,9 @@ matching work than the limit.
 minimum too, and a file whose R1 is missing or weaker is refused like an entry for R0. R1 must be
 an `after_then` rule with severity `block`. Its `after` fires on `read` and on `shell`, with a
 name list that marks at least every file *name* the "R1: secret, then network" bullets below count
-as secret, and exceptions no wider than theirs: only names ending in a plain `.example`,
-`.sample`, `.template` or `.pub`, never a folder. Its `then` is exactly `event = ["shell"]` with
+as secret, and exceptions no wider than theirs: the two SPEC makes, a name that starts `.env` and
+ends `.example`, `.sample` or `.template`, and one that starts `id_rsa` and ends `.pub`, never a
+folder (so an exception cannot match `credentials-prod.example`, which is a secret). Its `then` is exactly `event = ["shell"]` with
 `command_class = "outbound"`, and nothing else. Judged on those names, not on how a list is
 spelled (`.env*` in place of `.env` and `.env.*` is fine), against the program's own minimum and
 not against `default.toml`, so a wider later default never refuses an older file. Widening the
@@ -339,9 +340,11 @@ reviewed change path (V7).
 **What a file may cost.** Every path pattern of every clause is tried on every word of a shell
 command, inside the hook client's 0.5 s wait, so a file may ask for at most 200 units of matching
 work in all: a clause with path patterns 2, a pattern without `/` 1, a pattern with `/` 4 plus 12
-for each `**` (an unanchored pattern has one more), R1's `after` twice because it runs twice;
-command and host lists cost nothing. The packaged default uses 31. At the limit a 300-word
-command takes about 0.1 s through the whole hook on a Mac.
+for each `**` (an unanchored pattern has one more) plus 1 for each folder or name past the fourth,
+R1's `after` twice because it runs twice; command and host lists cost almost nothing (a command is
+read once, whatever the number of entries). The packaged default uses 31. At the limit a 300-word
+command with paths 20 folders deep takes about 0.1 s through the whole hook on a Mac; deeper paths
+cost more (about 0.3 s at 40 folders), and a hook past the client's wait falls to the offline guard.
 
 `agentfly rules check [FILE]` prints every problem of a file, each naming its rule, and exits 1 if
 there is one; `agentfly rules test [FILE]` runs every inline test (the rule that wins must be the

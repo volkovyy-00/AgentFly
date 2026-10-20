@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import json
 import re
@@ -95,6 +96,46 @@ def clause_of(text: str) -> Clause:
     clause = good(text).rules[0].clause
     assert clause is not None
     return clause
+
+
+def plain_glob(pattern: tuple[str, ...], segments: tuple[str, ...]) -> bool:
+    """The walk as it was before it dropped positions that cannot finish: the reference."""
+    positions = {0}
+    for part in pattern:
+        if part == "**":
+            reached = set(range(min(positions), len(segments) + 1))
+        else:
+            reached = {
+                i + 1
+                for i in positions
+                if i < len(segments) and fnmatch.fnmatchcase(segments[i], part)
+            }
+        if not reached:
+            return False
+        positions = reached
+    return len(segments) in positions
+
+
+def test_the_walk_that_drops_hopeless_positions_answers_as_the_plain_walk_does() -> None:
+    parts = ["**", "a", "?", "b*", "[ab]"]
+    names = ["a", "b", "ab"]
+    for count in range(6):
+        for pattern in itertools.product(parts, repeat=count):
+            for length in range(6):
+                for segments in itertools.product(names, repeat=length):
+                    assert rulefile._glob(pattern, segments) == plain_glob(pattern, segments), (
+                        pattern,
+                        segments,
+                    )
+
+
+def test_a_pattern_longer_than_the_path_tries_no_part(monkeypatch: pytest.MonkeyPatch) -> None:
+    tried = []
+    monkeypatch.setattr(fnmatch, "fnmatchcase", lambda name, part: tried.append(part) or True)
+    assert not rulefile._glob(("?",) * 50, ["a"] * 10)  # no ** : the path has to be 50 long
+    assert not rulefile._glob(("**", *("?",) * 50), ["a"] * 10)  # too short for the 50 parts
+    assert not rulefile._glob(("?", "?"), ["a"] * 3)  # no ** : not exactly as long
+    assert tried == []
 
 
 # ---------------------------------------------------------------- the packaged default

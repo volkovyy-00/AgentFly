@@ -74,6 +74,14 @@ def deep_floating() -> tuple[str, list[str]]:
     ]
 
 
+def long_slash_patterns() -> tuple[str, list[str]]:
+    """Ten one-step parts and a file name: every part matches, so the walk goes on to the end."""
+    sample = "/".join(["?"] * 10) + "/x0.py"
+    n = (ROOM - rulefile.WORK_CLAUSE) // rulefile.pattern_work(rulefile.compile_pattern(sample))
+    names = [sample.replace("x0", f"x{i}") for i in range(n)]
+    return list_line("l", *names), [match_rule(0, 'path = "l"')]
+
+
 def outbound_rules() -> tuple[str, list[str]]:
     body = 'command_class = "outbound"\nhost_not_in = "l"'
     return list_line("l", "localhost"), [match_rule(i, body) for i in range(100)]
@@ -84,17 +92,29 @@ def command_lists() -> tuple[str, list[str]]:
     return list_line("l", *entries), [match_rule(i, 'command = "l"') for i in range(150)]
 
 
+def command_list_on_one_program() -> tuple[str, list[str]]:
+    """Every entry names a program the hook's command has (`cat`): each one has to look at the
+    words after it, in every one of the 198 rules the file may hold beside the default's two."""
+    entries = [f"cat w{i}" for i in range(rulefile.MAX_LIST_ENTRIES)]
+    rules = [match_rule(i, 'command = "l"') for i in range(rulefile.MAX_RULES - 2)]
+    return list_line("l", *entries), rules
+
+
 SHAPES: dict[str, Callable[[], tuple[str, list[str]]]] = {
     "many rules with one name pattern": one_pattern_rules,
     "one long list of names": long_name_list,
     "slash patterns with one **": anchored_stars,
     "floating slash patterns": floating_stars,
     "floating patterns with several **": deep_floating,
+    "long slash patterns": long_slash_patterns,
     "many rules of command_class and host_not_in": outbound_rules,
     "many rules with a long command list": command_lists,
+    "many rules with a command list on one program": command_list_on_one_program,
 }
 # The shapes whose cost is in path patterns: they reach the limit; the others cost almost nothing.
 FULL = [name for name in SHAPES if "command" not in name]
+# The ones the whole hook is timed on: those, and the command list that every rule has to read.
+TIMED = [*FULL, "many rules with a command list on one program"]
 
 
 def text_of(shape: str) -> str:
@@ -134,6 +154,9 @@ def rec(tmp_path: Path) -> Iterator[Recorder]:
         ("cfg/**/x.txt", 28),
         ("**/a/**/b/**/x", 52),
         ("**/**/x", 28),  # `**/**` is one **
+        ("/a/b/c/d/e/f/g/h", 8),  # anchored, eight parts: four past the free ones
+        ("a/b/c/d/e/f/g/h", 20),  # the same, unanchored: the ** in front as well
+        ("/a/b/**/c/d/e/f", 18),  # six parts and a ** (a ** is not a part)
     ],
 )
 def test_what_a_pattern_costs_per_word(pattern: str, units: int) -> None:
@@ -142,6 +165,7 @@ def test_what_a_pattern_costs_per_word(pattern: str, units: int) -> None:
 
 def test_the_weights_are_what_the_comments_say() -> None:
     assert (rulefile.WORK_NAME, rulefile.WORK_SLASH, rulefile.WORK_STAR) == (1, 4, 12)
+    assert (rulefile.WORK_PARTS_FREE, rulefile.WORK_PART) == (4, 1)
     assert rulefile.WORK_CLAUSE == 2 and rulefile.MAX_WORK == 200
 
 
@@ -234,6 +258,33 @@ def test_a_word_is_worked_out_once_however_many_clauses_look_at_it() -> None:
     assert rulefile._folded_name.cache_info().misses == words + 1
 
 
+def test_where_a_word_last_stands_is_worked_out_once_however_many_entries_ask() -> None:
+    """A command entry `prog word` asks whether `word` comes after `prog`: that is one look-up in
+    a table made once per command, not a scan of the rest of the command for every entry."""
+    rulefile._last_positions.cache_clear()
+    lists, rules = command_list_on_one_program()
+    ruleset = ruleset_of(default_with(lists, *rules))
+    action = {"hook_event_name": "beforeShellExecution", "command": command()}
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    rules_mod.decide(action, rules_mod.mark(action, session, ruleset), ruleset)
+    info = rulefile._last_positions.cache_info()
+    assert info.misses == 1 and info.hits >= len(rules) - 1, info
+
+
+def test_a_command_entry_finds_a_word_after_its_program_and_not_before_it() -> None:
+    here = {"hook_event_name": "beforeShellExecution"}
+
+    def hit(command: str, entries: tuple[tuple[str, ...], ...]) -> bool:
+        one = rulefile.Clause(events=("shell",), command=entries)
+        return one.matches({**here, "command": command}, {})
+
+    assert not hit("cat b a", (("cat", "c"),))
+    assert hit("cat a b", (("cat", "a"),)) and hit("cat a b", (("cat", "b", "a"),))
+    assert not hit("a cat", (("cat", "a"),)), "the word comes before the program"
+    assert hit("cat B", (("cat", "b"),)), "case does not matter"
+    assert hit("ls", (("ls",),)) and not hit("pwd", (("ls",),))
+
+
 def test_the_memos_hold_more_than_one_long_command_needs() -> None:
     assert rulefile._candidates.cache_info().maxsize >= 3 * WORDS
     assert rulefile._folded_segments.cache_info().maxsize >= 3 * WORDS
@@ -274,7 +325,7 @@ def test_a_hook_at_the_limit_makes_no_more_pattern_tests_than_the_units_allow(
 
 
 @wallclock
-@pytest.mark.parametrize("shape", FULL)
+@pytest.mark.parametrize("shape", TIMED)
 def test_the_whole_hook_at_the_limit_is_well_inside_the_clients_wait(
     shape: str, rec: Recorder
 ) -> None:

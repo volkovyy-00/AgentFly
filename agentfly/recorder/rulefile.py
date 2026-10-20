@@ -73,13 +73,16 @@ MAX_LIST_ENTRIES: int = 200
 # The decision runs under the hook client's 0.5 s wait, and a command is up to hundreds of words.
 # Measured for a 300-word command (3 candidates a word) through the whole hook on the author's Mac:
 # about 32 ms with the packaged default, then about 0.5 ms for each unit below. At the limit the
-# slowest shapes tried (55 one-pattern rules; 5 floating "**" patterns; paths 20 folders deep) take
-# about 110 ms, a fifth of the wait. The weights below are fitted to those measurements.
+# slowest shapes tried (55 one-pattern rules; 5 floating "**" patterns; 7 ten-part patterns; paths
+# 20 folders deep) take about 110 ms, a fifth of the wait. Deeper paths cost more: the same shapes
+# at 40 folders take up to 0.3 s. The weights below are fitted to those measurements.
 MAX_WORK: int = 200
 WORK_CLAUSE: int = 2  # a clause with path patterns looks at every word of the command once
 WORK_NAME: int = 1  # a pattern without "/" is one comparison per word
 WORK_SLASH: int = 4  # a pattern with "/" is a walk through the path's folders ...
 WORK_STAR: int = 12  # ... and each "**" (an unanchored pattern has one more) multiplies it
+WORK_PARTS_FREE: int = 4  # WORK_SLASH covers a walk of this many folders and a file name ...
+WORK_PART: int = 1  # ... each part past them is a step more for every position reached
 WORK_ERROR: str = "asks for too much matching work per hook"
 MAX_PATTERN_CHARS: int = 200
 MAX_STARS: int = 8
@@ -103,21 +106,31 @@ def _glob(pattern: Sequence[str], segments: Sequence[str]) -> bool:
     """Match path segments against pattern segments; `**` is zero or more whole folders.
 
     Linear in pattern times path: it tracks the set of positions reached, with no backtracking.
+    Every other part takes exactly one segment, so a position from which the parts still to come
+    do not fit in the path is dropped at once, and a path that is too short (or, with no `**`,
+    not exactly as long) is refused before any part is tried: a long pattern costs almost
+    nothing on the short paths that make up most words.
     """
+    total: int = len(segments)
+    left: int = len(pattern) - pattern.count(
+        "**"
+    )  # parts that take one segment each, still to come
+    if total < left or (left == len(pattern) and total != left):
+        return False
     positions: set[int] = {0}
     for part in pattern:
         if part == "**":
-            reached: set[int] = set(range(min(positions), len(segments) + 1))
+            reached: set[int] = set(range(min(positions), total - left + 1))
         else:
+            left -= 1
+            last: int = total - left  # from a later position the rest cannot fit
             reached = {
-                i + 1
-                for i in positions
-                if i < len(segments) and fnmatch.fnmatchcase(segments[i], part)
+                i + 1 for i in positions if i < last and fnmatch.fnmatchcase(segments[i], part)
             }
         if not reached:
             return False
         positions = reached
-    return len(segments) in positions
+    return total in positions
 
 
 def _resolved(path: str, home: str) -> str:
@@ -158,6 +171,13 @@ def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
     for index, word in enumerate(argv):
         first.setdefault(base_name(word), index)
     return first
+
+
+@lru_cache(maxsize=64)
+def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
+    """Where each case-folded word of a command last stands (read only; shared by every clause),
+    so that "this word comes after position p" is one comparison, not a scan of the rest."""
+    return {word.casefold(): index for index, word in enumerate(argv)}
 
 
 @lru_cache(maxsize=64)
@@ -293,18 +313,12 @@ class Clause:
         """
         for argv in parsed.all_commands():
             first: dict[str, int] = _first_positions(argv)
+            last: dict[str, int] = _last_positions(argv)
             for program, *extras in self.command:
                 at: int | None = first.get(program)
-                if at is not None and self._extras_after(argv, at, extras):
+                if at is not None and all(last.get(extra, -1) > at for extra in extras):
                     return True
         return False
-
-    @staticmethod
-    def _extras_after(argv: tuple[str, ...], at: int, extras: list[str]) -> bool:
-        if not extras:
-            return True
-        later: set[str] = {w.casefold() for w in argv[at + 1 :]}
-        return all(extra in later for extra in extras)
 
     def _host_hit(self, parsed: Parsed) -> bool:
         return any(
@@ -336,14 +350,16 @@ def pattern_work(pattern: Pattern) -> int:
     if pattern.name_only:
         return WORK_NAME
     stars: int = pattern.parts.count("**") + (0 if pattern.anchor else 1)  # unanchored: `**/`
-    return WORK_SLASH + WORK_STAR * stars
+    steps: int = len(pattern.parts) - pattern.parts.count("**")
+    return WORK_SLASH + WORK_STAR * stars + WORK_PART * max(0, steps - WORK_PARTS_FREE)
 
 
 def clause_work(clause: Clause | None) -> int:
     """What a clause costs per hook: a fixed part and its path patterns, which are tried on every
-    word. Command entries and host names are looked up once per command and shared by all the
-    clauses, so a long list of them costs nothing worth counting (measured: 190 rules of 200
-    entries add 14 ms)."""
+    word. A command is read once for all its clauses (where each program first, and each word
+    last, stands; the host names), so an entry is a look-up and a long list of them costs
+    nothing worth counting (measured: 198 rules of 200 entries on the command's own program
+    take 31-35 ms for the whole hook, as the default alone does)."""
     if clause is None or not (clause.path or clause.path_except):
         return 0
     return WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
@@ -724,7 +740,14 @@ def parse(text: str) -> RuleFile:
 # refused (the packaged default runs), however it spells its lists. Widening and rewording are fine.
 # Measured against this, not against `default.toml`, so a wider later default never refuses an
 # older file. A local exception (a company host) waits for the reviewed path (V7).
-EXEMPTION_ENDINGS: tuple[str, ...] = (".example", ".sample", ".template", ".pub")
+# The two exceptions SPEC section 5 makes: `.env.*` but not a template, `id_rsa*` but not a public
+# key. An exception in R1 may be no wider, so it starts with one of the two and ends with its own
+# endings: then it cannot match `credentials-prod.example` or any other name SPEC counts as secret,
+# which no list of sample names could prove for a pattern.
+EXEMPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (".env", (".example", ".sample", ".template")),
+    ("id_rsa", (".pub",)),
+)
 _FAMILIES: tuple[str, ...] = (".env", "x.pem", ".pem", "k.key", ".key", "id_rsa", "credentials")
 _TAILS: tuple[str, ...] = (
     "",
@@ -839,10 +862,13 @@ def _minimum_problems(specs: Sequence[RuleSpec]) -> list[str]:
             problems.append(
                 f"{where}: exception {pattern.text!r} names a folder; R1 judges the file name only"
             )
-        elif not pattern.text.endswith(EXEMPTION_ENDINGS):
+        elif not any(
+            pattern.text.startswith(start) and pattern.text.endswith(ends)
+            for start, ends in EXEMPTIONS
+        ):
             problems.append(
-                f"{where}: exception {pattern.text!r} must end in a plain "
-                f"{', '.join(EXEMPTION_ENDINGS)} (SPEC section 5 allows no other)"
+                f"{where}: exception {pattern.text!r} must be .env... ending in .example, .sample "
+                "or .template, or id_rsa... ending in .pub: the two SPEC section 5 allows"
             )
     if _then_problem(r1.then):
         problems.append(

@@ -122,6 +122,13 @@ WEAKENED: dict[str, str] = {
     "an exception for .example on every secret": with_exemptions("*.example"),
     "an exception for .pub on every secret": with_exemptions("*.pub"),
     "an exception for .sample on every secret": with_exemptions("*.sample"),
+    # shaped like the default's, but wide enough to hide a name SPEC counts as secret
+    "an exception that hides credentials-prod.example": with_exemptions("*-prod.example"),
+    "an exception that hides credentials.pem.example": with_exemptions("*.pem.example"),
+    "an exception that hides credentials-prod.pub": with_exemptions("credentials-*.pub"),
+    "an exception that hides .env.key.pub": with_exemptions("*key.pub"),
+    "a .pub exception on .env names": with_exemptions(".env*.pub"),
+    "an .example exception on id_rsa names": with_exemptions("id_rsa*.example"),
 }
 
 
@@ -157,13 +164,14 @@ def test_the_recorder_refuses_a_weaker_r1_and_the_default_runs(
 def test_the_error_names_a_name_that_is_left_unmarked() -> None:
     (error,) = r1_errors(with_names(".env", ".env.*", "*.pem", "*.key", "id_rsa*"))
     assert "'credentials' unmarked" in error and "and 87 more" in error
-    (error,) = r1_errors(with_exemptions("*.example"))
-    assert "unmarked" in error and "SPEC section 5" in error
+    errors = r1_errors(with_exemptions("*.example"))
+    assert any("unmarked" in e and "SPEC section 5" in e for e in errors), errors
+    assert any("exception '*.example' must be .env... ending in" in e for e in errors), errors
 
 
 def test_a_literal_exemption_is_refused_for_its_shape_and_for_what_it_hides() -> None:
     errors = r1_errors(with_exemptions("prod.pem"))
-    assert any("'prod.pem' must end in a plain" in e for e in errors)
+    assert any("'prod.pem' must be .env... ending in" in e for e in errors)
     assert any("leaves 'prod.pem' unmarked" in e for e in errors)
 
 
@@ -183,7 +191,7 @@ ACCEPTED: dict[str, str] = {
     "no exceptions at all": changed(
         AFTER_LINE, AFTER_LINE.replace(', path_except = "secret_names_ok"', "")
     ),
-    "a narrower exception": with_exemptions("*.pem.example"),
+    "a narrower exception": with_exemptions(".env.local*.example", "id_rsa_work*.pub"),
     "a reworded message": BASE.replace("Blocked by rule R1: a secret", "R1 says: a secret", 1),
     "write added to the trigger": changed(
         AFTER_LINE, AFTER_LINE.replace('["read", "shell"]', '["read", "shell", "write"]')
