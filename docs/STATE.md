@@ -1,11 +1,11 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 13:45 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 14:10 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7, F10 ✅ (BOARD Done; last merge F10 5239e96 = trial 74acb5b tree, 3× 3529 passed, 5 skipped, 143–206 s with V5b's worker running).
 Pending decisions: D16
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
-- Order (owner 2026-10-19/20): V5b (in flight) → F9 ∥ F13 → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F11 after V5b (shares `sessions.py`, `app.py`); F12 after V5c and F13 (shares `agentfly/install/`, `packages.py`). V8b's highlighted verdict comes from V5b.
+- Order (owner 2026-10-19/20): V5b (reported done, fe3386e) → F9 ∥ F13 → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F11 after V5b (shares `sessions.py`, `app.py`); F12 after V5c and F13 (shares `agentfly/install/`, `packages.py`). V8b's highlighted verdict comes from V5b.
 - Briefs: V5b (pass 2 against dd44029; owner 2026-10-20: a shell warn's `ask` adds "If the user skips this, do not retry with another tool or language."). F9 (pass 2 against 333f665; owner settings on and CodeQL green on main, so it waits only for V5b's merge). F13 (pass 2 against f6bc22b; after V5b). V5c (pass 2, 2026-10-18; re-check before dispatch). V7, V9, F8, F11, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly, so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>` (F9 `security-scans`, F13 `escape-names`); the owner starts each worker.
 - Worker closing rule (owner 2026-10-19, docs/reports/README.md): `/final-verification` on main...HEAD, commit, then `/code-review high`; verdict in the report.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT. CI runs on GitHub's macos-15 (arm64); V4 may use a runner for its checks; rework then.
@@ -20,7 +20,7 @@ Pending decisions: D16
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job; harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main; ag-v5b-rules-file (from df617fe, 5 commits, head 8a0c564, uncommitted install work, worker running). F10 worktree and branch removed (2026-10-20, owner closed the worker). Disk 25 GiB free.
+- Worktrees and branches: main; ag-v5b-rules-file (from df617fe, 13 commits, head fe3386e = report; worker idle, keep open for fixes). F10 worktree and branch removed (2026-10-20, owner closed the worker). Disk 25 GiB free.
 - Git: origin/main = b342323 (owner pushed 2026-10-20 ~12:23; carries F10); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39380422658 (ae5dd0e), 39396576611 (b84e2ca), 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
@@ -46,10 +46,11 @@ none
 - R0 gaps (V5a): `pkill python` can kill the recorder; ruby/perl -e not inline code; relative paths after `cd`, globs, brace expansion and variables unseen; ~/.claude/settings.json not guarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md has no `/api/sessions` contract (V9); Neo4j Session lacks workspace_root. No card owns SPEC §10's per-session hash check.
+- V5b leftovers (report): new file rules have no offline-guard backing; packaged-rule updates never reach an install and `uninstall` drops an edited rules.toml unbacked (later card); `npx -y npm@latest publish`, `npm $(echo publish)` dodge (V5c); `write` covers the Write tool only; `status`/`start` omit `rules_problem`; Skip on `ask` passing `agent_message` unverified; test seam `RECORDER_CODE` (other child recorders read the real file). Lead: SPEC §7 and §8 (~l.675) still give the old shell-warn answer.
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. When V5b reports: `head -n 6`, update STATE; trial on top of main (expected conflicts: tests/test_package.py, AGENTS.md "Testing", SPEC.md), 3× check, fresh reviewer, fixes back to the worker.
+1. V5b reported (3846 passed, 5 skipped; final-verification READY; code-review high 10 findings, 6 fixed). Trial on top of main (expected conflicts: tests/test_package.py, AGENTS.md "Testing", SPEC.md), 3× check, fresh reviewer, fixes back to the worker.
 2. Then the first D26 batch: build `merge/v5b`, owner pushes and opens the PR; on green, `--ff-only` main and hand off.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
