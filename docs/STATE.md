@@ -38,7 +38,7 @@ none
 - Lead 2026-10-20: F10's two 5 s hang guards without `@wallclock` accepted.
 
 ## Open risks and findings
-- CI flake: `tests/test_offline_guard.py` "silent recorder" test bounds 8-way parallel hook-client starts (0.1 s budget) under 1.0 s; one took 1.28 s on macos-15 (b342323 attempt 1). If it recurs: fix card (bound or load), not a hook-client change.
+- CI flake: `test_offline_guard.py` "silent recorder" (8 parallel client starts under 1.0 s) took 1.28 s on macos-15 once (b342323). If it recurs: a fix card, not a hook-client change.
 - F9: Dependabot raises no alerts for SHA-pinned actions; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - F10 leftovers: AGENTS.md "Testing" lines for package tests failing (not skipping) under CI and the hand-typed-sudo uninstall path (lead, after V5b); SPEC §10 lacks the "service was not touched" message; `CI=false` counts as CI in `tests/test_package.py`.
 - V3c later-card items: `.pth` runs in the checking process; R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a dist-info); no offline-guard package rule; root runs bundled 3.12 on the env's site-packages.
@@ -52,7 +52,7 @@ none
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. V5b-fix2 brief done (pass 2 against efa9848; a limit hit on an unfinished file block rule denies). Owner starts the worker; then re-trial, 3× check, fresh reviewers.
+1. V5b-fix2 plan (1f33d06) checked by the lead 2026-10-20: covers the criteria; `namecover.py` allowed; owner to rule on R1 refusing floating folder patterns (D27 change). then re-trial, 3× check, fresh reviewers.
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; drop `docs/superpowers/*V5b-fix2*` (owner 2026-10-20); build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. Leftovers → V5c brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
