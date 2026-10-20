@@ -666,17 +666,31 @@ def test_a_directory_pattern_with_a_trailing_slash_covers_what_is_inside_it(
     assert not clause.matches(read("/elsewhere/other/file"), {})
 
 
-@wallclock
-def test_hundreds_of_slash_patterns_against_hundreds_of_words_stay_inside_the_budget() -> None:
-    """The decision runs on the event loop under the hook client's 0.5 s wait."""
+def test_hundreds_of_slash_patterns_against_hundreds_of_words_do_one_test_per_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decision runs on the event loop under the hook client's 0.5 s wait.
+
+    The bound is on work (one glob per pattern and word), not on seconds: a time limit tight
+    enough to mean something fails on a loaded machine, and a loose one proves nothing.
+    """
     entries = ", ".join(f'"/opt/p{i}/**/x{i}.txt"' for i in range(rulefile.MAX_LIST_ENTRIES))
     lists = f"[lists]\nnames = [{entries}]\n"
     rule = MATCH.replace('command = "cmds"', 'path = "names"')
     clause = clause_of(doc(rule, lists=lists))
-    command = "cat " + " ".join(f"/home/me/project/src/file{i}.py" for i in range(300))
-    started = time.perf_counter()
+    words = 300
+    command = "cat " + " ".join(f"/home/me/project/src/file{i}.py" for i in range(words))
+    calls = 0
+    real = rulefile._glob
+
+    def counting(pattern: Any, segments: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        return real(pattern, segments)
+
+    monkeypatch.setattr(rulefile, "_glob", counting)
     assert not clause.matches(shell(command), {})
-    assert time.perf_counter() - started < 0.35
+    assert calls <= rulefile.MAX_LIST_ENTRIES * (words + 1), "more than one glob per pair"
 
 
 def test_one_path_is_resolved_once_however_many_patterns_look_at_it() -> None:
