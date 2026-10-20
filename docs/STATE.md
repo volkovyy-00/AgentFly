@@ -13,7 +13,7 @@ Pending decisions: D16
 - D26 B is now in force (CI green on main 4×): V5b is the first batch. The lead builds `merge/<batch>` from main with the card merge only; the owner pushes it and opens one PR; green → lead `git merge --ff-only merge/<batch>` on main, handoff commit, owner pushes main. Red → drop the branch, worker fixes.
 
 ## In flight
-- V5b-fix · Claude Code worker (fresh; V5b's session closed) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b-fix.md · docs/briefs/V5b-fix.md
+- V5b · Claude Code worker (fix round, fresh session) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file · ag-v5b-rules-file · docs/reports/V5b-fix.md · docs/briefs/V5b-fix.md
 
 ## Machine state (verified 2026-10-20 13:40 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
