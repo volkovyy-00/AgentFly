@@ -645,3 +645,56 @@ def test_a_relative_dot_dot_that_leaves_the_pattern_does_not_match() -> None:
     clause = path_clause("secrets/key.txt")
     assert clause.matches(read("app/secrets/key.txt"), {})
     assert not clause.matches(read("app/secrets/../key.txt"), {})
+
+
+# ---------------------------------------------------------------- found by /code-review
+
+
+@pytest.mark.parametrize("pattern", ["~/.ssh/", ".github/workflows/", "/etc/ssh/"])
+def test_a_directory_pattern_with_a_trailing_slash_covers_what_is_inside_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pattern: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    clause = path_clause(pattern)
+    inside = {
+        "~/.ssh/": f"{tmp_path}/.ssh/id_ed25519",
+        ".github/workflows/": "/w/.github/workflows/ci.yml",
+        "/etc/ssh/": "/etc/ssh/sshd_config",
+    }[pattern]
+    assert clause.matches(read(inside), {})
+    assert clause.matches(read(inside.rsplit("/", 1)[0]), {}), "the folder itself too"
+    assert not clause.matches(read("/elsewhere/other/file"), {})
+
+
+@wallclock
+def test_hundreds_of_slash_patterns_against_hundreds_of_words_stay_inside_the_budget() -> None:
+    """The decision runs on the event loop under the hook client's 0.5 s wait."""
+    entries = ", ".join(f'"/opt/p{i}/**/x{i}.txt"' for i in range(rulefile.MAX_LIST_ENTRIES))
+    lists = f"[lists]\nnames = [{entries}]\n"
+    rule = MATCH.replace('command = "cmds"', 'path = "names"')
+    clause = clause_of(doc(rule, lists=lists))
+    command = "cat " + " ".join(f"/home/me/project/src/file{i}.py" for i in range(300))
+    started = time.perf_counter()
+    assert not clause.matches(shell(command), {})
+    assert time.perf_counter() - started < 0.35
+
+
+def test_one_path_is_resolved_once_however_many_patterns_look_at_it() -> None:
+    rulefile._folded_segments.cache_clear()
+    clause = path_clause(*[f"/opt/p{i}/**/x.txt" for i in range(50)])
+    clause.matches(read("/home/me/a/../b/file.py"), {})
+    info = rulefile._folded_segments.cache_info()
+    assert info.misses == 1 and info.hits == 49
+
+
+def test_the_file_the_recorder_would_load_is_the_active_one_only_when_it_exists(
+    active_rules: Path,
+) -> None:
+    assert rulefile.in_force_path() == (rulefile.default_path(), False)
+    active_rules.write_text("anything", encoding="utf-8")
+    assert rulefile.in_force_path() == (active_rules, True)
+    active_rules.unlink()
+    active_rules.symlink_to(
+        "nowhere"
+    )  # a dangling link is still "there": it is reported, not hidden
+    assert rulefile.in_force_path() == (active_rules, True)

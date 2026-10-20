@@ -13,7 +13,6 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT, rulefile
@@ -454,9 +453,9 @@ def load_active() -> RuleSet:
     A file that exists but cannot be used is reported in `problem`; a missing file is the normal
     case of a developer `serve` and says nothing.
     """
-    path: Path = rulefile.ACTIVE_RULES
+    path, present = rulefile.in_force_path()
     try:
-        if not os.path.lexists(path):
+        if not present:
             return DEFAULT
         loaded: RuleFile = rulefile.load_file(path)
         if loaded.errors:
@@ -468,12 +467,7 @@ def load_active() -> RuleSet:
 
 def find_rule(rule_id: str | None) -> Rule | None:
     """The rule in force with this id (one lookup per hook; see `app.apply_rules`)."""
-    if rule_id is None:
-        return None
-    for rule in RULES:
-        if rule.id == rule_id:
-            return rule
-    return None
+    return next((rule for rule in _active.rules if rule.id == rule_id), None)
 
 
 def reads_secret(action: Action) -> bool:

@@ -152,7 +152,7 @@ async def health() -> dict[str, Any]:
         "last_hook_at": _last_hook_at,
     }
     problem: str | None = rules_module.current().problem
-    if problem:  # only when the active rules file was rejected: `doctor` and `status` read it
+    if problem:  # only when the active rules file was rejected; `doctor` reads it from here
         answer["rules_problem"] = problem[:400]
     return answer
 

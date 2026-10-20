@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -24,10 +23,8 @@ def choose_file(given: Path | None) -> tuple[Path, str]:
     """The file to read and a few words on where it came from."""
     if given is not None:
         return given, "file given"
-    active: Path = rulefile.ACTIVE_RULES
-    if os.path.lexists(active):
-        return active, "the active file"
-    return rulefile.default_path(), "the packaged default; there is no active file"
+    path, active = rulefile.in_force_path()
+    return path, "the active file" if active else "the packaged default; there is no active file"
 
 
 def load(command: str, path: Path) -> rulefile.RuleFile | None:

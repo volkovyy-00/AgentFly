@@ -87,6 +87,14 @@ def test_find_rule_answers_from_the_rules_in_force() -> None:
     assert rules_mod.find_rule("nope") is None and rules_mod.find_rule(None) is None
 
 
+def test_find_rule_reads_the_rules_in_force_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rs = ruleset_of(default_as("warn"))
+    monkeypatch.setattr(rules_mod, "_active", rs)  # not through `activate`: RULES is not touched
+    assert rules_mod.find_rule("R1") is rs.rules[1] and rs.rules[1].severity == "warn"
+
+
 def test_the_deny_messages_come_from_the_rule_and_a_gone_rule_falls_back_to_r1() -> None:
     user, agent = rules_mod.deny_messages("R0")
     assert user == rules_mod.R0_MESSAGE and agent == user + rules_mod.BLOCK_TAIL

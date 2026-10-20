@@ -18,8 +18,9 @@ import os
 import posixpath
 import re
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -60,7 +61,7 @@ _ANY_FIELDS: frozenset[str] = _FIELDS_OF["match"] | _FIELDS_OF["after_then"]
 
 MAX_FILE_BYTES: int = 256 * 1024
 MAX_RULES: int = 200
-MAX_LIST_ENTRIES: int = 500
+MAX_LIST_ENTRIES: int = 200  # patterns times words is the cost of one hook: see the test
 MAX_PATTERN_CHARS: int = 200
 MAX_STARS: int = 8
 MAX_MESSAGE_CHARS: int = 500
@@ -79,7 +80,7 @@ def _segments(text: str) -> list[str]:
     return [part for part in text.split("/") if part and part != "."]
 
 
-def _glob(pattern: tuple[str, ...], segments: list[str]) -> bool:
+def _glob(pattern: Sequence[str], segments: Sequence[str]) -> bool:
     """Match path segments against pattern segments; `**` is zero or more whole folders.
 
     Linear in pattern times path: it tracks the set of positions reached, with no backtracking.
@@ -100,14 +101,27 @@ def _glob(pattern: tuple[str, ...], segments: list[str]) -> bool:
     return len(segments) in positions
 
 
-def _resolved(path: str) -> str:
+def _resolved(path: str, home: str) -> str:
     """A path as the shell would hand it on: a leading `~`, `$HOME` or `${HOME}` is the home
     folder, and `..` and `//` are folded (the text only; no link is followed)."""
     for prefix in ("~", "$HOME", "${HOME}"):
         if path == prefix or path.startswith(prefix + "/"):
-            path = os.path.expanduser("~") + path[len(prefix) :]
+            path = home + path[len(prefix) :]
             break
     return posixpath.normpath(path) if ".." in path or "//" in path else path
+
+
+@lru_cache(maxsize=512)
+def _folded_segments(path: str, home: str) -> tuple[str, tuple[str, ...]]:
+    """The resolved path and its case-folded segments, worked out once per word however many
+    patterns look at it (the decision runs on the event loop, under the hook client's 0.5 s)."""
+    resolved: str = _resolved(path, home)
+    return resolved, tuple(_segments(resolved.casefold()))
+
+
+@lru_cache(maxsize=4)
+def _home_segments(home: str) -> tuple[str, ...]:
+    return tuple(_segments(home.casefold()))
 
 
 @dataclass(frozen=True)
@@ -129,13 +143,13 @@ class Pattern:
         if self.name_only:
             folded: str = name if name is not None else PurePosixPath(path).name.casefold()
             return fnmatch.fnmatchcase(folded, self.text)
-        resolved: str = _resolved(path)
-        segments: list[str] = _segments(resolved.casefold())
+        home: str = os.path.expanduser("~")
+        resolved, segments = _folded_segments(path, home)
         if self.anchor == "home":
-            home: list[str] = _segments(os.path.expanduser("~").casefold())
-            if segments[: len(home)] != home:
+            base: tuple[str, ...] = _home_segments(home)
+            if segments[: len(base)] != base:
                 return False
-            return _glob(self.parts, segments[len(home) :])
+            return _glob(self.parts, segments[len(base) :])
         if self.anchor == "root":
             return resolved.startswith("/") and _glob(self.parts, segments)
         return _glob(("**", *self.parts), segments)
@@ -155,6 +169,8 @@ def compile_pattern(raw: str) -> Pattern:
     for part in _segments(rest):
         if part != "**" or not parts or parts[-1] != "**":  # `**/**` is `**`
             parts.append(part)
+    if text.endswith("/") and parts[-1:] != ["**"]:  # `~/.ssh/` is the folder and all in it
+        parts.append("**")
     return Pattern(text, False, anchor, tuple(parts))
 
 
@@ -613,6 +629,17 @@ def load_file(path: Path) -> RuleFile:
     except UnicodeDecodeError:
         return _refused("not UTF-8 text")
     return parse(text)
+
+
+def in_force_path() -> tuple[Path, bool]:
+    """The file a recorder started now would read, and whether it is the active file.
+
+    The active file counts as there when anything is at that path (a dangling link too: it is
+    reported, not hidden); otherwise the packaged default is read.
+    """
+    if os.path.lexists(ACTIVE_RULES):
+        return ACTIVE_RULES, True
+    return default_path(), False
 
 
 def load_default() -> RuleFile:

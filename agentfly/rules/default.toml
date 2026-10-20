@@ -17,7 +17,8 @@
 # rule that comes first in this file.
 #
 # Conditions (all that are present must hold):
-#   event        read, write, shell (a list)
+#   event        read, write, shell (a list). `write` is the agent's Write tool only; other
+#                edit tools are not seen yet
 #   path         a list name; patterns without "/" match the file name, patterns with "/" the whole
 #                path ("**" crosses folders, "~/" is your home folder)
 #   path_except  a list name; paths matching it are left out
