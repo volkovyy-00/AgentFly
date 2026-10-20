@@ -36,6 +36,7 @@ hand; "approved" always means the owner's explicit yes):
 - D26 approved 2026-10-19 · How cards reach main once CI exists
 - D27 approved 2026-10-20 · A rules file cannot drop or weaken R1
 - D28 approved 2026-10-20 · `init -g` refreshes an unedited rules file
+- D29 approved 2026-10-20 · How long the recorder keeps a chat's session note
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -741,3 +742,13 @@ the current default (bytes checked against the package's RECORD hash and parsed 
 an edited file is kept with a one-line notice. `doctor` warns only when the active file equals an
 older shipped default. A test pins the current default's hash into the set. Merging edits into an
 edited file stays in V7.
+
+## D29. How long the recorder keeps a chat's session note
+Status: **approved (2026-10-20), as written** · Cards: F11 · Tested by: F11
+A chat's note (mark, triggers, step counter, parent link) is dropped 29 days after its last
+activity, one day past history's 28 (D14), so a reopened chat never overwrites its own history rows.
+Kept regardless of age: a chat that is marked, has a trigger or an inherited mark or trigger window
+still open, every parent chat of a kept chat, and the Task links that tie them (D21). SPEC §5 ("clears
+only when a new chat starts") and D14 (`wipe` never clears marks) stand. A command to forget old
+marks is a later decision if kept chats pile up (2026-10-20: 95 chats, 48 marked, mostly rehearsals).
+Known gap: Neo4j has no retention, so a reopened chat's new steps can MERGE onto old Step nodes.
