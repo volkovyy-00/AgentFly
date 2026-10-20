@@ -23,6 +23,8 @@ import re
 import stat
 import string
 import tomllib
+from bisect import bisect_right
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -266,7 +268,10 @@ def _folded_name(text: str) -> str:
     return PurePosixPath(text).name.casefold()
 
 
-@lru_cache(maxsize=64)
+# The three memos below hold 512 simple commands, not 64: a long line is many of them (`a ; b ; …`),
+# and every clause that has a command list reads each one, so a smaller memo is worked out again
+# for each clause (spec §4.7).
+@lru_cache(maxsize=512)
 def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
     """Where each program name first appears in a command (read only; shared by every clause)."""
     first: dict[str, int] = {}
@@ -275,11 +280,21 @@ def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return first
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=512)
 def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     """Where each case-folded word of a command last stands (read only; shared by every clause),
     so that "this word comes after position p" is one comparison, not a scan of the rest."""
     return {word.casefold(): index for index, word in enumerate(argv)}
+
+
+@lru_cache(maxsize=512)
+def _words_by_last(argv: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    """The distinct case-folded words of a command, the one that stands last earliest first, and
+    where each stands (read only). The words after position p are the tail from
+    `bisect_right(positions, p)`, so how many there are is one search, not a scan."""
+    last: dict[str, int] = _last_positions(argv)
+    words: list[str] = sorted(last, key=last.__getitem__)
+    return tuple(words), tuple(last[word] for word in words)
 
 
 @lru_cache(maxsize=64)
@@ -482,6 +497,70 @@ def _action_path(action: Mapping[str, Any], event: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+# A clause's command list as the clause looks it up (spec §4.7): program -> key -> the entries'
+# other extra words. The key of an entry is its rarest extra word among that program's entries (the
+# first of them on a tie), or None for an entry with no extra word.
+_Keys = dict[str | None, tuple[tuple[str, ...], ...]]
+_Index = dict[str, _Keys]
+
+
+def _command_index(command: tuple[tuple[str, ...], ...]) -> _Index:
+    """Index a command list. Identical entries are kept once. An entry waits under its rarest word,
+    so it is looked at only in a command that has that word: entries that share a program and a
+    first word (`cat w a0` ... `cat w a199`) are keyed apart. What is stored under a key is the
+    entry's other extra words; the key word itself is known to hold by then."""
+    entries: dict[str, list[tuple[str, ...]]] = {}
+    for program, *extras in dict.fromkeys(command):
+        entries.setdefault(program, []).append(tuple(extras))
+    index: _Index = {}
+    for program, listed in entries.items():
+        held: Counter[str] = Counter(word for extras in listed for word in set(extras))
+        keyed: dict[str | None, list[tuple[str, ...]]] = {}
+        for extras in listed:
+            key: str | None = min(extras, key=held.__getitem__) if extras else None
+            keyed.setdefault(key, []).append(tuple(word for word in extras if word != key))
+        index[program] = {key: tuple(dict.fromkeys(rest)) for key, rest in keyed.items()}
+    return index
+
+
+def _key_lookups(count: int) -> None:
+    """A seam for tests, called with the number of keys about to be looked up for one program of
+    one simple command (a test counts them). Does nothing."""
+
+
+def _entry_follows(last: Mapping[str, int], at: int, extras: tuple[str, ...]) -> bool:
+    """Every extra word of an entry stands after position `at` (`last`: `_last_positions`). Every
+    entry the index cannot rule out comes here, so a test counts the calls."""
+    return all(last.get(extra, -1) > at for extra in extras)
+
+
+def _bucket_hit(bucket: tuple[tuple[str, ...], ...], last: Mapping[str, int], at: int) -> bool:
+    return any(_entry_follows(last, at, rest) for rest in bucket)
+
+
+def _program_hit(keys: _Keys, argv: tuple[str, ...], at: int) -> bool:
+    """One listed program, first standing at `at` in a simple command: some entry holds. Of the
+    program's keys and the distinct words after `at`, the smaller side is walked."""
+    if None in keys:  # an entry with no extra word fires on the program alone
+        return True
+    last: dict[str, int] = _last_positions(argv)
+    if len(keys) > 1:  # one key is looked up at once; more are weighed against the words after
+        words, positions = _words_by_last(argv)
+        start: int = bisect_right(positions, at)
+        if len(words) - start < len(keys):
+            _key_lookups(len(words) - start)
+            for word in words[start:]:
+                bucket = keys.get(word)
+                if bucket is not None and _bucket_hit(bucket, last, at):
+                    return True
+            return False
+    _key_lookups(len(keys))
+    for key, bucket in keys.items():
+        if last.get(key, -1) > at and _bucket_hit(bucket, last, at):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class Clause:
     """The conditions of a `match` rule, or of the `after` / `then` table of an `after_then`.
@@ -497,6 +576,14 @@ class Clause:
     command: tuple[tuple[str, ...], ...] = ()  # program, then extra whole words; case-folded
     command_class: str = ""
     host_not_in: frozenset[str] = frozenset()
+    # `command` as a look-up table, made here (a clause built by hand has one too). It follows from
+    # `command`, so it is no part of the clause's identity (a clause is hashed to cache a file).
+    _index: _Index = dataclasses.field(
+        default_factory=dict, init=False, hash=False, compare=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_index", _command_index(self.command))
 
     def _path_hit(self, text: str, home: str) -> bool:
         name: str = _folded_name(text)
@@ -513,16 +600,23 @@ class Clause:
         words include every extra word, in any order.
 
         Only the first word that is the program needs a look: what follows a later one is a
-        part of what follows the first. So a command is read once, however often it repeats the
-        program (this runs on the event loop, under the hook client's 0.5 s wait).
+        part of what follows the first. So a simple command is read once, however often it
+        repeats the program or stands in the line (this runs on the event loop, under the hook
+        client's 0.5 s wait). `_index` says which entries to look at.
         """
-        for argv in parsed.all_commands():
+        listed: _Index = self._index
+        for argv in dict.fromkeys(parsed.all_commands()):
             first: dict[str, int] = _first_positions(argv)
-            last: dict[str, int] = _last_positions(argv)
-            for program, *extras in self.command:
-                at: int | None = first.get(program)
-                if at is not None and all(last.get(extra, -1) > at for extra in extras):
-                    return True
+            if len(listed) <= len(first):  # walk the smaller side, look up the other
+                for program, keys in listed.items():
+                    at: int | None = first.get(program)
+                    if at is not None and _program_hit(keys, argv, at):
+                        return True
+            else:
+                for program, at in first.items():
+                    found: _Keys | None = listed.get(program)
+                    if found is not None and _program_hit(found, argv, at):
+                        return True
         return False
 
     def _host_hit(self, parsed: Parsed) -> bool:

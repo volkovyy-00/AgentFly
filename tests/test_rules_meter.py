@@ -8,13 +8,17 @@ charge: each start tried for a middle block is a step, each compare made costs
 
 from __future__ import annotations
 
+import random
 from typing import Any
 
 import pytest
 
+import agentfly.recorder.rules as rules_mod
 from agentfly.recorder import rulefile
 from agentfly.recorder.rulefile import Clause, Meter, WorkLimit, compile_pattern, metered
-from tests.test_rules_cost import command
+from tests.glob_oracle import old_command_hit
+from tests.rules_helpers import default_with, ruleset_of
+from tests.test_rules_cost import command, command_list_on_one_program
 
 HOME = "/h/me"
 
@@ -132,3 +136,146 @@ def test_distinct_candidates_keep_the_first_seen_order_and_the_text_after_eq_and
 
 def test_an_unparseable_command_naming_env_still_marks() -> None:
     assert r1_after().matches(shell("cat 'x .env"), {})
+
+
+# ---------------------------------------------------------------- command lists (spec §4.7)
+
+
+def command_clause(*entries: tuple[str, ...]) -> Clause:
+    return Clause(("shell",), command=entries)
+
+
+class Counts:
+    """What an index look-up did: key look-ups made, and entries whose extras were read."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.keys = 0
+        self.entries = 0
+        real_keys, real_entry = rulefile._key_lookups, rulefile._entry_follows
+
+        def keys(count: int) -> None:
+            self.keys += count
+            real_keys(count)
+
+        def entry(last: dict[str, int], at: int, extras: tuple[str, ...]) -> bool:
+            self.entries += 1
+            return real_entry(last, at, extras)
+
+        monkeypatch.setattr(rulefile, "_key_lookups", keys)
+        monkeypatch.setattr(rulefile, "_entry_follows", entry)
+
+
+def test_the_index_answers_as_the_old_loop() -> None:
+    rng = random.Random(20261020)
+    vocabulary = "cat a b c npm publish x".split()
+    answers = {True: 0, False: 0}
+    for _ in range(3000):
+        entries = tuple(
+            tuple(rng.choice(vocabulary) for _ in range(rng.randint(1, 3)))
+            for _ in range(rng.randint(1, 30))
+        )
+        line = " ; ".join(
+            " ".join(rng.choice(vocabulary) for _ in range(rng.randint(1, 6)))
+            for _ in range(rng.randint(1, 6))
+        )
+        parsed = rulefile.normalize(line)
+        expected = old_command_hit(entries, parsed)
+        assert command_clause(*entries)._command_hit(parsed) == expected, (entries, line)
+        answers[expected] += 1
+    assert min(answers.values()) > 200, answers  # both answers occur in numbers
+
+
+def test_a_command_naming_200_programs_looks_up_the_smaller_side(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clause = command_clause(*[(f"p{i}", "x") for i in range(200)])
+    counts = Counts(monkeypatch)
+    line = " ".join([*(f"p{i}" for i in range(200)), "y"])
+    assert not clause.matches(shell(line), {})
+    assert counts.keys <= 200 + 1 and counts.entries == 0, (counts.keys, counts.entries)
+
+
+def test_entries_that_share_a_first_word_are_keyed_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    many = command_clause(*[("cat", "w", f"a{i}") for i in range(200)])
+    counts = Counts(monkeypatch)
+    assert not many.matches(shell(" ; ".join(["cat w x"] * 100)), {})
+    assert counts.entries == 0 and counts.keys <= 2, (counts.keys, counts.entries)
+    one = command_clause(("cat", "w", "a7"))
+    assert one.matches(shell("cat w x ; cat a7 w"), {})
+    assert not one.matches(shell("cat w x ; cat a7 z"), {})
+
+
+def test_a_long_command_on_a_short_list_looks_up_the_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    clause = command_clause(("cat", "k1"), ("cat", "k2"), ("cat", "k3"))
+    counts = Counts(monkeypatch)
+    assert not clause.matches(shell("cat " + " ".join(f"w{i}" for i in range(100))), {})
+    assert counts.keys == 3 and counts.entries == 0, (counts.keys, counts.entries)
+    assert clause.matches(shell("cat " + " ".join(f"w{i}" for i in range(100)) + " k2"), {})
+
+
+def test_an_entry_is_keyed_by_its_rarest_extra_word(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`b` is in every entry, `c` only in the first: the first is looked at when `c` is there,
+    the others (keyed by their own rare words) when theirs are."""
+    clause = command_clause(("cat", "b", "c"), ("cat", "b", "d"), ("cat", "b", "e"))
+    counts = Counts(monkeypatch)
+    assert not clause.matches(shell("cat b"), {})
+    assert counts.entries == 0
+    assert clause.matches(shell("cat b e"), {})
+    assert counts.entries == 1
+
+
+def test_identical_entries_are_kept_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    clause = command_clause(*[("cat", "a", "b")] * 5, ("cat", "b", "a"))
+    counts = Counts(monkeypatch)
+    assert not clause.matches(shell("cat a"), {})
+    assert counts.entries <= 2, counts.entries  # (cat a b) once, (cat b a) once
+    assert clause.matches(shell("cat a b"), {})
+
+
+def test_an_entry_with_no_extra_word_fires_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    clause = command_clause(*[("cat", f"w{i}") for i in range(50)], ("ls",))
+    counts = Counts(monkeypatch)
+    assert clause.matches(shell("ls -l"), {})
+    assert not clause.matches(shell("cat x"), {})
+    assert counts.entries == 0
+
+
+def test_a_repeated_simple_command_is_read_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    clause = command_clause(("cat", "a"))
+    counts = Counts(monkeypatch)
+    assert not clause.matches(shell(" ; ".join(["cat x"] * 100)), {})
+    assert counts.keys == 1
+    assert clause.matches(shell(" ; ".join(["cat x"] * 100 + ["cat a"])), {})
+
+
+def test_a_long_line_of_simple_commands_is_worked_out_once_for_all_clauses() -> None:
+    """150 distinct simple commands are more than the old 64-entry memos held, so each clause read
+    them all again; now each is worked out once, whatever the number of clauses."""
+    memos = (rulefile._first_positions, rulefile._last_positions, rulefile._words_by_last)
+    for memo in memos:
+        memo.cache_clear()
+    line = " ; ".join(f"cat z{i} y" for i in range(150))
+    for i in range(20):
+        assert not command_clause(("cat", f"w{i}"), ("cat", f"v{i}")).matches(shell(line), {})
+    assert [memo.cache_info().misses for memo in memos] == [150, 150, 150]
+
+
+def test_the_index_is_not_part_of_the_clauses_identity() -> None:
+    one = command_clause(("cat", "a"), ("cat", "b"))
+    other = command_clause(("cat", "a"), ("cat", "b"))
+    assert one == other and hash(one) == hash(other)
+    assert "index" not in repr(one).casefold()
+    assert command_clause() == Clause(("shell",))
+
+
+def test_198_rules_of_200_cat_entries_on_150_cat_commands_check_few_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lists, rules = command_list_on_one_program()
+    ruleset = ruleset_of(default_with(lists, *rules))
+    action = shell(" ; ".join(f"cat z{i} y" for i in range(150)))
+    counts = Counts(monkeypatch)
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    verdict = rules_mod.decide(action, rules_mod.mark(action, session, ruleset), ruleset)
+    assert verdict == ("allow", None)
+    assert counts.entries == 0, counts.entries
