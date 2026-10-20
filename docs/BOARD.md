@@ -182,6 +182,21 @@ V7 and V9 can run in parallel.
 
 ---
 
+### F10 · Review fixes: uninstall, package check, step merge
+- **Owner:** worker-backend · brief docs/briefs/F10.md (pass 2 2026-10-20, against b84e2ca) · waits for the owner's go; may run alongside V5b (no shared files except new tests in tests/test_install_cli.py)
+- **Scope:** findings the lead verified 2026-10-20: uninstall service message under hand-typed sudo and single restart hint; same-version question names files; direct_url.json regular-file check; merge waiting slot freed on id join; evicted alarm in `flagged`; package tests fail on a network error under CI; `git rm result`. Not: links inside the tool env, sessions.json save per hook (own cards, proposed).
+- **Done when:** the brief's acceptance criteria hold.
+
+### F11 · Session state off the hook path
+- **Owner:** worker-backend · brief not written · after V5b (shares `sessions.py` and `app.py`) · approved by the owner 2026-10-20
+- **Scope:** `SessionStore.save` rewrites and fsyncs all of `sessions.json` inside every `/hook` answer, and nothing prunes it (lead measured 2026-10-20: `put()` 1.3 ms at 10 chats, 61 ms median at 5000). Settle what must be on disk before the answer (marks; `next_step`, since `steps` rows are `INSERT OR REPLACE` on (session_id, ord)), and add retention like D14.
+- **Done when:** a hook answer no longer waits on a whole-file rewrite; marks and step order survive a crash and a restart; the file stays bounded.
+
+### F12 · Package check: linked folders inside the tool environment
+- **Owner:** worker-backend · brief not written · after V5c (shares `agentfly/install/`) · approved by the owner 2026-10-20
+- **Scope:** `agentfly/install/packages.py` § `inspect` resolves the whole site-packages path, so a linked folder between the environment root and site-packages is either reported as "outside the environment" or not at all (SPEC §7: a file behind a linked folder inside the environment is a mismatch).
+- **Done when:** any linked folder from the environment root down is a named mismatch, and the wording names the link.
+
 ### F8 · Type checking: pyright
 - **Owner:** worker-backend · brief not written · after F7; alone, not alongside V5b (fixing type errors touches all of `agentfly/`)
 - **Scope (owner 2026-10-19: pyright approved):** before the brief, the lead counts basic-mode errors and checks how the pyright package gets its Node runtime (a first-run download would put the network in the check command; `pyright[nodejs]` would be a new dependency to ask about). Pyright in dev deps and AGENTS.md "Approved dependencies", basic mode, existing errors fixed (not silenced wholesale), a step in `ci.yml` and AGENTS.md's check command.
