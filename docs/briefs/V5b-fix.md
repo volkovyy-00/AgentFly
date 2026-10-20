@@ -1,31 +1,29 @@
-# V5b-fix · Review fixes on ag-v5b-rules-file (DRAFT: owner decisions A–C open; not dispatchable)
+# V5b-fix · Review fixes for V5b: trusted rules file, R1 minimum (D27), default refresh (D28), cost, `ask` end to end
 
-Source: lead trial 686ccbb (main 522b0b4 + V5b fe3386e): 3× check green (3871 passed, 5 skipped, 137–162 s); three fresh reviewers (rules engine; brief and tests; install, CLI, API), no blocker. Probes: lead scratchpad (not in repo).
+You are a worker on card V5b-fix in /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5b-rules-file. Follow AGENTS.md and this brief; report per docs/reports/README.md in `docs/reports/V5b-fix.md`. Never push; commit on branch ag-v5b-rules-file only, the lead merges. This brief, D27 and D28 are on main only: read them with `git show main:docs/briefs/V5b-fix.md` and `git show main:docs/DECISIONS.md`; do not merge main into the branch.
 
-## Owner decisions (open)
-- A. A valid active file may today drop R1, set it to `highlight`, or narrow it, with no problem in `/health` and doctor `ok`. Lead proposal: refuse such a file like an R0 entry (R1 must exist with severity `block`; the default runs and the problem is shown).
-- B. Packaged-rule updates never reach an install (`init -g` writes only when missing), so V5c's rules would reach no installed user. Lead proposal: doctor warns when the active file differs from the packaged default; the update path is V7's `apply`.
-- C. Who fixes: the V5b worker (very large context) or a fresh worker on the same branch running a plan with superpowers:subagent-driven-development. Lead proposal: fresh worker.
+**Summary.** V5b's branch passes its checks but three reviewers found that the active rules file is trusted without checks, a file can quietly weaken R1, the packaged default never reaches an install, a large file can make a hook miss its 0.5 s wait, and one timing test is flaky. Fix them on the same branch; V5b's report (`docs/reports/V5b.md` on the branch) describes the code.
 
-## Fix list (should-fix)
-1. Active file trust (D3): the recorder loads `rules.toml` without checking it. A symlink, a non-root owner or a group/other-writable mode is accepted silently (verified: such a file dropped R1, no `rules_problem`). Refuse it (no-follow open, uid 0, not group/other-writable) and run the default with a problem. Anchors: `rulefile.load_file`, `rules.load_active`.
-2. `init -g` copies `default.toml` from the user-writable tool environment late in `install`, after the hash check, unparsed. Read the bytes once, check them against the package's RECORD hash, require a clean parse, then write. Anchors: `installer._install_rules`, `packages.require`.
-3. Per-hook cost: path patterns are re-matched per word, per rule, per clause, and again in `store.reads_secret`. Verified: a valid file (20 `after_then` rules on one 200-entry list) plus a 300-word command takes 0.6 s, above the client's 0.5 s wait, so the offline guard answers (and allows `npm publish`). Compile each list once at load; reuse one per-hook result per list. Replace the 0.35 s wall-clock test in `tests/test_rulefile.py` (fails 3 of 4 under load) with a bound that does not depend on machine load.
-4. Match-everything check misses `[!x]*`, `*[a-z]*`, `.*` (verified: `secret_names_ok` with one of them turns off R1 marking, no error). Judge patterns by what they match, not by spelling.
-5. No test sends an `ask` answer through the hook client to its stdout; add one (StubRecorder returns the shell-warn answer; the client prints it unchanged).
-6. doctor `check_rules` says the file is "the one the running recorder read" but only reads `/health.rules_problem`; an edited, not-restarted file shows `ok`. Fix the wording or compare with what the recorder loaded. `/health.rules_problem` should say the default is in force.
-7. If A is approved: R1's id carries global meaning (`Session.marked`, D21 fallback, history flag, `sensitive` badge via `names.is_sensitive`); the A check covers it for v1.
+**Written against:** branch head fe3386e, main 7fcdf77 (2026-10-20).
 
-## Nits
-- `tests/test_rules_load.py` "unknown field" case is a second syntax error; add a real unknown field through `load_active` → `/health` → doctor.
-- Dead code / double sources: `rules.RULES` mirror, `deny_messages`, `is_outbound_send`, `R1_MESSAGE`, `MARK_RULE` in two modules, `decide` then `find_rule` (lookup not once), import inside `names.is_sensitive`.
-- `rules test` with 0 tests exits 0; a missing FILE says "not a file"; `schema = 1.0` accepted; `_folded_segments` cache keeps 512 whole words.
-- AGENTS.md "Testing" lacks the three wheel tests; edits to AGENTS.md "Commands"/"Hook facts" are outside Touches (lead reviews).
-- Duplicate tests: `test_rules_api` method refusals repeat `test_app`; `test_rules_cli` REFUSED ×2; `not hasattr(store, "find_rule")` proves little.
+**References**
+- `docs/DECISIONS.md` § D27 (R1's minimum, written in code next to R0; refused like an entry for R0) and § D28 (hashes of shipped defaults; `init -g` replaces only an unedited file); § D3 (root-owned active file). SPEC.md § 5 lists the names R1's minimum must cover.
+- `agentfly/recorder/rulefile.py` § `load_file`, § `MAX_FILE_BYTES`, § `MARK_RULE`; `agentfly/recorder/rules.py` § `load_active`, § `mark`, § `reads_secret`, § `is_secret_path` (R1's id drives the mark, the history flag and the page's sensitive badge, so a weak R1 weakens all of them; the `fallback_secret` path exists only because R1 may be missing).
+- `agentfly/install/installer.py` § `_install_rules`, § `_write_atomic`; `agentfly/install/packages.py` § `require` (hashes the tool environment at the start of `install`; `_install_rules` reads `default.toml` from it much later, unchecked and unparsed).
+- `agentfly/install/checks.py` § `check_rules` (says it reports what the running recorder read, but reads only `/health.rules_problem`); `agentfly/cli/status.py`, `agentfly/cli/start.py` (print no rules problem).
+- `tests/test_rulefile.py` § `test_hundreds_of_slash_patterns_against_hundreds_of_words_stay_inside_the_budget` (0.35 s wall-clock bound; failed 3 of 4 runs on a loaded Mac).
 
-## Not in this fix (later cards)
-- V5c: `npm${IFS}publish`, `echo publish | xargs npm`, `xargs npm <<< publish`, `pnpm publish`, `npx -y npm@latest publish`, `npm $(echo publish)` dodge; `npm run publish` is a false positive. Offline guard has no backing for file rules.
-- Chats marked before V5b do not get the npm trigger after upgrade (accept; one line in the report).
-- Pending Task snapshot copies parent triggers at Task start (same as marks).
-- `status`/`start` do not show `rules_problem`; a broken packaged default makes launchd restart-loop with no reason shown.
-- Lead (on merge): SPEC §8 (~l.707) shell-warn answer lacks `agent_message`; SPEC §7 doctor list (~l.575–592) lacks the rules line.
+**Scope**
+- Starts at: V5b as on fe3386e. Order: the flaky test first, then file trust, D27, the install read and D28, cost, the rest.
+- Touches: `agentfly/recorder/` (rulefile, rules, names, store, app), `agentfly/install/` (installer, packages, checks), `agentfly/cli/` (status, start, rules_check, rules_test), `agentfly/rules/default.toml` only if D27's check needs it, their tests and the hook client's, AGENTS.md "Testing" (also the three wheel tests V5b left out), SPEC § 5 (R1 minimum, refresh); remove code D27 makes dead.
+- Not included: new ways to spell `npm publish` (`npm${IFS}publish`, `xargs npm`, `pnpm`, `npx npm@…`; V5c); offline-guard backing for file rules; merging into an edited file (V7); a page view of rules; SPEC §7/§8 (lead).
+
+**Acceptance criteria**
+- An active file that is a symlink, not owned by root, or writable by group or others is not loaded: the default runs and `/health`, `/api/rules`, `doctor`, `agentfly start` and `agentfly status` say why (also for every other refused file).
+- Per D27, an active file whose R1 is missing, not an `after_then` `block`, has `after` off read or shell, leaves a file SPEC § 5 counts as secret unmarked or exempted (judged on sample file names, not pattern spelling: `.env*` in place of `.env` and `.env.*` loads), or has a `then` other than outbound shell with no further condition is refused as above, and `agentfly rules check` exits 1 naming R1; a file that only adds names or rewords R1's message loads.
+- `init -g` writes only a default whose bytes match the package's RECORD hash and parse cleanly; per D28 it replaces an unedited older default (and says a restart applies it), keeps an edited file with one notice line, and `doctor` warns only on an unedited older default; the current default's hash is pinned by a test.
+- With the largest file `agentfly rules check` accepts, a 300-word command gets its hook answer well inside the client's 0.5 s on this Mac, and `rules check` refuses a larger file; no test bounds wall-clock time tighter than it can hold on a loaded machine (3× full check green while another suite runs).
+- The hook client prints the recorder's shell-warn `ask` answer unchanged on stdout (tested through the client); `/health.rules_problem` says the default is in force; `rules check` refuses `[!x]*` and `*[a-z]*` as match-everything patterns; `rules test` on a file with no tests exits 1.
+- The AGENTS.md check is green; the demo replay answers stay byte-identical (also from the wheel).
+
+**Dependencies:** none. Close the V5b worker session before starting; the owner starts this worker by hand in the existing worktree (`dispatch.sh` refuses an existing branch).

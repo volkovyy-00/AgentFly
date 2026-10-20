@@ -737,7 +737,7 @@ exception (e.g. a company host) waits for V7's reviewed path.
 Status: **approved (2026-10-20), as written** · Cards: V5b-fix (install), V7 (merging edited files) · Tested by: V5b-fix
 The package carries the sha256 of every `default.toml` it has shipped. `init -g` replaces the active
 `rules.toml` only when its hash is in that set (the owner never edited it), with the checked bytes of
-the current default (fix 2: RECORD hash and a clean parse), and says a recorder restart applies it;
+the current default (bytes checked against the package's RECORD hash and parsed cleanly), and says a recorder restart applies it;
 an edited file is kept with a one-line notice. `doctor` warns only when the active file equals an
 older shipped default. A test pins the current default's hash into the set. Merging edits into an
 edited file stays in V7.
