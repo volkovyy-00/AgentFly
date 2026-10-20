@@ -33,6 +33,7 @@ from agentfly.install import (
 )
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 from tests.install_helpers import (
     TOOL_DISTS,
     fake_python_tar,
@@ -289,6 +290,23 @@ def test_a_fixed_file_with_a_recorder_still_on_the_default_asks_for_a_restart(
     assert check.level == "fail" and "restart" in check.text and "agentfly start" in check.text
 
 
+def test_a_rules_file_the_recorder_would_refuse_for_its_owner_fails_the_rules_line_only(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`doctor` reads the file as the recorder does: who owns it counts (V5b-fix)."""
+    monkeypatch.setattr(rulefile, "ACTIVE_OWNER_UID", os.getuid() + 1)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "is owned by" in check.text
+    assert world.levels("fail") == {"rules"}
+
+
+def test_a_rules_file_others_can_write_fails_the_rules_line(world: World) -> None:
+    world.layout.rules.chmod(0o666)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "written by group or others" in check.text
+    assert "rules" in world.levels("fail")
+
+
 def test_a_link_in_place_of_the_rules_file_fails_the_rules_line(
     world: World, tmp_path: Path
 ) -> None:
@@ -398,7 +416,9 @@ def put_another_agentfly_first(w: World) -> None:
     w.search_path = [str(other), *w.search_path]
 
 
-FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
+# The line each fault turns to fail. "a file the system user does not own" is two: the temporary
+# tree belongs to this user, so the rules file in it is not root's either, and `rules` says so.
+FAULTS: dict[str, tuple[str | set[str], Callable[[World], None]]] = {
     "a changed hook client": ("client", change_client),
     "a changed bundled Python": ("python", change_python),
     "a changed file of the package": ("package", change_package_file),
@@ -409,7 +429,7 @@ FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
     "no hooks.json": ("hooks", lambda w: w.layout.hooks_file.unlink()),
     "no hash record": ("record", lambda w: w.layout.record.unlink()),
     "a group-writable bundled Python": ("lock", make_python_group_writable),
-    "a file the system user does not own": ("lock", expect_another_owner),
+    "a file the system user does not own": ({"lock", "rules"}, expect_another_owner),
     "a missing hook client": ("client", lambda w: w.layout.client.unlink()),
     "KeepAlive off in the service file": ("keepalive", keepalive_off),
     "the service not loaded": ("service", lambda w: w.launchd.update(jobs={})),
@@ -444,7 +464,9 @@ FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
 def test_each_fault_turns_only_its_own_line_to_fail(name: str, world: World) -> None:
     expected, inject = FAULTS[name]
     inject(world)
-    assert world.levels("fail") == {expected}, world.results()
+    assert world.levels("fail") == ({expected} if isinstance(expected, str) else expected), (
+        world.results()
+    )
 
 
 def test_a_missing_record_leaves_what_needs_it_unchecked(world: World) -> None:

@@ -28,8 +28,16 @@ def choose_file(given: Path | None) -> tuple[Path, str]:
 
 
 def load(command: str, path: Path) -> rulefile.RuleFile | None:
-    """Read the file; print every problem to stderr and return None if it has any."""
-    loaded: rulefile.RuleFile = rulefile.load_file(path)
+    """Read the file; print every problem to stderr and return None if it has any.
+
+    The active file is read as the recorder reads it, who owns it included, so this never says
+    "ok" for a file the recorder would refuse. Any other file is a draft: it is the user's own.
+    """
+    loaded: rulefile.RuleFile = (
+        rulefile.load_active_file(path)
+        if rulefile.is_active_path(path)
+        else rulefile.load_file(path)
+    )
     if loaded.errors:
         for error in loaded.errors:
             print(f"agentfly rules {command}: {path}: {error}", file=sys.stderr)

@@ -556,6 +556,18 @@ def test_no_test_can_see_the_real_rules_file() -> None:
     assert not rulefile.ACTIVE_RULES.exists()
 
 
+def test_no_module_of_the_program_reads_a_rules_file_around_the_checks() -> None:
+    """Every reader goes through `load_bytes` (trust and the checks live there), never `parse`."""
+    root = Path(rulefile.__file__).resolve().parents[1]
+    callers = [
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if path.name != "rulefile.py"
+        and re.search(r"\brulefile\.parse\(|\bimport parse\b", path.read_text(encoding="utf-8"))
+    ]
+    assert callers == []
+
+
 def test_nothing_in_the_rules_file_module_reads_the_environment() -> None:
     text = Path(rulefile.__file__).read_text(encoding="utf-8")
     assert not re.search(r"\benviron\b|getenv", text)

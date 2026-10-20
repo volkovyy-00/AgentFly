@@ -132,7 +132,7 @@ def test_the_recorder_starts_on_an_invalid_file_with_the_default_and_logs_the_re
     with caplog.at_level(logging.WARNING, logger="agentfly"), start():
         assert rules_mod.current().source == "default"
         assert rules_mod.current().problem
-    assert any("packaged default is in force" in r.getMessage() for r in caplog.records)
+    assert any("packaged default rules are in force" in r.getMessage() for r in caplog.records)
 
 
 def test_the_recorder_reads_the_file_once_at_start(active_rules: Path) -> None:

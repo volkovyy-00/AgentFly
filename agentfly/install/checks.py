@@ -464,20 +464,21 @@ def check_claude_settings(ctx: Context) -> Finding:
 
 
 def check_rules(ctx: Context) -> Finding:
-    """The active rules file: there, valid, and the one the running recorder read.
+    """The active rules file: there, trusted, valid, and not refused by the running recorder.
 
-    `/health` says `rules_problem` only when the recorder rejected the file at its start, so a
-    recorder that is down proves nothing either way and never fails this line.
+    It reads the file as the recorder does (`load_active_file`, who owns it included). The only
+    thing it learns from the running recorder is `/health.rules_problem`, which is there only
+    when the recorder rejected the file at its start; it cannot see which rules the recorder
+    holds, and a recorder that is down proves nothing either way, so it never fails this line.
     """
     path = ctx.layout.rules
     reported = ctx.health.get("rules_problem") if ctx.health else None
-    if path.is_symlink():
-        return fail(f"{path} is a symbolic link; remove it, then run `agentfly init -g`")
-    if not path.exists():
+    if not os.path.lexists(path):
         return warn(
             f"{path} is missing, so the packaged default rules are in force; run `agentfly init -g`"
         )
-    loaded = rulefile.load_file(path)
+    owner = ctx.layout.owner[0] if ctx.layout.owner is not None else None
+    loaded = rulefile.load_active_file(path, owner)
     if loaded.errors:
         problem = rulefile.summary(loaded.errors)
         if reported:

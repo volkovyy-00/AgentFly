@@ -448,21 +448,23 @@ def activate(ruleset: RuleSet) -> None:
 
 
 def load_active() -> RuleSet:
-    """The active file's rules if it exists and is valid, else the packaged default. Never raises.
+    """The active file's rules if it exists, is trusted and valid, else the packaged default.
 
-    A file that exists but cannot be used is reported in `problem`; a missing file is the normal
-    case of a developer `serve` and says nothing.
+    Never raises. A file that exists but cannot be used (a link, not root's, writable by others,
+    or wrong inside) is reported in `problem`; a missing file is the normal case of a developer
+    `serve` and says nothing.
     """
     path, present = rulefile.in_force_path()
     try:
         if not present:
             return DEFAULT
-        loaded: RuleFile = rulefile.load_file(path)
+        loaded: RuleFile = rulefile.load_active_file(path)
         if loaded.errors:
-            return replace(DEFAULT, problem=f"{path}: {rulefile.summary(loaded.errors)}")
+            return replace(DEFAULT, problem=rulefile.refusal(path, loaded.errors))
         return build_ruleset(loaded, source="active", path=str(path))
     except Exception as exc:  # noqa: BLE001 - the recorder must start whatever the file holds
-        return replace(DEFAULT, problem=f"{path}: could not be read ({type(exc).__name__})")
+        reason = (f"could not be read ({type(exc).__name__})",)
+        return replace(DEFAULT, problem=rulefile.refusal(path, reason))
 
 
 def find_rule(rule_id: str | None) -> Rule | None:

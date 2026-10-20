@@ -105,7 +105,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError(ruleset.problem)  # a damaged install: hooks fall to the offline guard
     rules_module.activate(ruleset)
     if ruleset.problem:
-        logger.warning("rules: %s; the packaged default is in force", ruleset.problem)
+        logger.warning("rules: %s", ruleset.problem)  # the line already says what runs instead
     local_store.start(data_dir() / DB_NAME)
     if neo4j_opt_in():  # D14: neo4j.env alone does not turn Neo4j on
         graph_store.start()

@@ -13,13 +13,16 @@ failure becomes a message. The program supplies the engine-only command classes 
 
 from __future__ import annotations
 
+import errno
 import fnmatch
+import hashlib
 import os
 import posixpath
 import re
+import stat
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -31,6 +34,9 @@ from agentfly.recorder.normalize import Parsed, base_name, normalize
 # The file the recorder reads once at start. Tests (and nothing else) point this elsewhere; it is
 # always read as `rulefile.ACTIVE_RULES`, never copied. No flag or variable moves it (D3, D25).
 ACTIVE_RULES: Path = SYSTEM.rules
+# Who must own the active file: root, as D3 has it. Read at call time. Tests (and nothing else)
+# set their own user id, as they set `ACTIVE_RULES`; `tests/conftest.py` checks the value here.
+ACTIVE_OWNER_UID: int = SYSTEM.owner[0] if SYSTEM.owner is not None else 0
 
 SCHEMA: int = 1
 RESERVED_ID: str = "R0"  # built into the program; a rules file may not list it
@@ -306,14 +312,33 @@ class RuleFile:
     rules: tuple[RuleSpec, ...]
     errors: tuple[str, ...]  # a file with any of these is not used
     lint: tuple[str, ...]  # `rules check` prints these; the file is still used
+    sha256: str = ""  # of the bytes that were read, BOM and all; "" for a file never read
 
 
-def summary(errors: tuple[str, ...]) -> str:
+def summary(errors: tuple[str, ...], limit: int = MAX_SUMMARY_CHARS) -> str:
     """One short line for `/health` and `doctor`: the first problem and how many more."""
     first: str = " ".join(errors[0].split()) if errors else "no problem"
     more: str = f" (and {len(errors) - 1} more)" if len(errors) > 1 else ""
     text: str = first + more
-    return text if len(text) <= MAX_SUMMARY_CHARS else text[: MAX_SUMMARY_CHARS - 3] + "..."
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+DEFAULT_IN_FORCE: str = "the packaged default rules are in force"
+MAX_PROBLEM_CHARS: int = 400  # what `/health` sends: the tail must never be cut off
+
+
+def refusal(path: Path | str, errors: tuple[str, ...]) -> str:
+    """The one line that says a file was not used and what runs instead (`/health`, the API).
+
+    Always ends with `DEFAULT_IN_FORCE` and is at most `MAX_PROBLEM_CHARS` long: a long path or
+    a long first problem is shortened, never the part that says what is running.
+    """
+    shown: str = str(path)
+    if len(shown) > 150:
+        shown = "..." + shown[-147:]
+    tail: str = f"; {DEFAULT_IN_FORCE}"
+    room: int = max(MAX_PROBLEM_CHARS - len(shown) - len(": ") - len(tail), 40)
+    return f"{shown}: {summary(errors, room)}{tail}"
 
 
 def rules_word(count: int) -> str:
@@ -610,10 +635,30 @@ def default_text() -> str:
     return default_path().read_text(encoding="utf-8")
 
 
-def load_file(path: Path) -> RuleFile:
-    """Read and parse a file. Never raises; a file that cannot be read is an error message.
+def sha256_of(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
 
-    The messages do not name the file: whoever shows them says which file it was.
+
+def load_bytes(raw: bytes) -> RuleFile:
+    """Read a rules file's bytes: size, UTF-8, TOML, then the checks. Never raises.
+
+    Every reader of a rules file in the program comes through here, so no reader can skip a check.
+    """
+    digest: str = sha256_of(raw)
+    if len(raw) > MAX_FILE_BYTES:
+        return replace(_refused(f"too large (over {MAX_FILE_BYTES} bytes)"), sha256=digest)
+    try:
+        text: str = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return replace(_refused("not UTF-8 text"), sha256=digest)
+    return replace(parse(text), sha256=digest)
+
+
+def load_file(path: Path) -> RuleFile:
+    """Read and check a file (a draft, or the packaged default). Never raises.
+
+    The messages do not name the file: whoever shows them says which file it was. The active file
+    is read by `load_active_file`, which also checks who owns it.
     """
     try:
         if not path.is_file():
@@ -622,13 +667,84 @@ def load_file(path: Path) -> RuleFile:
             raw: bytes = handle.read(MAX_FILE_BYTES + 1)
     except OSError as exc:
         return _refused(f"cannot be read: {exc.strerror or type(exc).__name__}")
-    if len(raw) > MAX_FILE_BYTES:
-        return _refused(f"too large (over {MAX_FILE_BYTES} bytes)")
+    return load_bytes(raw)
+
+
+class _Untrusted(Exception):
+    """The active file is not one the recorder may believe; the text says why and what to do."""
+
+
+def _who(uid: int) -> str:
+    return "root" if uid == 0 else f"user id {uid}"
+
+
+def _trusted_bytes(path: Path, uid: int) -> bytes:
+    """The active file's bytes, if it is a plain file owned by `uid` that only `uid` can write.
+
+    One descriptor does it all, so nothing can be swapped between the check and the read:
+    `O_NOFOLLOW` refuses a link in the last place, `O_NONBLOCK` lets a named pipe open (and then
+    fail the type check) instead of hanging the recorder at its start, and `fstat` looks at the
+    file that was opened. A folder above it is not checked: the installer made it root's.
+    """
+    flags: int = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
     try:
-        text: str = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return _refused("not UTF-8 text")
-    return parse(text)
+        fd: int = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:  # also a link that points nowhere
+            raise _Untrusted(
+                "is a symbolic link; the recorder does not read a rules file through a link"
+            ) from exc
+        raise _Untrusted(f"cannot be read: {exc.strerror or type(exc).__name__}") from exc
+    try:
+        info: os.stat_result = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise _Untrusted("is not a regular file")
+        if info.st_uid != uid:
+            raise _Untrusted(
+                f"is owned by {_who(info.st_uid)}, not {_who(uid)}; if you trust what it says, "
+                f"give it to {_who(uid)} (sudo chown, sudo chmod 644)"
+            )
+        if info.st_mode & 0o022:
+            raise _Untrusted(
+                f"can be written by group or others (mode {stat.S_IMODE(info.st_mode):04o}); "
+                f"review what it says first, then sudo chmod 644 it"
+            )
+        chunks: list[bytes] = []
+        total: int = 0
+        while total <= MAX_FILE_BYTES:
+            chunk: bytes = os.read(fd, MAX_FILE_BYTES + 1 - total)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise _Untrusted(f"cannot be read: {exc.strerror or type(exc).__name__}") from exc
+    finally:
+        os.close(fd)
+
+
+def load_active_file(path: Path, uid: int | None = None) -> RuleFile:
+    """Read the active rules file the way the recorder does, trust check first. Never raises.
+
+    `uid` is who must own it (default `ACTIVE_OWNER_UID`, read now). A file that is a link, not
+    that user's, or writable by anyone else is refused like one with a syntax error.
+    """
+    try:
+        raw: bytes = _trusted_bytes(path, ACTIVE_OWNER_UID if uid is None else uid)
+    except _Untrusted as exc:
+        return _refused(str(exc))
+    return load_bytes(raw)
+
+
+def is_active_path(path: Path) -> bool:
+    """Is this the active file? (`rules check` and `rules test` then read it like the recorder.)"""
+    if path == ACTIVE_RULES:
+        return True
+    try:
+        return os.path.samefile(path, ACTIVE_RULES)
+    except OSError:
+        return False
 
 
 def in_force_path() -> tuple[Path, bool]:

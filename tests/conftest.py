@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from agentfly.install import packages, service
+from agentfly.install.layout import SYSTEM
 from agentfly.recorder import rulefile, rules
 from tests.helpers import copy_client, free_port
 from tests.install_helpers import make_tool_env
@@ -15,6 +17,10 @@ from tests.service_helpers import Launchd
 
 # Taken at import: a test that patches `rules.DEFAULT` must not change what is put back.
 PACKAGED_DEFAULT = rules.DEFAULT
+
+# Taken at import too: the production owner of the active file is the system user (D3), and the
+# tests below give it up for their own user id. This is the one place that says they agree.
+assert SYSTEM.owner is not None and rulefile.ACTIVE_OWNER_UID == SYSTEM.owner[0] == 0
 
 
 @pytest.fixture(autouse=True)
@@ -60,10 +66,17 @@ def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     The recorder reads `rulefile.ACTIVE_RULES` once at start; here it is a file that does not
     exist, so the packaged default is in force. A test that wants other rules writes this path.
     A recorder started as a child process gets the same by its launch snippet (`RECORDER_CODE`).
+
+    The recorder only believes a file that root owns and nobody else can write (V5b-fix); a test
+    writes as itself, so the owner it expects here is this user, and the umask is the usual 022
+    so a file a test writes is 0644 whatever the machine's own umask is.
     """
     path = tmp_path / "no-active-rules.toml"
     monkeypatch.setattr(rulefile, "ACTIVE_RULES", path)
+    monkeypatch.setattr(rulefile, "ACTIVE_OWNER_UID", os.getuid())
+    old_umask = os.umask(0o022)
     yield path
+    os.umask(old_umask)
     rules.activate(PACKAGED_DEFAULT)  # no test leaves other rules in force
 
 
