@@ -260,21 +260,27 @@ lines for them (R0 and normalisation: V5).
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
   file itself has not been seen).
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
-  its own `HOME`, temporary folders and ports. `free_port` picks a free port whose remainder
-  is the worker's own number (`PYTEST_XDIST_WORKER[_COUNT]`), and `StubRecorder` lets the system
-  pick its port, so two workers' `free_port` results never collide (a port handed to a
-  subprocess is still checked first and bound later; a crashed worker's replacement, gw8 of 8,
-  can share a class with a live one). The package tests (one wheel build,
-  files planted in the install and put back) carry `xdist_group(name="package")`; a test
-  that asserts a time limit or leans on a sleep carries `@wallclock` (`tests/helpers.py`),
-  and a test that reads the clock without it fails a check. Each group runs on one worker, in
-  file order. `strict_markers` makes an unknown marker an error, serial or parallel.
+  its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
+  20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by
+  the worker count is the worker's own number (`PYTEST_XDIST_WORKER[_COUNT]`); `StubRecorder`
+  lets the system pick its port. So no other worker's `free_port` and no port-0 bind can take a
+  port between its check and the moment a subprocess binds it (a crashed worker's replacement,
+  gw8 of 8, can share a class with a live worker; a stranger process can still win the race).
+  The package tests (one wheel build, files planted in the install and put back) carry
+  `xdist_group(name="package")`. A test that asserts a time limit or leans on a sleep carries
+  `@wallclock` (`tests/helpers.py`), put there by hand. The check sees only this: a test whose
+  own body names `perf_counter` or `monotonic` and lacks the mark fails, and so does a module
+  that names either and never uses `@wallclock`. `time.time`, `sleep`, a `join` timeout and a
+  helper that times for the test are not scanned. Each group runs on one worker, in file order.
+  `strict_markers` makes an unknown marker an error, serial or parallel.
 - CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
   refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes
-  and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA, a `secrets`
-  word, persisted checkout credentials or a non-macOS runner, or loses the cancel of an older
-  pull-request run, `uv sync --locked` or one of the three check commands above (read from this
-  file, run in this order).
+  and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA or not one
+  of the three approved actions, a `with:` input beyond the list for that action (no token, no
+  cache, checkout keeps no credentials), a `secrets` word, a runner other than `macos-15`, or a
+  `run:` of more than one line (one command per step: `bash -e` carries on past a failed `a`
+  in `a && b`); or if it loses the cancel of an older pull-request run, `uv sync --locked` or
+  one of the three check commands above (read from this file, run in this order).
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole

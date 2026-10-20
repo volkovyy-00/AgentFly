@@ -34,11 +34,17 @@ CHECK_LABELS = {
 TOP_KEYS = {"name", "on", "permissions", "concurrency", "jobs"}
 JOB_KEYS = {"runs-on", "timeout-minutes", "steps"}
 STEP_KEYS = {"name", "uses", "with", "run"}
-# AGENTS.md: ask before adding an action. A new one needs a deliberate edit of this set.
-APPROVED_ACTIONS = {"actions/checkout", "astral-sh/setup-uv", "actions/setup-node"}
+# AGENTS.md: ask before adding an action. A new one needs a deliberate edit of this table. Each
+# action takes exactly these inputs: no token, and no cache (setup-uv and setup-node turn their
+# cache on by themselves when the input is left out).
+ACTION_INPUTS = {
+    "actions/checkout": {"persist-credentials": "false"},
+    "astral-sh/setup-uv": {"enable-cache": "false"},
+    "actions/setup-node": {"node-version-file": "ui/.nvmrc", "package-manager-cache": "false"},
+}
+RUNNER = "macos-15"
 FORBIDDEN_WORDS = ("secrets", "pull_request_target", "workflow_run")
 PINNED = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
-MACOS = re.compile(r"^macos-[\w.-]+$")
 
 # ---------------------------------------------------------------- the YAML subset
 
@@ -245,14 +251,6 @@ def steps_of(job: Any) -> list[dict[str, Any]]:
     return [step for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
 
 
-def run_lines(steps: list[dict[str, Any]]) -> list[str]:
-    lines: list[str] = []
-    for step in steps:
-        if isinstance(step.get("run"), str):
-            lines += [" ".join(line.split()) for line in step["run"].split("\n") if line.strip()]
-    return lines
-
-
 def unknown_keys(where: str, node: Any, allowed: set[str]) -> list[str]:
     extra = sorted(set(node) - allowed) if isinstance(node, dict) else []
     return [f"{where} has keys this test does not allow: {extra}"] if extra else []
@@ -262,23 +260,23 @@ def job_problems(name: str, job: Any) -> list[str]:
     if not isinstance(job, dict):
         return [f"job {name} is not a mapping"]
     found = unknown_keys(f"job {name}", job, JOB_KEYS)
-    runner = job.get("runs-on")
-    if not isinstance(runner, str) or not MACOS.match(runner):
-        found.append(f"job {name}: runs-on must be one macOS label (macos-...), got {runner!r}")
+    if job.get("runs-on") != RUNNER:
+        found.append(f"job {name}: runs-on must be exactly {RUNNER}, got {job.get('runs-on')!r}")
     steps = steps_of(job)
     for step in steps:
         found += unknown_keys(f"a step of job {name}", step, STEP_KEYS)
         uses = step.get("uses")
-        if uses is not None and not (isinstance(uses, str) and PINNED.match(uses)):
+        if uses is None:
+            continue
+        action = str(uses).split("@")[0]
+        if not (isinstance(uses, str) and PINNED.match(uses)):
             found.append(f"uses must be pinned to a 40-character commit SHA, got {uses!r}")
-        elif uses is not None and uses.split("@")[0] not in APPROVED_ACTIONS:
+        elif action not in ACTION_INPUTS:
             found.append(f"action not approved in AGENTS.md: {uses!r}")
-    checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
-    if not checkouts:
+        elif step.get("with") != ACTION_INPUTS[action]:
+            found.append(f"{action} takes exactly {ACTION_INPUTS[action]}, got {step.get('with')}")
+    if not any(str(step.get("uses", "")).startswith("actions/checkout@") for step in steps):
         found.append(f"job {name}: no actions/checkout step")
-    for step in checkouts:
-        if step.get("with") != {"persist-credentials": "false"}:
-            found.append("checkout takes exactly `persist-credentials: false`")
     return found
 
 
@@ -289,11 +287,18 @@ def run_problems(jobs: dict[str, Any], agents: str) -> list[str]:
     wanted = ["uv sync --locked", *checks.values()]
     found = []
     for name, job in jobs.items():
-        lines = run_lines(steps_of(job))
+        runs = [step["run"] for step in steps_of(job) if "run" in step]
+        # One command per step: in a block, GitHub's `bash -e` goes on past a failed `a && b` line.
+        found += [
+            f"job {name}: a run value must be one line, one command per step: {run!r}"
+            for run in runs
+            if not isinstance(run, str) or "\n" in run
+        ]
+        lines = [" ".join(run.split()) for run in runs if isinstance(run, str)]
         absent = [cmd for cmd in wanted if cmd not in lines]
         found += [f"job {name} lacks the step: {cmd}" for cmd in absent]
         found += [
-            f"job {name} runs a line outside AGENTS.md: {x}" for x in lines if x not in wanted
+            f"job {name} runs a command outside AGENTS.md: {x}" for x in lines if x not in wanted
         ]
         places = [lines.index(cmd) for cmd in wanted if cmd in lines]
         if not absent and places != sorted(places):
@@ -401,8 +406,10 @@ MUTATIONS = [
         "",
         "persist-credentials",
     ),
-    ("a Linux runner", "runs-on: macos-15", "runs-on: ubuntu-latest", "macOS"),
-    ("a runner list", "runs-on: macos-15", "runs-on: [macos-15, ubuntu-latest]", "macOS"),
+    ("a Linux runner", "runs-on: macos-15", "runs-on: ubuntu-latest", "macos-15"),
+    ("a runner list", "runs-on: macos-15", "runs-on: [macos-15, ubuntu-latest]", "macos-15"),
+    ("an older macOS runner", "runs-on: macos-15", "runs-on: macos-14", "macos-15"),
+    ("a moving macOS label", "runs-on: macos-15", "runs-on: macos-latest", "macos-15"),
     ("no cancel", "  cancel-in-progress: " + CANCEL + "\n", "", "concurrency"),
     (
         "an inverted cancel",
@@ -467,7 +474,45 @@ MUTATIONS = [
         "another checkout input",
         "persist-credentials: false",
         "persist-credentials: false\n          ref: x",
-        "checkout takes exactly",
+        "takes exactly",
+    ),
+    ("uv cache switched on", "enable-cache: false", "enable-cache: true", "takes exactly"),
+    (
+        "no uv cache setting",
+        "        with:\n          enable-cache: false\n",
+        "",
+        "takes exactly",
+    ),
+    (
+        "a token for setup-uv",
+        "enable-cache: false",
+        "enable-cache: false\n          github-token: abc",
+        "takes exactly",
+    ),
+    (
+        "npm cache switched on",
+        "package-manager-cache: false",
+        "package-manager-cache: true",
+        "takes exactly",
+    ),
+    (
+        "another setup-node input",
+        "package-manager-cache: false",
+        "package-manager-cache: false\n          cache: npm",
+        "takes exactly",
+    ),
+    (
+        "two checks in one run block",
+        "run: npm --prefix ui ci && npm --prefix ui run check\n      - name: Stale-build check\n"
+        "        run: ",
+        "run: |\n          npm --prefix ui ci && npm --prefix ui run check\n          ",
+        "one line",
+    ),
+    (
+        "every step in one run block",
+        "      - run: uv sync --locked\n      - name: Check\n        run: ",
+        "      - run: |\n          uv sync --locked\n          ",
+        "one line",
     ),
 ]
 

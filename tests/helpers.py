@@ -24,13 +24,16 @@ NEO4J_ENV = "NEO4J_URI=neo4j+s://x.databases.neo4j.io\nNEO4J_USERNAME=u\nNEO4J_P
 wallclock = pytest.mark.xdist_group(name="wallclock")
 
 _PORT_TRIES = 10_000
-_DYNAMIC_PORTS = (49152, 65535)  # above 8787 and every port a service of ours uses
+# Above 8787 and every port a service of ours uses, below where the system picks port 0 (macOS
+# 49152-65535, Linux 32768-60999): a `StubRecorder` bind or a connection cannot take a port that
+# another worker was just handed and has not bound yet.
+_PORTS = (20000, 32767)
 
 
 def free_port() -> int:
     """A port nothing listens on that no other xdist worker of this run is handed.
 
-    A random port of the dynamic range, rounded up to the worker's own class: its remainder, by
+    A random port of `_PORTS`, rounded up to the worker's own class: its remainder, by
     the worker count, is the worker's number. So workers never share a port, on any system (the
     system's own choice for port 0 can follow a pattern). A crashed worker's replacement is
     numbered past the count (gw8 of 8), hence the remainder of that too; it can share a class with
@@ -39,7 +42,7 @@ def free_port() -> int:
     worker = os.environ.get("PYTEST_XDIST_WORKER", "")
     count = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
     own = int(worker[2:]) % count if worker.startswith("gw") else 0
-    low, high = _DYNAMIC_PORTS
+    low, high = _PORTS
     for _ in range(_PORT_TRIES):
         port = random.randint(low, high)
         port += (own - port) % count

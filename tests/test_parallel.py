@@ -41,9 +41,10 @@ def read_tests() -> list[tuple[Path, str, ast.FunctionDef]]:
 
 
 def test_a_test_that_reads_the_clock_is_on_the_wallclock_worker() -> None:
-    # Every test that asserts a time limit (or leans on a sleep) carries @wallclock, so these tests
-    # share one worker and do not compete with each other. This sees a test that reads the clock
-    # itself, and a module that times a test through a helper (it must use the mark somewhere).
+    # Tests that assert a time limit (or lean on a sleep) carry @wallclock by hand, so they share
+    # one worker and do not compete with each other. This scan sees only `perf_counter` and
+    # `monotonic`: in a test's own body (the test needs the mark), and anywhere in a module (the
+    # module must use the mark somewhere). `time.time`, `sleep` and helpers are not scanned.
     timers = [t for t in read_tests() if TIMED.search(ast.get_source_segment(t[1], t[2]) or "")]
     assert timers, "the scan found no test that reads the clock"
     bare = [
@@ -78,7 +79,7 @@ def test_a_worker_is_only_handed_ports_of_its_own_class(monkeypatch: pytest.Monk
         set_worker(monkeypatch, worker, 8)
         ports = [free_port() for _ in range(30)]
         assert {port % 8 for port in ports} == {int(worker[2:])}
-        assert all(49152 <= port <= 65535 for port in ports)
+        assert all(20000 <= port <= 32767 for port in ports)  # below where bind(0) picks
         for port in ports[:5]:  # nothing listens there
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", port))
