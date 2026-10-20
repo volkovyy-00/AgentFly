@@ -80,6 +80,19 @@ def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     rules.activate(PACKAGED_DEFAULT)  # no test leaves other rules in force
 
 
+@pytest.fixture(autouse=True)
+def rules_limit_hits() -> Iterator[None]:
+    """No test sees another's rules-limit hits (V5b-fix2).
+
+    `/health` adds `rules_limit` once a hook has left a rule unfinished, and a test that calls
+    `apply_rules` without running `lifespan` would leave the count to the next test on that worker.
+    """
+    from agentfly.recorder import app
+
+    yield
+    app.reset_rules_limit()
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Path:
     """A copy of the hook client alone in an empty folder."""

@@ -10,19 +10,29 @@ before.
 from __future__ import annotations
 
 import itertools
+import logging
+import re
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
+import agentfly.recorder.app as app_module
+import agentfly.recorder.rules as rules_mod
 from agentfly.cli.rules_test import run_tests
 from agentfly.recorder import rulefile
+from agentfly.recorder.memory import memory_steps
 from agentfly.recorder.rules import (
+    BLOCK_TAIL,
     DEFAULT,
     LIMIT_ID,
+    LIMIT_MESSAGE,
     LIMIT_RULE,
     LIMIT_WARN_RULE,
+    SKIP_TAIL,
     Rule,
     RuleSet,
     Session,
@@ -31,11 +41,13 @@ from agentfly.recorder.rules import (
     one_hook,
     winning_rule,
 )
+from tests.recorder_harness import Recorder
 from tests.rules_helpers import default_with, list_line, ruleset_of
 from tests.test_rules_cost import command, match_rule
 from tests.test_severities import push
 from tests.test_severities import rule as severity_rule
 from tests.test_severities import ruleset as severity_ruleset
+from tests.test_step_merge import event, live, post, pre
 
 # Five floating patterns: every word of `command(20)` holds `d…` folders and no `zN` folder, so
 # every middle walk runs to the end, none matches, and the budget runs out.
@@ -224,3 +236,170 @@ def test_one_hook_reads_the_budget_at_each_call(monkeypatch: pytest.MonkeyPatch)
     with one_hook() as meter:
         assert meter.left == 10 and rulefile.current_meter() is meter
     assert rulefile.current_meter() is None
+
+
+# ---------------------------------------------------------------- the recorder (V5b-fix2 §4.4)
+
+HEALTHY_KEYS = {"ok", "offline_guard_count", "last_hook_at"}
+LIMIT_LINE = re.compile(
+    r"rules limit reached by (\d+) hook\(s\) since the recorder started; "
+    r"last at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00, rules (.+)"
+)
+
+
+@pytest.fixture()
+def rec(tmp_path: Path) -> Iterator[Recorder]:
+    previous = app_module._store
+    app_module.graph_store.enabled = False
+    yield Recorder(tmp_path / "data")
+    app_module._store = previous
+
+
+@pytest.fixture()
+def app_client() -> Iterator[TestClient]:
+    """The app with its `lifespan` run (a bare `TestClient(app)` does not run it)."""
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
+        yield test_client
+
+
+def test_the_recorder_denies_with_the_limit_message_in_both_fields(rec: Recorder) -> None:
+    rules_mod.activate(heavy("block"))
+    assert rec.run("P", command(20)) == {
+        "permission": "deny",
+        "user_message": LIMIT_MESSAGE,
+        "agent_message": LIMIT_MESSAGE + BLOCK_TAIL,
+    }
+
+
+def test_a_padded_shell_command_with_an_unfinished_warn_asks(rec: Recorder) -> None:
+    rules_mod.activate(heavy("warn"))
+    assert rec.run("P", command(20)) == {
+        "permission": "ask",
+        "user_message": LIMIT_MESSAGE,
+        "agent_message": LIMIT_MESSAGE + SKIP_TAIL,
+    }
+
+
+def test_an_unfinished_warn_on_a_read_is_allowed_and_the_step_shows_the_limit(
+    rec: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rulefile, "FLOAT_STEPS", 10)  # one path cannot spend the real budget
+    warn_on_read = match_rule(0, 'path = "l"', "warn", event="read")
+    rules_mod.activate(ruleset_of(default_with(HEAVY_LIST + CHEAP_LISTS, warn_on_read)))
+    deep = "/w/" + "/".join(f"d{k}" for k in range(20)) + "/f.py"
+    assert rec.read("P", deep) == {"permission": "allow"}
+    [step] = memory_steps.snapshot(all_steps=True)["steps"]
+    assert (step["rule"], step["verdict"]) == (LIMIT_ID, "warned")
+
+
+def test_a_limit_deny_records_no_trigger_and_a_restart_judges_as_before(rec: Recorder) -> None:
+    """Review focus 1: the denied action does not run, so the trigger it would set is not kept."""
+    rules_mod.activate(heavy("block", "after_then"))
+    # The control: a path a floating pattern does match records the trigger, and `cat` is denied.
+    assert rec.run("K", "ls /w/d/d/d/z0/f.py")["permission"] == "allow"
+    assert rec.run("K", "cat notes.txt")["permission"] == "deny"
+
+    rec.task("P", "T1")
+    answer = rec.run("C", command(20), parent_tool_call_id="T1")
+    assert (answer["permission"], answer["user_message"]) == ("deny", LIMIT_MESSAGE)
+    for chat in ("P", "C"):
+        stored = rec.store.get(chat)
+        assert stored is not None and TRIGGER_ID not in stored.triggers
+        assert rec.run(chat, "cat notes.txt")["permission"] == "allow"
+
+    rec.restart()
+    for chat in ("P", "C"):
+        assert rec.run(chat, "cat notes.txt")["permission"] == "allow"
+    assert rec.run("K", "cat notes.txt")["permission"] == "deny"  # a trigger that was set stays
+
+
+def test_health_says_rules_limit_only_after_a_hit(app_client: TestClient) -> None:
+    rules_mod.activate(heavy("block"))  # `lifespan` activated the rules it loaded: after it
+    assert set(app_client.get("/health").json()) == HEALTHY_KEYS
+    post(app_client, event("beforeShellExecution", "c", command="ls"))
+    assert set(app_client.get("/health").json()) == HEALTHY_KEYS  # a hook that finished: no hit
+
+    answer = post(app_client, event("beforeShellExecution", "c", command=command(20)))
+    assert answer["permission"] == "deny"
+    body = app_client.get("/health").json()
+    assert set(body) == HEALTHY_KEYS | {"rules_limit"}
+    line = body["rules_limit"]
+    assert len(line) <= rulefile.MAX_PROBLEM_CHARS
+    match = LIMIT_LINE.fullmatch(line)
+    assert match is not None, line
+    assert match.groups() == ("1", MATCH_ID)
+
+    post(app_client, event("beforeShellExecution", "c", command=command(20)))
+    assert "reached by 2 hook(s)" in app_client.get("/health").json()["rules_limit"]
+
+
+def test_the_health_line_is_cut_to_fit_and_says_how_many_rules_it_left_out() -> None:
+    assert app_module.rules_limit_line() is None
+    ids = [f"{'r' * 60}{n:03d}" for n in range(190)]
+    app_module.report_rules_limit("c", ids, "none")
+    line = app_module.rules_limit_line()
+    assert line is not None and len(line) <= rulefile.MAX_PROBLEM_CHARS
+    assert LIMIT_LINE.fullmatch(line) is not None
+    assert ids[0] in line and ids[-1] not in line and re.search(r"and \d+ more$", line)
+
+
+@pytest.mark.parametrize(
+    ("severity", "answer"), [("block", "deny"), ("warn", "ask"), ("highlight", "none")]
+)
+def test_the_log_line_names_the_chat_and_rules_and_no_command_text(
+    rec: Recorder, caplog: pytest.LogCaptureFixture, severity: str, answer: str
+) -> None:
+    rules_mod.activate(heavy(severity))
+    with caplog.at_level(logging.WARNING, logger="agentfly"):
+        rec.run("chat-7", command(20) + " zz-secret-marker")
+    [record] = [r for r in caplog.records if "rules limit" in r.getMessage()]
+    text = record.getMessage()
+    assert record.levelno == logging.WARNING
+    assert "chat-7" in text and MATCH_ID in text and text.endswith(answer)
+    assert "zz-secret-marker" not in caplog.text
+
+
+def test_a_hook_that_finishes_is_neither_logged_nor_counted(
+    rec: Recorder, caplog: pytest.LogCaptureFixture
+) -> None:
+    rules_mod.activate(heavy("block"))
+    with caplog.at_level(logging.WARNING, logger="agentfly"):
+        assert rec.run("P", "ls")["permission"] == "allow"
+    assert "rules limit" not in caplog.text and app_module.rules_limit_line() is None
+
+
+@pytest.mark.parametrize("shell_first", [True, False])
+def test_a_merged_pair_with_a_limit_half_shows_the_limit_rule(
+    app_client: TestClient, shell_first: bool
+) -> None:
+    """Review focus 2: the two halves of one action are one step, and the denied half's rule shows.
+    (The client strips `tool_input`, so the preToolUse half carries no command.)"""
+    rules_mod.activate(heavy("block"))
+    halves = [
+        event("beforeShellExecution", "c", "t1", command=command(20)),
+        pre("Shell", "t1"),
+    ]
+    answers = [post(app_client, half) for half in (halves if shell_first else halves[::-1])]
+    assert sorted(a["permission"] for a in answers) == ["allow", "deny"]
+    [step] = live(app_client)
+    assert (step["rule"], step["verdict"]) == (LIMIT_ID, "blocked")
+    assert step["rule_text"] == step["user_message"] == LIMIT_MESSAGE
+    assert step["agent_message"] == LIMIT_MESSAGE + BLOCK_TAIL
+
+
+def test_a_fresh_start_forgets_the_limit_hit() -> None:
+    """Review focus 5: `lifespan` zeroes the counter, as it does `last_hook_at`."""
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as first:
+        rules_mod.activate(heavy("block"))
+        post(first, event("beforeShellExecution", "c", command=command(20)))
+        assert "rules_limit" in first.get("/health").json()
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as second:
+        assert set(second.get("/health").json()) == HEALTHY_KEYS
+
+
+def test_a_hit_in_one_test_is_not_seen_by_the_next(rec: Recorder) -> None:
+    """The conftest zeroes the counter after each test: a hit here (no `lifespan` runs) must not
+    show in a later test that pins the three `/health` keys."""
+    rules_mod.activate(heavy("block"))
+    rec.run("P", command(20))
+    assert app_module.rules_limit_line() is not None
