@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, NamedTuple
 
 from agentfly.install.layout import SYSTEM
 from agentfly.recorder.names import hosts_in_command
@@ -102,35 +102,94 @@ def _segments(text: str) -> list[str]:
     return [part for part in text.split("/") if part and part != "."]
 
 
-def _glob(pattern: Sequence[str], segments: Sequence[str]) -> bool:
-    """Match path segments against pattern segments; `**` is zero or more whole folders.
+class _Blocks(NamedTuple):
+    """A pattern's parts split at each `**` into blocks of fixed length (see `_glob`).
 
-    Linear in pattern times path: it tracks the set of positions reached, with no backtracking.
-    Every other part takes exactly one segment, so a position from which the parts still to come
-    do not fit in the path is dropped at once, and a path that is too short (or, with no `**`,
-    not exactly as long) is refused before any part is tried: a long pattern costs almost
-    nothing on the short paths that make up most words.
+    `head` is the part run before the first `**` (the whole pattern when there is none), `tail` the
+    run after the last, `middle` the non-empty runs between two `**`. `fixed` is the number of
+    parts that take one segment each, the length of the shortest path the pattern can match.
     """
-    total: int = len(segments)
-    left: int = len(pattern) - pattern.count(
-        "**"
-    )  # parts that take one segment each, still to come
-    if total < left or (left == len(pattern) and total != left):
-        return False
-    positions: set[int] = {0}
+
+    fixed: int
+    star: bool  # some `**`; otherwise the path has to be exactly `fixed` long
+    head: tuple[str, ...]
+    middle: tuple[tuple[str, ...], ...]
+    tail: tuple[str, ...]
+
+    @property
+    def floats(self) -> bool:
+        """Some run has a `**` on each side: the only shape that has to walk the path."""
+        return bool(self.middle)
+
+
+def _split(pattern: Sequence[str]) -> _Blocks:
+    runs: list[list[str]] = [[]]
     for part in pattern:
         if part == "**":
-            reached: set[int] = set(range(min(positions), total - left + 1))
+            runs.append([])
         else:
-            left -= 1
-            last: int = total - left  # from a later position the rest cannot fit
-            reached = {
-                i + 1 for i in positions if i < last and fnmatch.fnmatchcase(segments[i], part)
-            }
-        if not reached:
+            runs[-1].append(part)
+    fixed: int = sum(len(run) for run in runs)
+    if len(runs) == 1:
+        return _Blocks(fixed, False, tuple(runs[0]), (), ())
+    middle: tuple[tuple[str, ...], ...] = tuple(tuple(run) for run in runs[1:-1] if run)
+    return _Blocks(fixed, True, tuple(runs[0]), middle, tuple(runs[-1]))
+
+
+def _part_hit(segment: str, part: str) -> bool:
+    """One part against one segment; a bare `*` is any segment and needs no `fnmatch`."""
+    return part == "*" or fnmatch.fnmatchcase(segment, part)
+
+
+def _run_hit(block: Sequence[str], segments: Sequence[str], at: int) -> bool:
+    """The parts of a block against the segments from `at`, each part once."""
+    for offset, part in enumerate(block):
+        if not _part_hit(segments[at + offset], part):
             return False
-        positions = reached
-    return total in positions
+    return True
+
+
+def _place_middle(
+    middle: Sequence[Sequence[str]], segments: Sequence[str], start: int, end: int
+) -> bool:
+    """Find each middle block, left to right, at the earliest place from `start` to `end` that
+    follows the one before. Between `**` a block has a fixed length, so the earliest place is
+    always the safe one. This is the only walk through the path: every start position tried is a
+    step, and a pattern with no middle block never gets here."""
+    at: int = start
+    for block in middle:
+        last: int = end - len(block)  # the last place the block can start
+        while at <= last and not _run_hit(block, segments, at):
+            at += 1
+        if at > last:
+            return False
+        at += len(block)
+    return True
+
+
+def _glob(pattern: Sequence[str], segments: Sequence[str], blocks: _Blocks | None = None) -> bool:
+    """Match path segments against pattern segments; `**` is zero or more whole folders.
+
+    The parts are split at each `**` into blocks of fixed length, and the block kinds are checked
+    in a pinned order: the head at the start of the path, the tail at its end, then the middle
+    blocks. A path whose end does not fit is refused after a few compares, and a pattern with no
+    middle block (a head, a tail, or both) compares each part at most once, whatever the depth of
+    the path. Every part but `**` takes exactly one segment, so a path that is too short (or, with
+    no `**`, not exactly as long) is refused before any part is tried.
+
+    `blocks` is the split of `pattern`; `Pattern` passes the one it made once, and then `pattern`
+    is not read.
+    """
+    shape: _Blocks = blocks if blocks is not None else _split(pattern)
+    total: int = len(segments)
+    if total < shape.fixed or (not shape.star and total != shape.fixed):
+        return False
+    if not _run_hit(shape.head, segments, 0):
+        return False
+    tail_at: int = total - len(shape.tail)
+    if not _run_hit(shape.tail, segments, tail_at):
+        return False
+    return _place_middle(shape.middle, segments, len(shape.head), tail_at)
 
 
 def _resolved(path: str, home: str) -> str:
@@ -200,6 +259,11 @@ def _home_segments(home: str) -> tuple[str, ...]:
     return tuple(_segments(home.casefold()))
 
 
+def _effective(anchor: str, parts: tuple[str, ...]) -> tuple[str, ...]:
+    """The parts as matched: a pattern that may start anywhere has an implicit `**` in front."""
+    return parts if anchor else ("**", *parts)
+
+
 @dataclass(frozen=True)
 class Pattern:
     """One entry of a path list, case-folded.
@@ -213,22 +277,36 @@ class Pattern:
     name_only: bool
     anchor: str  # "", "root" or "home"
     parts: tuple[str, ...]
+    # The parts split at `**` once, here, not at every test (`compile_pattern`; slash patterns).
+    _blocks: _Blocks | None = None
 
-    def matches(self, path: str, name: str | None = None) -> bool:
-        """`name` is the path's folded file name when the caller has it already (one per path)."""
+    def blocks(self) -> _Blocks:
+        return self._blocks or _split(_effective(self.anchor, self.parts))
+
+    def matches(self, path: str, name: str | None = None, home: str | None = None) -> bool:
+        """`name` is the path's folded file name when the caller has it already (one per path),
+        `home` the home folder when the caller has it already (one per clause)."""
         if self.name_only:
             folded: str = name if name is not None else PurePosixPath(path).name.casefold()
             return fnmatch.fnmatchcase(folded, self.text)
-        home: str = os.path.expanduser("~")
+        if home is None:
+            home = os.path.expanduser("~")
         resolved, segments = _folded_segments(path, home)
         if self.anchor == "home":
             base: tuple[str, ...] = _home_segments(home)
             if segments[: len(base)] != base:
                 return False
-            return _glob(self.parts, segments[len(base) :])
+            return _glob(self.parts, segments[len(base) :], self.blocks())
         if self.anchor == "root":
-            return resolved.startswith("/") and _glob(self.parts, segments)
-        return _glob(("**", *self.parts), segments)
+            return resolved.startswith("/") and _glob(self.parts, segments, self.blocks())
+        return _glob(self.parts, segments, self.blocks())
+
+
+def floating(pattern: Pattern) -> bool:
+    """True when the pattern has a run of parts with `**` on both sides (an unanchored pattern
+    has an implicit `**` in front): `.ssh/**`, `a/**/b`, `**/x/**`. Only such a pattern walks the
+    path; every other one compares each part at most once whatever the depth."""
+    return not pattern.name_only and pattern.blocks().floats
 
 
 def compile_pattern(raw: str) -> Pattern:
@@ -247,7 +325,7 @@ def compile_pattern(raw: str) -> Pattern:
             parts.append(part)
     if text.endswith("/") and parts[-1:] != ["**"]:  # `~/.ssh/` is the folder and all in it
         parts.append("**")
-    return Pattern(text, False, anchor, tuple(parts))
+    return Pattern(text, False, anchor, tuple(parts), _split(_effective(anchor, tuple(parts))))
 
 
 # ---------------------------------------------------------------- clauses
@@ -289,15 +367,16 @@ class Clause:
     command_class: str = ""
     host_not_in: frozenset[str] = frozenset()
 
-    def _path_hit(self, text: str) -> bool:
+    def _path_hit(self, text: str, home: str) -> bool:
         name: str = _folded_name(text)
-        return any(p.matches(text, name) for p in self.path) and not any(
-            p.matches(text, name) for p in self.path_except
+        return any(p.matches(text, name, home) for p in self.path) and not any(
+            p.matches(text, name, home) for p in self.path_except
         )
 
     def _words_hit(self, parsed: Parsed) -> bool:
+        home: str = os.path.expanduser("~")  # once for the clause, not for each pattern test
         return any(
-            self._path_hit(candidate)
+            self._path_hit(candidate, home)
             for argv in parsed.all_commands()
             for word in argv
             for candidate in _candidates(word)
@@ -332,7 +411,9 @@ class Clause:
         if event is None or event not in self.events:
             return False
         if event != "shell":
-            return not self.path or self._path_hit(_action_path(action, event))
+            return not self.path or self._path_hit(
+                _action_path(action, event), os.path.expanduser("~")
+            )
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False

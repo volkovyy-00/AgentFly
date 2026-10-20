@@ -786,10 +786,10 @@ def test_hundreds_of_slash_patterns_against_hundreds_of_words_do_one_test_per_pa
     calls = 0
     real = rulefile._glob
 
-    def counting(pattern: Any, segments: Any) -> bool:
+    def counting(*args: Any) -> bool:
         nonlocal calls
         calls += 1
-        return real(pattern, segments)
+        return real(*args)
 
     monkeypatch.setattr(rulefile, "_glob", counting)
     assert not clause.matches(shell(command), {})

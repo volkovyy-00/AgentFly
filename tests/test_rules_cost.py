@@ -314,10 +314,12 @@ def test_a_hook_at_the_limit_makes_no_more_pattern_tests_than_the_units_allow(
     calls = 0
     real = rulefile.Pattern.matches
 
-    def counting(self: rulefile.Pattern, path: str, name: str | None = None) -> bool:
+    def counting(
+        self: rulefile.Pattern, path: str, name: str | None = None, home: str | None = None
+    ) -> bool:
         nonlocal calls
         calls += 1
-        return real(self, path, name)
+        return real(self, path, name, home)
 
     monkeypatch.setattr(rulefile.Pattern, "matches", counting)
     rec.run("P", command())
