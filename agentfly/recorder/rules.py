@@ -13,6 +13,7 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT, rulefile
@@ -98,6 +99,7 @@ def _argv_is_outbound(argv: tuple[str, ...]) -> bool:
     return False
 
 
+@lru_cache(maxsize=16)  # every `command_class` clause of every rule asks about the same command
 def parsed_is_outbound(parsed: Parsed) -> bool:
     """SPEC section 5 'Blocking': unparseable text, code a shell reads, inline code, or a tool."""
     if parsed.unparsed or parsed.unquoted_heredoc or parsed.code_heredoc or parsed.one_liner:

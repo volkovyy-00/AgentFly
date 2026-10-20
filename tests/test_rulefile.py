@@ -414,6 +414,12 @@ def path_clause(*patterns: str, event: str = "read", ok: tuple[str, ...] = ()) -
     return clause_of(doc(rule, lists=lists))
 
 
+def bare_clause(*patterns: str, event: str = "read") -> Clause:
+    """A clause built from patterns directly: it has not been through a file's work budget, so a
+    test of what one clause costs can use more patterns than a file may hold."""
+    return Clause((event,), tuple(rulefile.compile_pattern(p) for p in patterns))
+
+
 def test_a_pattern_without_a_slash_matches_the_file_name_in_any_case() -> None:
     clause = path_clause(".env", "*.pem")
     assert clause.matches(read("/a/b/.ENV"), {}) and clause.matches(read("x/Key.PEM"), {})
@@ -684,12 +690,11 @@ def test_hundreds_of_slash_patterns_against_hundreds_of_words_do_one_test_per_pa
     """The decision runs on the event loop under the hook client's 0.5 s wait.
 
     The bound is on work (one glob per pattern and word), not on seconds: a time limit tight
-    enough to mean something fails on a loaded machine, and a loose one proves nothing.
+    enough to mean something fails on a loaded machine, and a loose one proves nothing. (A file
+    may not hold this many patterns any more, see `test_rules_cost.py`; one clause can.)
     """
-    entries = ", ".join(f'"/opt/p{i}/**/x{i}.txt"' for i in range(rulefile.MAX_LIST_ENTRIES))
-    lists = f"[lists]\nnames = [{entries}]\n"
-    rule = MATCH.replace('command = "cmds"', 'path = "names"')
-    clause = clause_of(doc(rule, lists=lists))
+    patterns = 200
+    clause = bare_clause(*[f"/opt/p{i}/**/x{i}.txt" for i in range(patterns)], event="shell")
     words = 300
     command = "cat " + " ".join(f"/home/me/project/src/file{i}.py" for i in range(words))
     calls = 0
@@ -702,12 +707,12 @@ def test_hundreds_of_slash_patterns_against_hundreds_of_words_do_one_test_per_pa
 
     monkeypatch.setattr(rulefile, "_glob", counting)
     assert not clause.matches(shell(command), {})
-    assert calls <= rulefile.MAX_LIST_ENTRIES * (words + 1), "more than one glob per pair"
+    assert calls <= patterns * (words + 1), "more than one glob per pair"
 
 
 def test_one_path_is_resolved_once_however_many_patterns_look_at_it() -> None:
     rulefile._folded_segments.cache_clear()
-    clause = path_clause(*[f"/opt/p{i}/**/x.txt" for i in range(50)])
+    clause = bare_clause(*[f"/opt/p{i}/**/x.txt" for i in range(50)])
     clause.matches(read("/home/me/a/../b/file.py"), {})
     info = rulefile._folded_segments.cache_info()
     assert info.misses == 1 and info.hits == 49

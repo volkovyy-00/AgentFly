@@ -68,7 +68,19 @@ _ANY_FIELDS: frozenset[str] = _FIELDS_OF["match"] | _FIELDS_OF["after_then"]
 
 MAX_FILE_BYTES: int = 256 * 1024
 MAX_RULES: int = 200
-MAX_LIST_ENTRIES: int = 200  # patterns times words is the cost of one hook: see the test
+MAX_LIST_ENTRIES: int = 200
+# What one hook may cost in matching: the sum, over every clause of every rule, of `clause_work`.
+# The decision runs under the hook client's 0.5 s wait, and a command is up to hundreds of words.
+# Measured for a 300-word command (3 candidates a word) through the whole hook on the author's Mac:
+# about 32 ms with the packaged default, then about 0.5 ms for each unit below. At the limit the
+# slowest shapes tried (55 one-pattern rules; 5 floating "**" patterns; paths 20 folders deep) take
+# about 110 ms, a fifth of the wait. The weights below are fitted to those measurements.
+MAX_WORK: int = 200
+WORK_CLAUSE: int = 2  # a clause with path patterns looks at every word of the command once
+WORK_NAME: int = 1  # a pattern without "/" is one comparison per word
+WORK_SLASH: int = 4  # a pattern with "/" is a walk through the path's folders ...
+WORK_STAR: int = 12  # ... and each "**" (an unanchored pattern has one more) multiplies it
+WORK_ERROR: str = "asks for too much matching work per hook"
 MAX_PATTERN_CHARS: int = 200
 MAX_STARS: int = 8
 MAX_MESSAGE_CHARS: int = 500
@@ -118,12 +130,49 @@ def _resolved(path: str, home: str) -> str:
     return posixpath.normpath(path) if ".." in path or "//" in path else path
 
 
-@lru_cache(maxsize=512)
+# The decision runs on the event loop, under the hook client's 0.5 s wait, and every clause of every
+# rule looks at every word of the command. What is worked out about a word is worked out once,
+# whatever the number of patterns and clauses: a command of 300 words with up to 3 candidates each
+# is 900 entries, so these hold more than that. They keep text of recent commands in memory only.
+_WORD_MEMO = 2048
+
+
+@lru_cache(maxsize=_WORD_MEMO)
 def _folded_segments(path: str, home: str) -> tuple[str, tuple[str, ...]]:
     """The resolved path and its case-folded segments, worked out once per word however many
-    patterns look at it (the decision runs on the event loop, under the hook client's 0.5 s)."""
+    patterns look at it."""
     resolved: str = _resolved(path, home)
     return resolved, tuple(_segments(resolved.casefold()))
+
+
+@lru_cache(maxsize=_WORD_MEMO)
+def _folded_name(text: str) -> str:
+    """The case-folded file name of a path (or of a word that may be one)."""
+    return PurePosixPath(text).name.casefold()
+
+
+@lru_cache(maxsize=64)
+def _first_positions(argv: tuple[str, ...]) -> dict[str, int]:
+    """Where each program name first appears in a command (read only; shared by every clause)."""
+    first: dict[str, int] = {}
+    for index, word in enumerate(argv):
+        first.setdefault(base_name(word), index)
+    return first
+
+
+@lru_cache(maxsize=64)
+def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """The case-folded host names a command names."""
+    return tuple(host.casefold() for host in hosts_in_command(argv))
+
+
+@lru_cache(maxsize=_WORD_MEMO)
+def _candidates(word: str) -> tuple[str, ...]:
+    """A shell word and, if it holds `=` or `@`, what follows its last one (`--env-file=.env`,
+    `-d@.env`): each is looked at as a path."""
+    if "=" in word or "@" in word:
+        return tuple(dict.fromkeys((word, word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1])))
+    return (word,)
 
 
 @lru_cache(maxsize=4)
@@ -218,24 +267,21 @@ class Clause:
     path_except: tuple[Pattern, ...] = ()
     command: tuple[tuple[str, ...], ...] = ()  # program, then extra whole words; case-folded
     command_class: str = ""
-    host_not_in: tuple[str, ...] = ()
+    host_not_in: frozenset[str] = frozenset()
 
     def _path_hit(self, text: str) -> bool:
-        name: str = PurePosixPath(text).name.casefold()
+        name: str = _folded_name(text)
         return any(p.matches(text, name) for p in self.path) and not any(
             p.matches(text, name) for p in self.path_except
         )
 
     def _words_hit(self, parsed: Parsed) -> bool:
-        for argv in parsed.all_commands():
-            for word in argv:
-                if "=" in word or "@" in word:  # `--env-file=.env`, `-d@.env`
-                    candidates = {word, word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1]}
-                else:
-                    candidates = {word}
-                if any(self._path_hit(candidate) for candidate in candidates):
-                    return True
-        return False
+        return any(
+            self._path_hit(candidate)
+            for argv in parsed.all_commands()
+            for word in argv
+            for candidate in _candidates(word)
+        )
 
     def _command_hit(self, parsed: Parsed) -> bool:
         """Some word is the program (by base name, so wrappers do not hide it) and the later
@@ -246,9 +292,7 @@ class Clause:
         program (this runs on the event loop, under the hook client's 0.5 s wait).
         """
         for argv in parsed.all_commands():
-            first: dict[str, int] = {}
-            for index, word in enumerate(argv):
-                first.setdefault(base_name(word), index)
+            first: dict[str, int] = _first_positions(argv)
             for program, *extras in self.command:
                 at: int | None = first.get(program)
                 if at is not None and self._extras_after(argv, at, extras):
@@ -264,9 +308,9 @@ class Clause:
 
     def _host_hit(self, parsed: Parsed) -> bool:
         return any(
-            host.casefold() not in self.host_not_in
+            host not in self.host_not_in
             for argv in parsed.all_commands()
-            for host in hosts_in_command(argv)
+            for host in _hosts_of(argv)
         )
 
     def matches(self, action: Mapping[str, Any], classes: Mapping[str, CommandClass]) -> bool:
@@ -285,6 +329,35 @@ class Clause:
             and (not self.host_not_in or self._host_hit(parsed))
             and (not self.command_class or classes[self.command_class](parsed))
         )
+
+
+def pattern_work(pattern: Pattern) -> int:
+    """What one path pattern costs per word (see `MAX_WORK`)."""
+    if pattern.name_only:
+        return WORK_NAME
+    stars: int = pattern.parts.count("**") + (0 if pattern.anchor else 1)  # unanchored: `**/`
+    return WORK_SLASH + WORK_STAR * stars
+
+
+def clause_work(clause: Clause | None) -> int:
+    """What a clause costs per hook: a fixed part and its path patterns, which are tried on every
+    word. Command entries and host names are looked up once per command and shared by all the
+    clauses, so a long list of them costs nothing worth counting (measured: 190 rules of 200
+    entries add 14 ms)."""
+    if clause is None or not (clause.path or clause.path_except):
+        return 0
+    return WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
+
+
+def rule_work(spec: RuleSpec) -> int:
+    """What a rule costs per hook. R1's `after` is run twice for a shell command: once to mark the
+    chat, once to flag the step in the history (`store.build_step_record`)."""
+    twice: int = 2 if spec.id == MARK_RULE else 1
+    return clause_work(spec.clause) + twice * clause_work(spec.after) + clause_work(spec.then)
+
+
+def file_work(specs: Sequence[RuleSpec]) -> int:
+    return sum(rule_work(spec) for spec in specs)
 
 
 # ---------------------------------------------------------------- specs
@@ -466,7 +539,7 @@ def _clause(
     command = _compiled(
         where, _named(where, table, "command", lists, problems), _command_entry, problems
     )
-    hosts = tuple(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
+    hosts = frozenset(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
     command_class: Any = table.get("command_class", "")
     if "command_class" in table and not (
         isinstance(command_class, str) and command_class in COMMAND_CLASSES
@@ -604,6 +677,15 @@ def _parse(text: str) -> RuleFile:
     for number, raw in enumerate(raw_rules, 1):
         if (spec := _rule(number, raw, lists, seen, problems)) is not None:
             specs.append(spec)
+    total: int = file_work(specs)
+    if total > MAX_WORK:
+        heaviest: RuleSpec = max(specs, key=rule_work)
+        problems.add(
+            "",
+            f"{WORK_ERROR} ({total} units; at most {MAX_WORK}); the heaviest is rule "
+            f"{heaviest.id} with {rule_work(heaviest)}. Use fewer or shorter lists, names without "
+            f"'/' where a name will do, and fewer '**'",
+        )
     lint: list[str] = [
         f"rule {s.id}: no inline test; add a [[rule.test]]" for s in specs if not s.tests
     ]
@@ -768,7 +850,10 @@ def _with_minimum(parsed: RuleFile) -> RuleFile:
     error does not stop it, so `rules check` prints every problem at once.
     """
     own: str = f"rule {MARK_RULE}"
-    if parsed.errors and (not parsed.rules or any(e.startswith(own) for e in parsed.errors)):
+    if parsed.errors and (
+        not parsed.rules
+        or any(e.startswith((own, WORK_ERROR)) for e in parsed.errors)  # its grid runs R1 hundreds
+    ):  # of times: not on a clause that is already too heavy
         return parsed
     found: list[str] = _minimum_problems(parsed.rules)
     return replace(parsed, errors=(*parsed.errors, *found)) if found else parsed
