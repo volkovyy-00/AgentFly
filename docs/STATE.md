@@ -48,6 +48,6 @@ Pending decisions: D16
 ## Next 3 actions
 1. When V5b reports: trial it on top of main 5239e96 (expected conflicts: tests/test_package.py, AGENTS.md "Testing", SPEC.md); then: `head -n 6` of its report, update STATE; trial-merge, fresh reviewer, fixes back to the worker, merge.
 2. After V5b merges: dispatch F9 on the owner's go; add AGENTS.md Testing lines F10 left (CI fail-not-skip, hand-typed sudo uninstall).
-3. Then: F9 brief; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief after V5b merges.
+3. Then: move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief after V5b merges.
 
 Model used for rehearsals: Grok 4.7 High in Cursor chats.
