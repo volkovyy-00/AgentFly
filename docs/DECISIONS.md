@@ -34,6 +34,8 @@ hand; "approved" always means the owner's explicit yes):
 - D24 approved 2026-10-16 · `~/.claude/settings.json` is a third hook source
 - D25 approved 2026-10-16 · Hooks always use port 8787; no port file
 - D26 approved 2026-10-19 · How cards reach main once CI exists
+- D27 approved 2026-10-20 · A rules file cannot drop or weaken R1
+- D28 approved 2026-10-20 · `init -g` refreshes an unedited rules file
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -718,3 +720,24 @@ never pushes. "A red main blocks merges" (owner 2026-10-19) is checked on the ex
 `git fetch`, then the push run for `origin/main`'s SHA; no finished run counts as unknown, not green.
 A GitHub ruleset requiring a PR on main is not compatible with B's push of main unless the owner
 bypasses it; the owner's later choice.
+
+## D27. A rules file cannot drop or weaken R1
+Status: **approved (2026-10-20), as written** · Cards: V5b-fix · Tested by: V5b-fix
+SPEC §5 makes R0 and R1 the two rules v1 must have; R0 is in code, R1 sits in the rules file. An
+active file whose R1 is missing or weaker than a minimum written in code (next to R0) is refused
+like an entry for R0: the packaged default runs and `/health`, `/api/rules`, `doctor`, `agentfly
+start` and `agentfly status` say why. The minimum: an `R1` entry, kind `after_then`, severity
+`block`; `after` fires on read and shell with a secret-name list that holds at least SPEC §5's names
+and exceptions no wider than SPEC §5's; `then` fires on shell with `command_class = "outbound"` and
+no further condition. Widening and rewording the message are allowed. Measured against the code's
+minimum, not `default.toml`, so a wider later default never refuses an older file. Cost: a local
+exception (e.g. a company host) waits for V7's reviewed path.
+
+## D28. `init -g` refreshes an unedited rules file
+Status: **approved (2026-10-20), as written** · Cards: V5b-fix (install), V7 (merging edited files) · Tested by: V5b-fix
+The package carries the sha256 of every `default.toml` it has shipped. `init -g` replaces the active
+`rules.toml` only when its hash is in that set (the owner never edited it), with the checked bytes of
+the current default (fix 2: RECORD hash and a clean parse), and says a recorder restart applies it;
+an edited file is kept with a one-line notice. `doctor` warns only when the active file equals an
+older shipped default. A test pins the current default's hash into the set. Merging edits into an
+edited file stays in V7.

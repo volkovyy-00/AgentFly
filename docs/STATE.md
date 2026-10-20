@@ -1,5 +1,5 @@
 # STATE (lead handoff; overwrite, never append)
-Updated: 2026-10-20 15:00 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
+Updated: 2026-10-20 15:40 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: F10-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V6, V6b, V8, V8b, F3, F5, F6, F7, F10 ✅ (BOARD Done; last merge F10 5239e96 = trial 74acb5b tree, 3× 3529 passed, 5 skipped, 143–206 s with V5b's worker running).
 Pending decisions: D16
 
@@ -27,10 +27,10 @@ Pending decisions: D16
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Decide V5b-fix A, B, C (docs/briefs/V5b-fix.md "Owner decisions").
-2. Standing rule: workers on cards of more than ~3 steps plan with superpowers:writing-plans and run it with superpowers:subagent-driven-development? (lead proposal)
+1. Close the V5b worker session; after the V5b-fix brief passes pass 2, say go and start the fix worker by hand in `.claude/worktrees/ag-v5b-rules-file`.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
+- Owner 2026-10-20: D27 (a rules file cannot drop or weaken R1) and D28 (`init -g` refreshes an unedited rules file) approved; V5b fixes go to a fresh worker; plan + subagent-driven-development for workers rejected.
 - Owner 2026-10-20: GitHub security settings on (above). `uv.lock` is in GitHub's dependency graph (SBOM: 29 pkg:pypi), so Python alerts need no extra step; question closed.
 - Owner 2026-10-20: F10 merged (5239e96) and pushed; F13 approved as a card (escape names in package-check messages).
 - Lead 2026-10-20: F10's two 5 s hang guards without `@wallclock` accepted (they catch a hang, not a time limit).
@@ -47,11 +47,11 @@ Pending decisions: D16
 - R0 gaps (V5a): `pkill python` can kill the recorder; ruby/perl -e not inline code; relative paths after `cd`, globs, brace expansion and variables unseen; ~/.claude/settings.json not guarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md has no `/api/sessions` contract (V9); Neo4j Session lacks workspace_root. No card owns SPEC §10's per-session hash check.
-- V5b: trial 686ccbb 3× green (3871 passed, 5 skipped, 137–162 s); 3 fresh reviewers, no blocker; should-fix list, nits and later-card items in docs/briefs/V5b-fix.md (DRAFT).
+- V5b: trial 686ccbb 3× green (3871 passed, 5 skipped, 137–162 s); 3 fresh reviewers, no blocker; fixes in docs/briefs/V5b-fix.md (fresh worker on the same branch and worktree, started by hand; report docs/reports/V5b-fix.md).
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. Owner decides V5b-fix A (refuse a file that drops or weakens R1), B (doctor warns on a stale active file; update path V7), C (fresh worker with subagent-driven-development); lead finishes V5b-fix with a pass-2 reviewer, owner says go.
+1. V5b-fix brief: pass-2 reviewer running; then owner closes the V5b session, says go, starts the worker by hand in the V5b worktree.
 2. After the fix: re-trial, 3× check, reviewer; SPEC §7/§8 edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
