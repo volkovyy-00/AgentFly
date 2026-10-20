@@ -77,12 +77,15 @@ def test_a_valid_active_file_is_listed_in_its_own_order(active_rules: Path) -> N
     with started(active_rules, custom_rules()) as client:
         body = client.get("/api/rules").json()
     assert (body["source"], body["file"], body["problem"]) == ("active", str(active_rules), None)
-    assert [(r["id"], r["kind"], r["severity"]) for r in body["rules"]] == [
-        ("R0", "builtin", "block"),
-        ("R1", "after_then", "block"),
-        ("warn-push", "match", "warn"),
-    ]
-    assert body["rules"][2]["message"] == "A push needs a look."
+    shipped = [spec.id for spec in rulefile.load_default().rules]
+    assert [r["id"] for r in body["rules"]] == ["R0", *shipped, "warn-push"]
+    assert body["rules"][0]["kind"] == "builtin" and body["rules"][1]["id"] == "R1"
+    assert body["rules"][-1] == {
+        "id": "warn-push",
+        "kind": "match",
+        "severity": "warn",
+        "message": "A push needs a look.",
+    }
 
 
 def test_an_invalid_active_file_shows_the_default_and_says_why(active_rules: Path) -> None:
@@ -169,7 +172,8 @@ def test_a_child_recorder_with_a_valid_file_runs_it(isolated_home: Path) -> None
     health, listing = run_recorder(isolated_home, custom_rules())
     assert "rules_problem" not in health
     assert listing["source"] == "active"
-    assert [r["id"] for r in listing["rules"]] == ["R0", "R1", "warn-push"]
+    shipped = [spec.id for spec in rulefile.load_default().rules]
+    assert [r["id"] for r in listing["rules"]] == ["R0", *shipped, "warn-push"]
 
 
 def test_a_child_recorder_with_a_planted_invalid_file_runs_the_default_and_says_so(

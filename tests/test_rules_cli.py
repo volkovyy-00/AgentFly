@@ -80,7 +80,8 @@ def test_check_reports_how_many_rules_and_that_r0_is_built_in(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _, out, _ = run(capsys, "check")
-    assert "1 rule" in out and "R0" in out
+    count = len(rulefile.load_default().rules)
+    assert f"ok: {count} rule" in out and "R0" in out
 
 
 def test_test_reports_how_many_tests_passed(capsys: pytest.CaptureFixture[str]) -> None:
@@ -116,7 +117,8 @@ def test_a_good_file_with_its_own_rule_passes_both(
     path = rules_file(with_rule(GOOD_RULE))
     assert run(capsys, "check", str(path))[0] == 0
     code, out, _ = run(capsys, "test", str(path))
-    assert code == 0 and "tests passed" in out and "2 rules" in out
+    count = len(rulefile.load_default().rules) + 1
+    assert code == 0 and "tests passed" in out and f"in {count} rules" in out
 
 
 REFUSED = {
