@@ -539,6 +539,30 @@ def test_a_tilde_pattern_is_the_users_home(monkeypatch: pytest.MonkeyPatch, tmp_
     assert not clause.matches(read("/elsewhere/.ssh/id_ed25519"), {})
 
 
+EXCEPTING_MATCH = MATCH.replace('command = "cmds"', 'path = "names"\npath_except = "excepted"')
+EXCEPTING_AFTER = AFTER_THEN.replace('path_except = "ok"', 'path_except = "excepted"')
+
+
+@pytest.mark.parametrize(("rule", "rid"), [(EXCEPTING_MATCH, "M1"), (EXCEPTING_AFTER, "A1")])
+@pytest.mark.parametrize("exception", [".ssh/**", "a/**/b", "**/x/**"])
+def test_a_floating_exception_is_refused_in_any_rule(rule: str, rid: str, exception: str) -> None:
+    """V5b-fix2 §4.6: an exception is tried on every word whose path matched, so one that walks
+    the path is refused, naming the rule."""
+    assert rulefile.floating(rulefile.compile_pattern(exception))
+    text = doc(rule, lists=BASE_LISTS + list_line("excepted", exception))
+    assert errors_of(text) == (
+        f"rule {rid}: exception {exception!r} is checked at every folder of a path; an exception "
+        "must be a name, anchored ('~/...' or '/...'), or end at the file name"
+    )
+
+
+@pytest.mark.parametrize(("rule", "rid"), [(EXCEPTING_MATCH, "M1"), (EXCEPTING_AFTER, "A1")])
+@pytest.mark.parametrize("exception", ["~/.ssh/**", "*.bak"])
+def test_an_anchored_or_name_exception_loads(rule: str, rid: str, exception: str) -> None:
+    loaded = good(doc(rule, lists=BASE_LISTS + list_line("excepted", exception)))
+    assert [spec.id for spec in loaded.rules] == [rid]
+
+
 def test_path_except_removes_matches_per_pattern() -> None:
     clause = path_clause(".env", ".env.*", ok=(".env*.example",))
     assert clause.matches(read(".env.local"), {}) and not clause.matches(read(".env.example"), {})

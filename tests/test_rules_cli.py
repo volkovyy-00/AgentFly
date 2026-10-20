@@ -262,6 +262,36 @@ def test_a_rule_without_a_test_is_a_warning_not_a_failure(
     assert "warn: rule no-push: no inline test" in out
 
 
+FLOATING_RULE = """
+[[rule]]
+id = "gen"
+kind = "match"
+severity = "block"
+message = "Generated code is not read."
+event = ["read"]
+path = "gen_paths"
+  [[rule.test]]
+  steps = ["read: /w/src/a/gen.py"]
+  expect = "block"
+"""
+
+
+def test_rules_check_warns_about_floating_patterns(
+    capsys: pytest.CaptureFixture[str],
+    rules_file: Callable[..., Path],
+) -> None:
+    """V5b-fix2 §4.4: a floating `path` pattern loads, with a `warn:` line that names it."""
+    text = default_with('gen_paths = ["src/**/gen.py"]\n', FLOATING_RULE)
+    code, out, err = run(capsys, "check", str(rules_file(text)))
+    assert code == 0, err
+    (line,) = [line for line in out.splitlines() if line.startswith("warn:")]
+    assert line == (
+        "warn: rule gen: pattern 'src/**/gen.py' is checked at every folder of a path; on long, "
+        "deep commands it may reach the rules limit, which then blocks the action if gen is a "
+        "block rule, asks if it is a warn, and skips it if it is a highlight; anchor it if you can"
+    )
+
+
 def without_tests(text: str) -> str:
     """The text with every [[rule.test]] table taken out (they are indented, unlike the rules)."""
     return "".join(

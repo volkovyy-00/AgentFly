@@ -2,16 +2,22 @@
 
 The hook client waits 0.5 s for the recorder; past that it falls to the offline guard. The decision
 runs on the event loop, and every path pattern of every clause is tried on every word of a shell
-command. Two things keep that inside the wait: what is worked out about a word is worked out once,
-whatever the number of clauses (the memos), and a rules file may not ask for more than `MAX_WORK`
-units in all (`rulefile.file_work`; the weights are fitted to measurements, see the constants).
+command. What is worked out about a word is worked out once, whatever the number of clauses (the
+memos), and the work has two bounds (V5b-fix2 §4.5):
+- a pattern that does not float compares each of its parts at most once per candidate word, so a
+  file within `MAX_WORK` units makes at most `MAX_WORK × C` pattern tests per hook, C the command's
+  distinct candidates (`rulefile.distinct_candidates`), at any depth;
+- a floating pattern walks the path, and the hook's meter stops it after `FLOAT_STEPS` steps plus
+  one block's walk (an unfinished block rule then denies with the limit rule).
 
-No test here bounds seconds tighter than the wait itself: one counts calls, one is the real hook
-against the client's own 0.5 s. The first is the proof; the second catches a weight that drifted.
+The counting tests bound tests and steps, not seconds: they are the proof, and they fail if a bound
+is taken away. The one timed test is the real hook against the client's own 0.5 s; it catches a
+weight that drifted.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -101,6 +107,36 @@ def command_list_on_one_program() -> tuple[str, list[str]]:
     return list_line("l", *entries), rules
 
 
+HEAVY_PATTERNS = [f"d*/d*/d*/z{n}/**" for n in range(5)]
+FLOATING_BLOCK = "reviewer's floating block rule"
+
+
+def floating_block_rule() -> tuple[str, list[str]]:
+    """The owner's review's heavy shape: every word of `command()` holds `d…` folders and no `zN`
+    folder, so every middle walk runs to the end and none matches (a word holding `z0` would let
+    the rule fire on its first candidate and spend almost nothing)."""
+    return list_line("l", *HEAVY_PATTERNS), [match_rule(0, 'path = "l"', "block")]
+
+
+def one_list_of(sample: Callable[[int], str]) -> Callable[[], tuple[str, list[str]]]:
+    """A shape of one rule whose list holds as many patterns like `sample(i)` as the room allows."""
+
+    def shape() -> tuple[str, list[str]]:
+        n = (ROOM - rulefile.WORK_CLAUSE) // rulefile.pattern_work(
+            rulefile.compile_pattern(sample(0))
+        )
+        return list_line("l", *[sample(i) for i in range(n)]), [match_rule(0, 'path = "l"')]
+
+    return shape
+
+
+def reviewers_list(sample: Callable[[int], str], count: int) -> Callable[[], tuple[str, list[str]]]:
+    def shape() -> tuple[str, list[str]]:
+        return list_line("l", *[sample(i) for i in range(count)]), [match_rule(0, 'path = "l"')]
+
+    return shape
+
+
 SHAPES: dict[str, Callable[[], tuple[str, list[str]]]] = {
     "many rules with one name pattern": one_pattern_rules,
     "one long list of names": long_name_list,
@@ -111,11 +147,23 @@ SHAPES: dict[str, Callable[[], tuple[str, list[str]]]] = {
     "many rules of command_class and host_not_in": outbound_rules,
     "many rules with a long command list": command_lists,
     "many rules with a command list on one program": command_list_on_one_program,
+    FLOATING_BLOCK: floating_block_rule,
 }
 # The shapes whose cost is in path patterns: they reach the limit; the others cost almost nothing.
 FULL = [name for name in SHAPES if "command" not in name]
 # The ones the whole hook is timed on: those, and the command list that every rule has to read.
 TIMED = [*FULL, "many rules with a command list on one program"]
+# The shapes whose patterns walk the path, and are bounded by the meter, not by the units.
+FLOATING = ["floating slash patterns", "floating patterns with several **", FLOATING_BLOCK]
+# The shapes bounded by the units alone: the others that fill the limit, anchored and tail-only
+# slash patterns, and the owner's review's two files.
+UNMETERED: dict[str, Callable[[], tuple[str, list[str]]]] = {
+    **{name: SHAPES[name] for name in FULL if name not in FLOATING},
+    "anchored slash patterns": one_list_of(lambda i: f"/opt/p{i}/x{i}.txt"),
+    "unanchored slash patterns": one_list_of(lambda i: f"p{i}/x{i}.txt"),
+    "reviewer's pem file": reviewers_list(lambda i: f"*/*/*/*/*/*/*/k{i}.pem", 8),
+    "reviewer's json file": reviewers_list(lambda i: f"*/*/secret{i}/*.json", 10),
+}
 
 
 def text_of(shape: str) -> str:
@@ -333,6 +381,125 @@ def test_a_hook_at_the_limit_makes_no_more_pattern_tests_than_the_units_allow(
     monkeypatch.setattr(rulefile.Pattern, "matches", counting)
     rec.run("P", command())
     assert 0 < calls <= rulefile.MAX_WORK * 3 * (WORDS + 1), calls
+
+
+def shell(line: str) -> dict[str, str]:
+    return {"hook_event_name": "beforeShellExecution", "command": line}
+
+
+def test_a_hook_stops_at_the_budget_and_the_count_proves_it(
+    rec: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real steps of the floating rule (its `fnmatch` compares, its bare `*` parts and its
+    middle-block starts, counted beside the meter, not by it) stay within `FLOAT_STEPS` plus one
+    block's walk, and the hook is the limit deny. With the charge taken away the same hook takes
+    several budgets, so the test fails if the bound is removed."""
+    rules_mod.activate(ruleset_of(text_of(FLOATING_BLOCK)))
+    line = command(20)
+    parts = {part for raw in HEAVY_PATTERNS for part in raw.split("/")} - {"**"}
+    steps = 0
+    real = fnmatch.fnmatchcase
+
+    def compare(name: str, pat: str) -> bool:
+        nonlocal steps
+        steps += pat in parts  # every compare of these parts is short: priced 1 (n * m < 256)
+        return real(name, pat)
+
+    def tally(starts: int, stars: int) -> None:
+        nonlocal steps
+        steps += starts + stars
+
+    monkeypatch.setattr(fnmatch, "fnmatchcase", compare)
+    monkeypatch.setattr(rulefile, "_tally", tally)
+    answer = rec.run("P", line)
+    assert answer["permission"] == "deny"
+    assert answer["user_message"] == rules_mod.LIMIT_MESSAGE
+    deepest = max(
+        len(rulefile._segments(word))
+        for word in rulefile.distinct_candidates(rulefile.normalize(line))
+    )
+    block = len(rulefile.compile_pattern(HEAVY_PATTERNS[0]).blocks().middle[0])
+    walk = deepest * (1 + block)  # a step for each start, and one for each part compared from it
+    assert 0 < steps <= rulefile.FLOAT_STEPS + walk, steps
+
+    steps = 0
+    monkeypatch.setattr(rulefile, "_charge", lambda cost: None)
+    assert rec.run("Q", line)["permission"] == "allow"  # it runs to the end and does not fire
+    assert steps > rulefile.FLOAT_STEPS, steps
+
+
+def test_floating_shapes_float() -> None:
+    """The shapes left out of the unmetered bound below: every one of their patterns floats."""
+    for name in FLOATING:
+        patterns = [p for spec in rulefile.parse(text_of(name)).rules[2:] for p in spec.clause.path]
+        assert patterns and all(rulefile.floating(p) for p in patterns), name
+
+
+@pytest.mark.parametrize("partly", [False, True], ids=["parsed", "partly parsed"])
+@pytest.mark.parametrize("depth", [20, 60])
+@pytest.mark.parametrize("shape", UNMETERED)
+def test_a_file_without_floating_patterns_is_never_metered(
+    shape: str, depth: int, partly: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file at the limit with no floating pattern: the meter is never charged, no rule is left
+    unfinished, and the pattern tests (each `fnmatch` compare and each bare `*` part) are at most
+    `MAX_WORK × C`, whatever the depth, also when the command parses only partly."""
+    lists, rules = UNMETERED[shape]()
+    text = default_with(lists, *rules)
+    loaded = rulefile.parse(text)
+    clauses = [c for s in loaded.rules for c in (s.clause, s.after, s.then) if c is not None]
+    assert not any(rulefile.floating(p) for c in clauses for p in (*c.path, *c.path_except))
+    ruleset = ruleset_of(text)
+    line = command(depth) + (" 'x" if partly else "")
+    tests = 0
+    real_compare, real_part = fnmatch.fnmatchcase, rulefile._part_hit
+
+    def compare(name: str, pat: str) -> bool:
+        nonlocal tests
+        tests += 1
+        return real_compare(name, pat)
+
+    def part_hit(segment: str, part: str) -> bool:
+        nonlocal tests
+        tests += part == "*"  # a bare `*` needs no `fnmatch`, but it is a test
+        return real_part(segment, part)
+
+    monkeypatch.setattr(fnmatch, "fnmatchcase", compare)
+    monkeypatch.setattr(rulefile, "_part_hit", part_hit)
+    action = shell(line)
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    with rules_mod.one_hook() as meter:
+        rules_mod.winning_rule(action, rules_mod.mark(action, session, ruleset), ruleset)
+    assert meter.left == rulefile.FLOAT_STEPS and meter.unfinished == []
+    candidates = len(rulefile.distinct_candidates(rulefile.normalize(line)))
+    assert 0 < tests <= rulefile.MAX_WORK * candidates, (tests, candidates)
+
+
+def test_a_long_compare_and_a_bare_star_are_charged_at_their_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §4.2: a compare of n characters with a part of m costs `1 + n * m // 256`, a bare `*`
+    and a start 1. The head and the tail are charged first (nothing here), then each middle walk."""
+    charged: list[int] = []
+    tallied: list[tuple[int, int]] = []
+    real = rulefile._charge
+
+    def charge(steps: int) -> None:
+        charged.append(steps)
+        real(steps)
+
+    monkeypatch.setattr(rulefile, "_charge", charge)
+    monkeypatch.setattr(rulefile, "_tally", lambda starts, stars: tallied.append((starts, stars)))
+    part = "q" * 16 + "*"
+    assert rulefile.compare_cost(256, len(part)) == 18
+    with rulefile.metered(rulefile.Meter(left=100)) as meter:
+        assert rulefile.compile_pattern(f"{part}/**").matches("q" * 256, None, "/h")
+        assert charged == [0, 1 + 18] and tallied == [(0, 0), (1, 0)]
+        charged.clear()
+        tallied.clear()
+        assert rulefile.compile_pattern("*/x/**").matches("a/x", None, "/h")
+    assert charged == [0, 1 + 1 + 1] and tallied == [(0, 0), (1, 1)]  # a start, the `*`, the `x`
+    assert meter.left == 100 - 19 - 3
 
 
 @wallclock

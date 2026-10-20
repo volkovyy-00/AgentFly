@@ -1004,10 +1004,40 @@ def _rule(
             after = _clause(f"{where} after", raw["after"], lists, problems, needs_condition=True)
         if "then" in raw:
             then = _clause(f"{where} then", raw["then"], lists, problems, needs_condition=False)
+    for pattern in _patterns_of((clause, after, then), "path_except"):
+        if floating(pattern):  # spec §4.6: it would walk every word of every command
+            problems.add(where, f"exception {pattern.text!r} {FLOATING_EXCEPTION}")
     tests: tuple[InlineTest, ...] = _tests(where, raw.get("test"), problems)
     if len(problems.errors) > start:
         return None
     return RuleSpec(rid, kind, severity, message, clause, after, then, tests)
+
+
+FLOATING_EXCEPTION: str = (
+    "is checked at every folder of a path; an exception must be a name, anchored ('~/...' or "
+    "'/...'), or end at the file name"
+)
+
+
+def _patterns_of(clauses: Sequence[Clause | None], field: str) -> tuple[Pattern, ...]:
+    """The patterns of one field (`path` or `path_except`) in a rule's clauses, each once."""
+    found: dict[Pattern, None] = {}
+    for clause in clauses:
+        if clause is not None:
+            found.update(dict.fromkeys(getattr(clause, field)))
+    return tuple(found)
+
+
+def _floating_lint(spec: RuleSpec) -> list[str]:
+    """Spec §4.4: a floating `path` pattern loads, and `rules check` says what it may cost."""
+    return [
+        f"rule {spec.id}: pattern {pattern.text!r} is checked at every folder of a path; on long, "
+        f"deep commands it may reach the rules limit, which then blocks the action if {spec.id} "
+        "is a block rule, asks if it is a warn, and skips it if it is a highlight; anchor it if "
+        "you can"
+        for pattern in _patterns_of((spec.clause, spec.after, spec.then), "path")
+        if floating(pattern)
+    ]
 
 
 def _parse(text: str) -> RuleFile:
@@ -1051,6 +1081,7 @@ def _parse(text: str) -> RuleFile:
     lint: list[str] = [
         f"rule {s.id}: no inline test; add a [[rule.test]]" for s in specs if not s.tests
     ]
+    lint += [line for spec in specs for line in _floating_lint(spec)]
     return RuleFile(tuple(specs), tuple(problems.errors), tuple(lint))
 
 

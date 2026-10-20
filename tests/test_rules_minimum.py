@@ -117,7 +117,8 @@ WEAKENED: dict[str, str] = {
     "an exception for a .env name": with_exemptions(".env.staging"),
     "an exception for a file type": with_exemptions("*.yml"),
     "an exception for a folder": with_exemptions("/tmp/**"),
-    "an exception for a folder anywhere": with_exemptions("**/fixtures/**"),
+    # `**/fixtures/**` floats, so the parser refuses it before D27 (V5b-fix2 §4.6, test_rulefile)
+    "an exception for a folder anywhere": with_exemptions("**/fixtures/*"),
     "an exception that runs past .example": with_exemptions(".env*.example*"),
     "an exception for .example on every secret": with_exemptions("*.example"),
     "an exception for .pub on every secret": with_exemptions("*.pub"),
