@@ -401,20 +401,21 @@ def build_ruleset(
     source: str,
     path: str,
     problem: str | None = None,
-    fallback_secret: Callable[[Action], bool] | None = None,
 ) -> RuleSet:
-    """Rules from a file that parsed without errors. R0 is added in front; it is never in a file.
+    """Rules from a file that `rulefile.load_bytes` accepted. R0 is added in front; it is never
+    in a file.
 
     Whether an action reads a secret is decided by R1's `after` clause, so the lists in the file
-    rule; with no R1 in the file the packaged default's clause (`fallback_secret`) still marks
-    the chat.
+    rule. Every accepted file has an R1 at least as strong as the program's minimum (D27); a file
+    without one never gets here, and asking for its rules is a mistake in the caller.
     """
     composed: tuple[Rule, ...] = tuple(_compose(spec) for spec in file.rules)
-    secret: Callable[[Action], bool] = fallback_secret or DEFAULT.secret
-    for rule in composed:
-        if rule.id == MARK_RULE and rule.after is not None:
-            secret = rule.after
-    return RuleSet((R0_RULE, *composed), source, path, problem, secret)
+    r1: Rule | None = next(
+        (rule for rule in composed if rule.id == MARK_RULE and rule.after is not None), None
+    )
+    if r1 is None or r1.after is None:
+        raise ValueError(f"a rules file without {MARK_RULE} was not checked by load_bytes")
+    return RuleSet((R0_RULE, *composed), source, path, problem, r1.after)
 
 
 def _load_default() -> RuleSet:
@@ -422,7 +423,7 @@ def _load_default() -> RuleSet:
     try:
         loaded: RuleFile = rulefile.load_default()
         if not loaded.errors:
-            return build_ruleset(loaded, source="default", path=path, fallback_secret=_never)
+            return build_ruleset(loaded, source="default", path=path)
         reason: str = rulefile.summary(loaded.errors)
     except Exception as exc:  # noqa: BLE001 - a damaged install must not stop `uninstall`
         reason = f"{type(exc).__name__}: {exc}"

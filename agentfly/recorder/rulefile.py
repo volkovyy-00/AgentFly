@@ -20,6 +20,7 @@ import os
 import posixpath
 import re
 import stat
+import string
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -606,11 +607,6 @@ def _parse(text: str) -> RuleFile:
     lint: list[str] = [
         f"rule {s.id}: no inline test; add a [[rule.test]]" for s in specs if not s.tests
     ]
-    if not any(s.id == MARK_RULE and s.kind == "after_then" for s in specs):
-        lint.append(
-            f"no rule {MARK_RULE} (an after_then): a secret read still marks the chat, but "
-            "nothing blocks the send that follows"
-        )
     return RuleFile(tuple(specs), tuple(problems.errors), tuple(lint))
 
 
@@ -620,6 +616,162 @@ def parse(text: str) -> RuleFile:
         return _parse(text)
     except Exception as exc:  # noqa: BLE001 - a rules file must never crash the recorder
         return _refused(f"could not be read ({type(exc).__name__})")
+
+
+# ---------------------------------------------------------------- the minimum for R1 (D27)
+
+# SPEC section 5 makes R0 and R1 the two rules v1 must have. R0 is in code; R1 sits in the file, so
+# the program holds the least it may say, as it holds R0: a file whose R1 is missing or weaker is
+# refused (the packaged default runs), however it spells its lists. Widening and rewording are fine.
+# Measured against this, not against `default.toml`, so a wider later default never refuses an
+# older file. A local exception (a company host) waits for the reviewed path (V7).
+EXEMPTION_ENDINGS: tuple[str, ...] = (".example", ".sample", ".template", ".pub")
+_FAMILIES: tuple[str, ...] = (".env", "x.pem", ".pem", "k.key", ".key", "id_rsa", "credentials")
+_TAILS: tuple[str, ...] = (
+    "",
+    ".local",
+    ".production",
+    ".1",
+    "-w",
+    "_w",
+    "~",
+    ".x.y",
+    ".bak",
+    ".test",
+    ".dist",
+    ".yml",
+    ".md",
+    ".example",
+    ".sample",
+    ".template",
+    ".pub",
+)
+_SWEEP: str = string.ascii_letters + string.digits + "_-~.@+,%\u00e9"
+_LITERALS: tuple[str, ...] = (
+    "prod.pem",
+    "server.key",
+    ".env.staging",
+    "credentials.json",
+    "id_rsa2",
+    ".env._x",
+    ".env.example.local",
+)
+_FOLDERS: tuple[str, ...] = ("", "cfg/", "a/b/", "/Users/me/proj/", "~/")
+
+
+def spec_secret(name: str) -> bool:
+    """Does SPEC section 5 count this file *name* as a secret? (Written from its bullets.)"""
+    folded: str = name.casefold()
+    if folded == ".env" or (
+        folded.startswith(".env.") and not folded.endswith((".example", ".sample", ".template"))
+    ):
+        return True
+    if folded.endswith((".pem", ".key")):
+        return True
+    if folded.startswith("id_rsa") and not folded.endswith(".pub"):
+        return True
+    return folded.startswith("credentials")
+
+
+def _secret_names() -> tuple[str, ...]:
+    """Names SPEC section 5 counts as secrets, in the shapes a list is likely to get wrong: every
+    family with every kind of tail, one character after each stem, and a few whole names."""
+    names: set[str] = {family + tail for family in _FAMILIES for tail in _TAILS}
+    for stem in (".env.", "id_rsa", "credentials"):
+        names |= {stem + char for char in _SWEEP}
+    for char in _SWEEP:
+        names |= {char + ".pem", char + ".key", f".env.{char}x"}
+    names |= set(_LITERALS)
+    return tuple(sorted(name for name in names if spec_secret(name)))
+
+
+SECRET_NAMES: tuple[str, ...] = _secret_names()
+
+
+@lru_cache(maxsize=16)  # the same file is loaded again and again (a clause is hashable): once
+def _unmarked(after: Clause) -> tuple[str, ...]:
+    """Secret names (in several places) that R1's `after` clause does not fire on."""
+    left: list[str] = []
+    for name in SECRET_NAMES:
+        forms: list[str] = [folder + name for folder in _FOLDERS]
+        forms += [name.upper(), "cfg/" + name.upper()]
+        if any(not after.matches(_read_of(form), {}) for form in forms):
+            left.append(name)
+    for name in SECRET_NAMES[:: max(len(SECRET_NAMES) // 12, 1)]:  # a shell word counts too
+        word: dict[str, Any] = {"hook_event_name": "beforeShellExecution", "command": f"cat {name}"}
+        if name not in left and not after.matches(word, {}):
+            left.append(name)
+    return tuple(left)
+
+
+def _read_of(path: str) -> dict[str, Any]:
+    return {"hook_event_name": "beforeReadFile", "file_path": path}
+
+
+def _then_problem(then: Clause) -> bool:
+    return (
+        then.events != ("shell",)
+        or then.command_class != "outbound"
+        or bool(then.path or then.path_except or then.command or then.host_not_in)
+    )
+
+
+def _minimum_problems(specs: Sequence[RuleSpec]) -> list[str]:
+    """What is weaker in the file's R1 than SPEC section 5 allows; empty if nothing is."""
+    where: str = f"rule {MARK_RULE}"
+    r1: RuleSpec | None = next((spec for spec in specs if spec.id == MARK_RULE), None)
+    if r1 is None:
+        return [
+            f"{where}: missing. Every rules file carries R1, the rule that blocks a send after a "
+            "secret was read; AgentFly will not run without it (D27)"
+        ]
+    if r1.kind != "after_then" or r1.after is None or r1.then is None:
+        return [f"{where}: must be an after_then rule (it is {r1.kind!r}), as in the default (D27)"]
+    problems: list[str] = []
+    if r1.severity != "block":
+        problems.append(f'{where}: severity must stay "block" (it is {r1.severity!r}) (D27)')
+    after: Clause = r1.after
+    if after.command or after.command_class or after.host_not_in:
+        problems.append(f"{where}: its 'after' may hold only event, path and path_except (D27)")
+    if not {"read", "shell"} <= set(after.events):
+        problems.append(f"{where}: its 'after' must fire on both read and shell (D27)")
+    for pattern in after.path_except:
+        if "/" in pattern.text:
+            problems.append(
+                f"{where}: exception {pattern.text!r} names a folder; R1 judges the file name only"
+            )
+        elif not pattern.text.endswith(EXEMPTION_ENDINGS):
+            problems.append(
+                f"{where}: exception {pattern.text!r} must end in a plain "
+                f"{', '.join(EXEMPTION_ENDINGS)} (SPEC section 5 allows no other)"
+            )
+    if _then_problem(r1.then):
+        problems.append(
+            f"{where}: its 'then' must be exactly event = [\"shell\"] and command_class = "
+            '"outbound", with no other condition (D27)'
+        )
+    left: tuple[str, ...] = _unmarked(after)
+    if left:
+        more: str = f" (and {len(left) - 1} more)" if len(left) > 1 else ""
+        problems.append(
+            f"{where}: its 'after' leaves {left[0]!r} unmarked{more}, but SPEC section 5 counts "
+            "it as a secret; widen the lists or narrow the exceptions"
+        )
+    return problems
+
+
+def _with_minimum(parsed: RuleFile) -> RuleFile:
+    """The file with D27's findings added to its errors.
+
+    Not run when it would only echo something already said: a file refused before its rules were
+    read (no rules to judge), or one whose R1 already has an error of its own. Another rule's
+    error does not stop it, so `rules check` prints every problem at once.
+    """
+    own: str = f"rule {MARK_RULE}"
+    if parsed.errors and (not parsed.rules or any(e.startswith(own) for e in parsed.errors)):
+        return parsed
+    found: list[str] = _minimum_problems(parsed.rules)
+    return replace(parsed, errors=(*parsed.errors, *found)) if found else parsed
 
 
 # ---------------------------------------------------------------- files
@@ -651,7 +803,7 @@ def load_bytes(raw: bytes) -> RuleFile:
         text: str = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         return replace(_refused("not UTF-8 text"), sha256=digest)
-    return replace(parse(text), sha256=digest)
+    return replace(_with_minimum(parse(text)), sha256=digest)
 
 
 def load_file(path: Path) -> RuleFile:

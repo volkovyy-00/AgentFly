@@ -494,11 +494,6 @@ def check_rules(ctx: Context) -> Finding:
             f"{path} is valid now, but the recorder started without it and runs the default "
             "rules; restart it (`agentfly stop`, `agentfly start`)"
         )
-    missing_r1 = next(
-        (line for line in loaded.lint if line.startswith(f"no rule {rulefile.MARK_RULE}")), ""
-    )
-    if missing_r1:  # valid, and used: but nothing blocks a send after a secret read
-        return warn(f"{path}: {missing_r1}")
     return ok(f"{path}: {rulefile.rules_word(len(loaded.rules))}, plus R0, all valid")
 
 

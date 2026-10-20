@@ -255,11 +255,11 @@ def test_both_kinds_load_and_carry_their_clauses_and_tests() -> None:
     assert not any("inline test" in line for line in parsed.lint)
 
 
-def test_a_file_without_inline_tests_or_without_r1_is_lint_not_an_error() -> None:
+def test_a_file_without_inline_tests_is_lint_not_an_error() -> None:
     bare = MATCH.split("  [[rule.test]]")[0]
     parsed = good(doc(bare))
     assert any("M1" in line and "no inline test" in line for line in parsed.lint)
-    assert any("R1" in line for line in parsed.lint)
+    assert not any("R1" in line for line in parsed.lint), "a missing R1 is an error (D27)"
 
 
 # ---------------------------------------------------------------- what is refused, and who is named

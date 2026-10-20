@@ -219,15 +219,16 @@ def test_the_inherited_trigger_does_not_inherit_the_secret_mark(rec: Rec, armed:
 # ---------------------------------------------------------------- R1 and the file
 
 
-def test_taking_r1_out_of_the_file_still_marks_secret_reads_but_blocks_nothing(
-    rec: Rec, use: Callable[[str], None]
+def test_a_file_without_r1_is_refused_and_the_default_keeps_blocking(
+    rec: Rec, active_rules: Path
 ) -> None:
-    use(with_rules(NO_PUSH, drop_r1=True))
-    assert [r.id for r in rules_mod.RULES] == ["R0", "no-push-after-install"]
+    """D27: R1 cannot be taken out. The recorder runs the packaged default and says why."""
+    active_rules.write_text(with_rules(NO_PUSH, drop_r1=True), encoding="utf-8")
+    loaded = rules_mod.load_active()
+    assert loaded.source == "default" and "rule R1: missing" in (loaded.problem or "")
+    rules_mod.activate(loaded)
     rec.read_env("P")
-    stored = rec.store.get("P")
-    assert stored is not None and stored.marked is True, "the history and the page still see it"
-    assert rec.says("P", "curl https://x.com") == "allow", "nothing blocks the send without R1"
+    assert rec.says("P", "curl https://x.com") == "deny"
 
 
 def test_a_warn_after_then_asks_on_a_shell_command(rec: Rec, use: Callable[[str], None]) -> None:
