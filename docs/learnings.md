@@ -61,6 +61,11 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **One red CI run on a timing test is not yet a red main.** b342323 (2026-10-20) failed one `@wallclock` bound (1.28 s vs 1.0 s) and passed on rerun. Check the failure is outside the pushed diff, have the owner rerun (`gh run rerun --failed`; gh writes are denied to the lead), and count main red until a run on that SHA is green.
 - **GitHub's docs pages lag its changelog; ask the repo itself.** 2026-10-20: the dependency-graph docs omitted uv while the changelog (2025-12-16) and the repo's SBOM (29 pkg:pypi = `uv.lock`) showed it covered.
 
+- **A worker's own gates passing is not merge-ready.** V5b 2026-10-20: final-verification READY and /code-review high (6 of 10 fixed), yet three fresh lens reviewers (engine, brief and tests, install) found 6 should-fix items, two of them security (an untrusted active file, an unchecked copy as root). Use split-lens reviewers for large branches.
+- **A worker session near 700K tokens drifts; start a fresh one for fixes.** The branch and report carry the knowledge (V5b, 2026-10-20). `dispatch.sh` refuses an existing branch, so the owner starts a fix worker by hand in the old worktree.
+- **state-check reads card IDs as letter+digits(+one letter).** A row `- V5b-fix · …` read as no card in flight; list a fix round under its card ID and name its own brief and report (2026-10-20).
+- **Check an advisor's premise against the briefs.** The lead argued D28 from "V5c's rules reach no install"; V5c ships them off by default, so the real need was default-list fixes (brainstorm-advisor, 2026-10-20).
+
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).
 - **The agent leaves Cursor's sandbox on its own.** S5 (2026-10-16): `sudo` failed in the sandbox (127); the agent re-ran it with `sandbox: false`, no prompt to the owner. Never treat the sandbox as a control (D22).
