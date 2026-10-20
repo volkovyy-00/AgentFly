@@ -493,8 +493,7 @@ def check_rules(ctx: Context) -> Finding:
             f"{path} is valid now, but the recorder started without it and runs the default "
             "rules; restart it (`agentfly stop`, `agentfly start`)"
         )
-    count = len(loaded.rules)
-    return ok(f"{path}: {count} rule{'s' if count != 1 else ''}, plus R0, all valid")
+    return ok(f"{path}: {rulefile.rules_word(len(loaded.rules))}, plus R0, all valid")
 
 
 CHECKS: list[Callable[[Context], Finding]] = [

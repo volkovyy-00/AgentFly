@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 
 import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
-from agentfly.recorder import rulefile
 from agentfly.recorder.paths import config_dir, data_dir
-from agentfly.recorder.rules import R0_MESSAGE, R1_MESSAGE, build_ruleset
+from agentfly.recorder.rules import R0_MESSAGE, R1_MESSAGE
 from tests.helpers import REPO
+from tests.rules_helpers import default_as, ruleset_of
 from tests.test_step_merge import edited, event, live, post, pre, shell
 
 FIELDS: frozenset[str] = frozenset({"rule_text", "user_message", "agent_message"})
@@ -99,8 +99,7 @@ def test_the_deny_answer_is_byte_for_byte_what_it_was(client: TestClient) -> Non
 
 def warn_instead_of_block() -> None:
     """Put a rules file in force whose R1 is a warn (no runtime switch exists: it is the file)."""
-    text = rulefile.default_text().replace('severity = "block"', 'severity = "warn"', 1)
-    rules_mod.activate(build_ruleset(rulefile.parse(text), source="test", path="rules.toml"))
+    rules_mod.activate(ruleset_of(default_as("warn")))
 
 
 def test_a_warned_shell_step_carries_the_messages_of_the_ask_answer(client: TestClient) -> None:
@@ -123,12 +122,11 @@ def test_a_warned_shell_step_carries_the_messages_of_the_ask_answer(client: Test
 def test_a_warned_step_on_another_event_has_the_rule_text_and_no_messages(
     client: TestClient,
 ) -> None:
-    text = rulefile.default_text().replace('severity = "block"', 'severity = "warn"', 1)
-    text = text.replace(
+    text = default_as("warn").replace(
         'then = { event = ["shell"], command_class = "outbound" }',
         'then = { event = ["read"], path = "secret_names" }',
     )
-    rules_mod.activate(build_ruleset(rulefile.parse(text), source="test", path="rules.toml"))
+    rules_mod.activate(ruleset_of(text))
     post(client, shell("cat .env"))
     assert post_raw(client, event("beforeReadFile", "c", file_path="/w/.env")).content == (
         b'{"permission":"allow"}'

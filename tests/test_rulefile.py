@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -86,11 +87,16 @@ def write(path: str) -> dict[str, Any]:
     }
 
 
-def clause_of(text: str, field: str = "clause") -> Clause:
-    clause = getattr(good(text).rules[0], field)
+def clause_of(text: str) -> Clause:
+    """The clause of the first rule, a `match` rule, in a file that must load."""
+    clause = good(text).rules[0].clause
     assert clause is not None
-    assert isinstance(clause, Clause)
     return clause
+
+
+def list_line(name: str, *entries: str) -> str:
+    """A `[lists]` line; a JSON array of plain strings is also a TOML array."""
+    return f"{name} = {json.dumps(list(entries))}\n"
 
 
 # ---------------------------------------------------------------- the packaged default
@@ -400,14 +406,10 @@ def test_loading_a_missing_a_big_or_a_folder_path_is_an_error_not_a_crash(tmp_pa
 
 
 def path_clause(*patterns: str, event: str = "read", ok: tuple[str, ...] = ()) -> Clause:
-    listed = ", ".join(f'"{p}"' for p in patterns)
-    lists = f"[lists]\nnames = [{listed}]\n" + (
-        "ok = [" + ", ".join(f'"{p}"' for p in ok) + "]\n" if ok else ""
-    )
-    rule = MATCH.replace(
-        'command = "cmds"', 'path = "names"' + ('\npath_except = "ok"' if ok else "")
-    )
-    return clause_of(doc(rule.replace('["shell"]', f'["{event}"]'), lists=lists))
+    lists = "[lists]\n" + list_line("names", *patterns) + (list_line("ok", *ok) if ok else "")
+    condition = 'path = "names"' + ('\npath_except = "ok"' if ok else "")
+    rule = MATCH.replace('command = "cmds"', condition).replace('["shell"]', f'["{event}"]')
+    return clause_of(doc(rule, lists=lists))
 
 
 def test_a_pattern_without_a_slash_matches_the_file_name_in_any_case() -> None:
@@ -477,10 +479,10 @@ def test_a_shell_path_condition_looks_at_every_word_and_glued_values() -> None:
 
 
 def command_clause(*entries: str, host_not_in: tuple[str, ...] = ()) -> Clause:
-    lists = "[lists]\ncmds = [" + ", ".join(f'"{e}"' for e in entries) + "]\n"
+    lists = "[lists]\n" + list_line("cmds", *entries)
     rule = MATCH
     if host_not_in:
-        lists += "hosts = [" + ", ".join(f'"{h}"' for h in host_not_in) + "]\n"
+        lists += list_line("hosts", *host_not_in)
         rule = MATCH.replace('command = "cmds"', 'command = "cmds"\nhost_not_in = "hosts"')
     return clause_of(doc(rule, lists=lists))
 

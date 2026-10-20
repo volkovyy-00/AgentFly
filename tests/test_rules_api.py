@@ -15,8 +15,8 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
 from agentfly.recorder import rulefile
 from tests.helpers import free_port, start_recorder, stop_recorder, wait_for_health
+from tests.rules_helpers import BROKEN_TOML, default_with
 
-BROKEN = "schema = 1\n[[rule]\n"
 EXTRA = """
 [[rule]]
 id = "warn-push"
@@ -32,8 +32,7 @@ command = "push_cmds"
 
 
 def custom_rules() -> str:
-    text = rulefile.default_text().replace("[lists]\n", '[lists]\npush_cmds = ["git push"]\n', 1)
-    return text + EXTRA
+    return default_with('push_cmds = ["git push"]\n', EXTRA)
 
 
 @pytest.fixture
@@ -89,7 +88,7 @@ def test_a_valid_active_file_is_listed_in_its_own_order(active_rules: Path) -> N
 
 
 def test_an_invalid_active_file_shows_the_default_and_says_why(active_rules: Path) -> None:
-    with started(active_rules, BROKEN) as client:
+    with started(active_rules, BROKEN_TOML) as client:
         body = client.get("/api/rules").json()
     assert body["source"] == "default" and body["file"] == str(rulefile.default_path())
     assert str(active_rules) in body["problem"] and "TOML" in body["problem"]
@@ -129,7 +128,7 @@ def test_health_stays_as_it_was_when_the_rules_are_fine(client: TestClient) -> N
 
 
 def test_health_says_so_when_the_active_file_was_not_used(active_rules: Path) -> None:
-    with started(active_rules, BROKEN) as client:
+    with started(active_rules, BROKEN_TOML) as client:
         body = client.get("/health").json()
     assert set(body) == {"ok", "offline_guard_count", "last_hook_at", "rules_problem"}
     assert str(active_rules) in body["rules_problem"]
@@ -179,6 +178,6 @@ def test_a_child_recorder_with_a_valid_file_runs_it(isolated_home: Path) -> None
 def test_a_child_recorder_with_a_planted_invalid_file_runs_the_default_and_says_so(
     isolated_home: Path,
 ) -> None:
-    health, listing = run_recorder(isolated_home, BROKEN)
+    health, listing = run_recorder(isolated_home, BROKEN_TOML)
     assert "test-rules.toml" in health["rules_problem"]
     assert listing["source"] == "default" and listing["problem"] == health["rules_problem"]

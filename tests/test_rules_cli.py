@@ -6,12 +6,14 @@ not exist, so "no FILE" means the packaged default unless a test writes that pat
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from agentfly.cli import main
 from agentfly.recorder import rulefile
+from tests.rules_helpers import BROKEN_TOML, default_with
 
 DEFAULT = rulefile.default_text()
 
@@ -44,11 +46,11 @@ path = "all"
 
 
 def with_rule(*rules: str) -> str:
-    return DEFAULT.replace("[lists]\n", '[lists]\npush_cmds = ["git push"]\n', 1) + "".join(rules)
+    return default_with('push_cmds = ["git push"]\n', *rules)
 
 
 @pytest.fixture
-def rules_file(tmp_path: Path):  # noqa: ANN201
+def rules_file(tmp_path: Path) -> Callable[..., Path]:
     def write(text: str, name: str = "mine.toml") -> Path:
         path = tmp_path / name
         path.write_text(text, encoding="utf-8")
@@ -102,7 +104,7 @@ def test_the_default_for_no_file_is_the_file_the_recorder_would_load(
 def test_an_invalid_active_file_fails_even_though_the_recorder_would_use_the_default(
     capsys: pytest.CaptureFixture[str], active_rules: Path
 ) -> None:
-    active_rules.write_text("schema = 1\n[[rule]\n", encoding="utf-8")
+    active_rules.write_text(BROKEN_TOML, encoding="utf-8")
     for command in ("check", "test"):
         code, _, err = run(capsys, command)
         assert code == 1 and str(active_rules) in err and "TOML" in err
@@ -112,8 +114,8 @@ def test_an_invalid_active_file_fails_even_though_the_recorder_would_use_the_def
 
 
 def test_a_good_file_with_its_own_rule_passes_both(
-    capsys: pytest.CaptureFixture[str], rules_file
-) -> None:  # noqa: ANN001
+    capsys: pytest.CaptureFixture[str], rules_file: Callable[..., Path]
+) -> None:
     path = rules_file(with_rule(GOOD_RULE))
     assert run(capsys, "check", str(path))[0] == 0
     code, out, _ = run(capsys, "test", str(path))
@@ -144,8 +146,8 @@ REFUSED = {
 @pytest.mark.parametrize("label", sorted(REFUSED))
 def test_check_exits_1_and_names_the_rule_for_each_kind_of_fault(
     capsys: pytest.CaptureFixture[str],
-    rules_file,
-    label: str,  # noqa: ANN001
+    rules_file: Callable[..., Path],
+    label: str,
 ) -> None:
     text, needle = REFUSED[label]
     code, out, err = run(capsys, "check", str(rules_file(text)))
@@ -157,8 +159,8 @@ def test_check_exits_1_and_names_the_rule_for_each_kind_of_fault(
 @pytest.mark.parametrize("label", sorted(REFUSED))
 def test_test_also_refuses_a_file_that_check_refuses(
     capsys: pytest.CaptureFixture[str],
-    rules_file,
-    label: str,  # noqa: ANN001
+    rules_file: Callable[..., Path],
+    label: str,
 ) -> None:
     text, needle = REFUSED[label]
     code, _, err = run(capsys, "test", str(rules_file(text)))
@@ -167,7 +169,7 @@ def test_test_also_refuses_a_file_that_check_refuses(
 
 def test_every_problem_is_printed_not_only_the_first(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     text = (
         with_rule(GOOD_RULE)
@@ -180,7 +182,7 @@ def test_every_problem_is_printed_not_only_the_first(
 
 def test_a_failing_inline_test_exits_1_naming_the_rule_and_the_test(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     text = with_rule(
         GOOD_RULE.replace('steps = ["shell: git status"]', 'steps = ["shell: git push"]')
@@ -195,7 +197,7 @@ def test_a_failing_inline_test_exits_1_naming_the_rule_and_the_test(
 
 def test_a_test_whose_expected_severity_is_won_by_another_rule_fails_naming_both(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     # R1 blocks the send after a secret read, so the warn rule's own test never gets its warn.
     shadowed = GOOD_RULE.replace(
@@ -208,7 +210,7 @@ def test_a_test_whose_expected_severity_is_won_by_another_rule_fails_naming_both
 
 def test_an_expected_allow_fails_when_any_rule_fires(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     text = with_rule(
         GOOD_RULE.replace(
@@ -221,7 +223,7 @@ def test_an_expected_allow_fails_when_any_rule_fires(
 
 def test_the_trigger_of_an_after_then_rule_is_set_by_the_earlier_steps(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     text = (
         DEFAULT.replace("[lists]\n", '[lists]\ninstall = ["pip install"]\npush = ["git push"]\n', 1)
@@ -251,7 +253,7 @@ then = { event = ["shell"], command = "push" }
 
 def test_a_rule_without_a_test_is_a_warning_not_a_failure(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     bare = GOOD_RULE.split("  [[rule.test]]")[0]
     code, out, _ = run(capsys, "check", str(rules_file(with_rule(bare))))
@@ -269,7 +271,7 @@ def test_a_missing_file_is_a_message_not_a_traceback(
 
 def test_the_steps_run_against_the_rule_set_not_against_the_rules_in_force(
     capsys: pytest.CaptureFixture[str],
-    rules_file,  # noqa: ANN001
+    rules_file: Callable[..., Path],
 ) -> None:
     from agentfly.recorder import rules
 

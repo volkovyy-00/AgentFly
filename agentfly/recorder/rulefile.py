@@ -14,6 +14,7 @@ failure becomes a message. The program supplies the engine-only command classes 
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import tomllib
 from collections.abc import Callable, Mapping
@@ -27,9 +28,11 @@ from agentfly.recorder.normalize import Parsed, base_name, normalize
 
 # The file the recorder reads once at start. Tests (and nothing else) point this elsewhere; it is
 # always read as `rulefile.ACTIVE_RULES`, never copied. No flag or variable moves it (D3, D25).
-ACTIVE_RULES: Path = SYSTEM.system_root / "rules.toml"
+ACTIVE_RULES: Path = SYSTEM.rules
 
 SCHEMA: int = 1
+RESERVED_ID: str = "R0"  # built into the program; a rules file may not list it
+MARK_RULE: str = "R1"  # the after_then rule whose trigger is the chat's secret mark
 KINDS: tuple[str, ...] = ("match", "after_then")
 SEVERITIES: tuple[str, ...] = ("block", "warn", "highlight")
 EVENTS: tuple[str, ...] = ("read", "write", "shell")
@@ -48,6 +51,11 @@ _RULE_FIELDS: frozenset[str] = frozenset({"id", "kind", "severity", "message", "
 _TOP_FIELDS: frozenset[str] = frozenset({"schema", "lists", "rule"})
 _TEST_FIELDS: frozenset[str] = frozenset({"steps", "expect"})
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_FIELDS_OF: dict[str, frozenset[str]] = {
+    "match": _RULE_FIELDS | set(CLAUSE_FIELDS),
+    "after_then": _RULE_FIELDS | {"after", "then"},
+}
+_ANY_FIELDS: frozenset[str] = _FIELDS_OF["match"] | _FIELDS_OF["after_then"]
 
 MAX_FILE_BYTES: int = 256 * 1024
 MAX_RULES: int = 200
@@ -105,12 +113,14 @@ class Pattern:
     anchor: str  # "", "root" or "home"
     parts: tuple[str, ...]
 
-    def matches(self, path: str) -> bool:
+    def matches(self, path: str, name: str | None = None) -> bool:
+        """`name` is the path's folded file name when the caller has it already (one per path)."""
         if self.name_only:
-            return fnmatch.fnmatchcase(PurePosixPath(path).name.casefold(), self.text)
+            folded: str = name if name is not None else PurePosixPath(path).name.casefold()
+            return fnmatch.fnmatchcase(folded, self.text)
         segments: list[str] = _segments(path.casefold())
         if self.anchor == "home":
-            home: list[str] = _segments(str(Path.home()).casefold())
+            home: list[str] = _segments(os.path.expanduser("~").casefold())
             if segments[: len(home)] != home:
                 return False
             return _glob(self.parts, segments[len(home) :])
@@ -176,16 +186,20 @@ class Clause:
     host_not_in: tuple[str, ...] = ()
 
     def _path_hit(self, text: str) -> bool:
-        return any(p.matches(text) for p in self.path) and not any(
-            p.matches(text) for p in self.path_except
+        name: str = PurePosixPath(text).name.casefold()
+        return any(p.matches(text, name) for p in self.path) and not any(
+            p.matches(text, name) for p in self.path_except
         )
 
     def _words_hit(self, parsed: Parsed) -> bool:
         for argv in parsed.all_commands():
             for word in argv:
-                for candidate in {word, word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1]}:
-                    if self._path_hit(candidate):
-                        return True
+                if "=" in word or "@" in word:  # `--env-file=.env`, `-d@.env`
+                    candidates = {word, word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1]}
+                else:
+                    candidates = {word}
+                if any(self._path_hit(candidate) for candidate in candidates):
+                    return True
         return False
 
     def _command_hit(self, parsed: Parsed) -> bool:
@@ -261,16 +275,31 @@ def summary(errors: tuple[str, ...]) -> str:
     return text if len(text) <= MAX_SUMMARY_CHARS else text[: MAX_SUMMARY_CHARS - 3] + "..."
 
 
+def rules_word(count: int) -> str:
+    return f"{count} rule" if count == 1 else f"{count} rules"
+
+
+def _refused(message: str) -> RuleFile:
+    """A file that cannot be used at all, for one reason."""
+    return RuleFile((), (message,), ())
+
+
 # ---------------------------------------------------------------- parse
 
 
 class _Problems:
     def __init__(self) -> None:
         self.errors: list[str] = []
-        self.lint: list[str] = []
 
     def add(self, where: str, message: str) -> None:
         self.errors.append(f"{where}: {message}" if where else message)
+
+    def unknown(self, where: str, table: Any, allowed: Any, hint: str = "") -> None:
+        """One error per key of `table` that is not allowed (a rules file is typed by a person)."""
+        for field in table:
+            if field not in allowed:
+                extra = hint if field in CLAUSE_FIELDS else ""
+                self.add(where, f"unknown field {field!r}{extra}")
 
 
 def _strings(value: Any, limit: int) -> list[str] | None:
@@ -323,7 +352,10 @@ def _command_entry(where: str, raw: str, problems: _Problems) -> tuple[str, ...]
 
 def _named(
     where: str, table: dict[str, Any], field: str, lists: dict[str, tuple[str, ...]], p: _Problems
-) -> tuple[str, ...] | None:
+) -> tuple[str, ...]:
+    """The entries of the list a field names; () if the field is absent or wrong (reported)."""
+    if field not in table:
+        return ()
     name: Any = table[field]
     if not isinstance(name, str):
         p.add(where, f"'{field}' must be the name of a list in [lists], a string")
@@ -331,61 +363,58 @@ def _named(
         p.add(where, f"'{field}' names the list {name!r}, which [lists] does not define")
     else:
         return lists[name]
-    return None
+    return ()
+
+
+def _compiled(where: str, entries: tuple[str, ...], make: Any, p: _Problems) -> tuple[Any, ...]:
+    return tuple(c for e in entries if (c := make(where, e, p)) is not None)
 
 
 def _clause(
     where: str,
     table: Any,
     lists: dict[str, tuple[str, ...]],
-    role: str,
     problems: _Problems,
+    *,
+    needs_condition: bool,
 ) -> Clause | None:
+    """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition."""
     if not isinstance(table, dict):
         problems.add(where, "must be a table")
         return None
     start: int = len(problems.errors)
-    for field in table:
-        if field not in CLAUSE_FIELDS:
-            problems.add(where, f"unknown field {field!r}")
-    events: list[str] | None = _strings(table.get("event"), len(EVENTS))
-    events_ok: bool = events is not None
-    if events is None or not set(events) <= set(EVENTS) or len(set(events)) != len(events):
+    problems.unknown(where, table, CLAUSE_FIELDS)
+    events: list[str] = _strings(table.get("event"), len(EVENTS)) or []
+    if not events or not set(events) <= set(EVENTS) or len(set(events)) != len(events):
         problems.add(
             where,
             f"'event' must list some of {', '.join(EVENTS)}, each once "
             f"(got {table.get('event')!r})",
         )
-        events, events_ok = [], False
-    path: list[Pattern] = []
-    path_except: list[Pattern] = []
-    for field, into in (("path", path), ("path_except", path_except)):
-        if field in table and (entries := _named(where, table, field, lists, problems)):
-            into += [c for e in entries if (c := _path_pattern(where, e, problems))]
-    command: list[tuple[str, ...]] = []
-    if "command" in table and (entries := _named(where, table, "command", lists, problems)):
-        command = [c for e in entries if (c := _command_entry(where, e, problems))]
-    hosts: tuple[str, ...] = ()
-    if "host_not_in" in table and (entries := _named(where, table, "host_not_in", lists, problems)):
-        hosts = tuple(e.casefold() for e in entries)
+        events = []
+    path = _compiled(where, _named(where, table, "path", lists, problems), _path_pattern, problems)
+    path_except = _compiled(
+        where, _named(where, table, "path_except", lists, problems), _path_pattern, problems
+    )
+    command = _compiled(
+        where, _named(where, table, "command", lists, problems), _command_entry, problems
+    )
+    hosts = tuple(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
     command_class: Any = table.get("command_class", "")
     if "command_class" in table and command_class not in COMMAND_CLASSES:
         problems.add(
             where, f"command_class {command_class!r} is not one of {sorted(COMMAND_CLASSES)}"
         )
         command_class = ""
-    shell_only: bool = bool(command or hosts or command_class)
     if path_except and not path:
         problems.add(where, "'path_except' needs a 'path'")
-    if shell_only and events_ok and events != ["shell"]:
+    if (command or hosts or command_class) and events and events != ["shell"]:
         problems.add(where, "'command', 'command_class' and 'host_not_in' need event = [\"shell\"]")
-    if role != "then" and not (path or command or hosts or command_class):
+    if needs_condition and not (path or command or hosts or command_class):
         problems.add(where, f"matches every {'/'.join(events) or 'action'} action; add a condition")
     if len(problems.errors) > start:
         return None
-    return Clause(
-        tuple(events), tuple(path), tuple(path_except), tuple(command), command_class, hosts
-    )
+    return Clause(tuple(events), path, path_except, command, command_class, hosts)
 
 
 def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
@@ -400,9 +429,7 @@ def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
         if not isinstance(item, dict):
             problems.add(label, "must be a table")
             continue
-        for field in item:
-            if field not in _TEST_FIELDS:
-                problems.add(label, f"unknown field {field!r}")
+        problems.unknown(label, item, _TEST_FIELDS)
         expect: Any = item.get("expect")
         if expect not in EXPECTS:
             problems.add(label, f"'expect' must be one of {', '.join(EXPECTS)} (got {expect!r})")
@@ -437,8 +464,10 @@ def _rule(
     where: str = f"rule {rid}" if named else f"rule #{number}"
     if not named:
         problems.add(where, "'id' must be letters, digits, '.', '_' or '-' (at most 64)")
-    elif rid.casefold() == "r0":
-        problems.add(where, "R0 is built into AgentFly and cannot be listed in a rules file")
+    elif rid.casefold() == RESERVED_ID.casefold():
+        problems.add(
+            where, f"{RESERVED_ID} is built into AgentFly and cannot be listed in a rules file"
+        )
     elif rid.casefold() in seen:
         problems.add(where, "duplicate id")
     else:
@@ -452,39 +481,21 @@ def _rule(
     message: Any = raw.get("message")
     if not isinstance(message, str) or not message.strip() or len(message) > MAX_MESSAGE_CHARS:
         problems.add(where, f"'message' must be text of 1 to {MAX_MESSAGE_CHARS} characters")
-    allowed: frozenset[str] = _RULE_FIELDS
-    if kind == "match":
-        allowed = allowed | set(CLAUSE_FIELDS)
-    elif kind == "after_then":
-        allowed = allowed | {"after", "then"}
-    for field in raw:
-        if kind in KINDS and field not in allowed:
-            hint = " (conditions go inside 'after' and 'then')" if field in CLAUSE_FIELDS else ""
-            problems.add(where, f"unknown field {field!r}{hint}")
-        elif kind not in KINDS and field not in _RULE_FIELDS | set(CLAUSE_FIELDS) | {
-            "after",
-            "then",
-        }:
-            problems.add(where, f"unknown field {field!r}")
+    # An unusable `kind` is reported above; its other fields are then judged against every kind.
+    allowed = _FIELDS_OF[kind] if kind in KINDS else _ANY_FIELDS
+    problems.unknown(where, raw, allowed, " (conditions go inside 'after' and 'then')")
     clause = after = then = None
     if kind == "match":
-        clause = _clause(
-            where, {k: raw[k] for k in CLAUSE_FIELDS if k in raw}, lists, "match", problems
-        )
+        condition = {k: raw[k] for k in CLAUSE_FIELDS if k in raw}
+        clause = _clause(where, condition, lists, problems, needs_condition=True)
     elif kind == "after_then":
         for field in ("after", "then"):
             if field not in raw:
                 problems.add(where, f"an after_then rule needs '{field}'")
-        after = (
-            _clause(f"{where} after", raw["after"], lists, "after", problems)
-            if "after" in raw
-            else None
-        )
-        then = (
-            _clause(f"{where} then", raw["then"], lists, "then", problems)
-            if "then" in raw
-            else None
-        )
+        if "after" in raw:
+            after = _clause(f"{where} after", raw["after"], lists, problems, needs_condition=True)
+        if "then" in raw:
+            then = _clause(f"{where} then", raw["then"], lists, problems, needs_condition=False)
     tests: tuple[InlineTest, ...] = _tests(where, raw.get("test"), problems)
     if len(problems.errors) > start:
         return None
@@ -493,14 +504,14 @@ def _rule(
 
 def _parse(text: str) -> RuleFile:
     problems = _Problems()
-    if len(text) > MAX_FILE_BYTES:
-        return RuleFile((), (f"too large (over {MAX_FILE_BYTES} bytes)",), ())
+    if len(text) > MAX_FILE_BYTES:  # `load_file` checks bytes; this is for callers of `parse`
+        return _refused(f"too large (over {MAX_FILE_BYTES} bytes)")
     try:
         data: dict[str, Any] = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        return RuleFile((), (f"not valid TOML ({exc})",), ())
+        return _refused(f"not valid TOML ({exc})")
     except RecursionError:
-        return RuleFile((), ("nested too deeply to read",), ())
+        return _refused("nested too deeply to read")
     for key in data:
         if key not in _TOP_FIELDS:
             problems.add("", f"unknown top-level key {key!r}")
@@ -520,15 +531,15 @@ def _parse(text: str) -> RuleFile:
     for number, raw in enumerate(raw_rules, 1):
         if (spec := _rule(number, raw, lists, seen, problems)) is not None:
             specs.append(spec)
-    for spec in specs:
-        if not spec.tests:
-            problems.lint.append(f"rule {spec.id}: no inline test; add a [[rule.test]]")
-    if not any(s.id == "R1" and s.kind == "after_then" for s in specs):
-        problems.lint.append(
-            "no rule R1 (an after_then): a secret read still marks the chat, but nothing blocks "
-            "the send that follows"
+    lint: list[str] = [
+        f"rule {s.id}: no inline test; add a [[rule.test]]" for s in specs if not s.tests
+    ]
+    if not any(s.id == MARK_RULE and s.kind == "after_then" for s in specs):
+        lint.append(
+            f"no rule {MARK_RULE} (an after_then): a secret read still marks the chat, but "
+            "nothing blocks the send that follows"
         )
-    return RuleFile(tuple(specs), tuple(problems.errors), tuple(problems.lint))
+    return RuleFile(tuple(specs), tuple(problems.errors), tuple(lint))
 
 
 def parse(text: str) -> RuleFile:
@@ -536,7 +547,7 @@ def parse(text: str) -> RuleFile:
     try:
         return _parse(text)
     except Exception as exc:  # noqa: BLE001 - a rules file must never crash the recorder
-        return RuleFile((), (f"could not be read ({type(exc).__name__})",), ())
+        return _refused(f"could not be read ({type(exc).__name__})")
 
 
 # ---------------------------------------------------------------- files
@@ -559,17 +570,17 @@ def load_file(path: Path) -> RuleFile:
     """
     try:
         if not path.is_file():
-            return RuleFile((), ("cannot be read: not a file",), ())
+            return _refused("cannot be read: not a file")
         with path.open("rb") as handle:
             raw: bytes = handle.read(MAX_FILE_BYTES + 1)
     except OSError as exc:
-        return RuleFile((), (f"cannot be read: {exc.strerror or type(exc).__name__}",), ())
+        return _refused(f"cannot be read: {exc.strerror or type(exc).__name__}")
     if len(raw) > MAX_FILE_BYTES:
-        return RuleFile((), (f"too large (over {MAX_FILE_BYTES} bytes)",), ())
+        return _refused(f"too large (over {MAX_FILE_BYTES} bytes)")
     try:
         text: str = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return RuleFile((), ("not UTF-8 text",), ())
+        return _refused("not UTF-8 text")
     return parse(text)
 
 

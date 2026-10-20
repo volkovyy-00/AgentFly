@@ -8,7 +8,7 @@ import queue
 import sys
 import threading
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,7 @@ from agentfly.recorder.clean import clean_command, website_name
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
-from agentfly.recorder.rules import Session, find_rule, mark
+from agentfly.recorder.rules import Session, reads_secret
 
 logger = logging.getLogger("agentfly")
 
@@ -342,9 +342,9 @@ def build_step_record(
     """Build a cleaned StepRecord. Uses session.next_step only via `order` arg.
 
     `marks` is what `SessionStore.apply_mark` said about this event: it made the chat marked.
-    `rule_text` is the winning rule's message, which the caller already has; without it the rule
-    is looked up by its id. The messages are the ones the hook answer for this event sent, if it
-    sent any (V8b).
+    `rule_text` is the winning rule's message, which the caller already has (V5b: the rule is
+    looked up once per hook). The messages are the ones the hook answer for this event sent, if
+    it sent any (V8b).
     """
     event: str = str(payload.get("hook_event_name", ""))
     kind: str = kind_from_event(event)
@@ -390,15 +390,10 @@ def build_step_record(
 
     if kind == "shell" and not file_sensitive:
         # The rule engine's own test, whatever this chat's mark is: the history and R1 agree.
-        # (A read step already used it above: `mark()` tests the same file name.)
-        if mark(payload, replace(session, marked=False)).marked:
+        # (A read step already used it above: the same lists decide a file name.)
+        if reads_secret(payload):
             file_sensitive = True
             file_path = None  # the cleaner hid the name; do not show another file as touched
-
-    rule_description: str | None = rule_text
-    if rule_description is None and rule_id is not None:
-        rule = find_rule(rule_id)
-        rule_description = rule.message if rule is not None else None
 
     prev_step_id: str | None = None
     if order > 1:
@@ -420,7 +415,7 @@ def build_step_record(
         command=command,
         hosts=hosts,
         rule_id=rule_id,
-        rule_description=rule_description,
+        rule_description=rule_text,
         prev_step_id=prev_step_id,
         workspace_root=first_workspace_root(payload),
         marks=marks,

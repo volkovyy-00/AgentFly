@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import itertools
 import json
-import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -18,15 +17,14 @@ from fastapi.testclient import TestClient
 
 import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
-from agentfly.recorder import rulefile
-from agentfly.recorder.paths import config_dir
+import agentfly.recorder.store as store_module
 from agentfly.recorder.rules import R0_MESSAGE, R1_MESSAGE, Session, decide, mark
 from tests.helpers import REPO
+from tests.rules_helpers import default_with, ruleset_of
+from tests.test_step_fields import FIELDS, RETRY, post_raw
 from tests.test_step_merge import event, live, pre, read, saved, shell
 
 SKIP_TAIL = " If the user skips this, do not retry with another tool or language."
-RETRY = " Do not retry with another tool or language. Stop and tell the user."
-FIELDS = frozenset({"rule_text", "user_message", "agent_message"})
 
 LISTS = (
     'ls_cmds = ["ls"]\npush_cmds = ["git push"]\npy_files = ["*.py"]\nenv_local = [".env.local"]\n'
@@ -74,15 +72,11 @@ path = "py_files"
 
 def rules_text(*extra: str) -> str:
     """The packaged default (R0's neighbour R1) with more lists and rules after it."""
-    base = rulefile.default_text()
-    text = re.sub(r"^\[lists\]\n", "[lists]\n" + LISTS, base, count=1, flags=re.M)
-    return text + "".join(extra)
+    return default_with(LISTS, *extra)
 
 
 def ruleset(*extra: str) -> rules_mod.RuleSet:
-    parsed = rulefile.parse(rules_text(*extra))
-    assert parsed.errors == (), parsed.errors
-    return rules_mod.build_ruleset(parsed, source="test", path="test.toml")
+    return ruleset_of(rules_text(*extra))
 
 
 def session(*, marked: bool = False) -> Session:
@@ -151,17 +145,6 @@ def served(active_rules: Path) -> Iterator[Callable[..., TestClient]]:
     yield start
     for context in clients:
         context.__exit__(None, None, None)
-
-
-def post_raw(client: TestClient, body: dict[str, Any]) -> Any:
-    token = (config_dir() / "token").read_text(encoding="utf-8").strip()
-    response = client.post(
-        "/hook",
-        json=body,
-        headers={"Content-Type": "application/json", "X-Recorder-Token": token},
-    )
-    assert response.status_code == 200
-    return response
 
 
 def test_a_warn_on_a_shell_command_answers_ask_with_the_text_in_both_messages(
@@ -256,7 +239,7 @@ def test_a_merged_shell_pair_shows_the_warn_and_its_messages(
     assert step["user_message"] == "A push needs a look."
 
 
-def test_the_rule_is_looked_up_once_per_hook(
+def test_the_rule_is_looked_up_once_per_hook_and_the_store_does_not_look_it_up_again(
     served: Callable[..., TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = served(rule("warn-push", "warn", "A push needs a look."))
@@ -268,11 +251,10 @@ def test_the_rule_is_looked_up_once_per_hook(
         return real(rule_id)
 
     monkeypatch.setattr(app_module, "find_rule", counting)
-    import agentfly.recorder.store as store_module
-
-    monkeypatch.setattr(store_module, "find_rule", counting)
     post_raw(client, push())
     assert calls == ["warn-push"]
+    assert not hasattr(store_module, "find_rule"), "the step record is handed the text"
+    assert live(client)[-1]["rule_text"] == "A push needs a look."
 
 
 def test_the_answers_for_the_demo_do_not_change_with_the_file_format(

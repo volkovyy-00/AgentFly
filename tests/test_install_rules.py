@@ -20,6 +20,7 @@ from agentfly.install.layout import SYSTEM, Layout
 from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
 from tests.install_helpers import fake_python_tar, make_layout, status_of, write_archive
+from tests.rules_helpers import BROKEN_TOML
 
 EDITED = "# edited by the owner\n" + rulefile.default_text()
 
@@ -137,9 +138,9 @@ def test_an_edit_that_is_not_valid_is_still_left_alone(
     layout: Layout, archive: tuple[Path, PythonBuild]
 ) -> None:
     do_install(layout, archive)
-    layout.rules.write_text("schema = 1\n[[rule]\n", encoding="utf-8")
+    layout.rules.write_text(BROKEN_TOML, encoding="utf-8")
     do_install(layout, archive)
-    assert layout.rules.read_text() == "schema = 1\n[[rule]\n", "doctor reports it; init does not"
+    assert layout.rules.read_text() == BROKEN_TOML, "doctor reports it; init does not"
 
 
 # ---------------------------------------------------------------- an install from before this card

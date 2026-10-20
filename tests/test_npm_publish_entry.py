@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -17,36 +16,11 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
 from agentfly.recorder import rulefile
 from agentfly.recorder.memory import memory_steps
-from agentfly.recorder.sessions import SessionStore
 from tests.cases import wrapped
+from tests.recorder_harness import Recorder
 
 PUBLISH = "npm publish"
 MESSAGE = "Blocked: a .env file was read earlier in this session, so npm publish is off."
-
-
-class Recorder:
-    def __init__(self, folder: Path) -> None:
-        self.path = folder / "sessions.json"
-        self.restart()
-
-    def restart(self) -> None:
-        """What a recorder restart does: the store is read again from disk, memory starts empty."""
-        app_module._store = SessionStore(self.path)
-        memory_steps.clear()
-
-    def send(self, chat: str, event: str, **fields: Any) -> dict[str, str]:
-        payload = {"hook_event_name": event, "conversation_id": chat, "workspace_roots": ["/w"]}
-        payload.update(fields)
-        return app_module.apply_rules(payload)[0]
-
-    def run(self, chat: str, command: str, **fields: Any) -> dict[str, str]:
-        return self.send(chat, "beforeShellExecution", command=command, cwd="", **fields)
-
-    def read(self, chat: str, path: str, **fields: Any) -> dict[str, str]:
-        return self.send(chat, "beforeReadFile", file_path=path, **fields)
-
-    def task(self, chat: str, call: str) -> None:
-        self.send(chat, "preToolUse", tool_name="Task", tool_use_id=call)
 
 
 @pytest.fixture()

@@ -7,6 +7,7 @@ restart, the parent links and the 30-minute workspace fallback. No rule is invol
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,17 +17,10 @@ import pytest
 import agentfly.recorder.sessions as sessions_mod
 from agentfly.recorder.rules import Session
 from agentfly.recorder.sessions import FALLBACK_SECONDS, SessionStore
+from tests.recorder_harness import Clock
 
 X = frozenset({"X"})
 Y = frozenset({"Y"})
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now: float = 1_000_000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 @pytest.fixture()
@@ -283,7 +277,9 @@ def test_a_links_file_from_before_triggers_keeps_giving_the_r1_fallback(
 # ---------------------------------------------------------------- apply_mark
 
 
-def adds_trigger(name: str):  # noqa: ANN201 - a stand-in for rules.mark
+def adds_trigger(name: str) -> Callable[[dict[str, Any], Session], Session]:
+    """A stand-in for `rules.mark` that sets one trigger off on the command `fire`."""
+
     def mark(action: dict[str, Any], session: Session) -> Session:
         if action.get("command") == "fire":
             return replace(session, triggers=session.triggers | {name})

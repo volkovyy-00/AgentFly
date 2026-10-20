@@ -18,7 +18,6 @@ from agentfly.recorder.rules import (
     R1_MESSAGE,
     RULES,
     Session,
-    build_ruleset,
     decide,
     deny_messages,
     mark,
@@ -30,6 +29,7 @@ from tests.cases import (
     SHELL_TEMPLATES,
     wrapped,
 )
+from tests.rules_helpers import R0_ENTRY, default_as, default_with, ruleset_of
 
 PID = 31337
 PPID = 31338
@@ -181,24 +181,12 @@ def test_a_secret_read_that_is_also_an_r0_command_is_marked_and_denied() -> None
     assert decide(action, sess) == ("blocked", "R0")
 
 
-R0_ENTRY = """
-[[rule]]
-id = "R0"
-kind = "match"
-severity = "warn"
-message = "gentle"
-event = ["shell"]
-command_class = "outbound"
-"""
-
-
 def test_a_rules_file_cannot_turn_r0_into_a_warning() -> None:
     # An entry named R0 is refused, so the file is not used and R0 stays as the program has it.
-    refused = rulefile.parse(rulefile.default_text() + R0_ENTRY)
+    refused = rulefile.parse(default_with("", R0_ENTRY))
     assert any("R0" in problem for problem in refused.errors), refused.errors
     # And a file that makes every other rule gentle leaves R0 first and blocking.
-    gentle = rulefile.default_text().replace('severity = "block"', 'severity = "warn"', 1)
-    rs = build_ruleset(rulefile.parse(gentle), source="test", path="rules.toml")
+    rs = ruleset_of(default_as("warn"))
     rules_mod.activate(rs)  # the conftest puts the packaged default back after the test
     assert [rule.id for rule in rs.rules][:2] == ["R0", "R1"] and rs.rules[0].severity == "block"
     assert verdict_of(shell("agentfly stop")) == ("blocked", "R0")

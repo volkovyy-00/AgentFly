@@ -343,19 +343,18 @@ def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule
 
 # ---------------------------------------------------------------- the rule set (V5b)
 
-MARK_RULE: str = "R1"  # the after_then rule whose trigger is the chat's `marked` flag
+MARK_RULE: str = rulefile.MARK_RULE  # the after_then rule whose trigger is `Session.marked`
 BLOCK_TAIL: str = " Do not retry with another tool or language. Stop and tell the user."
 SKIP_TAIL: str = " If the user skips this, do not retry with another tool or language."
 
 # Command classes a rules file may name (`command_class = "outbound"`): engine code, not data.
+# (tests/test_rules_load.py checks that these names are the ones `rulefile` accepts.)
 CLASSES: dict[str, rulefile.CommandClass] = {"outbound": parsed_is_outbound}
-if set(CLASSES) != rulefile.COMMAND_CLASSES:  # pragma: no cover - a coding slip, caught at import
-    raise RuntimeError("rulefile.COMMAND_CLASSES and rules.CLASSES disagree")
 
 _SEVERITY_RANK: dict[str, int] = {"block": 2, "warn": 1, "highlight": 0}
 _VERDICT: dict[str, str] = {"block": "blocked", "warn": "warned", "highlight": "highlighted"}
 
-R0_RULE: Rule = Rule(id="R0", severity="block", message=R0_MESSAGE, check=check_r0)
+R0_RULE: Rule = Rule(id=rulefile.RESERVED_ID, severity="block", message=R0_MESSAGE, check=check_r0)
 
 
 def _never(action: Action) -> bool:  # noqa: ARG001
@@ -397,17 +396,22 @@ def _compose(spec: RuleSpec) -> Rule:
     return Rule(spec.id, spec.severity, spec.message, check_then, kind="after_then", after=trigger)
 
 
-_default_secret: Callable[[Action], bool] = _never
-
-
-def build_ruleset(file: RuleFile, *, source: str, path: str, problem: str | None = None) -> RuleSet:
+def build_ruleset(
+    file: RuleFile,
+    *,
+    source: str,
+    path: str,
+    problem: str | None = None,
+    fallback_secret: Callable[[Action], bool] | None = None,
+) -> RuleSet:
     """Rules from a file that parsed without errors. R0 is added in front; it is never in a file.
 
     Whether an action reads a secret is decided by R1's `after` clause, so the lists in the file
-    rule; with no R1 in the file the packaged default's clause still marks the chat.
+    rule; with no R1 in the file the packaged default's clause (`fallback_secret`) still marks
+    the chat.
     """
     composed: tuple[Rule, ...] = tuple(_compose(spec) for spec in file.rules)
-    secret: Callable[[Action], bool] = _default_secret
+    secret: Callable[[Action], bool] = fallback_secret or DEFAULT.secret
     for rule in composed:
         if rule.id == MARK_RULE and rule.after is not None:
             secret = rule.after
@@ -418,18 +422,17 @@ def _load_default() -> RuleSet:
     path: str = str(rulefile.default_path())
     try:
         loaded: RuleFile = rulefile.load_default()
-        if loaded.errors:
-            raise ValueError(rulefile.summary(loaded.errors))
-        return build_ruleset(loaded, source="default", path=path)
-    except Exception as exc:  # noqa: BLE001 - see below
-        # A damaged install must not stop `uninstall` and `doctor` from importing this module.
-        # Only R0 runs, and the recorder refuses to start on it (`app.lifespan`).
-        problem = f"the packaged default rules cannot be used: {exc}"
-        return RuleSet((R0_RULE,), "default", path, problem, _never, broken=True)
+        if not loaded.errors:
+            return build_ruleset(loaded, source="default", path=path, fallback_secret=_never)
+        reason: str = rulefile.summary(loaded.errors)
+    except Exception as exc:  # noqa: BLE001 - a damaged install must not stop `uninstall`
+        reason = f"{type(exc).__name__}: {exc}"
+    # Only R0 runs, and the recorder refuses to start on it (`app.lifespan`).
+    problem = f"the packaged default rules cannot be used: {reason}"
+    return RuleSet((R0_RULE,), "default", path, problem, _never, broken=True)
 
 
 DEFAULT: RuleSet = _load_default()
-_default_secret = DEFAULT.secret
 RULES: list[Rule] = list(DEFAULT.rules)  # the rules in force; R0 first
 _active: RuleSet = DEFAULT
 
@@ -443,10 +446,6 @@ def activate(ruleset: RuleSet) -> None:
     global _active
     RULES[:] = ruleset.rules
     _active = ruleset
-
-
-def reset() -> None:
-    activate(DEFAULT)
 
 
 def load_active() -> RuleSet:
@@ -477,9 +476,14 @@ def find_rule(rule_id: str | None) -> Rule | None:
     return None
 
 
+def reads_secret(action: Action) -> bool:
+    """Does this action read a secret by the rule set's lists? (What sets `Session.marked`.)"""
+    return _active.secret(action)
+
+
 def is_secret_path(path: str) -> bool:
     """Is this file a secret by the rule set's lists? (The page's `sensitive` badge asks.)"""
-    return _active.secret({"hook_event_name": "beforeReadFile", "file_path": path})
+    return reads_secret({"hook_event_name": "beforeReadFile", "file_path": path})
 
 
 def mark(action: Action, session: Session, rules: RuleSet | None = None) -> Session:
@@ -490,12 +494,14 @@ def mark(action: Action, session: Session, rules: RuleSet | None = None) -> Sess
     """
     ruleset: RuleSet = rules or _active
     marked: bool = session.marked or ruleset.secret(action)
-    fired: set[str] = set()
-    for rule in ruleset.rules:
-        if rule.after is None or rule.id == MARK_RULE or rule.id in session.triggers:
-            continue
-        if rule.after(action):
-            fired.add(rule.id)
+    fired: set[str] = {
+        rule.id
+        for rule in ruleset.rules
+        if rule.after is not None
+        and rule.id != MARK_RULE
+        and rule.id not in session.triggers
+        and rule.after(action)
+    }
     if marked == session.marked and not fired:
         return session
     return replace(session, marked=marked, triggers=session.triggers | fired)

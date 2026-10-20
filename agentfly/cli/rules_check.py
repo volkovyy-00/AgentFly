@@ -40,10 +40,6 @@ def load(command: str, path: Path) -> rulefile.RuleFile | None:
     return loaded
 
 
-def rules_word(count: int) -> str:
-    return f"{count} rule" if count == 1 else f"{count} rules"
-
-
 def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = commands.add_parser(
         "check",
@@ -62,7 +58,8 @@ def run(args: argparse.Namespace) -> int:
     loaded = load("check", path)
     if loaded is None:
         return 1
-    print(f"ok: {rules_word(len(loaded.rules))} in {path} ({what}), plus R0, which is built in")
+    count = rulefile.rules_word(len(loaded.rules))
+    print(f"ok: {count} in {path} ({what}), plus R0, which is built in")
     for line in loaded.lint:
         print(f"warn: {line}")
     return 0

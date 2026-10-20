@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from agentfly.cli.rules_check import add_file_argument, choose_file, load, rules_word
+from agentfly.cli.rules_check import add_file_argument, choose_file, load
 from agentfly.recorder import rulefile
 
 
@@ -83,7 +83,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"agentfly rules test: {path}: {failure}", file=sys.stderr)
         print(f"FAILED: {len(failures)} of {ran} tests", file=sys.stderr)
         return 1
-    print(f"ok: {ran} tests passed in {rules_word(len(loaded.rules))} ({path}; {what})")
+    print(f"ok: {ran} tests passed in {rulefile.rules_word(len(loaded.rules))} ({path}; {what})")
     for line in loaded.lint:
         print(f"warn: {line}")
     return 0

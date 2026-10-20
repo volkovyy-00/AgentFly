@@ -41,6 +41,7 @@ from tests.install_helpers import (
     upgrade,
     write_archive,
 )
+from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
 
 IDS = [
@@ -243,7 +244,7 @@ def test_a_missing_rules_file_is_a_warning_that_names_init(world: World) -> None
 
 @pytest.mark.parametrize(
     "text",
-    ["schema = 1\n[[rule]\n", "not toml", "", "schema = 2\n"],
+    [BROKEN_TOML, "not toml", "", "schema = 2\n"],
 )
 def test_an_invalid_rules_file_fails_only_the_rules_line_and_says_the_default_runs(
     world: World, monkeypatch: pytest.MonkeyPatch, text: str
@@ -256,10 +257,7 @@ def test_an_invalid_rules_file_fails_only_the_rules_line_and_says_the_default_ru
 
 
 def test_an_entry_for_r0_fails_the_rules_line(world: World) -> None:
-    text = world.layout.rules.read_text(encoding="utf-8") + (
-        '\n[[rule]]\nid = "R0"\nkind = "match"\nseverity = "warn"\nmessage = "x"\n'
-        'event = ["shell"]\ncommand_class = "outbound"\n'
-    )
+    text = world.layout.rules.read_text(encoding="utf-8") + R0_ENTRY
     world.layout.rules.write_text(text, encoding="utf-8")
     check = world.results()["rules"]
     assert check.level == "fail" and "R0" in check.text

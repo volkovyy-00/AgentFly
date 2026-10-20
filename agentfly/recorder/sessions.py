@@ -140,8 +140,13 @@ class SessionStore:
                 "parent_call": s.parent_call,
                 "parent_id": s.parent_id,
                 "inherited_until": s.inherited_until,
-                "triggers": sorted(s.triggers),
-                "inherited_triggers": dict(sorted(s.inherited_triggers.items())),
+                # V5b: only when there is something, so the file does not grow for chats without
+                **({"triggers": sorted(s.triggers)} if s.triggers else {}),
+                **(
+                    {"inherited_triggers": dict(sorted(s.inherited_triggers.items()))}
+                    if s.inherited_triggers
+                    else {}
+                ),
             }
             for s in self._sessions.values()
         ]
@@ -237,14 +242,15 @@ class SessionStore:
         changed: bool = False
         links_changed: bool = False
         if session is None:
+            inherit: bool = linkable and not call  # a chat with no parent link may inherit
             session = Session(
                 id=sid,
                 marked=False,
                 start_time=datetime.now(UTC).isoformat(),
                 next_step=1,
                 parent_call=call,
-                inherited_until=self.fallback_until(payload) if linkable and not call else 0.0,
-                inherited_triggers=self.fallback_triggers(payload) if linkable and not call else {},
+                inherited_until=self.fallback_until(payload) if inherit else 0.0,
+                inherited_triggers=self.fallback_triggers(payload) if inherit else {},
             )
             self._sessions[sid] = session
             changed = True
@@ -290,15 +296,14 @@ class SessionStore:
         started: Session | None = self._sessions.get(parent)
         linked: bool = any(s.parent_call == call for s in self._sessions.values())
         if call not in self.pending and not linked and started:
-            marked: bool = self.effective_marked(started)
-            triggers: frozenset[str] = self.effective_triggers(started)
-            if marked or triggers:
+            handed_on: Session = self.effective(started)  # what its subagents would inherit
+            if handed_on.marked or handed_on.triggers:
                 self.pending[call] = {
                     "parent": parent,
                     "roots": _roots(payload),
                     "t0": self.clock(),
-                    "marked": marked,
-                    "triggers": sorted(triggers),
+                    "marked": handed_on.marked,
+                    "triggers": sorted(handed_on.triggers),
                 }
                 changed = True
         return self.prune_pending() or changed
@@ -326,26 +331,27 @@ class SessionStore:
             del self.pending[call]
         return bool(stale)
 
-    def fallback_until(self, payload: dict[str, Any]) -> float:
-        """For a new chat with no parent link: when an inherited workspace mark ends (0: none)."""
+    def _inheritable(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Pending Tasks inside the fallback window that share a workspace with this event."""
         roots: set[str] = set(_roots(payload))
         now: float = self.clock()
-        until: float = 0.0
-        for entry in self.pending.values():
-            if entry["marked"] and now - entry["t0"] <= FALLBACK_SECONDS:
-                if roots & set(entry["roots"]):
-                    until = max(until, entry["t0"] + FALLBACK_SECONDS)
-        return until
+        return [
+            entry
+            for entry in self.pending.values()
+            if now - entry["t0"] <= FALLBACK_SECONDS and roots & set(entry["roots"])
+        ]
+
+    def fallback_until(self, payload: dict[str, Any]) -> float:
+        """For a new chat with no parent link: when an inherited workspace mark ends (0: none)."""
+        ends = (e["t0"] + FALLBACK_SECONDS for e in self._inheritable(payload) if e["marked"])
+        return max(ends, default=0.0)
 
     def fallback_triggers(self, payload: dict[str, Any]) -> dict[str, float]:
         """For a new chat with no parent link: each trigger it inherits and when that ends."""
-        roots: set[str] = set(_roots(payload))
-        now: float = self.clock()
         until: dict[str, float] = {}
-        for entry in self.pending.values():
-            if now - entry["t0"] <= FALLBACK_SECONDS and roots & set(entry["roots"]):
-                for trigger in entry["triggers"]:
-                    until[trigger] = max(until.get(trigger, 0.0), entry["t0"] + FALLBACK_SECONDS)
+        for entry in self._inheritable(payload):
+            for trigger in entry["triggers"]:
+                until[trigger] = max(until.get(trigger, 0.0), entry["t0"] + FALLBACK_SECONDS)
         return until
 
     def parent_of(self, session: Session) -> Session | None:
@@ -390,14 +396,16 @@ class SessionStore:
             if not (session.marked or session.triggers):
                 continue
             for ancestor in islice(self.chain(session), 1, None):
-                grown = replace(
+                if (
+                    ancestor.marked or not session.marked
+                ) and session.triggers <= ancestor.triggers:
+                    continue  # nothing to hand up
+                self._sessions[ancestor.id] = replace(
                     ancestor,
                     marked=ancestor.marked or session.marked,
                     triggers=ancestor.triggers | session.triggers,
                 )
-                if grown != ancestor:
-                    self._sessions[ancestor.id] = grown
-                    changed = True
+                changed = True
         return changed
 
     def apply_mark(self, payload: dict[str, Any], stored: Session) -> tuple[Session, Session, bool]:
@@ -409,13 +417,9 @@ class SessionStore:
         this event, itself or through a parent (a trigger is not a secret read).
         """
         was_marked: bool = self.effective_marked(stored)
-        fired: Session = mark(payload, stored)
-        if (fired.marked and not stored.marked) or fired.triggers - stored.triggers:
-            stored = replace(
-                stored,
-                marked=stored.marked or fired.marked,
-                triggers=stored.triggers | fired.triggers,
-            )
+        fired: Session = mark(payload, stored)  # a superset of `stored`: marks only get stricter
+        if fired != stored:
+            stored = fired
             self._sessions[stored.id] = stored
             self.propagate()
         session: Session = self.effective(stored)

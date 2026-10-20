@@ -18,6 +18,7 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
 from agentfly.recorder import rulefile
 from agentfly.recorder.names import is_sensitive
+from tests.rules_helpers import BROKEN_TOML, R0_ENTRY, default_as, default_with, ruleset_of
 
 GOOD_DEFAULT = rulefile.default_text()  # read before any test damages the path
 WITH_P12 = re.sub(
@@ -46,10 +47,10 @@ def test_a_valid_active_file_is_the_rules_in_force(active_rules: Path) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "schema = 1\n[[rule]\n",
+        BROKEN_TOML,
         "not toml at all",
-        rulefile.default_text() + '\n[[rule]]\nid = "R0"\nkind = "match"\n',
-        rulefile.default_text().replace("R1", "R1\nx"),
+        default_with("", R0_ENTRY),
+        GOOD_DEFAULT.replace("R1", "R1\nx"),
         "",
     ],
 )
@@ -72,12 +73,11 @@ def test_an_unreadable_active_file_never_raises(active_rules: Path) -> None:
 
 def test_activate_swaps_the_list_in_place_so_importers_see_it() -> None:
     imported = rules_mod.RULES
-    gentle = rulefile.default_text().replace('severity = "block"', 'severity = "warn"', 1)
-    rs = rules_mod.build_ruleset(rulefile.parse(gentle), source="test", path="x")
+    rs = ruleset_of(default_as("warn"))
     rules_mod.activate(rs)
     assert imported is rules_mod.RULES and imported[1].severity == "warn"
     assert rules_mod.current() is rs
-    rules_mod.reset()
+    rules_mod.activate(rules_mod.DEFAULT)
     assert imported[1].severity == "block" and rules_mod.current() is rules_mod.DEFAULT
 
 
@@ -93,9 +93,19 @@ def test_the_deny_messages_come_from_the_rule_and_a_gone_rule_falls_back_to_r1()
     assert rules_mod.deny_messages("gone")[0] == rules_mod.R1_MESSAGE
 
 
+def test_the_engine_knows_exactly_the_command_classes_a_rules_file_may_name() -> None:
+    assert set(rules_mod.CLASSES) == rulefile.COMMAND_CLASSES
+
+
+def test_reads_secret_is_the_marking_test_of_the_rules_in_force() -> None:
+    read = {"hook_event_name": "beforeReadFile", "file_path": "/w/.env"}
+    shell = {"hook_event_name": "beforeShellExecution", "command": "cat .env.example"}
+    assert rules_mod.reads_secret(read) is True and rules_mod.reads_secret(shell) is False
+
+
 def test_the_names_the_page_flags_as_sensitive_follow_the_rules_in_force() -> None:
     assert is_sensitive("cert.p12") is False
-    rules_mod.activate(rules_mod.build_ruleset(rulefile.parse(WITH_P12), source="test", path="x"))
+    rules_mod.activate(ruleset_of(WITH_P12))
     assert is_sensitive("dir/Cert.P12") is True
     assert is_sensitive(".env") is True and is_sensitive(".env.example") is False
 
@@ -110,7 +120,7 @@ def start() -> TestClient:
 def test_the_recorder_starts_on_an_invalid_file_with_the_default_and_logs_the_reason(
     active_rules: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    active_rules.write_text("schema = 1\n[[rule]\n", encoding="utf-8")
+    active_rules.write_text(BROKEN_TOML, encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="agentfly"), start():
         assert rules_mod.current().source == "default"
         assert rules_mod.current().problem

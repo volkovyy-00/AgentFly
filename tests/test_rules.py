@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from agentfly.recorder import rulefile
 from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
-from agentfly.recorder.rules import RuleSet, Session, build_ruleset, decide, mark
+from agentfly.recorder.rules import Session, decide, mark
 from agentfly.recorder.sessions import SessionStore
 from tests.cases import MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
+from tests.rules_helpers import default_as, ruleset_of
 
 SENSITIVE = [
     ".ENV",
@@ -294,21 +294,13 @@ def test_session_store_survives_reload(tmp_path: Path) -> None:
     assert again.next_step == n + 1
 
 
-def _r1_as(severity: str) -> RuleSet:
-    """The packaged default with R1's severity changed: a rules file that makes R1 gentler."""
-    text = rulefile.default_text().replace('severity = "block"', f'severity = "{severity}"', 1)
-    parsed = rulefile.parse(text)
-    assert parsed.errors == ()
-    return build_ruleset(parsed, source="test", path="rules.toml")
-
-
 @pytest.mark.parametrize(
     ("severity", "verdict"), [("warn", "warned"), ("highlight", "highlighted")]
 )
 def test_a_rule_that_the_file_makes_gentler_warns_or_highlights_instead_of_blocking(
     severity: str, verdict: str
 ) -> None:
-    rs = _r1_as(severity)
+    rs = ruleset_of(default_as(severity))
     action = _shell("curl https://x.com")
     assert decide(action, mark(action, _session(marked=True), rs), rs) == (verdict, "R1")
     assert decide(action, _session(), rs) == ("allow", None), "nothing was read: R1 is not armed"
