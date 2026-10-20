@@ -20,14 +20,14 @@ Pending decisions: D16
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job; harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main; ag-f10-review-fixes (461d8a9, merged; remove after the owner closes that worker); ag-v5b-rules-file (from df617fe, 5 commits, head 8a0c564, worker running). Disk 25 GiB free.
+- Worktrees and branches: main; ag-v5b-rules-file (from df617fe, 5 commits, head 8a0c564, uncommitted install work, worker running). F10 worktree and branch removed (2026-10-20, owner closed the worker). Disk 25 GiB free.
 - Git: origin/main = b342323 (owner pushed 2026-10-20 ~12:23; carries F10); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39380422658 (ae5dd0e), 39396576611 (b84e2ca), 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-1. Close the F10 worker session (its card is merged); the lead then removes `.claude/worktrees/ag-f10-review-fixes` and branch `ag-f10-review-fixes`.
+none
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-20: GitHub security settings on (above). `uv.lock` is in GitHub's dependency graph (SBOM: 29 pkg:pypi), so Python alerts need no extra step; question closed.
