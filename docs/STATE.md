@@ -20,14 +20,14 @@ Pending decisions: D16
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job; harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main; ag-v5b-rules-file (23 commits, head efa9848 = fix report); trial worktree `.claude/worktrees/trial-v5b` (detached 686ccbb = main 522b0b4 + V5b; remove after the fix round). Disk 25 GiB free.
+- Worktrees and branches: main; ag-v5b-rules-file (23 commits, head efa9848 = fix report); trial worktree `.claude/worktrees/trial-v5b` (detached 8b01d19 = main af46cb3 + efa9848). Disk 25 GiB free.
 - Git: origin/main = b342323 (owner pushed 2026-10-20 ~12:23; carries F10); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode Command Line Tools: `make` opens an install dialog.
 
 ## Waiting on owner
-none
+1. V5b: merge now with follow-ups (lead) or a second fix round first.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-20: D30 (uninstall keeps a copy of an edited rules.toml; in V5c) approved; go for the V5b re-trial.
@@ -48,11 +48,11 @@ none
 - R0 gaps (V5a): `pkill python`; ruby/perl -e; relative paths after `cd`, globs, braces, variables; ~/.claude/settings.json unguarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md lacks `/api/sessions` (V9); Neo4j Session lacks workspace_root; no card owns SPEC §10's per-session hash check.
-- V5b: trial 686ccbb 3× green (3871 passed, 5 skipped); fix round done (efa9848: 4123 passed, 5 skipped, 3× under load; final-verification READY; /code-review high 8 findings, 1 fixed, 7 out of Touches). Leftovers (report "Gaps"): `cli/init.py` messages, uninstall deletes an edited rules.toml, cost past 20 folders deep (0.46 s at 60), `memory.py` `_ALARMS` vs highlight (unverified), HOOKS.md `rules_problem` text.
+- V5b re-trial reviewers (2026-10-20): accepted file `*/*/*/*/*/*/*/k0.pem`…k7 (8 patterns) costs 372 ms per 300-word hook idle (default 44 ms); budget fitted, count tests tautological. D27 samples miss `.env.[!s]*` dodges. `init -g` says intact on wrong owner/mode. `_ALARMS` drops highlighted steps from `flagged` (confirmed). Pre-existing on main: a shell word >255 chars (a commit message) makes `clean_command` raise → hook 500 → offline guard. Also report "Gaps".
 - V2c leftovers: `StrReplace`/`Delete` edits not merged as writes; merge state lost on restart; a blocked step keeps its first half's order.
 
 ## Next 3 actions
-1. Running (owner go 2026-10-20): remove trial-v5b, re-trial main + efa9848, 3× check (nothing else running), fresh reviewers (fix-round diff fe3386e..efa9848, split lenses).
+1. Done: trial `.claude/worktrees/trial-v5b` 8b01d19 (main af46cb3 + efa9848) 3× green (4148 passed, 5 skipped, 153–171 s); 3 reviewers back. Owner decides merge vs round 2.
 2. If clean: SPEC §7/§8 and HOOKS.md edits on merge; build `merge/v5b`, owner pushes and opens the PR; on green `--ff-only` main and hand off. V5b leftovers go into V5c's brief.
 3. Then dispatch F9 and F13 on the owner's go; add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md; re-check V5c's brief.
 
