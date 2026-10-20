@@ -494,13 +494,13 @@ def _rule(
 def _parse(text: str) -> RuleFile:
     problems = _Problems()
     if len(text) > MAX_FILE_BYTES:
-        return RuleFile((), (f"is too large (over {MAX_FILE_BYTES} bytes)",), ())
+        return RuleFile((), (f"too large (over {MAX_FILE_BYTES} bytes)",), ())
     try:
         data: dict[str, Any] = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        return RuleFile((), (f"is not valid TOML: {exc}",), ())
+        return RuleFile((), (f"not valid TOML ({exc})",), ())
     except RecursionError:
-        return RuleFile((), ("is nested too deeply to read",), ())
+        return RuleFile((), ("nested too deeply to read",), ())
     for key in data:
         if key not in _TOP_FIELDS:
             problems.add("", f"unknown top-level key {key!r}")
@@ -553,20 +553,23 @@ def default_text() -> str:
 
 
 def load_file(path: Path) -> RuleFile:
-    """Read and parse a file. Never raises; a file that cannot be read is an error message."""
+    """Read and parse a file. Never raises; a file that cannot be read is an error message.
+
+    The messages do not name the file: whoever shows them says which file it was.
+    """
     try:
         if not path.is_file():
-            return RuleFile((), (f"cannot read {path}: not a file",), ())
+            return RuleFile((), ("cannot be read: not a file",), ())
         with path.open("rb") as handle:
             raw: bytes = handle.read(MAX_FILE_BYTES + 1)
     except OSError as exc:
-        return RuleFile((), (f"cannot read {path}: {exc.strerror or type(exc).__name__}",), ())
+        return RuleFile((), (f"cannot be read: {exc.strerror or type(exc).__name__}",), ())
     if len(raw) > MAX_FILE_BYTES:
-        return RuleFile((), (f"{path} is too large (over {MAX_FILE_BYTES} bytes)",), ())
+        return RuleFile((), (f"too large (over {MAX_FILE_BYTES} bytes)",), ())
     try:
         text: str = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return RuleFile((), (f"{path} is not UTF-8 text",), ())
+        return RuleFile((), ("not UTF-8 text",), ())
     return parse(text)
 
 

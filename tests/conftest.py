@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from agentfly.install import packages, service
-from agentfly.recorder import rulefile
+from agentfly.recorder import rulefile, rules
 from tests.helpers import copy_client, free_port
 from tests.install_helpers import make_tool_env
 from tests.service_helpers import Launchd
+
+# Taken at import: a test that patches `rules.DEFAULT` must not change what is put back.
+PACKAGED_DEFAULT = rules.DEFAULT
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +54,7 @@ def tool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> packages.Enviro
 
 
 @pytest.fixture(autouse=True)
-def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """No test reads the real /Library/Application Support/AgentFly/rules.toml (V5b).
 
     The recorder reads `rulefile.ACTIVE_RULES` once at start; here it is a file that does not
@@ -59,7 +63,8 @@ def active_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     path = tmp_path / "no-active-rules.toml"
     monkeypatch.setattr(rulefile, "ACTIVE_RULES", path)
-    return path
+    yield path
+    rules.activate(PACKAGED_DEFAULT)  # no test leaves other rules in force
 
 
 @pytest.fixture

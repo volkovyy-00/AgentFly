@@ -1,4 +1,10 @@
-"""Rule engine: mark sessions and decide allow/block (pure checks)."""
+"""Rule engine: R0 in code, the rules file's rules, and the decision (D10, D11).
+
+`mark` records what a chat has done (R1's mark in `Session.marked`, every other `after_then`
+rule's trigger in `Session.triggers`); `decide` picks the strictest rule that fires. R0 is code
+only and always first. The other rules come from a rules file (`rulefile.py`): the packaged
+default, or the root-owned active file when the recorder was started with a valid one.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +13,13 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
-from agentfly.recorder import DEFAULT_PORT
-from agentfly.recorder.names import hosts_in_command, is_local_host, is_sensitive
+from agentfly.recorder import DEFAULT_PORT, rulefile
+from agentfly.recorder.names import hosts_in_command, is_local_host
 from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter, normalize
+from agentfly.recorder.rulefile import RuleFile, RuleSpec
 
 Action = dict[str, Any]
 
@@ -22,8 +30,6 @@ R0_MESSAGE: str = (
 R1_MESSAGE: str = (
     "Blocked by rule R1: a secret was read earlier in this session, and now data is being sent out."
 )
-
-WATCH_ONLY: bool = False
 
 # R0 (SPEC section 5): the recorder's own process, as the kill check sees it. Tests patch these.
 RECORDER_PID: int = os.getpid()
@@ -59,6 +65,9 @@ class Rule:
     severity: str
     message: str
     check: Callable[[Action, Session], bool]
+    kind: str = "builtin"  # "match" and "after_then" come from a rules file
+    # after_then only: does this action make the trigger fire? (`check` tests the follow-up)
+    after: Callable[[Action], bool] | None = None
 
 
 def _shell_command(action: Action) -> str | None:
@@ -103,10 +112,6 @@ def is_outbound_send(action: Action) -> bool:
     if cmd is None or not cmd.strip():
         return False
     return parsed_is_outbound(normalize(cmd))
-
-
-def check_r1(action: Action, session: Session) -> bool:
-    return session.marked and is_outbound_send(action)
 
 
 # ---------------------------------------------------------------- R0: protect AgentFly itself
@@ -336,55 +341,200 @@ def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule
     return False
 
 
-RULES: list[Rule] = [
-    Rule(id="R0", severity="block", message=R0_MESSAGE, check=check_r0),
-    Rule(id="R1", severity="block", message=R1_MESSAGE, check=check_r1),
-]
+# ---------------------------------------------------------------- the rule set (V5b)
+
+MARK_RULE: str = "R1"  # the after_then rule whose trigger is the chat's `marked` flag
+BLOCK_TAIL: str = " Do not retry with another tool or language. Stop and tell the user."
+SKIP_TAIL: str = " If the user skips this, do not retry with another tool or language."
+
+# Command classes a rules file may name (`command_class = "outbound"`): engine code, not data.
+CLASSES: dict[str, rulefile.CommandClass] = {"outbound": parsed_is_outbound}
+if set(CLASSES) != rulefile.COMMAND_CLASSES:  # pragma: no cover - a coding slip, caught at import
+    raise RuntimeError("rulefile.COMMAND_CLASSES and rules.CLASSES disagree")
+
+_SEVERITY_RANK: dict[str, int] = {"block": 2, "warn": 1, "highlight": 0}
+_VERDICT: dict[str, str] = {"block": "blocked", "warn": "warned", "highlight": "highlighted"}
+
+R0_RULE: Rule = Rule(id="R0", severity="block", message=R0_MESSAGE, check=check_r0)
 
 
-def _names_secret(word: str) -> bool:
-    """A word that is a sensitive file, or has one glued on: `--env-file=.env`, `-d@.env`."""
-    return is_sensitive(word) or any(
-        is_sensitive(part) for part in (word.rsplit("=", 1)[-1], word.rsplit("@", 1)[-1])
-    )
+def _never(action: Action) -> bool:  # noqa: ARG001
+    return False
 
 
-def mark(action: Action, session: Session) -> Session:
-    """Return session, marking if this action touches a sensitive file name."""
-    if session.marked:
-        return session
+@dataclass(frozen=True)
+class RuleSet:
+    """The rules in force: R0 first, then the file's rules in file order."""
 
-    event: str = str(action.get("hook_event_name", ""))
-    if event == "beforeReadFile":
-        path: str = str(action.get("file_path", ""))
-        if path and is_sensitive(path):
-            return replace(session, marked=True)
-
-    if event == "beforeShellExecution":
-        cmd: str = str(action.get("command", ""))
-        for argv in normalize(cmd).all_commands():
-            if any(_names_secret(word) for word in argv):
-                return replace(session, marked=True)
-
-    return session
+    rules: tuple[Rule, ...]
+    source: str  # "default", "active", or what a caller calls its own file
+    path: str  # the file the rules came from
+    problem: str | None  # why the active file was not used (the default runs instead)
+    secret: Callable[[Action], bool]  # does this action read a secret? (sets `Session.marked`)
+    broken: bool = False  # the packaged default itself could not be read: only R0 runs
 
 
-def decide(action: Action, session: Session) -> tuple[str, str | None]:
-    """Return (verdict, rule_id). Pure: does not mark. Call mark() first."""
+def _compose(spec: RuleSpec) -> Rule:
+    if spec.kind == "match":
+        clause = spec.clause
+        assert clause is not None
+
+        def check_match(action: Action, session: Session) -> bool:  # noqa: ARG001
+            return clause.matches(action, CLASSES)
+
+        return Rule(spec.id, spec.severity, spec.message, check_match, kind="match")
+    after, then = spec.after, spec.then
+    assert after is not None and then is not None
+    rid: str = spec.id
+
+    def check_then(action: Action, session: Session) -> bool:
+        fired: bool = session.marked if rid == MARK_RULE else rid in session.triggers
+        return fired and then.matches(action, CLASSES)
+
+    def trigger(action: Action) -> bool:
+        return after.matches(action, CLASSES)
+
+    return Rule(spec.id, spec.severity, spec.message, check_then, kind="after_then", after=trigger)
+
+
+_default_secret: Callable[[Action], bool] = _never
+
+
+def build_ruleset(file: RuleFile, *, source: str, path: str, problem: str | None = None) -> RuleSet:
+    """Rules from a file that parsed without errors. R0 is added in front; it is never in a file.
+
+    Whether an action reads a secret is decided by R1's `after` clause, so the lists in the file
+    rule; with no R1 in the file the packaged default's clause still marks the chat.
+    """
+    composed: tuple[Rule, ...] = tuple(_compose(spec) for spec in file.rules)
+    secret: Callable[[Action], bool] = _default_secret
+    for rule in composed:
+        if rule.id == MARK_RULE and rule.after is not None:
+            secret = rule.after
+    return RuleSet((R0_RULE, *composed), source, path, problem, secret)
+
+
+def _load_default() -> RuleSet:
+    path: str = str(rulefile.default_path())
+    try:
+        loaded: RuleFile = rulefile.load_default()
+        if loaded.errors:
+            raise ValueError(rulefile.summary(loaded.errors))
+        return build_ruleset(loaded, source="default", path=path)
+    except Exception as exc:  # noqa: BLE001 - see below
+        # A damaged install must not stop `uninstall` and `doctor` from importing this module.
+        # Only R0 runs, and the recorder refuses to start on it (`app.lifespan`).
+        problem = f"the packaged default rules cannot be used: {exc}"
+        return RuleSet((R0_RULE,), "default", path, problem, _never, broken=True)
+
+
+DEFAULT: RuleSet = _load_default()
+_default_secret = DEFAULT.secret
+RULES: list[Rule] = list(DEFAULT.rules)  # the rules in force; R0 first
+_active: RuleSet = DEFAULT
+
+
+def current() -> RuleSet:
+    return _active
+
+
+def activate(ruleset: RuleSet) -> None:
+    """Put a rule set in force. The recorder does this once at start (and tests, per test)."""
+    global _active
+    RULES[:] = ruleset.rules
+    _active = ruleset
+
+
+def reset() -> None:
+    activate(DEFAULT)
+
+
+def load_active() -> RuleSet:
+    """The active file's rules if it exists and is valid, else the packaged default. Never raises.
+
+    A file that exists but cannot be used is reported in `problem`; a missing file is the normal
+    case of a developer `serve` and says nothing.
+    """
+    path: Path = rulefile.ACTIVE_RULES
+    try:
+        if not os.path.lexists(path):
+            return DEFAULT
+        loaded: RuleFile = rulefile.load_file(path)
+        if loaded.errors:
+            return replace(DEFAULT, problem=f"{path}: {rulefile.summary(loaded.errors)}")
+        return build_ruleset(loaded, source="active", path=str(path))
+    except Exception as exc:  # noqa: BLE001 - the recorder must start whatever the file holds
+        return replace(DEFAULT, problem=f"{path}: could not be read ({type(exc).__name__})")
+
+
+def find_rule(rule_id: str | None) -> Rule | None:
+    """The rule in force with this id (one lookup per hook; see `app.apply_rules`)."""
+    if rule_id is None:
+        return None
     for rule in RULES:
-        if rule.check(action, session):
-            if WATCH_ONLY and rule.id != "R0":  # R0 cannot be switched down
-                return ("warned", rule.id)
-            return ("blocked", rule.id)
-    return ("allow", None)
+        if rule.id == rule_id:
+            return rule
+    return None
+
+
+def is_secret_path(path: str) -> bool:
+    """Is this file a secret by the rule set's lists? (The page's `sensitive` badge asks.)"""
+    return _active.secret({"hook_event_name": "beforeReadFile", "file_path": path})
+
+
+def mark(action: Action, session: Session, rules: RuleSet | None = None) -> Session:
+    """Return the session with what this action sets off: R1's mark and every after_then trigger.
+
+    Call it before `decide`: an action that sets a trigger off and is also the follow-up (`cat .env
+    | curl …`, `pip install x && git push`) is judged with the trigger already set.
+    """
+    ruleset: RuleSet = rules or _active
+    marked: bool = session.marked or ruleset.secret(action)
+    fired: set[str] = set()
+    for rule in ruleset.rules:
+        if rule.after is None or rule.id == MARK_RULE or rule.id in session.triggers:
+            continue
+        if rule.after(action):
+            fired.add(rule.id)
+    if marked == session.marked and not fired:
+        return session
+    return replace(session, marked=marked, triggers=session.triggers | fired)
+
+
+def winning_rule(action: Action, session: Session, rules: RuleSet | None = None) -> Rule | None:
+    """The strictest rule that fires (block, then warn, then highlight); a tie goes to the first."""
+    best: Rule | None = None
+    for rule in (rules or _active).rules:
+        if not rule.check(action, session):
+            continue
+        if rule.severity == "block":
+            return rule  # nothing outranks a block, and the first block is the tie-break
+        if best is None or _SEVERITY_RANK[rule.severity] > _SEVERITY_RANK[best.severity]:
+            best = rule
+    return best
+
+
+def decide(
+    action: Action, session: Session, rules: RuleSet | None = None
+) -> tuple[str, str | None]:
+    """Return (verdict, rule_id): blocked, warned, highlighted or allow. Pure: call mark() first."""
+    rule: Rule | None = winning_rule(action, session, rules)
+    if rule is None:
+        return ("allow", None)
+    return (_VERDICT[rule.severity], rule.id)
+
+
+def block_messages(rule: Rule | None) -> tuple[str, str]:
+    """user_message, agent_message of a deny. A rule that is gone gets R1's text (as before)."""
+    message: str = rule.message if rule is not None else R1_MESSAGE
+    return message, message + BLOCK_TAIL
+
+
+def ask_messages(rule: Rule) -> tuple[str, str]:
+    """user_message, agent_message of a warn on a shell command (Cursor asks the user)."""
+    return rule.message, rule.message + SKIP_TAIL
 
 
 def deny_messages(rule_id: str) -> tuple[str, str]:
     """user_message, agent_message for a blocked rule."""
-    message: str = R1_MESSAGE
-    for rule in RULES:
-        if rule.id == rule_id:
-            message = rule.message
-            break
-    agent: str = f"{message} Do not retry with another tool or language. Stop and tell the user."
-    return message, agent
+    return block_messages(find_rule(rule_id))

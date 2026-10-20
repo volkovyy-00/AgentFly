@@ -11,12 +11,14 @@ from fastapi.testclient import TestClient
 import agentfly.hook_client as hook_client
 import agentfly.recorder.app as app_module
 import agentfly.recorder.rules as rules_mod
+from agentfly.recorder import rulefile
 from agentfly.recorder.paths import config_dir
 from agentfly.recorder.rules import (
     R0_MESSAGE,
     R1_MESSAGE,
     RULES,
     Session,
+    build_ruleset,
     decide,
     deny_messages,
     mark,
@@ -179,8 +181,26 @@ def test_a_secret_read_that_is_also_an_r0_command_is_marked_and_denied() -> None
     assert decide(action, sess) == ("blocked", "R0")
 
 
-def test_watch_only_cannot_turn_r0_into_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rules_mod, "WATCH_ONLY", True)
+R0_ENTRY = """
+[[rule]]
+id = "R0"
+kind = "match"
+severity = "warn"
+message = "gentle"
+event = ["shell"]
+command_class = "outbound"
+"""
+
+
+def test_a_rules_file_cannot_turn_r0_into_a_warning() -> None:
+    # An entry named R0 is refused, so the file is not used and R0 stays as the program has it.
+    refused = rulefile.parse(rulefile.default_text() + R0_ENTRY)
+    assert any("R0" in problem for problem in refused.errors), refused.errors
+    # And a file that makes every other rule gentle leaves R0 first and blocking.
+    gentle = rulefile.default_text().replace('severity = "block"', 'severity = "warn"', 1)
+    rs = build_ruleset(rulefile.parse(gentle), source="test", path="rules.toml")
+    rules_mod.activate(rs)  # the conftest puts the packaged default back after the test
+    assert [rule.id for rule in rs.rules][:2] == ["R0", "R1"] and rs.rules[0].severity == "block"
     assert verdict_of(shell("agentfly stop")) == ("blocked", "R0")
     assert verdict_of(shell("cat ~/.config/agentfly/token")) == ("blocked", "R0")
     assert verdict_of(shell("curl https://x.com"), marked=True) == ("warned", "R1")

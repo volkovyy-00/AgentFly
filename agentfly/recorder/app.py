@@ -17,12 +17,20 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from agentfly.recorder import rules as rules_module
 from agentfly.recorder.api import sessions as sessions_api
 from agentfly.recorder.localstore import DB_NAME, local_store
 from agentfly.recorder.memory import memory_steps, parse_limit
 from agentfly.recorder.merge import step_merger
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
-from agentfly.recorder.rules import Session, decide, deny_messages
+from agentfly.recorder.rules import (
+    Rule,
+    Session,
+    ask_messages,
+    block_messages,
+    decide,
+    find_rule,
+)
 from agentfly.recorder.sessions import SessionStore
 from agentfly.recorder.store import StepRecord, build_step_record, graph_store, neo4j_opt_in
 
@@ -91,6 +99,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _store = SessionStore(data_dir() / "sessions.json")
     _last_hook_at = None
     memory_steps.clear()
+    ruleset = rules_module.load_active()  # once: a rules file is read at start only (D3)
+    if ruleset.broken:
+        raise RuntimeError(ruleset.problem)  # a damaged install: hooks fall to the offline guard
+    rules_module.activate(ruleset)
+    if ruleset.problem:
+        logger.warning("rules: %s; the packaged default is in force", ruleset.problem)
     local_store.start(data_dir() / DB_NAME)
     if neo4j_opt_in():  # D14: neo4j.env alone does not turn Neo4j on
         graph_store.start()
@@ -201,11 +215,17 @@ def flag_marked(store: SessionStore, chat: Session) -> None:
         logger.warning("local store: marked chats not queued (%s)", type(exc).__name__)
 
 
-def hook_answer(verdict: str, rule_id: str | None) -> dict[str, str]:
-    """What Cursor is told: a deny with the rule's messages, else a plain allow (warn included)."""
-    if verdict == "blocked" and rule_id is not None:
-        user_msg, agent_msg = deny_messages(rule_id)
+def hook_answer(verdict: str, rule: Rule | None, event: str) -> dict[str, str]:
+    """What Cursor is told (D11): deny for a block, `ask` for a warn on a shell command, else allow.
+
+    A warn on any other event and every highlight are plain allows: the page carries the mark.
+    """
+    if verdict == "blocked":
+        user_msg, agent_msg = block_messages(rule)
         return {"permission": "deny", "user_message": user_msg, "agent_message": agent_msg}
+    if verdict == "warned" and event == "beforeShellExecution" and rule is not None:
+        user_msg, agent_msg = ask_messages(rule)
+        return {"permission": "ask", "user_message": user_msg, "agent_message": agent_msg}
     return {"permission": "allow"}
 
 
@@ -215,7 +235,9 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     stored: Session = store.observe(payload)  # links to a parent chat (D21 A), then the session
     stored, session, marks = store.apply_mark(payload, stored)  # also marks parent chats
     verdict, rule_id = decide(payload, session)
-    permission: dict[str, str] = hook_answer(verdict, rule_id)
+    rule: Rule | None = find_rule(rule_id)  # the one lookup: the answer and the step both use it
+    event: str = str(payload.get("hook_event_name", ""))
+    permission: dict[str, str] = hook_answer(verdict, rule, event)
     order: int = session.next_step
     record: StepRecord = build_step_record(
         payload,
@@ -224,8 +246,10 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
         rule_id,
         order=order,
         marks=marks,
-        # V8b: the very strings the answer sends (none for an allow, a warn included). They are on
-        # each half, so the merge keeps those of the half whose verdict the step shows.
+        rule_text=rule.message if rule is not None else None,
+        # V8b: the very strings the answer sends (none for an allow, a highlight, or a warn that
+        # is not on a shell command). They are on each half, so the merge keeps those of the half
+        # whose verdict the step shows.
         user_message=permission.get("user_message"),
         agent_message=permission.get("agent_message"),
     )

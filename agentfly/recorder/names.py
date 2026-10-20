@@ -5,24 +5,17 @@ from __future__ import annotations
 import ipaddress
 import shlex
 from collections.abc import Iterable
-from pathlib import Path
 from urllib.parse import urlparse
-
-_ENV_SAFE_SUFFIXES = (".example", ".sample", ".template")
 
 
 def is_sensitive(path: str) -> bool:
-    """Return True if the file name alone looks like a secret-bearing file."""
-    name = Path(path).name.casefold()  # macOS reads `.ENV` as `.env`
-    if name == ".env" or name.startswith(".env."):
-        return not name.endswith(_ENV_SAFE_SUFFIXES)
-    if name.endswith((".pem", ".key")):
-        return True
-    if name.startswith("id_rsa") and not name.endswith(".pub"):
-        return True
-    if name.startswith("credentials"):
-        return True
-    return False
+    """Return True if the file name alone looks like a secret-bearing file.
+
+    The lists live in the rules file (R1's `after`, V5b); this asks the rules in force.
+    """
+    from agentfly.recorder.rules import is_secret_path  # rules.py imports this module
+
+    return is_secret_path(path)
 
 
 def host_of(url: str) -> str | None:

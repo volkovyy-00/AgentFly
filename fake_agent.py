@@ -25,8 +25,9 @@ Scenario file: demo/scenario.json
 
 Verdict mapping from helper stdout:
   permission=deny  -> blocked
+  permission=ask   -> warned (a warn rule on a shell command; Cursor asks the user)
   otherwise        -> allowed
-  (warned is reserved for WATCH_ONLY once the server exposes it)
+  (a warn on another event and a highlight answer allow: the page shows them, this script cannot)
 
 SIMULATION (not a real agent) — first line of stdout.
 """
@@ -67,9 +68,10 @@ def label_for(event: dict[str, Any]) -> str:
 
 
 def permission_to_verdict(payload: dict[str, Any]) -> str:
-    if str(payload.get("permission", "")) == "deny":
+    permission: str = str(payload.get("permission", ""))
+    if permission == "deny":
         return "blocked"
-    if str(payload.get("verdict", "")) == "warned":
+    if permission == "ask":
         return "warned"
     return "allowed"
 
