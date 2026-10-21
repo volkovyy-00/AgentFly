@@ -234,6 +234,27 @@ def test_a_draft_is_not_trust_checked_but_the_active_path_given_as_a_file_is(
     assert not rulefile.is_active_path(draft)
 
 
+def test_rules_check_through_a_link_to_the_active_file_judges_the_active_file(
+    active_rules: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    active_rules.write_text(GOOD, encoding="utf-8")
+    active_rules.chmod(0o644)
+    link = tmp_path / "link.toml"
+    link.symlink_to(active_rules)
+    assert main(["rules", "check", str(link)]) == 0
+    captured = capsys.readouterr()
+    assert str(active_rules) in captured.out and str(link) not in captured.out
+    assert main(["rules", "test", str(link)]) == 0  # `rules test` goes through the same door
+    captured = capsys.readouterr()
+    assert str(active_rules) in captured.out and str(link) not in captured.out
+    active_rules.chmod(0o664)
+    for command in ("check", "test"):
+        assert main(["rules", command, str(link)]) == 1
+        err = capsys.readouterr().err
+        assert str(active_rules) in err and "written by group or others" in err
+        assert "symbolic link" not in err and str(link) not in err
+
+
 def test_a_missing_file_given_as_the_active_path_is_not_a_crash(
     active_rules: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

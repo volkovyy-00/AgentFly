@@ -41,6 +41,7 @@ _UNSAFE_IN_QUOTES: frozenset[str] = frozenset('"$`\\\n')
 class Outcome:
     changed: bool
     messages: list[str]
+    cursor_reload: bool = True  # False when only the rules file changed: Cursor reads no rules
 
 
 # ---------------------------------------------------------------- what is registered
@@ -140,6 +141,21 @@ def _packaged_default(current: packages.Check) -> bytes:
             "nothing was changed"
         )
     return data
+
+
+RULES_WRITTEN = frozenset({"missing", "older", "untrusted"})  # states in which `init -g` writes
+
+
+def check_packaged_default(layout: Layout, current: packages.Check) -> None:
+    """Raise the error root's install would raise about the default it is about to write.
+
+    The unprivileged run calls this before the password, so a damaged default stops there. Where
+    the file is the owner's (`edited`) or cannot be opened (`unknown`), nothing is written, so
+    nothing here can fail.
+    """
+    wanted = packages.recorded_hash(current, DEFAULT_RECORD_PATH)
+    if rules_state(layout, wanted) in RULES_WRITTEN:
+        _packaged_default(current)
 
 
 # The rules file follows one principle: `init -g` writes only bytes it has checked, and never
@@ -641,7 +657,7 @@ def install(
     rules = rules_state(layout, wanted)
     if rules == "blocked":
         raise _blocked(layout)  # before anything is changed, not halfway through
-    rules_data = _packaged_default(current) if rules in {"missing", "older", "untrusted"} else None
+    rules_data = _packaged_default(current) if rules in RULES_WRITTEN else None
     created_hooks = _read_hooks(layout) is None or bool(
         previous and previous.get("hooks_file", {}).get("created")
     )
@@ -725,7 +741,7 @@ def install(
         done = messages or ["repaired"]
         if notice:
             done.append(notice)
-        return Outcome(True, done)
+        return Outcome(True, done, cursor_reload=bad != {"rules"})
     except BaseException as failure:
         # A hook entry must never outlive the files it runs (S2 F1): entries go before the folder,
         # and a repair puts the old Python and client back. If this cleanup itself fails, the

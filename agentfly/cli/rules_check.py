@@ -19,10 +19,20 @@ def add_file_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def named(path: Path) -> Path:
+    """The path to read and to name in messages: the active file whatever way it was reached.
+
+    A link to the active file is the active file (`is_active_path` follows links); the recorder
+    reads `ACTIVE_RULES` itself, which a link is not, so the link must not be what is judged.
+    """
+    return rulefile.ACTIVE_RULES if rulefile.is_active_path(path) else path
+
+
 def choose_file(given: Path | None) -> tuple[Path, str]:
     """The file to read and a few words on where it came from."""
     if given is not None:
-        return given, "file given"
+        path = named(given)
+        return path, "the active file" if path != given else "file given"
     path, active = rulefile.in_force_path()
     return path, "the active file" if active else "the packaged default; there is no active file"
 
@@ -32,10 +42,12 @@ def load(command: str, path: Path) -> rulefile.RuleFile | None:
 
     The active file is read as the recorder reads it, who owns it included, so this never says
     "ok" for a file the recorder would refuse. Any other file is a draft: it is the user's own.
+    A link to the active file is the active file: the messages name `ACTIVE_RULES`, not the link.
     """
+    path = named(path)
     loaded: rulefile.RuleFile = (
         rulefile.load_active_file(path)
-        if rulefile.is_active_path(path)
+        if path == rulefile.ACTIVE_RULES
         else rulefile.load_file(path)
     )
     if loaded.errors:
