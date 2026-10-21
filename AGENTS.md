@@ -433,7 +433,11 @@ lines for them (R0 and normalisation: V5).
   a link must lead inside, and 3,000 seeded random words over a tree of every kind of link (also
   the root as a link, and `//`) get the answer of `os.path.realpath(strict=True)`. All the words
   of a hook share `LOOKUP_STEPS` (4,000, pinned; a step for each `lstat` and `readlink`, measured
-  4.6 us on a short path and 8.5 us at 753 characters, so the price is per call): a folder seen
+  4.6 us on a short path and 8.5 us at 753 characters, so the price is per call, and for each link
+  followed a step and one more for each 64 characters of its target, whose parts are walked too: a
+  link to `.` and 1,022 `/` crossed 31 times a word cost 553 ms for 300 words before the charge,
+  21 ms after; more than 32 links make a word not a file; a root with `..` in it is not read by
+  its text): a folder seen
   once is not looked up again (40 files in one folder cost three calls and 40), a word past the
   budget is saved as `<arg>` and is not the step's file, and the cleaner and the step record
   spend one budget (`build_step_record` makes one `Lookups` and splits the cleaned command once,

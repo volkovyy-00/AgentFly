@@ -79,6 +79,7 @@ def fs_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_the_budget_is_pinned() -> None:
     assert clean.LOOKUP_STEPS == 4_000
     assert clean.MAX_LINK_HOPS == 32
+    assert clean.LINK_PARTS == 64
 
 
 # ---------------------------------------------------------------- text first
@@ -219,6 +220,45 @@ def test_the_walk_answers_as_realpath_strict_does(tree: Path, alias: bool, share
     for word in random_words(rng, tree, 1_500):
         lookups = one if shared else Lookups(sent, steps=10**9)
         assert lookups.project_relative(word) == oracle(word, str(sent), str(tree)), word
+
+
+def test_a_link_with_a_long_target_is_paid_for_by_its_parts(tree: Path) -> None:
+    """A target of 1,023 characters holds as many parts as that, a word may cross 32 links and 300
+    words may: 9.5 million steps of the walk for 3 of the budget before the crossing was charged."""
+    (tree / "L").symlink_to("." + "/" * 1_022)
+    words_ = ["L/" * 31 + "./" * k + "sub" for k in range(300)]
+    assert all(len(word) <= clean.MAX_PATH_WORD for word in words_)
+    lookups = Lookups(tree)
+    found = [lookups.project_relative(word) for word in words_]
+    assert found[0] == "sub"
+    assert found.count("sub") < 10 and lookups.left < 1 + 1_023 // clean.LINK_PARTS
+
+
+def test_a_word_through_more_than_32_links_is_not_a_file(tree: Path) -> None:
+    for k in range(40):
+        (tree / f"h{k}").symlink_to(f"h{k + 1}")
+    (tree / "h40").symlink_to("sub")
+    assert Lookups(tree, steps=10**6).project_relative("h39") == "sub"  # two hops
+    for k in range(40):
+        (tree / f"c{k}").symlink_to(f"c{k + 1}")
+    (tree / "c40").symlink_to("sub")
+    assert Lookups(tree, steps=10**6).project_relative("c0") is None  # 41 hops
+
+
+def test_a_root_with_dots_after_a_link_is_not_read_by_its_text(tree: Path) -> None:
+    """`<base>/p/lnk/../proj` is `<base>/elsewhere/proj` on disk, not the `<base>/p/proj` its text
+    folds to: a word under that other folder is not inside."""
+    base = tree.parent
+    (base / "elsewhere" / "proj").mkdir(parents=True)
+    (base / "elsewhere" / "deeper").mkdir()
+    (base / "p" / "proj").mkdir(parents=True)
+    (base / "p" / "lnk").symlink_to("../elsewhere/deeper")
+    (base / "elsewhere" / "proj" / "y.txt").write_text("")
+    (base / "p" / "proj" / "y.txt").write_text("")
+    lookups = Lookups(base / "p" / "lnk" / ".." / "proj")
+    assert lookups.project_relative("y.txt") == "y.txt"
+    assert lookups.project_relative(f"{base}/elsewhere/proj/y.txt") == "y.txt"
+    assert lookups.project_relative(f"{base}/p/proj/y.txt") is None
 
 
 # ---------------------------------------------------------------- the budget

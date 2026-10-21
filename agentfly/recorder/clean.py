@@ -37,8 +37,11 @@ MAX_PATH_WORD: int = 1024
 # Mac, a call takes 4.6 us on a short path and 8.5 us on one of 753 characters, so the price is
 # per call. A test pins the number.
 LOOKUP_STEPS: int = 4_000
-# A word's links are followed at most this often (the system's own limit is near it).
+# A word's links are followed at most this often (the system's own limit is near it), and each
+# crossing costs a step and one more for each LINK_PARTS characters of its target, which are
+# walked as well (a target of 1,023 characters holds as many parts, and a word may cross 32).
 MAX_LINK_HOPS: int = 32
+LINK_PARTS: int = 64
 
 # The scans below read a command in C-speed regular expressions where the old loops read one
 # character at a time in Python (V5b-fix2 §4.5); their answers are the same, character for
@@ -381,7 +384,9 @@ class Lookups:
     def __init__(self, project_root: Path, steps: int | None = None) -> None:
         self.left: int = LOOKUP_STEPS if steps is None else steps  # read now: a test lowers it
         self._project_root: Path = project_root
-        self._sent: str | None = _folded(str(project_root)) if project_root.is_absolute() else None
+        # The root as typed names a place by its text only if no `..` can climb out of a link.
+        typed: bool = project_root.is_absolute() and ".." not in project_root.parts
+        self._sent: str | None = str(project_root) if typed else None
         self._answers: dict[str, str | None] = {}
         self._plain: set[str] = set()  # paths seen to be no link (so every part above is a folder)
         self._links: dict[str, str] = {}
@@ -481,6 +486,7 @@ class Lookups:
             hops += 1
             if hops > MAX_LINK_HOPS:
                 return None
+            self._spend(1 + len(target) // LINK_PARTS)  # the target's parts are walked too
             if target.startswith("/"):
                 here = "/"
             pending.extend(target.split("/")[::-1])
