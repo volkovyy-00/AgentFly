@@ -39,11 +39,19 @@ from tests.install_helpers import (
     fake_python_tar,
     make_cursor_app,
     make_layout,
+    make_tool_env,
     upgrade,
     write_archive,
 )
 from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
+from tests.test_install_packages import (
+    BAD,
+    REAL_TOOL_ENVIRONMENT,
+    SHOWN,
+    assert_plain,
+    fake_agentfly,
+)
 
 IDS = [
     "record",
@@ -931,3 +939,38 @@ def test_a_rebuild_at_the_same_version_only_warns(world: World) -> None:
     assert line.level == "warn" and "fakedep: same version 1.0" in line.text
     assert "match RECORD" in line.text and "agentfly init -g" in line.text
     assert world.levels("fail") == set()
+
+
+# ---------------------------------------------------------------- the package line, names (F13)
+
+
+def test_the_package_line_shows_a_version_with_a_control_character_escaped(world: World) -> None:
+    upgrade(
+        packages.tool_environment(), "fakedep", "1.1\x1b[2K", {"fakedep/__init__.py": b"X = 2\n"}
+    )
+    line = world.results()["package"]
+    assert line.level == "warn" and "fakedep: changed from 1.0 to 1.1\\x1b[2K" in line.text
+    assert_plain(line.text)
+
+
+def test_the_package_line_shows_an_environment_path_with_control_characters_escaped(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_tool_env(tmp_path / f"other{BAD}")
+    (made.prefix / "pyvenv.cfg").unlink()
+    fake_agentfly(monkeypatch, made.site / "agentfly" / "__init__.py")
+    monkeypatch.setattr(packages, "tool_environment", REAL_TOOL_ENVIRONMENT)
+    line = world.results()["package"]
+    assert line.level == "warn" and f"({str(made.site).replace(BAD, SHOWN)})" in line.text
+    assert_plain(line.text)
+
+
+def test_the_command_prints_a_package_name_with_control_characters_as_one_plain_line(
+    command: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (packages.tool_environment().site / "agentfly" / f"x{BAD}y.py").write_text("x = 1\n")
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert_plain(out)
+    [line] = [line for line in out.split("\n") if line.startswith("fail  package")]
+    assert f"x{SHOWN}y.py is not listed in any RECORD" in line

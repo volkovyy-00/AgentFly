@@ -453,6 +453,18 @@ lines for them (R0 and normalisation: V5).
   with no prompt, and an edited file that means none is written does not need it); a refresh of
   the rules alone asks for a recorder restart and not a Cursor restart, one that changes more
   still asks for both.
+- Escaped names (`tests/test_install_packages.py`, `tests/test_install_cli.py`,
+  `tests/test_doctor.py`, F13): every text the package check shows the owner (the refusal, the
+  confirm question, `doctor`'s package line, `tool_environment`'s messages) writes each character
+  `str.isprintable` calls false as an escape (`\x1b`, `\n`, `\u202e`; `packages.visible`) and
+  leaves other text alone, `café.py` and a backslash included. `inspect` escapes `Check.problems`
+  and `Check.changes` when it builds them and `confirm` escapes what it prints; the hash record
+  keeps names as read. Tests plant a name holding `ESC [2K`, a newline and U+202E in an unlisted
+  file, a listed file that fails its hash or cannot be read, a RECORD row outside the
+  environment, a dist-info folder and the environment path, and each of them in a `METADATA` Name
+  or Version (a newline there is a folded header: a plain one ends it); `init -g` and `uninstall`
+  stop with one printable line and no password, nothing raw reaches stdout before "Go on? [y/N]",
+  `doctor` prints one plain line. Expected texts are written out, never computed with `visible`.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;

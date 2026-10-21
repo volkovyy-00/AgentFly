@@ -42,7 +42,13 @@ from tests.install_helpers import (
     write_archive,
 )
 from tests.service_helpers import Launchd
-from tests.test_install_packages import REAL_TOOL_ENVIRONMENT, fake_agentfly
+from tests.test_install_packages import (
+    BAD,
+    REAL_TOOL_ENVIRONMENT,
+    SHOWN,
+    assert_plain,
+    fake_agentfly,
+)
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
@@ -432,6 +438,41 @@ def test_an_extra_file_in_site_packages_stops_it_too(
     assert main(command) == 1
     assert "_native.so is not listed in any RECORD" in capsys.readouterr().err
     assert sudo.calls == []
+
+
+@pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]])
+def test_a_file_with_control_characters_in_its_name_stops_with_one_plain_line(
+    command: list[str],
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tool_env.site / "agentfly" / f"x{BAD}y.py").write_text("x = 1\n")
+    assert main(command) == 1
+    err = capsys.readouterr().err
+    assert f"/agentfly/x{SHOWN}y.py is not listed in any RECORD" in err
+    assert err.endswith("\n") and err[:-1].isprintable()  # one line; nothing a terminal acts on
+    assert sudo.calls == [] and system.system_root.exists()
+
+
+def test_a_version_with_a_control_character_is_escaped_in_the_question_before_the_password(
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    upgrade(tool_env, "agentfly-recorder", "0.2.0\x1b[2K", NEW_AGENTFLY)
+    asked: list[str] = []
+    monkeypatch.setattr(packages.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("builtins.input", lambda prompt="": asked.append(prompt) or "n")
+    assert main(["init", "-g"]) == 1
+    out = capsys.readouterr().out
+    assert "agentfly-recorder: changed from 0.1.0 to 0.2.0\\x1b[2K" in out
+    assert_plain(out)  # everything printed before "Go on? [y/N]"
+    assert asked == ["Go on? [y/N] "] and sudo.calls == []
 
 
 def test_a_clean_install_is_checked_and_init_asks_for_no_password(
