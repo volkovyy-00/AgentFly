@@ -32,7 +32,7 @@ Pending decisions: D16
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. F9: dismiss CodeQL #5, #6, #7 in the UI (comments in docs/reports/F9.md on its branch); vite 8.3.2 advisory has no Dependabot alert (check Security → Dependabot → Closed).
+1. F9: vite 8.3.2 advisory has no Dependabot alert (check Security → Dependabot → Closed). CodeQL #5–#7 dismissed by the owner 2026-10-21.
 2. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
