@@ -124,6 +124,14 @@ def test_a_refusal_names_the_listed_versions_and_the_newest(tmp_path: Path) -> N
         check_version(tmp_path, "1.0.0")
 
 
+def nested_binary_plist(depth: int) -> bytes:
+    """`depth` arrays each holding the next, then an integer; written flat, so no recursion here."""
+    body = b"".join(b"\xa1" + (i + 1).to_bytes(2, "big") for i in range(depth)) + b"\x10\x01"
+    offsets = b"".join((8 + 3 * i).to_bytes(2, "big") for i in range(depth + 1))
+    trailer = bytes(6) + bytes([2, 2]) + (depth + 1).to_bytes(8, "big") + bytes(8)
+    return b"bplist00" + body + offsets + trailer + (8 + len(body)).to_bytes(8, "big")
+
+
 MALFORMED_PLISTS = {
     "a mismatched tag": b'<?xml version="1.0"?><plist version="1.0"><dict><key>a</key>'
     b"<string>x</dict></plist>",
@@ -132,6 +140,10 @@ MALFORMED_PLISTS = {
     b"<key>CFBundleShortVersionString</key><string>3.26&#x1b;</string></dict></plist>",
     "not a plist": b"\xff\xfe junk",
     "empty": b"",
+    "a list, not a dictionary": plistlib.dumps(["3.26.13"], fmt=plistlib.FMT_BINARY),
+    "a date plistlib cannot read": b'<?xml version="1.0"?><plist version="1.0"><dict>'
+    b"<key>CFBundleShortVersionString</key><date>9999999-01-01T00:00:00Z</date></dict></plist>",
+    "nested deeper than plistlib reads": nested_binary_plist(2_000),
 }
 
 
