@@ -45,6 +45,7 @@ from tests.install_helpers import (
 )
 from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
+from tests.test_install_cursor import ADVICE, MALFORMED_PLISTS, NEWER, NEWEST, write_version
 from tests.test_install_packages import (
     BAD,
     REAL_TOOL_ENVIRONMENT,
@@ -535,16 +536,87 @@ def test_a_client_that_matches_the_record_but_is_older_than_this_agentfly_warns(
     assert "agentfly init -g" in stale.results()["client"].text
 
 
-def test_an_unknown_cursor_version_only_warns_about_the_events(world: World) -> None:
-    plist = world.layout.cursor_app / "Contents" / "Info.plist"
-    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "9.9.9"}))
+def test_a_version_older_than_the_newest_listed_only_warns_about_the_events(world: World) -> None:
+    write_version(world.layout, "1.0.0")
     results = world.results()
-    assert results["events"].level == "warn" and "9.9.9" in results["events"].text
+    assert results["events"].level == "warn" and "1.0.0" in results["events"].text
+    assert "could not be checked" in results["events"].text
     assert world.levels("fail") == set()
+
+
+UNCOMPARABLE = {
+    "a beta tag": "3.26.13-beta",
+    "letters": "x.y",
+    "10,000 digits": "9" * 10_000,
+    "a newline": "3.26\n13",
+    "an escape sequence": "3.26\x1b[2K",
+}
+
+
+@pytest.mark.parametrize("version", UNCOMPARABLE.values(), ids=UNCOMPARABLE.keys())
+def test_a_version_that_is_not_dotted_numbers_is_one_plain_unchecked_line(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    line = world.results()["events"]
+    assert line.level == "warn" and "could not be checked" in line.text
+    assert "\n" not in line.text and "\x1b" not in line.text and len(line.text) < 400
+    assert world.levels("fail") == set()
+
+
+def test_a_newer_cursor_warns_unchecked_on_the_events_line_and_nothing_fails(world: World) -> None:
+    write_version(world.layout, NEWER)
+    set_record_versions(world, agentfly=installer.agentfly_version(), cursor=NEWER)
+    results = world.results()
+    events = results["events"]
+    assert events.level == "warn" and "unchecked Cursor version" in events.text
+    assert NEWER in events.text and NEWEST in events.text
+    assert ADVICE in events.text
+    assert "could not be checked" not in events.text
+    assert results["record"].level == "ok" and f"Cursor {NEWER}" in results["record"].text
+    assert results["hooks"].level == "ok"
+    assert world.levels("fail") == set()
+
+
+def test_a_newer_cursor_with_an_event_the_newest_does_not_accept_fails_the_events_line(
+    world: World,
+) -> None:
+    write_version(world.layout, NEWER)
+    add_unknown_event(world)
+    events = world.results()["events"]
+    assert events.level == "fail" and "afBogusEvent" in events.text and NEWEST in events.text
+
+
+HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
+
+
+@pytest.mark.parametrize("name", HOOKS_LOG_FAULTS)
+def test_on_a_newer_cursor_a_log_that_rejects_the_hooks_still_fails_the_hooks_log_line(
+    name: str, world: World
+) -> None:
+    write_version(world.layout, NEWER)
+    FAULTS[name][1](world)
+    assert world.levels("fail") == {"hooks-log"}
+
+
+def test_on_a_newer_cursor_a_log_that_loaded_the_hooks_passes_the_hooks_log_line(
+    world: World,
+) -> None:
+    write_version(world.layout, NEWER)
+    results = world.results()
+    assert results["hooks-log"].level == "ok" and results["events"].level == "warn"
 
 
 def test_an_unreadable_cursor_version_only_warns(world: World) -> None:
     (world.layout.cursor_app / "Contents" / "Info.plist").unlink()
+    assert world.results()["events"].level == "warn" and world.levels("fail") == set()
+
+
+@pytest.mark.parametrize("data", MALFORMED_PLISTS.values(), ids=MALFORMED_PLISTS.keys())
+def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(
+    world: World, data: bytes
+) -> None:
+    (world.layout.cursor_app / "Contents" / "Info.plist").write_bytes(data)
     assert world.results()["events"].level == "warn" and world.levels("fail") == set()
 
 

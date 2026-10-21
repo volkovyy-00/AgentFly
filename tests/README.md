@@ -324,6 +324,14 @@ lines for them (R0 and normalisation: V5).
   or Version (a newline there is a folded header: a plain one ends it); `init -g` and `uninstall`
   stop with one printable line and no password, nothing raw reaches stdout before "Go on? [y/N]",
   `doctor` prints one plain line. Expected texts are written out, never computed with `visible`.
+- Cursor versions (`tests/test_install_cursor.py`, `tests/test_install_cli.py`, `tests/test_doctor.py`,
+  V3d, D32): a version newer than the newest listed one, part by part as numbers, gets the newest's
+  events and one `warning:` line naming both versions with the restart-and-`doctor` advice, once
+  however `init -g` ends (the user's run elevates, finds the install intact, or the sudo is typed by
+  hand); the record keeps the real version; `doctor`'s `events` line warns "unchecked Cursor version"
+  and its `hooks-log` line still fails on a rejected or unloaded log. Older, in-between, non-dotted,
+  10,000-character and control-character versions and an unreadable `Info.plist` are refused in one
+  escaped line with nothing written; a listed version prints no warning.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;

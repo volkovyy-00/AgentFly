@@ -16,7 +16,9 @@ import pytest
 from agentfly.cli import build_parser, init, main, uninstall
 from agentfly.install import (
     InstallError,
+    cursor,
     elevate,
+    hooks_file,
     installer,
     packages,
     pythons,
@@ -42,6 +44,14 @@ from tests.install_helpers import (
     write_archive,
 )
 from tests.service_helpers import Launchd
+from tests.test_install_cursor import (
+    ADVICE,
+    MALFORMED_PLISTS,
+    NEWER,
+    NEWEST,
+    REFUSED,
+    write_version,
+)
 from tests.test_install_packages import (
     BAD,
     REAL_TOOL_ENVIRONMENT,
@@ -136,6 +146,146 @@ def test_init_refuses_an_unknown_cursor_before_asking_for_a_password(
     err = capsys.readouterr().err
     assert "Cursor 1.0.0" in err and "nothing was written" in err
     assert not system.system_root.exists()
+
+
+# ---------------------------------------------------------------- a newer Cursor (V3d, D32)
+
+
+def init_through_a_fake_sudo(monkeypatch: pytest.MonkeyPatch, archive: Path) -> None:
+    """Stand in for the sudo: the child is the real root path, fed the archive the user piped."""
+
+    def fake_sudo(tail: list[str], stdin: IO[bytes] | None = None, **kwargs: object) -> int:
+        with monkeypatch.context() as child:  # only while it runs: the parent is the user's
+            child.setattr(init.os, "geteuid", lambda: 0)
+            child.setattr(init, "_stdin_archive", lambda: archive)
+            return main(tail)
+
+    monkeypatch.setattr(elevate, "run_elevated", fake_sudo)
+
+
+def first_install_with(
+    system: Layout, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    """`agentfly init -g` on an empty root with Cursor at `version`, through the fake sudo."""
+    write_version(system, version)
+    path, build = write_archive(tmp_path / "dl", fake_python_tar())
+    monkeypatch.setattr(pythons, "select_build", lambda *a: build)
+    monkeypatch.setattr(pythons, "download", lambda wanted, target: shutil.copyfile(path, target))
+    init_through_a_fake_sudo(monkeypatch, path)
+    assert main(["init", "-g"]) == 0
+
+
+def warnings_in(out: str) -> list[str]:
+    return [line for line in out.splitlines() if line.startswith("warning:")]
+
+
+def test_a_newer_cursor_installs_the_newest_versions_entries_and_warns_once(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first_install_with(system, tmp_path, monkeypatch, NEWER)
+    captured = capsys.readouterr()
+    [warning] = warnings_in(captured.out)  # the user's run and the root child say it once, together
+    assert NEWER in warning and NEWEST in warning and ADVICE in warning
+    assert "Traceback" not in captured.err
+    text = system.hooks_file.read_text(encoding="utf-8")
+    found = hooks_file.our_entries(text, installer.prefix(system))
+    assert hooks_file.same_entries(found, installer.desired_entries(system))
+    assert {entry.event for entry in found} == set(cursor.EVENTS)
+    record = records.read(system)
+    assert record is not None and record["cursor_version"] == NEWER  # the real one
+
+
+def test_a_newer_cursor_gets_the_same_hooks_file_as_the_newest_listed_one(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first_install_with(system, tmp_path, monkeypatch, NEWER)
+    newer_bytes = system.hooks_file.read_bytes()
+    installer.uninstall(system)
+    assert not system.hooks_file.exists() or b"agentfly" not in system.hooks_file.read_bytes()
+    capsys.readouterr()
+    first_install_with(system, tmp_path / "again", monkeypatch, NEWEST)
+    assert system.hooks_file.read_bytes() == newer_bytes
+    assert warnings_in(capsys.readouterr().out) == []
+
+
+def test_a_newer_cursor_on_an_intact_install_warns_once_and_asks_for_no_password(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build = install_system(system, tmp_path)
+    monkeypatch.setattr(pythons, "select_build", lambda *a: build)
+    write_version(system, NEWER)  # Cursor updated after the install
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["init", "-g"]) == 0
+    out = capsys.readouterr().out
+    assert "already installed and intact" in out
+    [warning] = warnings_in(out)
+    assert NEWER in warning and NEWEST in warning and ADVICE in warning
+
+
+def test_a_hand_typed_sudo_init_on_a_newer_cursor_warns_once(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_version(system, NEWER)
+    path, build = write_archive(tmp_path / "dl", fake_python_tar())
+    monkeypatch.setattr(pythons, "select_build", lambda *a: build)
+    monkeypatch.setattr(init.os, "geteuid", lambda: 0)  # `sudo agentfly init -g` typed by hand
+    monkeypatch.setattr(init, "_stdin_archive", lambda: path)
+    assert main(["init", "-g"]) == 0
+    assert len(warnings_in(capsys.readouterr().out)) == 1
+
+
+@pytest.mark.parametrize("version", ["3.24.12", NEWEST])
+def test_a_listed_cursor_installs_with_no_warning(
+    version: str,
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first_install_with(system, tmp_path, monkeypatch, version)
+    out = capsys.readouterr().out
+    assert warnings_in(out) == [] and "warning" not in out.lower()
+    record = records.read(system)
+    assert record is not None and record["cursor_version"] == version
+
+
+REFUSED_BY_INIT = {**REFUSED, **{f"plist: {name}": "" for name in MALFORMED_PLISTS}}
+
+
+@pytest.mark.parametrize("name", REFUSED_BY_INIT)
+def test_init_refuses_any_other_version_in_one_line_before_the_password(
+    name: str,
+    system: Layout,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    if name.startswith("plist: "):
+        plist = system.cursor_app / "Contents" / "Info.plist"
+        plist.write_bytes(MALFORMED_PLISTS[name.removeprefix("plist: ")])
+    else:
+        write_version(system, REFUSED[name])
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len(captured.err.strip().splitlines()) == 1 and captured.err.startswith(
+        "agentfly init: "
+    )
+    assert "Traceback" not in captured.err and "\x1b" not in captured.err
+    assert len(captured.err) < 600
+    assert not system.system_root.exists() and not system.hooks_file.exists()
 
 
 def test_init_as_root_installs_from_the_piped_archive(

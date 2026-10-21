@@ -50,6 +50,14 @@ def _run_as() -> tuple[int, int] | None:
         return None
 
 
+def _warn_if_unchecked(version: str) -> None:
+    """D32: said once per run, by whichever process ends it (the root child, or the user's run
+    when it has nothing to elevate); the user's run that does elevate says nothing itself."""
+    note = cursor.warning(version)
+    if note:
+        print(note)
+
+
 def _as_root(version: str, build: pythons.PythonBuild) -> int:
     archive = _stdin_archive()
     try:
@@ -72,6 +80,7 @@ def _as_root(version: str, build: pythons.PythonBuild) -> int:
                 "Quit and reopen Cursor so it loads the hooks (its Hooks panel does not list them)."
             )
         print("Next: `agentfly start` (or `agentfly serve` in a terminal) runs the recorder.")
+    _warn_if_unchecked(version)
     return 0
 
 
@@ -87,6 +96,7 @@ def _as_user(version: str, build: pythons.PythonBuild) -> int:
         )
         if notice:
             print(notice)
+        _warn_if_unchecked(version)
         return 0
     # A damaged default, or a link or folder at the rules path, stops before the password.
     installer.check_packaged_default(SYSTEM, current)

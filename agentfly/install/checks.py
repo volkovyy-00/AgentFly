@@ -85,8 +85,11 @@ class Context:
 
     @property
     def valid_events(self) -> frozenset[str] | None:
-        """What this Cursor version accepts; None when AgentFly has not verified it."""
-        return cursor.KNOWN_VERSIONS.get(self.cursor_version) if self.cursor_version else None
+        """What this Cursor version is checked against; None when AgentFly refuses the version.
+
+        A listed version has its own events. A newer one has the newest listed version's (D32).
+        """
+        return cursor.accepted_events(self.cursor_version) if self.cursor_version else None
 
 
 def default_own_script() -> Path | None:
@@ -275,19 +278,30 @@ def check_events(ctx: Context) -> Finding:
         return warn("no AgentFly entries are registered")
     if ctx.cursor_version is None:
         return _not_checked("cannot read the Cursor version")
+    version = cursor.shown(ctx.cursor_version)
     if ctx.valid_events is None:
-        known = ", ".join(sorted(cursor.KNOWN_VERSIONS))
         return warn(
-            f"Cursor {ctx.cursor_version} is not on AgentFly's verified list ({known}); "
-            "its registered events could not be checked"
+            f"Cursor {version} is not on AgentFly's verified list ({cursor.listed()}) and is not "
+            "newer than its newest version; its registered events could not be checked"
         )
+    verified = cursor.verified_as(ctx.cursor_version)
     unknown = sorted({entry.event for entry in found} - ctx.valid_events)
     if unknown:
+        # a newer Cursor is checked against the newest listed version's events, and says so
+        against = (
+            "" if verified == ctx.cursor_version else f" (checked against {verified}'s events)"
+        )
         return fail(
-            f"Cursor {ctx.cursor_version} does not accept {', '.join(unknown)}: it rejects the "
+            f"Cursor {version} does not accept {', '.join(unknown)}{against}: it rejects the "
             "whole hooks file (D23)"
         )
-    return ok(f"every registered event is accepted by Cursor {ctx.cursor_version}")
+    if verified != ctx.cursor_version:
+        return warn(
+            f"unchecked Cursor version: Cursor {version} is newer than the newest AgentFly has "
+            f"checked ({verified}); its registered events are compared with {verified}'s. "
+            f"{cursor.ADVICE}"
+        )
+    return ok(f"every registered event is accepted by Cursor {version}")
 
 
 # ---------------------------------------------------------------- the service (D4, D8)
