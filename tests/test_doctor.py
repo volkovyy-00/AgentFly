@@ -52,6 +52,7 @@ from tests.test_install_packages import (
     assert_plain,
     fake_agentfly,
 )
+from tests.test_install_rules import another_user
 
 IDS = [
     "record",
@@ -974,3 +975,22 @@ def test_the_command_prints_a_package_name_with_control_characters_as_one_plain_
     assert_plain(out)
     [line] = [line for line in out.split("\n") if line.startswith("fail  package")]
     assert f"x{SHOWN}y.py is not listed in any RECORD" in line
+
+
+# ---------------------------------------------------------------- the rules file's group (V5d)
+
+
+def test_a_rules_file_readable_through_the_users_group_does_not_fail_the_lock_line(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    os.chown(world.layout.rules, -1, os.getegid())
+    world.layout.rules.chmod(0o640)
+    # The tree is this user's, so only another user shows the group clause.
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid()))
+    assert world.results()["lock"].level == "ok"
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid() + 1))
+    check = world.results()["lock"]
+    assert check.level == "fail" and "could not load it" in check.text
+    world.layout.rules.chmod(0o660)  # group-writable, in a group the user is in
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid()))
+    assert world.results()["lock"].level == "fail"

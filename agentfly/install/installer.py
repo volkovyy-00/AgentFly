@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import re
 import shutil
 import stat
@@ -421,11 +422,53 @@ def smoke(command: str, event: str, run_as: tuple[int, int] | None) -> None:
         )
 
 
-def lock_problems(layout: Layout, *, check_owner: bool) -> list[str]:
+@dataclass(frozen=True)
+class Reader:
+    """The user who has to read what is installed: the hook client and Python by the hook, the
+    rules file by the recorder, all run as this user (V5d)."""
+
+    uid: int
+    groups: frozenset[int]
+
+
+def current_reader() -> Reader:
+    """Whoever runs now (`doctor` is the user)."""
+    return Reader(os.geteuid(), frozenset({os.getegid(), *os.getgroups()}))
+
+
+def reader_for(run_as: tuple[int, int] | None) -> Reader:
+    """The user the hooks will run as: who ran `sudo` when the installer knows (`run_as`, from
+    `SUDO_UID` and `SUDO_GID`), else whoever runs."""
+    if run_as is None:
+        return current_reader()
+    uid, gid = run_as
+    try:
+        groups = os.getgrouplist(pwd.getpwuid(uid).pw_name, gid)
+    except (KeyError, OSError):
+        groups = []
+    return Reader(uid, frozenset({gid, *groups}))
+
+
+def _readable_by(info: os.stat_result, reader: Reader) -> bool:
+    """Can the user read the file: by the others' bit, as its owner, or in its group. Root can
+    read everything, which says nothing about the user, so for root only the others' bit counts."""
+    if info.st_mode & 0o004:
+        return True
+    if reader.uid == 0:
+        return False
+    if info.st_uid == reader.uid and info.st_mode & 0o400:
+        return True
+    return info.st_gid in reader.groups and bool(info.st_mode & 0o040)
+
+
+def lock_problems(layout: Layout, *, check_owner: bool, reader: Reader | None = None) -> list[str]:
     """What in the system folder is a stray link, or can be written by group or others.
 
     Also what the user could not enter or read (the hook would fail), and, when `check_owner`, what
     is not owned by the system user. `doctor` asks this as the user; the installer asks it as root.
+    Everything must be readable by others, except the rules file, which only the recorder reads:
+    root's mode 0640 file in a group the user is in is fine (V5d; the recorder loads it, D3).
+    `reader` is the user (default: whoever runs).
     """
     if layout.system_root.is_symlink():
         return [f"{layout.system_root} is a symbolic link"]
@@ -439,16 +482,21 @@ def lock_problems(layout: Layout, *, check_owner: bool) -> list[str]:
             problems.append(f"{path} cannot be entered by the user, so the hook would fail")
         if info.st_mode & 0o022:
             problems.append(f"{path} can be written by group or others")
-        if not info.st_mode & 0o004:
+        if path == layout.rules:
+            if not _readable_by(info, reader or current_reader()):
+                problems.append(
+                    f"{path} cannot be read by the user, so the recorder could not load it"
+                )
+        elif not info.st_mode & 0o004:
             problems.append(f"{path} cannot be read by the user, so the hook would fail")
         if check_owner and layout.owner is not None and info.st_uid != layout.owner[0]:
             problems.append(f"{path} is not owned by the system user")
     return problems
 
 
-def assert_locked(layout: Layout) -> None:
+def assert_locked(layout: Layout, run_as: tuple[int, int] | None = None) -> None:
     """Nothing in the system folder is a stray link, or writable by group or others."""
-    problems = lock_problems(layout, check_owner=os.geteuid() == 0)
+    problems = lock_problems(layout, check_owner=os.geteuid() == 0, reader=reader_for(run_as))
     if problems:
         raise InstallError(problems[0])
 
@@ -712,7 +760,7 @@ def install(
         shutil.rmtree(staging, ignore_errors=True)
         if rules_data is not None:
             messages.append(_write_rules(layout, rules_data, rules))
-        assert_locked(layout)
+        assert_locked(layout, run_as)
         for event in cursor.EVENTS:  # every command as registered, through `sh -c` (S2 F1)
             smoke(command_for(layout.interpreter, layout.client, event), event, run_as)
 

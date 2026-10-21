@@ -59,10 +59,17 @@ def archive(tmp_path: Path) -> tuple[Path, PythonBuild]:
     return write_archive(tmp_path / "download", fake_python_tar())
 
 
-def do_install(layout: Layout, archive: tuple[Path, PythonBuild]) -> installer.Outcome:
+def do_install(
+    layout: Layout, archive: tuple[Path, PythonBuild], run_as: tuple[int, int] | None = None
+) -> installer.Outcome:
     path, build = archive
     return installer.install(
-        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+        layout,
+        build,
+        cursor_version="3.24.12",
+        source=installer.client_source(),
+        archive=path,
+        run_as=run_as,
     )
 
 
@@ -685,3 +692,109 @@ def test_root_that_cannot_read_a_file_calls_it_edited_as_before(
         assert "rules" not in status_of(layout, archive[1])
     finally:
         layout.rules.chmod(0o644)
+
+
+# ---------------------------------------------------------------- who can read the rules file (V5d)
+
+# The tests run as the file's owner, so the group clause is tried through a `Reader` of another
+# user. No such user exists (`pwd` has no entry), so `reader_for` knows only the group it is given.
+NOBODY = 2_000_000_000
+
+
+def edited_rules(layout: Layout, archive: tuple[Path, PythonBuild], mode: int) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    os.chown(layout.rules, -1, os.getegid())  # a group the user is in
+    layout.rules.chmod(mode)
+
+
+def another_user(*groups: int) -> installer.Reader:
+    return installer.Reader(NOBODY, frozenset(groups))
+
+
+def test_a_rules_file_the_user_reads_through_its_group_is_no_lock_fault(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, 0o640)
+    reader = another_user(os.getegid())
+    assert installer.lock_problems(layout, check_owner=False, reader=reader) == []
+    lonely = another_user(os.getegid() + 1)
+    assert installer.lock_problems(layout, check_owner=False, reader=lonely) == [
+        f"{layout.rules} cannot be read by the user, so the recorder could not load it"
+    ]
+
+
+@pytest.mark.parametrize("mode", [0o660, 0o664, 0o646, 0o620])
+def test_a_group_writable_rules_file_is_refused_in_a_group_the_user_is_in(
+    mode: int, layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, mode)
+    problems = installer.lock_problems(layout, check_owner=False, reader=another_user(os.getegid()))
+    assert any("can be written by group or others" in problem for problem in problems)
+
+
+def test_the_owner_bit_counts_for_the_owner_and_root_reads_nothing_by_owner_or_group(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, 0o600)
+    unread = f"{layout.rules} cannot be read by the user, so the recorder could not load it"
+    mine = installer.Reader(os.getuid(), frozenset())
+    assert installer.lock_problems(layout, check_owner=False, reader=mine) == []
+    assert installer.lock_problems(layout, check_owner=False, reader=another_user()) == [unread]
+    layout.rules.chmod(0o640)  # root could read it, which says nothing about the user
+    root = installer.Reader(0, frozenset({os.getegid()}))
+    assert installer.lock_problems(layout, check_owner=False, reader=root) == [unread]
+    layout.rules.chmod(0o644)
+    assert installer.lock_problems(layout, check_owner=False, reader=root) == []
+    layout.rules.chmod(0o000)
+    assert installer.lock_problems(layout, check_owner=False, reader=mine) == [unread]
+
+
+def test_the_other_files_still_have_to_be_readable_by_others(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    os.chown(layout.client, -1, os.getegid())
+    layout.client.chmod(0o640)
+    problems = installer.lock_problems(layout, check_owner=False, reader=another_user(os.getegid()))
+    assert problems == [f"{layout.client} cannot be read by the user, so the hook would fail"]
+
+
+def test_a_repair_goes_on_past_a_rules_file_the_user_reads_through_its_group(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, 0o640)
+    before = fingerprint(layout.rules)
+    tamper_with_the_client(layout)
+    outcome = do_install(layout, archive, (NOBODY, os.getegid()))
+    assert outcome.changed
+    assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o640
+
+
+def test_a_repair_stops_when_the_user_the_installer_serves_is_not_in_the_group(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, 0o640)
+    before = fingerprint(layout.rules)
+    tamper_with_the_client(layout)
+    with pytest.raises(InstallError, match="could not load it"):
+        do_install(layout, archive, (NOBODY, os.getegid() + 1))
+    assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+
+
+def test_the_reader_of_a_sudo_user_is_their_group_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(installer.pwd, "getpwuid", lambda uid: type("P", (), {"pw_name": "u"})())
+    seen: list[tuple[str, int]] = []
+
+    def groups(name: str, gid: int) -> list[int]:
+        seen.append((name, gid))
+        return [gid, 80, 12]
+
+    monkeypatch.setattr(os, "getgrouplist", groups)
+    assert installer.reader_for((501, 20)) == installer.Reader(501, frozenset({20, 80, 12}))
+    assert seen == [("u", 20)]
+    monkeypatch.setattr(os, "getgrouplist", lambda *a: (_ for _ in ()).throw(OSError("no")))
+    assert installer.reader_for((501, 20)) == installer.Reader(501, frozenset({20}))
+    assert installer.reader_for(None) == installer.current_reader()
+    assert installer.current_reader().uid == os.geteuid()

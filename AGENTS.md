@@ -385,6 +385,22 @@ lines for them (R0 and normalisation: V5).
   `git push --force` on 75 `git push origin bK`), while 198 times `cat wN` on `command(60)` pays
   only its probes (198 times 50 steps) and finishes. `rules check` prints one line for a heavy
   list, none at weight 20 (see Rules file above).
+  The program walk is charged too (V5d): a clause makes at most `min(listed programs, programs of
+  the simple command)` look-ups in each distinct simple command of the line, worked out for the
+  whole clause from a table made once a hook (`rulefile._program_sizes`) and charged before the
+  clause is walked; `PROGRAM_LOOKUPS_FREE` (300, as many as a hook of 300 words can make) cost
+  nothing for each clause (198 clauses can make 59,400 look-ups, about 130 ms, that the meter
+  never sees; the real shapes below need it), so a clause that cheap answers on a spent meter, and
+  each look-up past them costs
+  `PROGRAM_LOOKUP_STEPS` (4; a look-up was measured at 2.2 us against 0.4 us a step). 300 charges
+  nothing and 301 charges 4. The target line (1,000 `;`-joined `cat zK y` against 198 rules of 50
+  `cat wN`) charges 2,800 a clause, so 16 clauses walk (16,000 `_program_hit` calls, 198,000 with
+  `_charge` a no-op) and the 17th and every later one raise without walking; block gives the limit
+  deny, warn `ask`, highlight allow, and the whole hook is under the client's wait
+  (`@wallclock`; 70 ms of rules here against 190 to 360 before). 300 distinct one-word commands
+  are a real shape and are never charged. `test_the_budgets_are_pinned` pins `FLOAT_STEPS`
+  (45,000), `PROBES_PER_STEP`, `PROGRAM_LOOKUPS_FREE` and `PROGRAM_LOOKUP_STEPS` by value, because
+  every other test reads them by name.
 - Limit (`tests/test_rules_limit.py`, V5b-fix2): one hook shares one budget (`rules.one_hook()`
   reads `rulefile.FLOAT_STEPS` at each call); an unfinished block rule gives the `rules limit`
   deny, the limit message in both fields, unless R0 or R1 answers; R0's and R1's answers are the
@@ -405,7 +421,8 @@ lines for them (R0 and normalisation: V5).
   (with and without `/`), 128 emoji, a program name as long and a Read `file_path` with a part
   over the system's name limit each get the answer the short word gets, R1 still blocks after a
   `.env` read, and the step reaches the history cleaned; the cleaner asks the system about no
-  word over 1,024 characters; the root itself is `.`, and `ws2` beside `ws` is outside it; a
+  word over 1,024 characters (not one call, also for a word inside the root as text); the root
+  itself is `.`, and `ws2` beside `ws` is outside it; a
   lone surrogate or NUL makes a word not a path, an absolute path the system cannot encode (also
   one macOS resolves, U+DC80..U+DCFF) is saved as its base name, and a base name that does not
   encode is saved with U+FFFD for each lone surrogate, so a Read of `<ws>/x/\udcff` reaches the
@@ -413,6 +430,29 @@ lines for them (R0 and normalisation: V5).
   a link loop never raises (shell word, Read and Write answer allow
   and reach the history); `bash -c` with 300 paths 60 deep is cleaned as one word and is under
   the client's wait (`@wallclock`). `tests/leak_cases.py` and `tests/test_clean.py` pass unedited.
+- Path look-ups (`tests/test_path_lookups.py`, V5d): a command word is judged as text before the
+  disk is asked: a relative word is joined to the root, `.` and `..` are folded, `~` is not
+  expanded, and it is tried against the root as sent and as resolved. A word outside both (also
+  `/net/x/...`) makes no `lstat`, `stat` or `readlink`, and the root is looked up once a hook; a
+  link from outside that leads into the project counts as outside (`<arg>`). A word inside is
+  walked by `clean.Lookups` with one `lstat` a part; a missing part ends the walk after that call,
+  a link must lead inside, and 3,000 seeded random words over a tree of every kind of link (also
+  the root as a link, and `//`) get the answer of `os.path.realpath(strict=True)`. All the words
+  of a hook share `LOOKUP_STEPS` (4,000, pinned; a step for each `lstat` and `readlink`, measured
+  4.6 us on a short path and 8.5 us at 753 characters, so the price is per call, and for each link
+  followed a step and one more for each 64 characters of its target, whose parts are walked too: a
+  link to `.` and 1,022 `/` crossed 31 times a word cost 553 ms for 300 words before the charge,
+  21 ms after; more than 32 links make a word not a file; a root with `..` in it is not read by
+  its text): a folder seen
+  once is not looked up again (40 files in one folder cost three calls and 40), a word past the
+  budget is saved as `<arg>` and is not the step's file, and the cleaner and the step record
+  spend one budget (`build_step_record` makes one `Lookups` and splits the cleaned command once,
+  at regular-expression speed: `cleaned_words` equals `names.words` on 5,000 random strings).
+  An absolute program word is the step's file only if it is inside through the walk (an outside
+  program such as `/bin/ls`, or one through a link that leads out, is not; a sensitive one is
+  saved by its base name). Read and Write `file_path` keep `relative_file_path`. `@wallclock`:
+  300 distinct words of 1,022 characters, 2- and 60-character folders, outside, inside and
+  missing, inside and existing, answer within the client's wait through `apply_rules`.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
@@ -448,7 +488,13 @@ lines for them (R0 and normalisation: V5).
   <what runs instead>", the reason being the recorder's own wording (`rulefile.trust_problem`).
   An intact re-run prints the pinned "already installed and intact; nothing changed" and then
   the notice, as the user with no password; with other repair work a group-writable edit stops
-  the repair (`assert_locked` fails closed) and the file is not touched. As the user, `init -g`
+  the repair (`assert_locked` fails closed) and the file is not touched. The lock check asks that
+  the user can read `rules.toml`, not that others can (V5d, `tests/test_install_rules.py`): a
+  root-owned 0640 edit in a group the user is in passes (`installer.Reader`: the user's id and
+  groups, which as root are the `SUDO_UID`/`SUDO_GID` user's from `getgrouplist`; root itself
+  counts only through the others' bit), also the repair that goes on past it and leaves it as it
+  was; 0640 in a group the user is not in, 0660 and 0000 are refused, and every other file in the
+  folder must still be readable by others. As the user, `init -g`
   checks the packaged default before the password when it would write one (a damaged one stops
   with no prompt, and an edited file that means none is written does not need it); a refresh of
   the rules alone asks for a recorder restart and not a Cursor restart, one that changes more
@@ -483,7 +529,9 @@ lines for them (R0 and normalisation: V5).
   unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
   link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
   rejected the file (the default is in force), asks for a restart after a fix, and never fails
-  because the recorder is down. An edited file that started from an older default is ok.
+  because the recorder is down. An edited file that started from an older default is ok. The
+  `lock` line takes a rules file the user reads through its group (V5d; a test injects the
+  reader), and fails a group-writable one or one the user cannot read.
 - Session state (`tests/test_session_state.py`, `tests/test_session_kill.py`, F11): a mark, a trigger,
   an inherited window, a parent link, a parent changed by propagation and every `links.json` change
   are on disk when `SessionStore.commit` returns (a store read right after, with no flush, is a killed
