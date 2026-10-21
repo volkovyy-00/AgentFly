@@ -1,0 +1,16 @@
+# Version updates for the GitHub Actions that .github/workflows/ci.yml uses, and nothing else.
+# Alerts and security updates for uv.lock and ui/package-lock.json are repository settings.
+# tests/test_dependabot_config.py pins this file.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 7

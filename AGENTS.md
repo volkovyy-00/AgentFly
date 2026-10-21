@@ -74,7 +74,11 @@ tailwindcss, `@tailwindcss/vite`, vitest, `@vitejs/plugin-react`,
 `ui/package.json`). The page at `/` is the Vite build in `ui/dist`.
 
 CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (owner
-2026-10-19). Ask before adding an action or another workflow.
+2026-10-19). Ask before adding an action or another workflow. `.github/dependabot.yml` holds one
+`github-actions` entry (weekly, one group, 7-day cooldown) and no uv or npm entry: those get
+alerts and security updates from repository settings, and `@xyflow/react` and `motion` stay
+pinned. CodeQL is GitHub's default setup, a repository setting with no workflow file. Dependabot
+PRs are never merged on GitHub: the lead folds them into a card.
 
 ## Working rules
 - One card at a time. Do only the card you were asked for, then STOP and say
@@ -490,7 +494,17 @@ lines for them (R0 and normalisation: V5).
   cache, checkout keeps no credentials), a `secrets` word, a runner other than `macos-15`, or a
   `run:` of more than one line (one command per step: `bash -e` carries on past a failed `a`
   in `a && b`); or if it loses the cancel of an older pull-request run, `uv sync --locked` or
-  one of the three check commands above (read from this file, run in this order).
+  one of the three check commands above (read from this file, run in this order). Its mutation
+  cases look the action pins up in `ci.yml` instead of hard-coding them (F9).
+- Dependabot (`tests/test_dependabot_config.py`, F9): `dependabot.yml` is read with the same
+  parser. The suite fails if it gains a second entry or an ecosystem other than `github-actions`
+  (`pip`, `uv`, `npm`), a key the test does not list (`target-branch`, `ignore`, `labels`,
+  `open-pull-requests-limit`, `registries`), a schedule other than weekly, a directory other than
+  `/`, or if it loses or renames its one group (`github-actions`, pattern `"*"`, quoted: the parser
+  refuses a bare `*`) or loses its 7-day cooldown. It also fails if `.github/workflows/` holds
+  anything but `ci.yml` (Finder's `.DS_Store` aside) or if a `dependabot.yaml` sits beside the
+  `.yml`. A copy of `ci.yml` with every pin swapped for another SHA and tag, what a Dependabot PR
+  does, still passes the CI check.
 
 ## Hook facts (fill in after the logging stage)
 - Config file (today's dev setup): `.cursor/hooks.json` — **gitignored** (whole

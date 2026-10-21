@@ -351,6 +351,25 @@ def test_the_three_check_commands_are_found_in_agents_md() -> None:
 
 ENV_SECRET = "- run: uv sync --locked\n        env:\n          T: ${{ SECRETS.TOKEN }}"
 
+
+def pinned(action: str) -> str:
+    """`owner/name@<sha>` as ci.yml pins it now, so a Dependabot bump leaves the cases below valid.
+
+    With no pin to find (or no ci.yml) the text is one that is not in the file: only the cases that
+    use it fail, and this module still imports.
+    """
+    try:
+        text = read(WORKFLOW)
+    except OSError:
+        text = ""
+    found = re.search(rf"{re.escape(action)}@[0-9a-f]{{40}}", text)
+    return found.group(0) if found else f"{action}@<no pin in ci.yml>"
+
+
+CHECKOUT, SETUP_UV, SETUP_NODE = (
+    pinned(action) for action in ("actions/checkout", "astral-sh/setup-uv", "actions/setup-node")
+)
+
 # (what is edited, the text to replace, its replacement, a fragment of the problem it must raise)
 MUTATIONS = [
     ("a third trigger", "  pull_request:\n", "  pull_request:\n  workflow_dispatch:\n", "trigger"),
@@ -368,18 +387,8 @@ MUTATIONS = [
         "    permissions:\n      contents: write\n    timeout-minutes",
         "does not allow",
     ),
-    (
-        "a tag instead of a SHA",
-        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-        "actions/checkout@v7",
-        "pinned",
-    ),
-    (
-        "a short SHA",
-        "astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884",
-        "astral-sh/setup-uv@1c37ad0",
-        "pinned",
-    ),
+    ("a tag instead of a SHA", CHECKOUT, "actions/checkout@v7", "pinned"),
+    ("a short SHA", SETUP_UV, SETUP_UV[: SETUP_UV.index("@") + 8], "pinned"),
     (
         "a local action",
         "- run: uv sync --locked",
@@ -416,12 +425,7 @@ MUTATIONS = [
         "concurrency",
     ),
     ("a group by sha only", GROUP, "ci-${{ github.sha }}", "concurrency"),
-    (
-        "an unapproved action",
-        "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
-        "actions/cache@" + "0" * 40,
-        "not approved",
-    ),
+    ("an unapproved action", SETUP_NODE, "actions/cache@" + "0" * 40, "not approved"),
     ("an unlocked sync", "- run: uv sync --locked", "- run: uv sync", "uv sync --locked"),
     (
         "a non-breaking space in a command",
