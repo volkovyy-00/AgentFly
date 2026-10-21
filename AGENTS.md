@@ -13,8 +13,8 @@ The code moves toward it card by card. So:
 
 The hackathon spec (history only): `git show 3871787:docs/archive/SPEC-hackathon.md`.
 
-A "card" is one of the maintainers' work items; cards, briefs, reports and the decisions
-(D-numbers, see SPEC.md's header) live in a private repo. An outside contributor treats the
+A "card" is one of the maintainers' work items; cards, briefs, reports and decisions
+(D-numbers, SPEC.md's header) live in a private repo. An outside contributor treats the
 issue or pull request as the card and puts the gap notes in the pull request.
 
 ## Where things are
@@ -29,9 +29,9 @@ issue or pull request as the card and puts the gap notes in the pull request.
 
 ## Commands
 - Install deps: `uv sync`
-- Install for every project (one `sudo`, SPEC §7): `agentfly init -g`. Remove it: `agentfly uninstall`.
-  Quit and reopen Cursor after either: it reads the system file only at start-up. The installed
-  client is a copy, so a hook client change needs `init -g` again.
+- Install for every project (one `sudo`, SPEC §7): `agentfly init -g`. Remove it: `agentfly uninstall`
+  (our entries first, then the folder). Quit and reopen Cursor after either: it reads the system
+  file only at start-up. The installed client is a copy, so a hook client change needs `init -g` again.
 - Run the recorder as a service (no `sudo`, SPEC §7): `agentfly start`, `agentfly stop`,
   `agentfly status`. A dev checkout runs `uv run agentfly serve` instead; both on port 8787 do not work.
 - Check an install: `agentfly doctor` (one line per check, exit 1 on any fail, no password).
@@ -62,8 +62,8 @@ issue or pull request as the card and puts the gap notes in the pull request.
 Python: fastapi, uvicorn, httpx, neo4j (driver), pytest, pytest-xdist (with its
 `execnet`), ruff, and hatchling (build backend, D6). Standard-library
 `tomllib`, `sqlite3` and `argparse` need no approval. The **bundled Python
-runtime** (D5) is also approved: a relocatable standalone build that
-`agentfly init -g` installs for the hook client. Ask before adding anything else.
+runtime** (D5) is also approved: a relocatable standalone build (the kind uv
+downloads) that `agentfly init -g` installs for the hook client. Ask before adding anything else.
 
 JavaScript (npm **only inside `ui/`**; commit `ui/dist`, ignore
 `ui/node_modules` via `ui/.gitignore`): vite, react, react-dom, typescript,
@@ -114,11 +114,11 @@ on GitHub: the lead folds them into a card.
   can switch it off or name it. R1 and its sensitive-name lists are the first entry of
   `agentfly/rules/default.toml`; only its engine-only outbound cases stay in Python
   (`command_class = "outbound"`).
-- `agentfly/recorder/rulefile.py` reads and checks a rules file (it never raises and reads only
-  the home folder, through `expanduser`); `rules.py` composes the rules. Every reader of a rules
-  file goes through `rulefile.load_bytes`, which also holds the program's minimum for R1 (D27,
-  SPEC §5: a file may widen R1 or reword it, never weaken it) and the work budget.
-  `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
+- `agentfly/recorder/rulefile.py` reads and checks a rules file (it never raises and reads no
+  environment variable but `HOME`, through `expanduser`); `rules.py` composes the rules. Every
+  reader of a rules file goes through `rulefile.load_bytes`, which also holds the program's
+  minimum for R1 (D27, SPEC §5: a file may widen R1 or reword it, never weaken it) and the work
+  budget. `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
   in `Session.triggers`. No flag or variable moves the active file or who must own it: tests set
   `rulefile.ACTIVE_RULES` and `rulefile.ACTIVE_OWNER_UID`.
 
@@ -188,5 +188,5 @@ change it. Each card adds the lines for its own tests there, not in this file.
   Recorded only: `afterFileEdit`, `sessionStart`, `sessionEnd`, `subagentStart`. The session
   key is `conversation_id`.
 - Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}` on stdout, exit
-  code 0 (exit 2 also blocks; invalid JSON blocks).
-- Log the real input before coding against it. Seen so far, by version: HOOKS.md "Observed on Cursor".
+  0 (exit 2 and invalid JSON also block).
+- What Cursor sent, by version: HOOKS.md "Observed on Cursor".

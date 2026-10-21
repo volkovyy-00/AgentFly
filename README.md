@@ -329,13 +329,18 @@ AgentFly is a first layer of defence, not a sandbox.
   already gone to the AI model.
 - It sees only what Cursor hooks report. Cursor's built-in web tools may
   bypass the hooks.
-- It **fails open**: if the recorder is not running, every action is allowed
-  (with a warning on stderr).
+- If the recorder is not running, the hook client applies the **offline guard**
+  instead of allowing everything. It denies outbound commands (`curl`, `wget`,
+  `ssh`, `git push` and the like, and every inline `python -c` or `node -e`;
+  `localhost` and private addresses are allowed) and anything that touches
+  AgentFly's own files (R0). It allows the rest and logs that it did. Each deny
+  says to run `agentfly start`.
 - A determined agent can get around it, for example by hiding the file name
   (`cat .en*`), sending data through DNS, or through a tunnel to a local
   address.
-- Rule R0 (protect the recorder's own files and process) is specified but not
-  built yet.
+- Rule R0 blocks the agent from touching AgentFly's own files (config, history,
+  hook registration, installed program) or from stopping, wiping or
+  uninstalling it (SPEC.md section 5).
 
 > [!WARNING]
 > Do not delete or move `hooks/hook.py` or `agentfly/hook_client.py` while `.cursor/hooks.json` still
@@ -358,19 +363,19 @@ a separate credentials file for a test database, and are skipped otherwise.
 
 | Path | Contents |
 |---|---|
-| `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, fails open |
-| `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it until `agentfly init` |
+| `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, applies the offline guard when the recorder is down |
+| `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it for development, while `agentfly init -g` installs a copy of the client and uses no shim |
 | `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, local history (`localstore.py`, `api/`), Neo4j store, file locations (`paths.py`) |
-| `agentfly/cli/` | The `agentfly` command (`serve`, `start`, `stop`, `status`, `doctor`, `init`, `uninstall`, `wipe`) |
+| `agentfly/cli/` | The `agentfly` command (`serve`, `start`, `stop`, `status`, `doctor`, `init`, `uninstall`, `wipe`, `rules`) |
 | `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
 | `examples/` | `fake_agent.py` and its `scenario.json`: scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
 
 ## Documentation
 
-- [SPEC.md](SPEC.md): the v1 specification and the source of truth (the code is
-  still the hackathon version and moves toward it; the old spec is in git
-  history: `git show 3871787:docs/archive/SPEC-hackathon.md`)
+- [SPEC.md](SPEC.md): the v1 specification and the source of truth (the code
+  moves toward it card by card; the hackathon spec is in git history:
+  `git show 3871787:docs/archive/SPEC-hackathon.md`)
 - [HOOKS.md](HOOKS.md): hook wiring, real Cursor input fields and server details
 - [AGENTS.md](AGENTS.md): working rules for coding agents on this repo
 

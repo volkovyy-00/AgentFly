@@ -81,10 +81,6 @@ Hook command after install (prefer project venv when present):
 Do **not** use `uv run` in the hook path (slow cold start). `timeout` in
 `hooks.json` is `1` second.
 
-**Before Checkpoint A / demos:** turn Cursor’s “ask before running commands”
-style prompts **OFF** (hackathon demo setup,
-`git show 3871787:docs/archive/SPEC-hackathon.md` §8).
-
 ---
 
 ## Events we wire
@@ -383,7 +379,7 @@ waits on the driver.
 | Command cleaning (`agentfly/recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
 | Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
 | Page (trail at `/`, lane graph at `/?view=graph`) + `/api/steps` | **Done** (memory; Host only) |
-| R0 protect recorder | Not done |
+| R0 protect recorder | **Done** (in code, `agentfly/recorder/rules.py`; SPEC §5) |
 
 ---
 

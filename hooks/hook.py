@@ -2,7 +2,8 @@
 """Thin shim: runs agentfly/hook_client.py.
 
 `./install.sh` and existing `.cursor/hooks.json` files point here. Stdlib only, so it runs on
-any Python, installed package or not. It goes away with V3 (`agentfly init -g`).
+any Python, installed package or not. It stays: `./install.sh` wires it for development, while
+`agentfly init -g` installs a copy of the hook client and uses no shim.
 """
 
 from __future__ import annotations
