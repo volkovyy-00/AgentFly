@@ -41,6 +41,7 @@ SAVE_DELAY_S: float = 10.0
 # D29: a note idle this long is dropped (one day past history's 28), unless it still matters.
 IDLE_DROP_SECONDS: float = 29 * 24 * 3600
 SWEEP_EVERY_SECONDS: float = 3600.0
+STOP_WAIT_S: float = 10.0  # how long a clean stop waits for a write that is already running
 
 
 def _text(value: Any) -> str:
@@ -323,11 +324,16 @@ class SessionStore:
         if thread is not None:
             self._stop.set()
             self._wake.set()
-            thread.join(timeout=10.0)
+            thread.join(timeout=STOP_WAIT_S)
+        if not self._lock.acquire(timeout=STOP_WAIT_S):  # a write stuck on the disk: do not hang
+            logger.warning("session notes: last save skipped (a write is stuck)")
+            return
         try:
-            self.flush()
+            self._write_locked()
         except Exception as exc:  # noqa: BLE001
             logger.warning("session notes: last save failed (%s)", type(exc).__name__)
+        finally:
+            self._lock.release()
 
     def _write_later(self) -> None:
         failing: bool = False

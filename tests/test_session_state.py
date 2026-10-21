@@ -452,6 +452,17 @@ def test_at_start_the_counter_comes_from_history() -> None:
         assert saved is not None and saved.next_step == 7  # this step was number 6
 
 
+def test_a_swept_chat_still_numbers_its_next_step_after_what_history_holds() -> None:
+    """The sweep runs first at start, so the floor of a dropped note is not lost with it."""
+    write_notes(data_dir() / "sessions.json", note("old", last_active=time.time() - 40 * DAY))
+    make_history(data_dir() / ls.DB_NAME, {"old": 5})
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
+        app_module.graph_store.enabled = False
+        assert app_module.get_store().get("old") is None
+        post(client, event("old", command="ls", cwd=""))
+        assert next_step_of(app_module.get_store(), "old") == 7  # this step was number 6
+
+
 # ---------------------------------------------------------------- old notes (D29)
 
 
@@ -707,3 +718,31 @@ def test_one_failing_sweep_does_not_end_the_hourly_job(
 
     monkeypatch.setattr(app_module.get_store(), "sweep", flaky)
     assert wait_for(lambda: len(calls) >= 3)
+
+
+def test_housekeeping_that_fails_at_start_does_not_stop_the_recorder(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(*_args: Any) -> Any:
+        raise RuntimeError("odd data")
+
+    monkeypatch.setattr(SessionStore, "sweep", broken)
+    monkeypatch.setattr(app_module, "next_orders", broken)
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
+        app_module.graph_store.enabled = False
+        assert post(client, event("A", command="ls", cwd="")).json() == {"permission": "allow"}
+    assert "sweep skipped" in caplog.text and "step counters skipped" in caplog.text
+
+
+@wallclock
+def test_a_clean_stop_does_not_wait_for_ever_for_a_stuck_write(
+    tmp_path: Path, clock: Clock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(sessions_module, "STOP_WAIT_S", 0.1)
+    store = SessionStore(tmp_path / "s.json", clock=clock)
+    store.observe(event("A"))
+    started = time.monotonic()
+    with store._lock:  # a writer stuck in a write that never ends
+        store.close()
+    assert time.monotonic() - started < 5
+    assert "write is stuck" in caplog.text
