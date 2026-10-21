@@ -45,7 +45,15 @@ from tests.install_helpers import (
 )
 from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
-from tests.test_install_cursor import ADVICE, MALFORMED_PLISTS, NEWER, NEWEST, write_version
+from tests.test_install_cursor import (
+    ADVICE,
+    MALFORMED_PLISTS,
+    NEWER,
+    NEWEST,
+    REFUSED,
+    write_plist,
+    write_version,
+)
 from tests.test_install_packages import (
     BAD,
     REAL_TOOL_ENVIRONMENT,
@@ -544,24 +552,15 @@ def test_a_version_older_than_the_newest_listed_only_warns_about_the_events(worl
     assert world.levels("fail") == set()
 
 
-UNCOMPARABLE = {
-    "a beta tag": "3.26.13-beta",
-    "letters": "x.y",
-    "10,000 digits": "9" * 10_000,
-    "a newline": "3.26\n13",
-    "an escape sequence": "3.26\x1b[2K",
-}
-
-
-@pytest.mark.parametrize("version", UNCOMPARABLE.values(), ids=UNCOMPARABLE.keys())
-def test_a_version_that_is_not_dotted_numbers_is_one_plain_unchecked_line(
-    world: World, version: str
-) -> None:
-    write_version(world.layout, version)
-    line = world.results()["events"]
-    assert line.level == "warn" and "could not be checked" in line.text
-    assert "\n" not in line.text and "\x1b" not in line.text and len(line.text) < 400
-    assert world.levels("fail") == set()
+def test_every_refused_version_is_one_plain_unchecked_events_line(world: World) -> None:
+    context = world.context()  # one install, the version swapped in the context (it is frozen)
+    for name, version in REFUSED.items():
+        line = checks.check_events(replace(context, cursor_version=version))
+        assert line.level == "warn" and "could not be checked" in line.text, name
+        assert "\n" not in line.text and "\x1b" not in line.text and len(line.text) < 400, name
+        # a version that cannot be compared is not "not newer"
+        said = "plain dotted version number" if not cursor.parts(version) else "is not newer than"
+        assert said in line.text, name
 
 
 def test_a_newer_cursor_warns_unchecked_on_the_events_line_and_nothing_fails(world: World) -> None:
@@ -590,13 +589,13 @@ def test_a_newer_cursor_with_an_event_the_newest_does_not_accept_fails_the_event
 HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
 
 
-@pytest.mark.parametrize("name", HOOKS_LOG_FAULTS)
 def test_on_a_newer_cursor_a_log_that_rejects_the_hooks_still_fails_the_hooks_log_line(
-    name: str, world: World
+    world: World,
 ) -> None:
     write_version(world.layout, NEWER)
-    FAULTS[name][1](world)
-    assert world.levels("fail") == {"hooks-log"}
+    for name in HOOKS_LOG_FAULTS:  # each writes the whole log again, so one install serves all
+        FAULTS[name][1](world)
+        assert world.levels("fail") == {"hooks-log"}, name
 
 
 def test_on_a_newer_cursor_a_log_that_loaded_the_hooks_passes_the_hooks_log_line(
@@ -612,11 +611,8 @@ def test_an_unreadable_cursor_version_only_warns(world: World) -> None:
     assert world.results()["events"].level == "warn" and world.levels("fail") == set()
 
 
-@pytest.mark.parametrize("data", MALFORMED_PLISTS.values(), ids=MALFORMED_PLISTS.keys())
-def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(
-    world: World, data: bytes
-) -> None:
-    (world.layout.cursor_app / "Contents" / "Info.plist").write_bytes(data)
+def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:
+    write_plist(world.layout, MALFORMED_PLISTS["a mismatched tag"])  # `plistlib` raises ExpatError
     assert world.results()["events"].level == "warn" and world.levels("fail") == set()
 
 

@@ -19,19 +19,25 @@ NEWER = "3.26.13"
 ADVICE = "quit and reopen Cursor, then run `agentfly doctor`"
 
 
-def write_version(layout: Layout, version: str) -> None:
+def plist_bytes(version: str) -> bytes:
     """An Info.plist holding `version`; binary, because XML cannot hold a control character."""
+    return plistlib.dumps({"CFBundleShortVersionString": version}, fmt=plistlib.FMT_BINARY)
+
+
+def write_plist(layout: Layout, data: bytes) -> None:
     plist = layout.cursor_app / "Contents" / "Info.plist"
     plist.parent.mkdir(parents=True, exist_ok=True)
-    plist.write_bytes(
-        plistlib.dumps({"CFBundleShortVersionString": version}, fmt=plistlib.FMT_BINARY)
-    )
+    plist.write_bytes(data)
+
+
+def write_version(layout: Layout, version: str) -> None:
+    write_plist(layout, plist_bytes(version))
 
 
 def check_version(tmp_path: Path, version: str, *events: str) -> str:
     layout = make_layout(tmp_path)
     write_version(layout, version)
-    return cursor.check(layout.cursor_app, events) if events else cursor.check(layout.cursor_app)
+    return cursor.check(layout.cursor_app, events or cursor.EVENTS)
 
 
 @pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
@@ -108,6 +114,11 @@ def test_a_version_is_shown_with_its_control_characters_escaped(tmp_path: Path) 
         check_version(tmp_path, "3.26\x1b[2K")
 
 
+def test_a_version_that_cannot_be_compared_is_not_called_not_newer(tmp_path: Path) -> None:
+    with pytest.raises(InstallError, match=r"Cursor 3\.26\.13-beta is not a plain dotted version"):
+        check_version(tmp_path, "3.26.13-beta")
+
+
 def test_a_refusal_names_the_listed_versions_and_the_newest(tmp_path: Path) -> None:
     with pytest.raises(InstallError, match=r"Cursor 1\.0\.0 .*\(3\.24\.12, 3\.25\.9\).*3\.25\.9"):
         check_version(tmp_path, "1.0.0")
@@ -129,18 +140,14 @@ def test_a_plist_that_cannot_be_read_is_one_refusal_not_a_traceback(
     tmp_path: Path, data: bytes
 ) -> None:
     layout = make_layout(tmp_path)
-    plist = layout.cursor_app / "Contents" / "Info.plist"
-    plist.parent.mkdir(parents=True)
-    plist.write_bytes(data)
+    write_plist(layout, data)
     with pytest.raises(InstallError, match="cannot read the Cursor version"):
         cursor.check(layout.cursor_app)
 
 
 def test_a_plist_without_a_version_is_refused(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
-    plist = layout.cursor_app / "Contents" / "Info.plist"
-    plist.parent.mkdir(parents=True)
-    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": 3}))
+    write_plist(layout, plistlib.dumps({"CFBundleShortVersionString": 3}))
     with pytest.raises(InstallError, match="no Cursor version string"):
         cursor.check(layout.cursor_app)
 

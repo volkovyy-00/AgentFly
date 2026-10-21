@@ -50,6 +50,8 @@ from tests.test_install_cursor import (
     NEWER,
     NEWEST,
     REFUSED,
+    plist_bytes,
+    write_plist,
     write_version,
 )
 from tests.test_install_packages import (
@@ -261,21 +263,30 @@ def test_a_listed_cursor_installs_with_no_warning(
     assert record is not None and record["cursor_version"] == version
 
 
-REFUSED_BY_INIT = {**REFUSED, **{f"plist: {name}": "" for name in MALFORMED_PLISTS}}
+# One of each kind: `tests/test_install_cursor.py` runs every version and plist through `check`.
+REFUSED_BY_INIT = {
+    **{
+        name: plist_bytes(REFUSED[name])
+        for name in (
+            "older than every listed",
+            "a beta tag",
+            "10,000 characters of newer parts",
+            "an embedded newline",
+            "an escape sequence",
+        )
+    },
+    "a plist that is not XML": MALFORMED_PLISTS["a control character reference"],
+}
 
 
-@pytest.mark.parametrize("name", REFUSED_BY_INIT)
+@pytest.mark.parametrize("plist", REFUSED_BY_INIT.values(), ids=REFUSED_BY_INIT.keys())
 def test_init_refuses_any_other_version_in_one_line_before_the_password(
-    name: str,
+    plist: bytes,
     system: Layout,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    if name.startswith("plist: "):
-        plist = system.cursor_app / "Contents" / "Info.plist"
-        plist.write_bytes(MALFORMED_PLISTS[name.removeprefix("plist: ")])
-    else:
-        write_version(system, REFUSED[name])
+    write_plist(system, plist)
     monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
     assert main(["init", "-g"]) == 1
     captured = capsys.readouterr()

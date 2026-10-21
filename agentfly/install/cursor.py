@@ -45,8 +45,7 @@ KNOWN_VERSIONS: dict[str, frozenset[str]] = {
 ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly doctor`."
 
 _DOTTED = re.compile(r"[0-9]+(?:\.[0-9]+)*")  # [0-9]: `\d` also takes other scripts' digits
-_MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared at all
-_SHOWN = 40  # how much of a version a message prints
+_MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, and printed cut
 
 
 def installed_version(app: Path) -> str:
@@ -66,19 +65,19 @@ def installed_version(app: Path) -> str:
     return version
 
 
-def parts(version: str) -> tuple[int, ...] | None:
-    """The numbers of a dotted version, or None: the length is tested before anything else."""
+def parts(version: str) -> tuple[int, ...]:
+    """The numbers of a dotted version, or () when it is not one: the length is tested first."""
     if len(version) > _MAX_LENGTH or not _DOTTED.fullmatch(version):
-        return None
+        return ()
     return tuple(int(part) for part in version.split("."))
 
 
 def newest_verified() -> str:
-    return max(KNOWN_VERSIONS, key=lambda version: parts(version) or ())
+    return max(KNOWN_VERSIONS, key=parts)
 
 
 def listed() -> str:
-    return ", ".join(sorted(KNOWN_VERSIONS, key=lambda version: parts(version) or ()))
+    return ", ".join(sorted(KNOWN_VERSIONS, key=parts))
 
 
 def _newer(mine: tuple[int, ...], than: tuple[int, ...]) -> bool:
@@ -87,18 +86,20 @@ def _newer(mine: tuple[int, ...], than: tuple[int, ...]) -> bool:
     return mine + (0,) * (width - len(mine)) > than + (0,) * (width - len(than))
 
 
-def verified_as(version: str) -> str | None:
-    """The listed version whose events `version` gets, or None when it is refused (D32).
+def stand_in(version: str) -> str | None:
+    """The newest listed version, whose events an unlisted `version` newer than it gets (D32)."""
+    newest = newest_verified()
+    mine = parts(version)
+    return newest if mine and _newer(mine, parts(newest)) else None
 
-    A listed version gets its own. One newer than the newest listed gets the newest's. One that is
-    older, lies between listed versions, or is not dotted numbers gets none.
+
+def verified_as(version: str) -> str | None:
+    """The listed version whose events `version` gets, or None when AgentFly refuses it.
+
+    A listed version gets its own, a newer one the newest's. One that is older, lies between
+    listed versions, or is not dotted numbers gets none.
     """
-    if version in KNOWN_VERSIONS:
-        return version
-    mine, newest = parts(version), newest_verified()
-    if mine is not None and _newer(mine, parts(newest) or ()):
-        return newest
-    return None
+    return version if version in KNOWN_VERSIONS else stand_in(version)
 
 
 def accepted_events(version: str) -> frozenset[str] | None:
@@ -107,20 +108,40 @@ def accepted_events(version: str) -> frozenset[str] | None:
     return KNOWN_VERSIONS[verified] if verified is not None else None
 
 
+def refusal(version: str) -> str:
+    """Why AgentFly refuses `version` (one `verified_as` gives None for), as a clause."""
+    newest = newest_verified()
+    if not parts(version):
+        return (
+            f"is not a plain dotted version number (like {newest}), so AgentFly cannot tell "
+            f"whether it is newer than {newest}"
+        )
+    return (
+        f"is not on AgentFly's list of verified versions ({listed()}) "
+        f"and is not newer than {newest}"
+    )
+
+
+def checked_against(version: str) -> str:
+    """A clause for a message about events: whose events an unchecked `version` stands on."""
+    stand = stand_in(version)
+    return f" (checked against {stand}'s events)" if stand else ""
+
+
 def shown(version: str) -> str:
     """`version` as a message may print it: cut, and each unprintable character escaped."""
-    cut = version if len(version) <= _SHOWN else version[:_SHOWN] + "\u2026"
+    cut = version if len(version) <= _MAX_LENGTH else version[:_MAX_LENGTH] + "\u2026"
     return packages.visible(cut)
 
 
 def warning(version: str) -> str | None:
     """The one line `init -g` prints for a version it accepts without having checked it."""
-    verified = verified_as(version)
-    if verified is None or verified == version:
+    stand = stand_in(version)
+    if stand is None:
         return None
     return (
         f"warning: Cursor {shown(version)} is newer than the newest version AgentFly has checked "
-        f"({verified}), so it registered {verified}'s events. If Cursor dropped one of them it may "
+        f"({stand}), so it registered {stand}'s events. If Cursor dropped one of them it may "
         f"ignore the whole hooks file. {ADVICE}"
     )
 
@@ -128,25 +149,17 @@ def warning(version: str) -> str | None:
 def check(app: Path, events: tuple[str, ...] = EVENTS) -> str:
     """The installed Cursor version if AgentFly accepts it and every event, else InstallError."""
     version: str = installed_version(app)
-    accepted: frozenset[str] | None = accepted_events(version)
-    if accepted is None:
-        newest = newest_verified()
-        if parts(version) is None:
-            raise InstallError(
-                f"Cursor {shown(version)} is not a plain dotted version number (like {newest}), "
-                f"so AgentFly cannot tell whether it is newer than {newest}; nothing was written."
-            )
+    verified: str | None = verified_as(version)
+    if verified is None:
         raise InstallError(
-            f"Cursor {shown(version)} is not on AgentFly's list of verified versions ({listed()}) "
-            f"and is not newer than {newest}; nothing was written. A new AgentFly release adds a "
-            "version once it is checked."
+            f"Cursor {shown(version)} {refusal(version)}; nothing was written. "
+            "A new AgentFly release adds a version once it is checked."
         )
-    unknown: list[str] = [event for event in events if event not in accepted]
+    unknown: list[str] = [event for event in events if event not in KNOWN_VERSIONS[verified]]
     if unknown:
-        verified = verified_as(version)
-        against = "" if verified == version else f" (checked against {verified}'s events)"
         raise InstallError(
-            f"Cursor {shown(version)} does not accept the event(s) {', '.join(unknown)}{against}; "
-            "nothing was written (one unknown event disables the whole hooks file)."
+            f"Cursor {shown(version)} does not accept the event(s) {', '.join(unknown)}"
+            f"{checked_against(version)}; nothing was written "
+            "(one unknown event disables the whole hooks file)."
         )
     return version
