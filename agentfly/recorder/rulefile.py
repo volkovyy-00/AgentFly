@@ -1354,7 +1354,7 @@ def _with_minimum(parsed: RuleFile) -> RuleFile:
     read (no rules to judge), or one whose R1 already has an error of its own. Another rule's
     error does not stop it, so `rules check` prints every problem at once.
     """
-    own: str = f"rule {MARK_RULE}"
+    own: str = f"rule {MARK_RULE}:"  # the colon: `rule R10: …` is another rule's
     if parsed.errors and (
         not parsed.rules
         or any(e.startswith((own, WORK_ERROR)) for e in parsed.errors)  # a file too heavy to run is

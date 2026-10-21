@@ -237,6 +237,17 @@ def test_another_rules_error_does_not_hide_a_weak_r1() -> None:
     assert any(e.startswith("rule R1") for e in errors) and any("bad" in e for e in errors)
 
 
+@pytest.mark.parametrize("other", ["R10", "R1x", "R2"])
+def test_a_broken_rule_whose_id_starts_like_r1_does_not_hide_r1s_errors(other: str) -> None:
+    """Final audit A4: `rule R10: …` once counted as an error of R1's own."""
+    broken = f'\n[[rule]]\nid = "{other}"\nkind = "match"\nseverity = "block"\nmessage = "x"\n'
+    renamed = rulefile.default_text().replace('id = "R1"', 'id = "secret-then-send"', 1)
+    for text in (default_as("warn"), renamed):  # R1 gentler, or R1 missing
+        errors = rulefile.load_bytes((text + broken + 'event = ["shell"]\n').encode()).errors
+        assert any(e.startswith(f"rule {other}:") for e in errors), errors
+        assert any(e.startswith("rule R1:") for e in errors), errors
+
+
 def test_a_broken_r1_is_reported_once_and_not_also_as_missing() -> None:
     text = BASE.replace('kind = "after_then"', 'kind = "after_then"\ncolour = "red"', 1)
     errors = rulefile.load_bytes(text.encode()).errors
