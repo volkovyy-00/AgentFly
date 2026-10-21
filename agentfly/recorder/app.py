@@ -299,8 +299,9 @@ def apply_rules(payload: dict[str, Any]) -> tuple[dict[str, str], str]:
     """Mark, decide, memory + Neo4j enqueue, persist session. Returns (permission, verdict)."""
     store: SessionStore = get_store()
     stored: Session = store.observe(payload)  # links to a parent chat (D21 A), then the session
-    # The floating patterns of this hook share one budget (V5b-fix2). Nothing in this block awaits
-    # or starts a task: the meter is a context variable and must stay with this hook.
+    # The floating patterns and command lists of this hook share one budget (V5b-fix2). Nothing in
+    # this block awaits or starts a task: the meter is a context variable and must stay with this
+    # hook.
     with one_hook() as meter:
         stored, session, marks = store.apply_mark(payload, stored)  # also marks parent chats
         verdict, rule_id = decide(payload, session)

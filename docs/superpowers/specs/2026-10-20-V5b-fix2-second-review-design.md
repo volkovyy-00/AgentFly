@@ -4,16 +4,17 @@ Card: V5b-fix2 (`git show main:docs/briefs/V5b-fix2.md`, read at main 67efc8d). 
 2026-10-20 (`git show main:docs/DECISIONS.md`). Intent:
 `docs/superpowers/intents/2026-10-20-V5b-fix2-second-review-intent.md`. Branch `ag-v5b-rules-file`.
 Author: the worker, for the owner.
-Status: revision 3 (2026-10-20). It follows the owner's changes in the brief at 67efc8d: the meter
-covers floating patterns only, in one pass, with a budget priced from measured time; an unfinished
-block rule denies and records no trigger; an unfinished warn on a shell command asks; D27 is a
-structural rule with no automaton; R1 and `path_except` refuse floating patterns. Awaiting the
-lead's check. Revision 2 (approved by the owner earlier the same day) is superseded on these points.
-Status: revision 4 (2026-10-21): command lists are metered (owner). After Task 6's gate found
-accepted command-list files at 0.27 to 2 s a hook, the owner decided that command-list entry checks
-count against the same per-hook budget as floating patterns (§4.2, §4.5, §4.7), with a `rules check`
-line for a heavy list (§4.4); an unfinished highlight is still skipped. The brief's "meter only
-floating patterns" is superseded on this point; the brief is the lead's to edit.
+Status: revision 4 (2026-10-21), awaiting the lead's check. Revision 4 changes one point of
+revision 3: command lists are metered (owner). After Task 6's gate found accepted command-list files
+at 0.27 to 2 s a hook, the owner decided that command-list entry checks count against the same
+per-hook budget as floating patterns (§4.2, §4.5, §4.7), with a `rules check` line for a heavy list
+(§4.4); an unfinished highlight is still skipped. The brief's "meter only floating patterns" is
+superseded on this point; the brief is the lead's to edit. Revision 3 (2026-10-20) followed the
+owner's changes in the brief at 67efc8d: the meter in one pass, with a budget priced from measured
+time; an unfinished block rule denies and records no trigger; an unfinished warn on a shell command
+asks; D27 is a structural rule with no automaton; R1 and `path_except` refuse floating patterns.
+Revision 2 (approved by the owner earlier the same day) is superseded on these points. The final
+review's fixes (2026-10-21: a walk stops at the budget, §4.2; "may name", §4.3) change no decision.
 
 The brief and the intent are the authority; this document says how. Where it would differ from the
 brief, the builder stops and asks. "My call" marks a choice the owner did not make.

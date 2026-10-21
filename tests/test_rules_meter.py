@@ -388,7 +388,7 @@ def test_a_run_of_probes_is_charged_one_step_for_four(monkeypatch: pytest.Monkey
         assert not many.matches(shell("cat " + " ".join(f"w{i}" for i in range(8))), {})
     assert charged == [2]
     charged.clear()
-    with metered(Meter(left=0)):  # fewer than four probes charge nothing, even on a spent meter
+    with metered(Meter(left=0)):  # fewer than four probes charge nothing; 0 left is not below 0
         assert not command_clause(*[("cat", f"k{i}") for i in range(3)]).matches(long_line, {})
     assert charged == []
 
