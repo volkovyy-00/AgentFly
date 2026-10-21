@@ -8,8 +8,10 @@ Cursor.app's Info.plist, which the agent can rewrite, so it is compared only as 
 
 from __future__ import annotations
 
+import os
 import plistlib
 import re
+import stat
 from pathlib import Path
 
 from agentfly.install import InstallError, packages
@@ -45,6 +47,23 @@ ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly do
 
 _DOTTED = re.compile(r"[0-9]+(?:\.[0-9]+)*")  # [0-9]: `\d` also takes other scripts' digits
 _MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, and printed cut
+MAX_PLIST_BYTES = 1 << 20  # Cursor's Info.plist is a few KB; the agent can write a huge one
+
+
+def _read_plist(plist: Path) -> bytes:
+    """The bytes of a plain file of at most MAX_PLIST_BYTES, else ValueError or OSError.
+
+    `O_NONBLOCK` lets a named pipe open and then fail the type check, where a plain `open` would
+    wait for a writer for ever (the same care as the rules file's, `rulefile._trust_fd`).
+    """
+    fd = os.open(plist, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("not a regular file")
+        data = handle.read(MAX_PLIST_BYTES + 1)
+    if len(data) > MAX_PLIST_BYTES:
+        raise ValueError("too large")
+    return data
 
 
 def installed_version(app: Path) -> str:
@@ -53,11 +72,11 @@ def installed_version(app: Path) -> str:
     The agent can write the file, and plistlib raises whatever a malformed one makes it raise
     (ExpatError, LookupError, IndexError, TypeError, RecursionError, ...): whatever it is, the
     answer is a version or this one error, so `init -g` and `doctor` never end in a traceback.
+    A named pipe or a file over MAX_PLIST_BYTES is refused unread, so neither can stall them.
     """
     plist: Path = app / "Contents" / "Info.plist"
     try:
-        with plist.open("rb") as handle:
-            info = plistlib.load(handle)
+        info = plistlib.loads(_read_plist(plist))
         version = info["CFBundleShortVersionString"]
     except Exception as exc:
         raise InstallError(

@@ -36,6 +36,7 @@ from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
 from tests.install_helpers import (
     TOOL_DISTS,
+    call_unless_it_hangs,
     fake_python_tar,
     make_cursor_app,
     make_layout,
@@ -584,6 +585,9 @@ def test_a_newer_cursor_with_an_event_the_newest_does_not_accept_fails_the_event
     add_unknown_event(world)
     events = world.results()["events"]
     assert events.level == "fail" and "afBogusEvent" in events.text and NEWEST in events.text
+    assert world.levels("fail") == {
+        "events"
+    }  # `hooks` filters by the same list, as for a listed one
 
 
 HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
@@ -609,6 +613,14 @@ def test_on_a_newer_cursor_a_log_that_loaded_the_hooks_passes_the_hooks_log_line
 def test_an_unreadable_cursor_version_only_warns(world: World) -> None:
     (world.layout.cursor_app / "Contents" / "Info.plist").unlink()
     assert world.results()["events"].level == "warn" and world.levels("fail") == set()
+
+
+def test_a_named_pipe_for_the_plist_does_not_hang_doctor(world: World) -> None:
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    plist.unlink()
+    os.mkfifo(plist)
+    results = call_unless_it_hangs(world.results, plist)
+    assert results["events"].level == "warn" and world.levels("fail") == set()
 
 
 def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:

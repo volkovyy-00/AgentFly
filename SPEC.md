@@ -704,10 +704,11 @@ up with every Cursor release, so a version newer than the newest listed one,
 compared part by part and as numbers, is accepted: it gets the newest listed
 version's events, `init -g` warns once, and the hash record keeps the real
 version as of the install or repair that wrote it. A version that is not newer
-and not listed is still refused, and so is anything that is not dotted numbers
-(it is read from Cursor.app's `Info.plist`, which the agent can rewrite, and is
-only ever compared). The risk is accepted:
-if that Cursor dropped one of the events, it would ignore the whole hooks file
+and not listed is still refused, and so is anything that is not dotted numbers of
+at most 32 characters (it is read from Cursor.app's `Info.plist`, which the agent
+can rewrite, and is only ever compared; a named pipe or a file over 1 MiB there is
+refused unread). The risk is accepted: if that Cursor dropped one of the events,
+it would ignore the whole hooks file
 (S5), and protection would be off with no sign inside Cursor. So `doctor` fails
 when Cursor's Hooks log shows AgentFly's hooks rejected or not loaded, and
 `init -g` and `doctor` both say: after any Cursor update, quit and reopen

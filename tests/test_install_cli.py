@@ -200,20 +200,23 @@ def test_a_newer_cursor_installs_the_newest_versions_entries_and_warns_once(
     assert record is not None and record["cursor_version"] == NEWER  # the real one
 
 
-def test_a_newer_cursor_gets_the_same_hooks_file_as_the_newest_listed_one(
+def test_a_newer_cursor_gets_the_same_hooks_file_and_output_as_the_newest_listed_one(
     system: Layout,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     first_install_with(system, tmp_path, monkeypatch, NEWER)
-    newer_bytes = system.hooks_file.read_bytes()
+    newer_bytes, newer_out = system.hooks_file.read_bytes(), capsys.readouterr().out
     installer.uninstall(system)
-    assert not system.hooks_file.exists() or b"agentfly" not in system.hooks_file.read_bytes()
-    capsys.readouterr()
     first_install_with(system, tmp_path / "again", monkeypatch, NEWEST)
+    listed_out = capsys.readouterr().out
     assert system.hooks_file.read_bytes() == newer_bytes
-    assert warnings_in(capsys.readouterr().out) == []
+    assert len(warnings_in(newer_out)) == 1 and warnings_in(listed_out) == []
+    # the two runs print the same lines, but for the one warning
+    assert [line for line in newer_out.splitlines() if not line.startswith("warning:")] == (
+        listed_out.splitlines()
+    )
 
 
 def test_a_newer_cursor_on_an_intact_install_warns_once_and_asks_for_no_password(
@@ -297,6 +300,19 @@ def test_init_refuses_any_other_version_in_one_line_before_the_password(
     assert "Traceback" not in captured.err and "\x1b" not in captured.err
     assert len(captured.err) < 600
     assert not system.system_root.exists() and not system.hooks_file.exists()
+
+
+def test_init_refuses_a_named_pipe_for_the_plist_instead_of_waiting_before_the_password(
+    system: Layout, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plist = system.cursor_app / "Contents" / "Info.plist"
+    plist.unlink()
+    os.mkfifo(plist)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert call_unless_it_hangs(lambda: main(["init", "-g"]), plist) == 1
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and "cannot read the Cursor version" in err
+    assert not system.system_root.exists()
 
 
 def test_init_as_root_installs_from_the_piped_archive(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import plistlib
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 
 from agentfly.install import InstallError, cursor
 from agentfly.install.layout import Layout
-from tests.install_helpers import make_cursor_app, make_layout
+from tests.install_helpers import call_unless_it_hangs, make_cursor_app, make_layout
 
 # The newest version AgentFly has checked, and one that is newer than it. The card that lists
 # NEWER changes this one line.
@@ -107,6 +108,15 @@ def test_any_other_version_is_refused_in_one_line_and_nothing_is_written(
     assert len(message) < 500  # a 10,000-character version is cut, not printed
 
 
+def test_a_dotted_version_is_compared_up_to_32_characters_and_refused_beyond(
+    tmp_path: Path,
+) -> None:
+    longest = "9." * 15 + "99"  # 32 characters, numerically newer than anything listed
+    assert len(longest) == 32 and check_version(tmp_path, longest) == longest
+    assert cursor.verified_as(longest) == NEWEST
+    assert cursor.verified_as(longest + "9") is None  # 33 characters: not compared at all
+
+
 def test_a_version_is_shown_with_its_control_characters_escaped(tmp_path: Path) -> None:
     with pytest.raises(InstallError, match=r"Cursor 3\.26\\n13 "):
         check_version(tmp_path, "3.26\n13")
@@ -160,6 +170,30 @@ def test_a_plist_that_cannot_be_read_is_one_refusal_not_a_traceback(
     write_plist(layout, data)
     with pytest.raises(InstallError, match="cannot read the Cursor version"):
         cursor.check(layout.cursor_app)
+
+
+def padded_plist(size: int) -> bytes:
+    """A plist that holds NEWER and is exactly `size` bytes long."""
+    base = {"CFBundleShortVersionString": NEWER, "pad": ""}
+    return plistlib.dumps({**base, "pad": "x" * (size - len(plistlib.dumps(base)))})
+
+
+def test_a_plist_is_read_up_to_the_size_limit_and_refused_one_byte_over(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    write_plist(layout, padded_plist(cursor.MAX_PLIST_BYTES))
+    assert cursor.check(layout.cursor_app) == NEWER
+    write_plist(layout, padded_plist(cursor.MAX_PLIST_BYTES + 1))
+    with pytest.raises(InstallError, match="cannot read the Cursor version"):
+        cursor.check(layout.cursor_app)
+
+
+def test_a_named_pipe_in_place_of_the_plist_is_refused_not_waited_for(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    plist = layout.cursor_app / "Contents" / "Info.plist"
+    plist.parent.mkdir(parents=True)
+    os.mkfifo(plist)  # an open() with no writer would block for ever
+    with pytest.raises(InstallError, match="cannot read the Cursor version"):
+        call_unless_it_hangs(lambda: cursor.check(layout.cursor_app), plist)
 
 
 def test_a_plist_without_a_version_is_refused(tmp_path: Path) -> None:
