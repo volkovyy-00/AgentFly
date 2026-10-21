@@ -1162,13 +1162,58 @@ def parse(text: str) -> RuleFile:
 # refused (the packaged default runs), however it spells its lists. Widening and rewording are fine.
 # Measured against this, not against `default.toml`, so a wider later default never refuses an
 # older file. A local exception (a company host) waits for the reviewed path (V7).
+
+
+@dataclass(frozen=True)
+class Family:
+    """One bullet of SPEC section 5's secret file names, as the shape of a name (case folded).
+
+    A name is in the family when it starts with `start`, ends with `end`, is at least as long as
+    both together and does not end with one of `unless`. An `exact` family is the one name `start`,
+    and its `end` is that same name, so the rule "a prefix of `start`, a suffix of `end`" reads the
+    same on every family. `bullet` is SPEC's wording, for messages.
+    """
+
+    bullet: str
+    start: str
+    end: str
+    exact: bool = False
+    unless: tuple[str, ...] = ()
+
+    def has(self, folded: str) -> bool:
+        """Is this case-folded file name one SPEC section 5 counts as secret under this bullet?"""
+        if self.exact:
+            return folded == self.start
+        return (
+            folded.startswith(self.start)
+            and folded.endswith(self.end)
+            and len(folded) >= len(self.start) + len(self.end)
+            and not folded.endswith(self.unless)
+        )
+
+
+# SPEC section 5's name bullets, in its order; the one place that says what counts as secret.
+SECRET_FAMILIES: tuple[Family, ...] = (
+    Family("any file named .env", ".env", ".env", exact=True),
+    Family(
+        "any file starting with .env. (for example .env.local), except ones ending in .example, "
+        ".sample or .template",
+        ".env.",
+        "",
+        unless=(".example", ".sample", ".template"),
+    ),
+    Family("any file ending in .pem", "", ".pem"),
+    Family("any file ending in .key", "", ".key"),
+    Family("any file whose name starts with id_rsa (but not .pub)", "id_rsa", "", unless=(".pub",)),
+    Family("any file whose name starts with credentials", "credentials", ""),
+)
 # The two exceptions SPEC section 5 makes: `.env.*` but not a template, `id_rsa*` but not a public
 # key. An exception in R1 may be no wider, so it starts with one of the two and ends with its own
 # endings: then it cannot match `credentials-prod.example` or any other name SPEC counts as secret,
-# which no list of sample names could prove for a pattern.
-EXEMPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (".env", (".example", ".sample", ".template")),
-    ("id_rsa", (".pub",)),
+# which no list of sample names could prove for a pattern. Derived from the table; a pattern is
+# written `.env*.example`, so it starts with `.env.` less its dot.
+EXEMPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
+    (family.start.removesuffix("."), family.unless) for family in SECRET_FAMILIES if family.unless
 )
 _FAMILIES: tuple[str, ...] = (".env", "x.pem", ".pem", "k.key", ".key", "id_rsa", "credentials")
 _TAILS: tuple[str, ...] = (
@@ -1204,17 +1249,9 @@ _FOLDERS: tuple[str, ...] = ("", "cfg/", "a/b/", "/Users/me/proj/", "~/")
 
 
 def spec_secret(name: str) -> bool:
-    """Does SPEC section 5 count this file *name* as a secret? (Written from its bullets.)"""
+    """Does SPEC section 5 count this file *name* as a secret? (Read from `SECRET_FAMILIES`.)"""
     folded: str = name.casefold()
-    if folded == ".env" or (
-        folded.startswith(".env.") and not folded.endswith((".example", ".sample", ".template"))
-    ):
-        return True
-    if folded.endswith((".pem", ".key")):
-        return True
-    if folded.startswith("id_rsa") and not folded.endswith(".pub"):
-        return True
-    return folded.startswith("credentials")
+    return any(family.has(folded) for family in SECRET_FAMILIES)
 
 
 def _secret_names() -> tuple[str, ...]:

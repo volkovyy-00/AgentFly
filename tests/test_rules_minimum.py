@@ -9,7 +9,9 @@ exceptions), never on how a list is spelled, so `.env*` in place of `.env` and `
 
 from __future__ import annotations
 
+import random
 import re
+import string
 from pathlib import Path
 
 import pytest
@@ -273,3 +275,79 @@ def test_the_minimum_does_not_read_default_toml() -> None:
     start = source.index("the minimum for R1 (D27)")
     end = source.index("---- files", start)
     assert not re.search(r"default_(text|path)|load_default", source[start:end])
+
+
+# ---------------------------------------------------------------- one table for "secret" (6.1)
+
+
+def _spec_secret_before(name: str) -> bool:
+    """`rulefile.spec_secret` as it was before the table (kept here as the second opinion)."""
+    folded = name.casefold()
+    if folded == ".env" or (
+        folded.startswith(".env.") and not folded.endswith((".example", ".sample", ".template"))
+    ):
+        return True
+    if folded.endswith((".pem", ".key")):
+        return True
+    if folded.startswith("id_rsa") and not folded.endswith(".pub"):
+        return True
+    return folded.startswith("credentials")
+
+
+def _grid_without_the_filter() -> set[str]:
+    """The old `_secret_names` grid before it kept only what `spec_secret` counts."""
+    names = {family + tail for family in rulefile._FAMILIES for tail in rulefile._TAILS}
+    for stem in (".env.", "id_rsa", "credentials"):
+        names |= {stem + char for char in rulefile._SWEEP}
+    for char in rulefile._SWEEP:
+        names |= {char + ".pem", char + ".key", f".env.{char}x"}
+    return names | set(rulefile._LITERALS)
+
+
+def _random_names(count: int, seed: int) -> list[str]:
+    rng = random.Random(seed)
+    pieces = [".env", ".", "pem", "key", "id_rsa", "credentials", "pub", "example"]
+    pieces += [".sample", ".template"]
+    out: list[str] = []
+    for _ in range(count):
+        parts: list[str] = []
+        for _ in range(rng.randint(1, 4)):
+            if rng.random() < 0.7:
+                part = rng.choice(pieces)
+            else:
+                part = "".join(rng.choices(string.ascii_letters + "_-", k=rng.randint(1, 3)))
+            parts.append(part.upper() if rng.random() < 0.1 else part)
+        out.append("".join(parts))
+    return out
+
+
+def test_spec_secret_from_the_table_answers_as_before() -> None:
+    random_names = _random_names(20_000, seed=2026)
+    names = [*rulefile.SECRET_NAMES, *sorted(_grid_without_the_filter()), *random_names]
+    assert len(names) > 20_300
+    wrong = [n for n in names if rulefile.spec_secret(n) != _spec_secret_before(n)]
+    assert wrong[:5] == []
+    # the comparison is not vacuous: the random names fall on both sides, and in every family
+    answers = [_spec_secret_before(n) for n in random_names]
+    assert 2_000 < sum(answers) < len(answers) - 2_000
+    for family in rulefile.SECRET_FAMILIES:
+        assert any(family.has(n.casefold()) for n in random_names), family.bullet
+
+
+def test_the_table_holds_the_six_families_of_spec_section_5_in_order() -> None:
+    shape = [(f.start, f.end, f.exact, f.unless) for f in rulefile.SECRET_FAMILIES]
+    assert shape == [
+        (".env", ".env", True, ()),
+        (".env.", "", False, (".example", ".sample", ".template")),
+        ("", ".pem", False, ()),
+        ("", ".key", False, ()),
+        ("id_rsa", "", False, (".pub",)),
+        ("credentials", "", False, ()),
+    ]
+    assert all(f.bullet and f.start == f.start.casefold() for f in rulefile.SECRET_FAMILIES)
+    assert len({f.bullet for f in rulefile.SECRET_FAMILIES}) == 6
+    # derived from the table, with the value the exception-shape check has always had
+    assert rulefile.EXEMPTIONS == (
+        (".env", (".example", ".sample", ".template")),
+        ("id_rsa", (".pub",)),
+    )
