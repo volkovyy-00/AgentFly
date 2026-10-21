@@ -736,7 +736,7 @@ minimum, not `default.toml`, so a wider later default never refuses an older fil
 exception (e.g. a company host) waits for V7's reviewed path.
 
 ## D28. `init -g` refreshes an unedited rules file
-Status: **approved (2026-10-20), as written** · Cards: V5b-fix (install), V7 (merging edited files) · Tested by: V5b-fix
+Status: **approved (2026-10-20), as written** · Cards: V5b-fix (install), V7 (merging edited files) · Tested by: V5b-fix, V5b-fix2
 The package carries the sha256 of every `default.toml` it has shipped. `init -g` replaces the active
 `rules.toml` only when its hash is in that set (the owner never edited it), with the checked bytes of
 the current default (bytes checked against the package's RECORD hash and parsed cleanly), and says a recorder restart applies it;

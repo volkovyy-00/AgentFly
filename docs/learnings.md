@@ -65,6 +65,9 @@ When a lesson becomes a standing rule, move it to AGENTS.md (workers) or docs/ro
 - **A worker session near 700K tokens drifts; start a fresh one for fixes.** The branch and report carry the knowledge (V5b, 2026-10-20). `dispatch.sh` refuses an existing branch, so the owner starts a fix worker by hand in the old worktree.
 - **state-check reads card IDs as letter+digits(+one letter).** A row `- V5b-fix · …` read as no card in flight; list a fix round under its card ID and name its own brief and report (2026-10-20).
 - **Check an advisor's premise against the briefs.** The lead argued D28 from "V5c's rules reach no install"; V5c ships them off by default, so the real need was default-list fixes (brainstorm-advisor, 2026-10-20).
+- **No main commits between building `merge/<batch>` and its `--ff-only`.** 2026-10-21: a STATE commit after building merge/v5b broke the fast-forward; rebuilt it on the new main. Write STATE's waiting item without the merge SHA, commit, then build.
+- **CodeQL's PR check fails on alerts in changed lines, old behaviour included.** PR #7: three `py/path-injection` on rewritten stat calls. Read them as check-run annotations (`! gh api repos/<repo>/check-runs/<id>/annotations`); the PR-ref alert list came back empty. The owner dismisses; the lead cannot.
+- **Time the reviewers' worst shapes yourself before merging.** V5b re-trial: every criterion passed (60 folders deep, 116 ms), yet 300 words of 1,022-char paths took 633 ms, past the client's wait.
 
 ## Cursor facts
 - **Test a made-up hook event in its own file, or check Cursor's Hooks log at once.** S5's first chat was void: one fake event made Cursor drop the whole hooks.json silently (2026-10-16).

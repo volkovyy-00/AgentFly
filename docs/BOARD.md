@@ -108,6 +108,7 @@ V7 and V9 can run in parallel.
 - V3c ✅ 2026-10-19 · docs/reports/V3c.md · merged 07a8d7f · package check before sudo (links, extra files, own RECORD), same-version rebuild and upgrade ask (owner 2026-10-19), root -I -S -B on bundled Python, R0 guards tool env and uv/pipx/brew, doctor package line; leftovers → fix card · body: git show 441ddd4:docs/BOARD.md
 - F7 ✅ 2026-10-20 · docs/reports/F7.md · merged ae5dd0e · pytest-xdist check 37–44% of serial; ci.yml (main pushes and PRs, macos-15, read-only, SHA-pinned) pinned by tests/test_ci_workflow.py; CI green on arm64 (PR #6); leftovers → fix card · body: git show ae5dd0e:docs/BOARD.md
 - F10 ✅ 2026-10-20 · docs/reports/F10.md · merged 5239e96 · 7 review defects fixed; leftovers: escape RECORD/METADATA names in package-check messages (proposed card), 5 s hang guards without @wallclock (accepted), AGENTS.md Testing lines for CI fail-not-skip and hand-typed sudo (lead) · body: git show 5239e96:docs/BOARD.md
+- V5b ✅ 2026-10-21 · docs/reports/V5b.md, V5b-fix.md, V5b-fix2.md · merged de0aee7 (PR #7) · changed D27 (structural R1 minimum, no floating R1 patterns), D28, D30 (new; V5c) · two fix rounds; per-hook rules limit (owner 2026-10-21: command lists metered); CodeQL path alerts dismissed (stat only) → V5d; CR1 → F11; A3 → V5c · body: git show aabeec7:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -137,13 +138,13 @@ V7 and V9 can run in parallel.
   - The release workflow builds the UI once and makes the wheel and sdist. It
     has no publish step until you approve publishing.
 
-### V5b · Rules file and severities: R1 in TOML, warn and highlight, `rules check` / `rules test`, `GET /api/rules`
-- **Brief:** `docs/briefs/V5b.md` (authoritative; pass 2 against dd44029) · dispatched 2026-10-20 (worktree ag-v5b-rules-file, from df617fe), alongside F10. Split from V5 (owner 2026-10-18). "Block npm publish after .env" ships in the default rules (owner 2026-10-18).
-- **Lane:** backend, after V3c · **Depends on:** V5a ✅, V3a ✅, F5 ✅, V3b, V3c
-
 ### V5c · S3 rule additions and the owner's ten rules, with bypass tests
 - **Brief:** `docs/briefs/V5c.md` (authoritative). Split from V5b (owner 2026-10-18). The ten S3 rules ship as an example file, off by default (owner 2026-10-18).
 - **Lane:** backend, after V5b · **Depends on:** V5b
+
+### V5d · Hook speed on long commands and V5b leftovers
+- **Brief:** not written (owner 2026-10-21: merge V5b now, follow-up card). Scope from the V5b re-trial: check as text that a word stays inside the project before any disk lookup (`clean.py` `_project_relative`, `store.py` `_is_file_in`; 300 × 1,022-char paths took 633 ms; also CodeQL's three path alerts and `/net` automount look-ups); charge `_command_hit`'s program walk; pin `FLOAT_STEPS`; `lock_problems` vs a trusted 0640 edited rules.toml.
+- **Lane:** backend, ∥ wave 1 (file overlap with F11 checked when the brief is written) · **Depends on:** V5b ✅
 
 ### V7 · Rule change flow: draft, check, diff, backtest, `sudo` approve
 - **Owner:** worker-backend
