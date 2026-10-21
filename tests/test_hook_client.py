@@ -16,6 +16,8 @@ import pytest
 
 import agentfly.hook_client as client_module
 from agentfly.recorder import paths
+from agentfly.recorder.app import hook_answer
+from agentfly.recorder.rules import Rule
 from tests.helpers import (
     REPO,
     StubRecorder,
@@ -423,6 +425,40 @@ def test_lone_surrogates_are_replaced_before_they_are_sent(
 
 def shell_event(command: str = "ls") -> dict[str, Any]:
     return {"hook_event_name": "beforeShellExecution", "command": command, "conversation_id": "a"}
+
+
+ASK_TEXT = "Linting right after an install? \u201cquoted\u201d, caf\u00e9, \\ back\nslash"
+
+
+@pytest.mark.parametrize("what", ["both messages", "no messages"])
+def test_a_shell_warn_reaches_cursor_as_the_recorders_ask_answer_unchanged(
+    what: str, client: Path, isolated_home: Path
+) -> None:
+    """A warn on a shell command makes Cursor pause and ask (D11). The recorder's answer is built
+    by `hook_answer`; the client must print exactly that object, one line, nothing else."""
+    write_token(isolated_home)
+    rule = Rule("warn-lint", "warn", ASK_TEXT, lambda action, session: True)
+    answer = hook_answer("warned", rule, "beforeShellExecution")
+    assert answer["permission"] == "ask" and answer["user_message"] == ASK_TEXT
+    if what == "no messages":
+        answer = {"permission": "ask"}
+    with StubRecorder(answer) as stub:
+        result = run_hook(client, isolated_home, shell_event("ruff check"), port=stub.port)
+    assert result.returncode == 0
+    assert result.stdout == (json.dumps(answer, ensure_ascii=True) + "\n").encode("ascii")
+    assert json.loads(result.stdout) == answer
+
+
+def test_a_warn_on_another_event_is_a_plain_allow_to_cursor(
+    client: Path, isolated_home: Path
+) -> None:
+    write_token(isolated_home)
+    rule = Rule("warn-read", "warn", "careful", lambda action, session: True)
+    answer = hook_answer("warned", rule, "beforeReadFile")
+    assert answer == {"permission": "allow"}
+    with StubRecorder(answer) as stub:
+        result = run_hook(client, isolated_home, {**EVENT, "file_path": "/w/a"}, port=stub.port)
+    assert result.stdout == b'{"permission": "allow"}\n'
 
 
 def test_cursor_with_an_event_argument_and_the_no_argument_form_answer_the_same(

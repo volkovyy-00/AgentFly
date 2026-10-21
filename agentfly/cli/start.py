@@ -23,8 +23,12 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 def run(args: argparse.Namespace) -> int:
     for line in service.start():
         print(line)
-    if service.wait_for_health() is not None:
+    answer = service.wait_for_health()
+    if answer is not None:
         print(f"recorder answers on 127.0.0.1:{service.HEALTH_PORT}")
+        problem = answer.get("rules_problem")
+        if problem:  # it runs, on the packaged default rules; say so where the owner looks
+            print(f"agentfly start: rules: {' '.join(str(problem).split())}", file=sys.stderr)
         return 0
     where = "" if service.detect_manager().brew else f"; see {service.log_path()}"
     print(

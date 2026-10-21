@@ -286,7 +286,84 @@ instead of a third kind. Each is one named pure check in Python:
   program in the list (covers `| sh`, `sh -c "$(curl …)"`, `bash <(curl …)`).
 
 "After reading `.env`" means the whole `.env` family, as in the sensitive-file
-list below. The field names beyond these are fixed when the rules card is built.
+list below. The three additions are not built yet (card V5c); the rest of this
+section's file format is what V5b built.
+
+**The file format (V5b).** `schema = 1`, one `[lists]` table of named arrays of
+strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
+
+| Field | Where | Meaning |
+|---|---|---|
+| `id`, `kind`, `severity`, `message` | every rule | `kind` is `match` or `after_then`; `severity` is `block`, `warn` or `highlight`; `id` is unique and never `R0` |
+| `event` | `match`, and inside `after` / `then` | a list of `read` (`beforeReadFile`), `shell` (`beforeShellExecution`) and `write` (`preToolUse` of the Write tool) |
+| `path`, `path_except` | same | the name of a list of path patterns. A pattern without `/` matches the file *name* (`.env`, `*.pem`); with `/` the whole path (`**` crosses folders, `~/` is the home folder). In a shell command a path condition looks at every word, and at the text after the last `=` or `@` of a word |
+| `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order |
+| `command_class` | same, `event = ["shell"]` | a class built into the program: `outbound` (R1's definition, below) |
+| `host_not_in` | same, `event = ["shell"]`, beside a `command` or `command_class` | the name of a list of host names; true when the command names a host not in it |
+| `after`, `then` | `after_then` | tables of the fields above; the follow-up fires only after the `after` table matched once in this chat |
+| `steps`, `expect` | `[[rule.test]]` | steps are `"read: PATH"`, `"shell: COMMAND"`, `"write: PATH"`; `expect` is what the last step gets: `block`, `warn`, `highlight` or `allow` |
+
+When several rules fire, the strictest wins (block, then warn, then highlight); a
+tie goes to the rule that comes first in the file. R0 is always first and only in
+code. A trigger is kept per chat like R1's mark (it survives a restart and
+reaches subagents and parents, D21) and counts before the check on the same
+command.
+
+**Which file is in force.** The recorder reads `/Library/Application Support/AgentFly/rules.toml`
+once, at start. `init -g` writes it when it is missing, replaces it when it is byte for byte a
+default the package once carried (nobody edited it; the package keeps the hash of every default
+it has shipped, D28; a recorder restart applies the new one), keeps an edited file with a one-line
+notice, and `uninstall` removes it. What `init -g` writes is the packaged default as read once,
+compared with the hash in the wheel's `RECORD` and parsed under the checks below. Without the file
+(a developer `serve`) the recorder runs the default file inside the package.
+
+The recorder believes the file only if it is a plain file, not a link, owned by root, that group
+and others cannot write (D3): the agent's user can write none of these. A file that cannot be
+used is not loaded: the default runs, and `/health` (`rules_problem`), `GET /api/rules`,
+`agentfly doctor`, `agentfly start` and `agentfly status` say why. That covers a file that is not
+trusted, a syntax error, an unknown field, an entry for R0, an R1 below the minimum, and more
+matching work than the limit.
+
+**The least R1 may say (D27).** R0 is in code; R1 is in the file, so the program holds R1's
+minimum too, and a file whose R1 is missing or weaker is refused like an entry for R0. R1 must be
+an `after_then` rule with severity `block`. Its `after` fires on `read` and on `shell`, with a
+name list that marks at least every file *name* the "R1: secret, then network" bullets below count
+as secret, and exceptions no wider than theirs: the two SPEC makes, a name that starts `.env` and
+ends `.example`, `.sample` or `.template`, and one that starts `id_rsa` and ends `.pub`, never a
+folder (so an exception cannot match `credentials-prod.example`, which is a secret). Its `then` is exactly `event = ["shell"]` with
+`command_class = "outbound"`, and nothing else. The names are judged by the shape of the
+patterns, not on sample names: for each of those bullets the list holds one pattern without `/`,
+`?` or `[` that is the bullet's one name (`.env`) or has a single `*` between a part the bullet's
+fixed start begins with and a part its fixed end ends with, the two together no longer than `.env`
+for that bullet (so `.env*` in place of `.env` and `.env.*`, `.*`, `*env`, `*pem` and
+`cred*` are fine, while `.env.?*`, `?*.pem`, `.env*.env` and a union such as `.env.[!s]*` plus
+`.env.s` are refused). R1 holds no floating folder pattern (`.ssh/**`; an anchored `~/.ssh/**` is
+fine), because R1 is never cut short by the rules limit. Both are measured against the program's
+own minimum and not against `default.toml`, so a wider later default never refuses an older file. Widening the
+lists and rewording the message are allowed. A local exception (a company host) waits for the
+reviewed change path (V7).
+
+**What a file may cost.** Every path pattern of every clause is tried on every word of a shell
+command, inside the hook client's 0.5 s wait, so two limits keep a hook short. When the file is
+read, it may ask for at most 200 units of matching work in all: a clause with path patterns 2, a
+pattern without `/` 1, a pattern with `/` 4 plus 12 for each `**` (an unanchored pattern has one
+more) plus 1 for each folder or name past the fourth, R1's `after` twice because it runs twice. The
+packaged default uses 31. When a hook runs, the work that grows with the command, floating folder
+patterns (one that may start at any folder, such as `secrets/**`) and command-list entries, shares
+one budget for the hook: the *rules limit* (about 20 ms of matching). A rule the budget cannot
+finish is unfinished: an unfinished `block` rule denies the action with the rules-limit message and
+records no trigger, an unfinished `warn` asks on a shell command, and an unfinished `highlight` is
+skipped; `/health` (`rules_limit`) and the recorder's log say so. R0 and R1 are never cut short: R1
+may hold no floating folder pattern, and no rule's `path_except` may hold one. Measured on a Mac,
+a 300-word command with paths 60 folders deep takes 22-116 ms through the whole hook under any file
+`rules check` accepts. A much longer command (hundreds of words of about 1,000 characters each) can
+still pass the client's wait and fall to the offline guard (a known gap).
+
+`agentfly rules check [FILE]` prints every problem of a file, each naming its rule, and exits 1 if
+there is one; `agentfly rules test [FILE]` runs every inline test (the rule that wins must be the
+rule the test belongs to) and exits 1 if there is none to run. With no FILE both read the file the
+recorder would load, and read it the way the recorder does, owner and mode included; a FILE is a
+draft and only needs to be well formed, unless it is the active file itself.
 
 ### R0: protect AgentFly itself (in code only)
 
@@ -329,8 +406,8 @@ The exact guard list is fixed when the R0 card is built.
 - any file ending in `.pem` or `.key`;
 - any file whose name starts with `id_rsa` (but not `.pub`) or `credentials`.
 
-These lists move into the rules file (G2); their exact field names are fixed
-when the rules card is built.
+These lists are in the default rules file (G2) as `secret_names` and
+`secret_names_ok`; R1 is its first rule.
 
 **Marking a session** ("has seen a secret"):
 - when the file-read tool opens a sensitive file; or
@@ -673,7 +750,12 @@ One action can fire two hooks: a general `preToolUse` and a specific one
   rule text goes in both messages (where the event accepts both), because one of
   them has been reported ignored in some Cursor versions. `agent_message` adds: "Do not retry with another tool
   or language. Stop and tell the user."
-- **Warn on a shell command:** `{"permission":"ask","user_message":"…"}`.
+- **Warn on a shell command:** `{"permission":"ask","user_message":"…","agent_message":"…"}`,
+  the rule text in both; `agent_message` adds: "If the user skips this, do not retry with another
+  tool or language."
+- **Rules limit:** an unfinished `block` rule (section 5, "What a file may cost") is a deny and an
+  unfinished `warn` on a shell command an `ask`, both with the rules-limit message in place of the
+  rule's; R0's and R1's answers never change.
 - **Allow, warn on other events, and highlight:** plain allow; the page carries
   the mark.
 

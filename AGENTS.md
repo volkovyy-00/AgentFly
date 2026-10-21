@@ -31,6 +31,18 @@ The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
 - Dev-only wiring (writes gitignored `.cursor/hooks.json`): `./install.sh`. With `init -g`
   also installed, every event arrives twice.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
+- Rules: `agentfly rules check [FILE]` and `agentfly rules test [FILE]` (no FILE: the file the
+  recorder would load, the active `/Library/Application Support/AgentFly/rules.toml` if it exists,
+  else `agentfly/rules/default.toml`). The recorder reads the active file once, at start, and only
+  believes it if it is a plain file owned by root that group and others cannot write (D3); the
+  active file is read that way by `doctor` and by these commands too, other files are drafts.
+  `rules test` exits 1 for a file with no tests. A file must keep R1 at least as strong as the
+  program's minimum (D27) and stay under the work limit (`rulefile.MAX_WORK`, 200 units: the packaged
+  default uses 31; a name pattern is 1, a slash pattern 4 plus 12 per `**` plus 1 per part past the
+  fourth).
+  `init -g` writes the file when missing, replaces it when it is byte for byte a default the
+  package once carried (D28; the hashes are `rulefile.SHIPPED_DEFAULTS`, the new one goes in
+  whenever `default.toml` changes), and keeps an edited one; a recorder restart applies a change.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; the `env` keeps byte-code out (another worker's `.pyc` would
   break `test_nothing_is_written_next_to_the_client`). The flags stay on the command line,
@@ -91,12 +103,23 @@ CI: GitHub Actions, `.github/workflows/ci.yml` only, on a hosted macOS runner (o
   or delete data (SPEC section 11). A new route is a read-only GET and gets a
   line in the API whitelist test in the same change.
 - Rule shape: `Rule(id, severity, message, check)`. `severity` is `block`,
-  `warn` or `highlight`. `check` is a small named pure function
-  `(action, session) -> bool`. A rule *kind* is one such function in Python; the
-  rules file (TOML) only supplies a kind's parameters and named lists. Do not
-  build an expression language: a new kind is Python, a new rule is a file
-  entry. R0 lives in code and no rules file can switch it off. Until the rules
-  card lands, rules are one list in `agentfly/recorder/rules.py`.
+  `warn` or `highlight`; the strictest firing rule wins and a tie goes to file order.
+  `check` is a small named pure function `(action, session) -> bool`. A rule *kind*
+  (`match`, `after_then`) is such a function in Python; the rules file (TOML) only
+  supplies a kind's parameters and named lists. Do not build an expression language:
+  a new kind is Python, a new rule is a file entry. R0 lives in code and no rules file
+  can switch it off or name it. R1 and its sensitive-name lists are the first entry of
+  `agentfly/rules/default.toml`; only its engine-only outbound cases stay in Python
+  (`command_class = "outbound"`). `agentfly/recorder/rulefile.py` reads and checks the
+  file (it never raises and reads no environment); `rules.py` composes the rules. Every reader of
+  a rules file goes through `rulefile.load_bytes`, which also holds the program's minimum for R1
+  (D27: an `after_then` block whose `after` marks every name SPEC §5 counts as secret on read and
+  shell, with exceptions only SPEC §5's two (`.env…` ending `.example`/`.sample`/`.template`,
+  `id_rsa…` ending `.pub`), and whose `then` is exactly outbound shell; widening and rewording are
+  fine) and the work budget.
+  `Session.marked` is R1's trigger; every other `after_then` rule's trigger is its id
+  in `Session.triggers`. No flag or variable moves the active file or who must own it: tests set
+  `rulefile.ACTIVE_RULES` and `rulefile.ACTIVE_OWNER_UID`.
 
 ## Hook client rules
 (`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is a shim for it
@@ -202,7 +225,11 @@ lines for them (R0 and normalisation: V5).
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
   README and HOOKS.md name `/` as the trail.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
-  under a temporary HOME and runs `agentfly serve` and `agentfly-hook`.
+  under a temporary HOME and runs `agentfly serve` and `agentfly-hook`. From the wheel it also:
+  checks and tests the default rules the wheel carries (`rules check` / `rules test` on that file);
+  replays the demo with byte-identical answers (R1 comes from the file inside the wheel); lists
+  `R0, R1, npm-publish-after-env` at `/api/rules` with no `rules_problem`; and shows that the
+  wheel's RECORD lists `agentfly/rules/default.toml` with the hash `init -g` checks it against.
 - Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
   README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
   `?all=1` returns more than the default last 10; `GET /` serves the React
@@ -234,16 +261,194 @@ lines for them (R0 and normalisation: V5).
   steps. `tests/test_memory.py` covers `replace`.
 - Step fields and health (`tests/test_step_fields.py`, V8b): after the `demo/scenario.json` replay
   the blocked step has `rule_text` (R1's message) and `user_message` / `agent_message` equal to
-  the deny answer's, and the allowed steps have none of the three; in watch-only mode (set in
-  process) a warned step has `rule_text` and no messages, and its answer is a plain allow; a merged
+  the deny answer's, and the allowed steps have none of the three; a warned step on a shell
+  command (answer `ask`) carries the answer's messages, a warned step on another event has
+  `rule_text` and no messages (its answer is a plain allow); a merged
   pair shows the messages of the half whose verdict it shows, the earlier half on a tie (R0 against
   R1, either order); `/health` sends `last_hook_at` (`null` after start, UTC ms, set by a request
   that passed the token check, not by a 401); `?all=1` sends `marked_order` as `?limit=1` does. The
   messages reach neither `history.db` nor Neo4j (`tests/test_localstore.py`, `tests/test_store.py`,
   marker strings), and the deny answer's bytes are pinned.
+- Rules file (`tests/test_rulefile.py`, `tests/test_rules_load.py`, `tests/test_rules_cli.py`,
+  `tests/test_rules_api.py`, V5b): R1's name lists answer as the old `is_sensitive` did over about
+  6,000 generated names; every kind of fault is refused with a message naming the rule (and
+  `tomllib` oddities such as deep nesting never crash); the recorder runs the default when the
+  active file is missing or invalid and says why in `/health` (`rules_problem`, only then) and
+  `GET /api/rules`; a damaged packaged default leaves only R0, does not stop `uninstall` from
+  importing and stops the recorder from starting (with a refused active file too, and then the
+  reason says the default is damaged, not in force); `rules check` / `rules test` exit 1 and name the
+  rule. Tests never read the real rules file: the conftest redirects `rulefile.ACTIVE_RULES` and
+  sets `rulefile.ACTIVE_OWNER_UID` to the test's own user (and the umask to 022), and
+  `RECORDER_CODE` does both in a child recorder. A path pattern with a `*` or a `[...]` and no
+  character a name must contain (`[!x]*`, `*[a-z]*`) is refused as matching every path. A
+  floating pattern (V5b-fix2: a run of parts with `**` on both sides) in any rule's `path_except`
+  (`.ssh/**`, `a/**/b`, `**/x/**`, in a `match` rule and in an `after_then`'s `after`) is refused
+  with a message naming the rule; `~/.ssh/**` and a name load. `rules check` loads a file whose
+  `path` holds a floating pattern and prints one `warn:` line for it, and one for a command list
+  whose heaviest bucket weighs over 20, once per list per rule (eleven entries `cat a0 bJ` weigh
+  22 and give a line, ten weigh 20 and give none; the packaged default has no lint at all)
+  (`tests/test_rulefile.py`, `tests/test_rules_cli.py`).
+- Trusted file (`tests/test_rules_trust.py`, V5b-fix): a link (also a dangling one), a file that is
+  not the owner's, one group or others can write, a named pipe and a folder are each refused: the
+  default runs and `/health`, `/api/rules`, `doctor`, `agentfly start` / `status` (as one line) and
+  `rules check` / `rules test` with no FILE say why; the reason line is at most 400 characters and
+  always ends with what runs instead; `rules check FILE` is a draft check unless FILE is the
+  active file; a child recorder says it over HTTP; a fresh process shows the owner is root.
+  V5b-fix2: `rulefile.trust_problem` is the recorder's trust test alone (the same open, the same
+  wording for each kind above, no read, no descriptor left open; none for modes 0644, 0640, 0600
+  and 0444); `rules check LINK` and `rules test LINK`, where LINK points at the active file, judge
+  the active file and name its path, not the link (a group-writable one is refused as that);
+  `rules check` calls the active path "the active file" given itself or through a link.
+- R1 minimum (`tests/test_rules_minimum.py`, D27): the packaged default passes; about thirty
+  weakened files (R1 missing, as a match, warn or highlight, `after` on one event, `then` with a
+  condition, lists that miss names, exceptions for a literal name, a file type or a folder) are
+  each valid TOML refused with an error that starts `rule R1`, by `rules check` (exit 1) and by the
+  recorder (the default runs); `.env*` for `.env` and `.env.*`, extra names, no exceptions, a
+  reworded message and extra rules load; another rule's error does not hide R1's (also one whose
+  id starts like it, `R10` or `R1x`), a broken R1 is
+  not also "missing" (also when the fault is in its `after`, its `then` or an inline test). The
+  check does not read `default.toml`.
+  V5b-fix2 (`tests/test_rules_minimum.py`, `tests/r1_grid.py`): the names are judged by the shape
+  of R1's patterns, not on sample names. SPEC §5's six bullets are one table
+  (`rulefile.SECRET_FAMILIES`, which `spec_secret` also reads and which answers as the old
+  function did on the grid and 20,000 random names); `rulefile.covers` says a pattern covers a
+  bullet when it has no `/`, `?` or `[`, at most one `*`, and is the bullet's one name or `P*Q`
+  with P a prefix of its fixed start and Q a suffix of its fixed end (`.env`: no more than 4
+  characters in all); exceptions are judged by their own shape, not by the coverage rule. The
+  brief's three dodge files (a chain of `.env.[!s]*`, `credentials[!$ ]*`, `.env.` plus fifteen
+  `?`) are each refused by `rules check` (exit 1) with `rule R1: ` and the bullet; `.env*`, `.*`,
+  `*pem`, extra names and `~/.ssh/**` load. R1 with a floating folder pattern (`.ssh/**`,
+  `a/**/b`, `**/x/**`) is refused naming R1 and the recorder runs the default, while
+  `~/.aws/config`, `~/.aws/**` and `/etc/ssl/private/*` load; the packaged R1 never charges the
+  meter. `tests/r1_grid.py` keeps the old sample grid (SPEC's names in the shapes a list gets
+  wrong, in several places and as a shell word) as a second opinion: every accepted fixture
+  leaves no grid name unmarked. The brute force (seed 27) draws a thousand R1 name lists from
+  one covering shape per family, some swapped for one- or two-character edits of it or for a
+  fixed near miss (`.env.?*`, `.env*.env`, `.en*nv`) and some such added; for each list the file
+  accepts, every secret name built from a family's start, a middle of up to two characters and
+  its end (and each exempt ending) is marked, read and shell; at least 100 lists are accepted
+  and 100 refused (399 and 601 here).
+- Cost (`tests/test_rules_cost.py`, V5b-fix, V5b-fix2): what is worked out about a word is worked
+  out once (memo hit counts); the weights of `rulefile.pattern_work`; a file at the limit of each
+  shape is accepted and one unit over is refused naming the heaviest rule; a command entry is
+  looked up in a table made once per command. The work has two bounds, both counted, and each
+  test fails if its bound is taken away. A pattern that does not float makes at most `MAX_WORK`
+  times the command's distinct candidates (`rulefile.distinct_candidates`) pattern tests per hook,
+  also at 60 folders deep and on a partly parsed command, and never charges the meter (eight
+  shapes at the limit, among them anchored and tail-only slash patterns and the reviewer's two
+  files; the shapes that float are listed apart and a test says they float). A floating pattern
+  (the reviewer's block rule `d*/d*/d*/zN/**` five times is in `SHAPES`) stops at `FLOAT_STEPS`
+  plus one block's walk: through `Recorder.run` the hook answers the limit deny, the real steps
+  (`fnmatch.fnmatchcase` calls on the heavy parts plus the starts and bare `*` parts seen at
+  `_tally`) number 45,004 here, and with `_charge` a no-op it answers allow after 306,000. A walk
+  stops once it has spent what the meter had left when it began: one `.ssh/**` on a path 50,000
+  folders deep ends at most one start's work below 0 (final audit A1).
+  The price of a long compare and of a bare `*` is pinned. The whole hook (`apply_rules`, 300
+  words, paths 20 folders deep, `=` and `@` in the words; also 198 rules whose command lists all
+  name the program in the command) is under the client's own 0.5 s wait (`@wallclock`, best of
+  three; well under it here, so a loaded machine passes). No other test bounds seconds.
+- Matcher (`tests/test_rules_matcher.py`, `tests/glob_oracle.py`, V5b-fix2): a slash pattern is
+  split at each `**` into a head, a tail and middle blocks, and only a pattern with a middle block
+  floats (`rulefile.floating`); the old walk is kept in `tests/glob_oracle.py`, and the new
+  matcher answers as it did on 20,000 seeded random patterns and paths (anchored or not, leading,
+  trailing and inner `**`, `*`, `?`, classes) and, through `Pattern.matches`, on `~/`, `/`, `..`,
+  `//` and mixed case (5,000 random compiled slash patterns too); a pattern that does not float
+  makes at most one `fnmatch` compare a part at depths 4, 20 and 60, and a bare `*` none; the
+  tail is checked before a middle block and the head before the tail; middle blocks keep their
+  order and do not overlap; the home folder is looked up once for a clause.
+- Meter and command index (`tests/test_rules_meter.py`, V5b-fix2): patterns that do not float
+  never charge (a meter's budget is the same after a 300-word command under the default, the
+  reviewer's two files and a 167-name list); a floating pattern charges `1 + n * m // 256` for an
+  `fnmatch` compare (`DIV`), and 1 for a start and for a bare `*`; past the budget `WorkLimit` is
+  raised and every later charge raises, and one walk stops at the budget however deep the path;
+  with no meter nothing is charged; a partly parsed command
+  is walked once per distinct candidate. The command index (a list is looked up by program, then
+  by the entry's rarest extra word) answers as the old loop on 3,000 seeded cases; a command
+  naming 200 listed programs makes at most 201 key look-ups; 198 rules of 200 `cat` entries on
+  150 `cat zN y` check no entry; a simple command is read once for all clauses of a hook.
+- Command lists count against the rules limit (`tests/test_rules_meter.py`,
+  `tests/test_rules_limit.py`, `tests/test_rules_cli.py`; owner 2026-10-21): a bucket of the index
+  is charged its weight (1 plus the words of each rest) before its first entry is read (ten
+  one-word rests weigh 20, and a meter of 19 reads none), and key probes cost a step for four
+  (8 probes charge 2; fewer than 4 make no charge, even on a spent meter). The bipartite shape
+  (198 block rules, each a list `cat aI bJ`, I below 20, J below 10, on 13 `;`-joined
+  `cat a0 .. a19 zK`) gives the limit deny, and the entry work counted at `_entry_follows` and
+  `_key_lookups` is at most `FLOAT_STEPS` plus one bucket (with `_charge` a no-op more than
+  `FLOAT_STEPS` entries are read); as warn it answers `ask` with the limit message, as highlight
+  allow with the rules in `meter.unfinished`; R0 and R1 answer as usual with those 198 rules
+  before R1. Real shapes are never charged (the default on `command(60)`; 198 times `cat wN` on
+  150 `cat zN y`; 198 times `cat w a0..a199` on 100 `cat w x`; 20 block rules of 15 entries like
+  `git push --force` on 75 `git push origin bK`), while 198 times `cat wN` on `command(60)` pays
+  only its probes (198 times 50 steps) and finishes. `rules check` prints one line for a heavy
+  list, none at weight 20 (see Rules file above).
+- Limit (`tests/test_rules_limit.py`, V5b-fix2): one hook shares one budget (`rules.one_hook()`
+  reads `rulefile.FLOAT_STEPS` at each call); an unfinished block rule gives the `rules limit`
+  deny, the limit message in both fields, unless R0 or R1 answers; R0's and R1's answers are the
+  same at the limit, also with the heavy rule placed before R1, and R1's mark is still set. An
+  unfinished warn on a shell command answers `ask` with the limit message, on any other event a
+  plain allow whose step shows `rules limit`; an unfinished highlight is skipped; an unfinished
+  trigger is recorded in no chat and no parent, and a restart judges the next command as if the
+  hook had not happened; a fired block before an unfinished one wins and one after it does not.
+  Outside a hook nothing is charged. A 167-name list on 300 words of 30-character names gets no
+  limit deny. `/health` has `rules_limit` only after a hit (a fresh start has the three keys
+  again); the line is cut to 400 characters with "and K more"; the log line names the chat and
+  the rule ids and holds no command text (and at most 80 characters of the chat id); a merged
+  pair with a limit half shows the limit rule; the limit message says `rules check` may name the
+  heavy rules. A trigger a chat holds only through the workspace fallback is evaluated again by
+  `mark`; a heavy command that leaves it unfinished and also performs the trigger action gets the
+  limit deny and nothing is recorded for that chat (it fails closed).
+- Long words (`tests/test_long_words.py`, V5b-fix2): a quoted word of 300 or 5,000 characters
+  (with and without `/`), 128 emoji, a program name as long and a Read `file_path` with a part
+  over the system's name limit each get the answer the short word gets, R1 still blocks after a
+  `.env` read, and the step reaches the history cleaned; the cleaner asks the system about no
+  word over 1,024 characters; the root itself is `.`, and `ws2` beside `ws` is outside it; a
+  lone surrogate or NUL makes a word not a path, an absolute path the system cannot encode (also
+  one macOS resolves, U+DC80..U+DCFF) is saved as its base name, and a base name that does not
+  encode is saved with U+FFFD for each lone surrogate, so a Read of `<ws>/x/\udcff` reaches the
+  history and `/api/steps` answers 200; a 60 kB program word naming a secret is not looked up;
+  a link loop never raises (shell word, Read and Write answer allow
+  and reach the history); `bash -c` with 300 paths 60 deep is cleaned as one word and is under
+  the client's wait (`@wallclock`). `tests/leak_cases.py` and `tests/test_clean.py` pass unedited.
+- Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
+  `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
+  `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
+- Severities and triggers (`tests/test_severities.py`, `tests/test_after_then.py`,
+  `tests/test_session_triggers.py`, `tests/test_npm_publish_entry.py`): the strictest rule wins in
+  every file order; a warn on a shell command answers `ask` with the text in both messages, a warn
+  elsewhere and every highlight answer `{"permission":"allow"}` (bytes pinned); the page and the
+  history show warned and highlighted steps; a trigger survives a restart, reaches subagents and
+  parents, is inherited for 30 minutes through the workspace fallback, never marks R1, and counts
+  before the check on the same command; `npm publish` after `cat .env` is denied, in a fresh chat
+  it is not.
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
   byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
-  repair and uninstall on a temporary root, the sudo command line.
+  repair and uninstall on a temporary root, the sudo command line. The rules file
+  (`tests/test_install_rules.py`) is written when missing, mode 644, from the packaged default as
+  read once, compared with the wheel's RECORD hash (the fake tool environment lists it) and parsed
+  under the recorder's checks; an unedited earlier default (each fixture) is replaced and the
+  message asks for a recorder restart; an edited file, valid or not, is kept with one notice line;
+  a default changed after the check, one that does not parse or is weak, or one RECORD does not
+  list stops the install before anything is written; a link or folder in its place is refused
+  before any repair, and in the unprivileged run before the password (`tests/test_install_cli.py`);
+  `uninstall` removes the file with the folder.
+  V5b-fix2 (`tests/test_install_rules.py`, `tests/test_install_cli.py`,
+  `tests/test_rules_trust.py`): the principle is that `init -g` writes only bytes it has checked
+  and never changes the trust of bytes it has not. Current bytes in a file that is not exactly
+  a regular file of the layout's owner at mode 0644 (`rules_state` `untrusted`: another owner,
+  mode 0664, mode 0600) are rewritten, the message names the reason and asks for a recorder
+  restart, and `status` counts it as work; this is stricter than the recorder, which loads a
+  root:admin 0640 file, so `doctor` may call fine a file `init -g` rewrites. A file an
+  unprivileged run cannot read is `unknown`, not `edited`, and root decides after the password.
+  An edited file is never written, chowned or chmodded: a trusted one gets the existing notice,
+  an untrusted one "kept your edited rules file ..., but the recorder will not read it: <reason>;
+  <what runs instead>", the reason being the recorder's own wording (`rulefile.trust_problem`).
+  An intact re-run prints the pinned "already installed and intact; nothing changed" and then
+  the notice, as the user with no password; with other repair work a group-writable edit stops
+  the repair (`assert_locked` fails closed) and the file is not touched. As the user, `init -g`
+  checks the packaged default before the password when it would write one (a damaged one stops
+  with no prompt, and an edited file that means none is written does not need it); a refresh of
+  the rules alone asks for a recorder restart and not a Cursor restart, one that changes more
+  still asks for both.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
@@ -258,7 +463,11 @@ lines for them (R0 and normalisation: V5).
   own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
   Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
-  file itself has not been seen).
+  file itself has not been seen). The `rules` line warns on a missing rules file and on an
+  unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
+  link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
+  rejected the file (the default is in force), asks for a restart after a fix, and never fails
+  because the recorder is down. An edited file that started from an older default is ok.
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
   its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
   20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by
@@ -308,8 +517,9 @@ lines for them (R0 and normalisation: V5).
   - Helper POSTs sanitized JSON to `http://127.0.0.1:8787/hook` with
     `X-Recorder-Token` (from `~/.config/agentfly/token`); offline guard if
     the server is down, slow or answers 401/403.
-  - R1 (`agentfly/recorder/rules.py`): mark on sensitive read/shell word, then block
-    outbound sends; sessions in `~/.local/share/agentfly/sessions.json`.
+  - R1 (first entry of `agentfly/rules/default.toml`, engine in `agentfly/recorder/rules.py`):
+    mark on a sensitive read/shell word, then block outbound sends; sessions in
+    `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
   - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrived on
     `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it from 3.25.9, see

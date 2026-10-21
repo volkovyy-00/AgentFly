@@ -27,6 +27,35 @@ _ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
+# A word longer than this (in characters) is never looked up as a file (V5b-fix2 §5).
+MAX_PATH_WORD: int = 1024
+
+# The scans below read a command in C-speed regular expressions where the old loops read one
+# character at a time in Python (V5b-fix2 §4.5); their answers are the same, character for
+# character. A quoted run: single quotes hold everything up to the next `'`; in double quotes a
+# backslash keeps the character after it.
+_SINGLE: str = r"'[^']*+"
+_DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
+# A closed quoted run, or a quote that is never closed (it runs to the end).
+_QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
+# What `_split_keeping_seps` cuts on, and the quoted runs it skips (an unclosed one runs to the
+# end, a lone backslash at the end with it).
+_SPLIT_SCAN = re.compile(rf"""{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z)|\|\||&&|[|;]""", re.DOTALL)
+# `shlex.split` (POSIX, no comments) cuts words on these four characters only, not on every
+# character `str.split` calls a space.
+_SHELL_SPACE: str = " \t\r\n"
+_PLAIN_WORD = re.compile(r"[^ \t\r\n]+")
+# A whole word, then the space after it or the end.
+_SHELL_WORD = re.compile(
+    rf"""((?:[^ \t\r\n'"\\]++|\\.|{_SINGLE}'|{_DOUBLE}")++)(?:[ \t\r\n]++|\Z)""", re.DOTALL
+)
+# One piece of a whole shell word: a character after a backslash, the inside of a single- or
+# double-quoted run, or plain text.
+_WORD_PIECE = re.compile(
+    r"""\\(.)|'([^']*+)'|"([^"\\]*+(?:\\.[^"\\]*+)*+)"|([^'"\\]++)""", re.DOTALL
+)
+# In double quotes a backslash goes only before `"` and before another backslash.
+_DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -61,20 +90,7 @@ def _needs_unparsed(cmd: str) -> bool:
 
 
 def _quotes_balanced(cmd: str) -> bool:
-    in_single: bool = False
-    in_double: bool = False
-    i: int = 0
-    while i < len(cmd):
-        ch: str = cmd[i]
-        if ch == "\\" and in_double:
-            i += 2
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        i += 1
-    return not in_single and not in_double
+    return all(len(run.group()) > 1 for run in _QUOTE_SCAN.finditer(cmd))
 
 
 def _assign_name(token: str) -> str | None:
@@ -129,53 +145,54 @@ def _first_program(cmd: str) -> str:
 def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
     """Split on |, &&, ||, ; outside quotes; return (segment, following_sep)."""
     segments: list[tuple[str, str]] = []
-    buf: list[str] = []
-    in_single: bool = False
-    in_double: bool = False
-    i: int = 0
-    while i < len(cmd):
-        ch: str = cmd[i]
-        if ch == "\\" and in_double:
-            buf.append(ch)
-            if i + 1 < len(cmd):
-                buf.append(cmd[i + 1])
-                i += 2
-                continue
-            i += 1
+    start: int = 0
+    for found in _SPLIT_SCAN.finditer(cmd):
+        sep: str = found.group()
+        if sep[0] in "'\"":
             continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-            buf.append(ch)
-            i += 1
-            continue
-        if ch == '"' and not in_single:
-            in_double = not in_double
-            buf.append(ch)
-            i += 1
-            continue
-        if not in_single and not in_double:
-            if cmd.startswith("||", i) or cmd.startswith("&&", i):
-                sep: str = cmd[i : i + 2]
-                segments.append(("".join(buf), sep))
-                buf = []
-                i += 2
-                continue
-            if ch in {"|", ";"}:
-                segments.append(("".join(buf), ch))
-                buf = []
-                i += 1
-                continue
-        buf.append(ch)
-        i += 1
-    segments.append(("".join(buf), ""))
+        segments.append((cmd[start : found.start()], sep))
+        start = found.end()
+    segments.append((cmd[start:], ""))
     return segments
+
+
+def _shell_words(segment: str) -> list[str]:
+    """`shlex.split(segment)`, the same words. A segment that is not whole words (an unclosed
+    quote, a backslash at the end) goes to `shlex.split`, which raises `ValueError` as before."""
+    if not _has_quoting(segment):
+        return _PLAIN_WORD.findall(segment)
+    words: list[str] = []
+    at: int = len(segment) - len(segment.lstrip(_SHELL_SPACE))
+    while at < len(segment):
+        found = _SHELL_WORD.match(segment, at)
+        if found is None:
+            return shlex.split(segment)
+        words.append(_unquote(found.group(1)))
+        at = found.end()
+    return words
+
+
+def _has_quoting(text: str) -> bool:
+    return "'" in text or '"' in text or "\\" in text
+
+
+def _unquote(word: str) -> str:
+    """A whole shell word's text as shlex gives it: the quotes go, a backslash outside quotes
+    keeps the character after it, and one in double quotes goes only before `"` or `\\`."""
+    if not _has_quoting(word):
+        return word
+    texts: list[str] = []
+    for piece in _WORD_PIECE.finditer(word):
+        text: str = piece.group(piece.lastindex or 0)
+        texts.append(_DOUBLE_ESCAPE.sub(r"\1", text) if piece.lastindex == 3 else text)
+    return "".join(texts)
 
 
 def _clean_segment(segment: str, project_root: Path) -> str:
     if not segment:
         return ""
     try:
-        tokens: list[str] = shlex.split(segment)
+        tokens: list[str] = _shell_words(segment)
     except ValueError:
         return f"{_first_program(segment)} <unparsed>"
 
@@ -289,24 +306,47 @@ def _host_looks_encoded(host: str) -> bool:
     return any(_label_triggers_reduction(p) for p in host.split("."))
 
 
-def _project_relative(word: str, project_root: Path) -> str | None:
-    root: Path = project_root.resolve()
-    raw: Path = Path(word)
-    candidates: list[Path] = []
-    if raw.is_absolute():
-        candidates.append(raw)
-    else:
-        candidates.append(root / raw)
+def resolved_or_none(path: Path) -> Path | None:
+    """`path.resolve()`, or None when the system cannot say: a part over its name limit, a lone
+    surrogate or a NUL (`OSError`, `ValueError`), a link that leads back to itself
+    (`RuntimeError`)."""
+    try:
+        return path.resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
 
-    for cand in candidates:
-        try:
-            resolved: Path = cand.resolve()
-        except OSError:
-            continue
-        try:
-            rel: Path = resolved.relative_to(root)
-        except ValueError:
-            continue
-        if resolved.exists():
-            return rel.as_posix()
-    return None
+
+def contained_relative(path: str, root: str) -> str | None:
+    """`path` relative to `root`, both resolved and written with `/`, or None when it is outside.
+
+    A string test: `Path.relative_to` is quadratic in the depth on Python 3.12. The root itself is
+    ".". A root that already ends in "/" (the folder "/") is used as it is.
+    """
+    if path == root:
+        return "."
+    prefix: str = root if root.endswith("/") else root + "/"
+    return path[len(prefix) :] if path.startswith(prefix) else None
+
+
+def _project_relative(word: str, project_root: Path) -> str | None:
+    """The word as a path inside the project when it names an existing file there, else None.
+
+    Never raises (V5b-fix2 §5). A word over `MAX_PATH_WORD` characters is not looked up: it is
+    cheap to refuse and costly to resolve, one system call per part.
+    """
+    if len(word) > MAX_PATH_WORD:
+        return None
+    root: Path | None = resolved_or_none(project_root)
+    if root is None:
+        return None
+    raw: Path = Path(word)
+    resolved: Path | None = resolved_or_none(raw if raw.is_absolute() else root / raw)
+    if resolved is None:
+        return None
+    rel: str | None = contained_relative(resolved.as_posix(), root.as_posix())
+    if rel is None:
+        return None
+    try:
+        return rel if resolved.exists() else None
+    except (OSError, ValueError):
+        return None

@@ -29,4 +29,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
     note = "" if state.running else " (not through the service: was it started by hand?)"
     print(f"recorder: answers on {port}{note}")
+    problem = answer.get("rules_problem")
+    if problem:
+        print(f"rules:    {' '.join(str(problem).split())}")
     return 0

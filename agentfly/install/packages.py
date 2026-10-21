@@ -349,6 +349,16 @@ def _changes(
     return changes
 
 
+def recorded_hash(check: Check, rel: str, distribution: str = "agentfly-recorder") -> str | None:
+    """The sha256 of one file of a distribution, as hashed by `inspect`; None if it is not listed.
+
+    `inspect` has already compared each hash with the file's row in its RECORD, so for a `Check`
+    without problems this is the hash the wheel's own RECORD gives that file.
+    """
+    dist = check.distributions.get(distribution)
+    return dist.files.get(rel) if dist is not None else None
+
+
 def advice(check: Check) -> str:
     """How to get a clean environment back: one text for the refusal and for `doctor`."""
     reinstall = (

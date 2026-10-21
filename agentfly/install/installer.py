@@ -11,7 +11,6 @@ leave the interpreter in place while the client is gone.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -30,6 +29,7 @@ from agentfly.install import InstallError, cursor, hooks_file, packages, pythons
 from agentfly.install.hooks_file import HookEntry
 from agentfly.install.layout import INTERPRETER_REL, Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 
 # Cursor's timeout is in seconds. With the recorder down the client answers in about 0.57 s; with
 # it up, in about 60 ms. A Cursor timeout fails open, so there is headroom for a busy machine.
@@ -41,6 +41,7 @@ _UNSAFE_IN_QUOTES: frozenset[str] = frozenset('"$`\\\n')
 class Outcome:
     changed: bool
     messages: list[str]
+    cursor_reload: bool = True  # False when only the rules file changed: Cursor reads no rules
 
 
 # ---------------------------------------------------------------- what is registered
@@ -108,6 +109,174 @@ def _write_atomic(path: Path, data: bytes, layout: Layout, mode: int = 0o644) ->
         temp.unlink(missing_ok=True)
 
 
+DEFAULT_RECORD_PATH = "agentfly/rules/default.toml"  # as the wheel's RECORD writes it
+
+
+def _packaged_default(current: packages.Check) -> bytes:
+    """The packaged default rules, read once, checked, and nothing else is ever written.
+
+    `packages.require` hashed the tool environment at the start; the file is read again here, so
+    its bytes are compared with that RECORD hash and must parse cleanly under the rules the
+    recorder applies (D27). What is returned is what gets written.
+    """
+    wanted = packages.recorded_hash(current, DEFAULT_RECORD_PATH)
+    if wanted is None:
+        raise InstallError(
+            f"{DEFAULT_RECORD_PATH} is not listed in AgentFly's RECORD, so the default rules "
+            "cannot be checked; nothing was changed"
+        )
+    try:
+        data = rulefile.default_path().read_bytes()
+    except OSError as exc:
+        raise InstallError(f"cannot read the packaged default rules ({exc})") from exc
+    if rulefile.sha256_of(data) != wanted:
+        raise InstallError(
+            "the packaged default rules are not the file that was checked a moment ago; nothing "
+            "was changed. Reinstall AgentFly from a source you trust, then run `agentfly init -g`"
+        )
+    loaded = rulefile.load_bytes(data)
+    if loaded.errors:
+        raise InstallError(
+            f"the packaged default rules cannot be used ({rulefile.summary(loaded.errors)}); "
+            "nothing was changed"
+        )
+    return data
+
+
+RULES_WRITTEN = frozenset({"missing", "older", "untrusted"})  # states in which `init -g` writes
+
+
+def check_packaged_default(layout: Layout, current: packages.Check) -> None:
+    """Raise the error root's install would raise about the rules file: a link or a folder in its
+    place (CR7), or a damaged default it is about to write.
+
+    The unprivileged run calls this before the password, so either stops there. Where the file is
+    the owner's (`edited`) or cannot be opened (`unknown`), nothing is written, so nothing here
+    can fail.
+    """
+    state = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
+    if state == "blocked":
+        raise _blocked(layout)
+    if state in RULES_WRITTEN:
+        _packaged_default(current)
+
+
+# The rules file follows one principle: `init -g` writes only bytes it has checked, and never
+# changes the trust of bytes it has not checked. What it writes is the packaged default
+# (`_packaged_default`: hashed against the wheel's RECORD, parsed under D27). It writes where the
+# file is missing or holds known bytes (this version's default or an older one the package shipped,
+# D28), in any mode or owner: rewriting known bytes is harmless. An edited file is the owner's and
+# is never written, chowned or chmodded: a chown or a chmod would hand rules nobody has looked at
+# to a recorder that believes the owner's file.
+
+
+def rules_owner_uid(layout: Layout) -> int:
+    """Who must own the rules file: the layout's system user, or whoever runs, with no owner."""
+    return layout.owner[0] if layout.owner is not None else os.getuid()
+
+
+def _not_exactly_ours(layout: Layout) -> str | None:
+    """Why the file is not exactly what `init -g` writes (the owner's, mode 0644), or None.
+
+    Stricter than the recorder's trust test, which loads a root:admin 0640 file too: bytes that
+    are known are rewritten, which costs nothing, so the installer asks for the exact file. The
+    reason is the first clause of the recorder's own words (the rest advises on a file nobody
+    wrote), or the mode when the recorder would load the file.
+    """
+    problem = rulefile.trust_problem(layout.rules, rules_owner_uid(layout))
+    if problem is not None:
+        return problem.split("; ", 1)[0]
+    try:
+        mode = stat.S_IMODE(layout.rules.lstat().st_mode)
+    except OSError as exc:
+        return f"cannot be read: {exc.strerror or type(exc).__name__}"
+    return None if mode == 0o644 else f"has mode {mode:04o}, not the 0644 that `init -g` writes"
+
+
+def rules_state(layout: Layout, wanted: str | None) -> str:
+    """What is at the rules file's place:
+
+    - `missing`;
+    - `current` (this version's default, in exactly the file `init -g` writes);
+    - `untrusted` (this version's default, in a file that is not exactly that: not the owner's, or
+      not mode 0644);
+    - `older` (a default the package once carried, never edited);
+    - `edited` (anything else, the owner's);
+    - `unknown` (an unprivileged run cannot open it, a 0600 root file for one; root decides);
+    - `blocked` (a link or a folder, which `init -g` will not write through).
+
+    `wanted` is the sha256 of this version's default. A file too big to be a rules file, or one
+    that even root cannot read, is `edited`: it is not ours to replace.
+    """
+    path = layout.rules
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return "blocked"
+    if not path.exists():
+        return "missing"
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(rulefile.MAX_FILE_BYTES + 1)
+    except PermissionError:
+        return "edited" if os.geteuid() == 0 else "unknown"
+    except OSError:
+        return "edited"
+    if len(raw) > rulefile.MAX_FILE_BYTES:
+        return "edited"
+    digest = rulefile.sha256_of(raw)
+    if digest == wanted:
+        return "untrusted" if _not_exactly_ours(layout) else "current"
+    return "older" if rulefile.is_older_default(digest) else "edited"
+
+
+def rules_notice(layout: Layout, wanted: str | None) -> str | None:
+    """The line that says an edited rules file was kept; None for any other state.
+
+    A trusted edit is kept and this version's default rules are not applied. An untrusted one is
+    kept as well, but the recorder will not read it: the reason is the recorder's own
+    (`rulefile.trust_problem`, which says what to do), and the default rules run instead.
+    """
+    return _kept_notice(layout, rules_state(layout, wanted))
+
+
+def _kept_notice(layout: Layout, state: str) -> str | None:
+    """`rules_notice` for a `rules_state` the caller has already looked up."""
+    if state != "edited":
+        return None
+    problem = rulefile.trust_problem(layout.rules, rules_owner_uid(layout))
+    if problem is None:
+        return (
+            f"kept your edited rules file {layout.rules}; this version's default rules "
+            "were not applied"
+        )
+    return (
+        f"kept your edited rules file {layout.rules}, but the recorder will not read it: "
+        f"{problem}; {rulefile.DEFAULT_IN_FORCE}"
+    )
+
+
+def _blocked(layout: Layout) -> InstallError:
+    if layout.rules.is_symlink():
+        return InstallError(f"{layout.rules} is a symbolic link; remove it first")
+    return InstallError(f"{layout.rules} is not a regular file; remove it first")
+
+
+def _write_rules(layout: Layout, data: bytes, state: str) -> str:
+    """Put the checked default in place (atomic, 0644, the system user's); say what was done."""
+    reason = _not_exactly_ours(layout) if state == "untrusted" else None  # before it is replaced
+    _write_atomic(layout.rules, data, layout)
+    restart = "restart the recorder (`agentfly stop`, `agentfly start`) to apply them"
+    if state == "older":
+        return (
+            f"replaced the unedited default rules in {layout.rules} with this version's; {restart}"
+        )
+    if state == "untrusted":
+        return (
+            f"rewrote the default rules in {layout.rules}: the file "
+            f"{reason or 'was not exactly the one init -g writes'}; {restart}"
+        )
+    return f"wrote the default rules to {layout.rules}"
+
+
 def _read_hooks(layout: Layout) -> str | None:
     try:
         data = layout.hooks_file.read_bytes()
@@ -143,16 +312,25 @@ def python_intact(layout: Layout) -> bool:
 
 
 def status(layout: Layout, build: PythonBuild, source: Path, current: packages.Check) -> set[str]:
-    """Which parts are missing or differ: any of "python", "client", "hooks", "packages".
+    """Which parts are missing or differ: any of "python", "client", "hooks", "packages", "rules".
 
     Empty when intact. "packages" is the record's package hashes differing from `current`, the
-    check of the tool environment: an upgrade is not "intact".
+    check of the tool environment: an upgrade is not "intact". "rules" is a missing rules file
+    (an install from before V5b has none), a link or folder in its place, an unedited default
+    from before this version's (D28), this version's default in a file that is not exactly the
+    one `init -g` writes, or a file an unprivileged run cannot open (root decides, after the
+    password). A file the owner edited is never "different": it is theirs, whatever it says, and
+    no hash of it is kept.
     """
     record = records.read(layout)
-    everything = {"python", "client", "hooks", "packages"}
+    everything = {"python", "client", "hooks", "packages", "rules"}
     if record is None:
         return everything
     bad: set[str] = set()
+    if rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH)) in (
+        RULES_WRITTEN | {"unknown", "blocked"}
+    ):
+        bad.add("rules")
     try:
         python = record["python"]
         if python["archive_sha256"] != build.sha256 or not _python_matches(layout, python):
@@ -288,7 +466,7 @@ def _backup(layout: Layout, text: str) -> Path:
 
 
 def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return rulefile.sha256_of(text.encode("utf-8"))
 
 
 def _apply_hooks(
@@ -472,10 +650,18 @@ def install(
     # defence, root has imported that code already; the check that matters ran before the password.
     current = packages.require(previous, "agentfly init -g")
     bad = status(layout, build, source, current)
+    # One look at the rules file: the notice and what is written below come from the same state.
+    rules = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
+    notice = _kept_notice(layout, rules)  # about an edited file only; it is never written below
     if not bad:
-        return Outcome(False, ["already installed and intact; nothing changed"])
+        return Outcome(
+            False, ["already installed and intact; nothing changed", *([notice] if notice else [])]
+        )
     if layout.system_root.is_symlink():
         raise InstallError(f"{layout.system_root} is a symbolic link; remove it first")
+    if rules == "blocked":
+        raise _blocked(layout)  # before anything is changed, not halfway through
+    rules_data = _packaged_default(current) if rules in RULES_WRITTEN else None
     created_hooks = _read_hooks(layout) is None or bool(
         previous and previous.get("hooks_file", {}).get("created")
     )
@@ -524,6 +710,8 @@ def install(
                 shutil.copy2(layout.client, graveyard / "hook_client.py")
             os.replace(staged_client, layout.client)
         shutil.rmtree(staging, ignore_errors=True)
+        if rules_data is not None:
+            messages.append(_write_rules(layout, rules_data, rules))
         assert_locked(layout)
         for event in cursor.EVENTS:  # every command as registered, through `sh -c` (S2 F1)
             smoke(command_for(layout.interpreter, layout.client, event), event, run_as)
@@ -554,7 +742,10 @@ def install(
             messages.append(f"recorded the hashes of {len(current.distributions)} packages")
         if _apply_hooks(layout, entries, existing, merged):
             messages.append(f"registered {len(entries)} hooks in {layout.hooks_file}")
-        return Outcome(True, messages or ["repaired"])
+        done = messages or ["repaired"]
+        if notice:
+            done.append(notice)
+        return Outcome(True, done, cursor_reload=bad != {"rules"})
     except BaseException as failure:
         # A hook entry must never outlive the files it runs (S2 F1): entries go before the folder,
         # and a repair puts the old Python and client back. If this cleanup itself fails, the

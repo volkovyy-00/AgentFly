@@ -14,8 +14,17 @@ from typing import IO
 import pytest
 
 from agentfly.cli import build_parser, init, main, uninstall
-from agentfly.install import elevate, installer, packages, pythons, records, service
+from agentfly.install import (
+    InstallError,
+    elevate,
+    installer,
+    packages,
+    pythons,
+    records,
+    service,
+)
 from agentfly.install.layout import SYSTEM, Layout
+from agentfly.recorder import rulefile
 from tests.helpers import REPO
 from tests.install_helpers import (
     DIRECT_URL_KINDS,
@@ -744,3 +753,99 @@ def test_the_flags_sudo_starts_python_with_are_the_ones_the_child_looks_for() ->
         return run.stdout.strip()
 
     assert (started(*flags), started()) == ("1", "0")
+
+
+# ---------------------------------------------------------------- the rules file (V5b-fix2)
+
+OLDER_DEFAULT = sorted((REPO / "tests/fixtures/shipped_defaults").glob("*.toml"))[0]
+
+
+def test_a_damaged_packaged_default_stops_init_before_the_password(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    system.rules.unlink()  # `init -g` would write the packaged default again
+    monkeypatch.setattr(rulefile, "default_path", lambda: tmp_path / "gone.toml")
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert "cannot read the packaged default rules" in captured.err
+    assert "ask for your password" not in captured.out and sudo.calls == []
+
+
+def test_a_damaged_packaged_default_does_not_stop_init_when_no_default_is_to_be_written(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    system.rules.write_text("# edited by the owner\n" + rulefile.default_text(), encoding="utf-8")
+    system.client.write_text("tampered\n")  # a repair that has nothing to do with the rules
+    monkeypatch.setattr(rulefile, "default_path", lambda: tmp_path / "gone.toml")
+    assert main(["init", "-g"]) == 0
+    assert len(sudo.calls) == 1  # the owner's file is never written: the default is not needed
+
+
+def test_a_rules_only_refresh_does_not_ask_for_a_cursor_restart(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(init, "_stdin_archive", lambda: None)
+    system.rules.write_bytes(
+        OLDER_DEFAULT.read_bytes()
+    )  # an unedited default of an earlier version
+    assert init._as_root("3.24.12", installed) == 0
+    out = capsys.readouterr().out
+    assert "restart the recorder" in out and "Quit and reopen Cursor" not in out
+    assert system.rules.read_bytes() == rulefile.default_path().read_bytes()
+
+
+def test_a_refresh_that_changes_more_than_the_rules_still_asks_for_a_cursor_restart(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(init, "_stdin_archive", lambda: None)
+    system.rules.write_bytes(OLDER_DEFAULT.read_bytes())
+    system.client.write_text("tampered\n")
+    assert init._as_root("3.24.12", installed) == 0
+    out = capsys.readouterr().out
+    assert "restart the recorder" in out and "Quit and reopen Cursor" in out
+
+
+@pytest.mark.parametrize("what", ["link", "folder"])
+def test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password(
+    what: str,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CR7: the unprivileged run refuses with root's own words, and asks for no password."""
+    system.rules.unlink()
+    if what == "link":
+        target = tmp_path / "elsewhere.toml"
+        target.write_text(rulefile.default_text(), encoding="utf-8")
+        system.rules.symlink_to(target)
+    else:
+        system.rules.mkdir()
+    expected = str(installer._blocked(system))
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == f"agentfly init: {expected}\n"
+    assert "ask for your password" not in captured.out and sudo.calls == []
+    with pytest.raises(InstallError, match="remove it first"):  # root says the same
+        installer.install(
+            system, installed, cursor_version="3.24.12", source=installer.client_source()
+        )

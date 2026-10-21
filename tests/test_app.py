@@ -456,6 +456,7 @@ ROUTE_WHITELIST: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/steps"),
         ("GET", "/api/sessions"),
         ("GET", "/api/sessions/{id}/steps"),
+        ("GET", "/api/rules"),
         ("GET", "/"),
         ("GET", "/v2"),
         ("GET", "/v2/"),
@@ -499,7 +500,7 @@ def test_every_other_method_on_a_served_route_is_405(client: TestClient) -> None
 
 
 @pytest.mark.parametrize(
-    "path", ["/health", "/api/steps", "/api/sessions", "/api/sessions/some-id/steps"]
+    "path", ["/health", "/api/steps", "/api/sessions", "/api/sessions/some-id/steps", "/api/rules"]
 )
 def test_head_on_an_api_route_is_405(client: TestClient, path: str) -> None:
     assert client.head(path).status_code == 405

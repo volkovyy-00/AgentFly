@@ -16,7 +16,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from agentfly.install import (
     InstallError,
@@ -31,6 +31,7 @@ from agentfly.install import (
 from agentfly.install.hooks_file import HookEntry
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild, file_sha256, tree_digest
+from agentfly.recorder import rulefile
 
 Level = Literal["ok", "warn", "fail"]
 
@@ -80,6 +81,7 @@ class Context:
     state_error: str
     environment: packages.Environment | None  # the tool environment this AgentFly runs from
     environment_error: str
+    health: dict[str, Any] | None = None  # what the recorder's /health answers; None: nothing
 
     @property
     def valid_events(self) -> frozenset[str] | None:
@@ -128,6 +130,7 @@ def build_context(
         state_error=error,
         environment=environment,
         environment_error=environment_error,
+        health=service.health(),
     )
 
 
@@ -457,11 +460,54 @@ def check_claude_settings(ctx: Context) -> Finding:
     return ok("~/.claude/settings.json has no hooks on a gate event")
 
 
+# ---------------------------------------------------------------- the rules file (D3, D10)
+
+
+def check_rules(ctx: Context) -> Finding:
+    """The active rules file: there, trusted, valid, and not refused by the running recorder.
+
+    It reads the file as the recorder does (`load_active_file`, who owns it included). The only
+    thing it learns from the running recorder is `/health.rules_problem`, which is there only
+    when the recorder rejected the file at its start; it cannot see which rules the recorder
+    holds, and a recorder that is down proves nothing either way, so it never fails this line.
+    """
+    path = ctx.layout.rules
+    reported = ctx.health.get("rules_problem") if ctx.health else None
+    if not os.path.lexists(path):
+        return warn(
+            f"{path} is missing, so the packaged default rules are in force; run `agentfly init -g`"
+        )
+    owner = ctx.layout.owner[0] if ctx.layout.owner is not None else None
+    loaded = rulefile.load_active_file(path, owner)
+    if loaded.errors:
+        problem = rulefile.summary(loaded.errors)
+        if reported:
+            return fail(f"{path}: {problem}; the default rules are in force")
+        if ctx.health is None:
+            return fail(f"{path}: {problem}; the recorder will start on the default rules")
+        return fail(
+            f"{path}: {problem}; the running recorder still has the rules it read at its start "
+            "and will use the default at its next start; fix the file, then restart it"
+        )
+    if reported:
+        return fail(
+            f"{path} is valid now, but the recorder started without it and runs the default "
+            "rules; restart it (`agentfly stop`, `agentfly start`)"
+        )
+    if rulefile.is_older_default(loaded.sha256):  # the owner never edited it (D28)
+        return warn(
+            f"{path} is an older default than this version carries; run `agentfly init -g` to "
+            "replace it, then restart the recorder"
+        )
+    return ok(f"{path}: {rulefile.rules_word(len(loaded.rules))}, plus R0, all valid")
+
+
 CHECKS: list[Callable[[Context], Finding]] = [
     check_record,
     check_python,
     check_lock,
     check_client,
+    check_rules,
     check_package,
     check_hooks,
     check_events,

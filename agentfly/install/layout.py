@@ -28,6 +28,11 @@ class Layout:
         return self.system_root / "hook_client.py"
 
     @property
+    def rules(self) -> Path:
+        """The active rules file (D3): root's, readable by all, written by `init -g` once."""
+        return self.system_root / "rules.toml"
+
+    @property
     def record(self) -> Path:
         return self.system_root / "hashes.json"
 

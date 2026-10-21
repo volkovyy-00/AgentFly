@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import queue
 import sys
 import threading
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,17 @@ from typing import Any
 from neo4j import Driver, GraphDatabase
 
 from agentfly.recorder import clean as clean_settings
-from agentfly.recorder.clean import clean_command, website_name
+from agentfly.recorder.clean import (
+    MAX_PATH_WORD,
+    clean_command,
+    contained_relative,
+    resolved_or_none,
+    website_name,
+)
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
-from agentfly.recorder.rules import RULES, Session, mark
+from agentfly.recorder.rules import Session, reads_secret
 
 logger = logging.getLogger("agentfly")
 
@@ -286,16 +293,67 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
     return Path.cwd()
 
 
-def relative_file_path(file_path: str, project_root: Path) -> str:
-    raw: Path = Path(file_path)
-    root: Path = project_root.resolve()
+def _encodes(text: str) -> bool:
     try:
-        if raw.is_absolute():
-            return raw.resolve().relative_to(root).as_posix()
-    except ValueError:
-        pass
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _storable(text: str) -> str:
+    """`text` as the history and the page can hold it: unchanged when it encodes as UTF-8, else
+    with each lone surrogate (the only characters that do not) as U+FFFD."""
+    if _encodes(text):
+        return text
+    return "".join("\ufffd" if "\ud800" <= char <= "\udfff" else char for char in text)
+
+
+def _resolved_or_tidied(path: Path) -> str | None:
+    """The resolved path written with `/`, or, when the system cannot resolve it (a part over its
+    name limit, a NUL, a lone surrogate, a link loop), the path tidied by string alone (§5).
+
+    A path that does not encode as UTF-8 comes back as None, "outside": the history could not
+    store it, so the caller saves the base name, as it did before there was a fallback. That holds
+    for a resolved path too (macOS resolves U+DC80..U+DCFF, final audit A2).
+    """
+    resolved: Path | None = resolved_or_none(path)
+    found: str = resolved.as_posix() if resolved is not None else os.path.normpath(path.as_posix())
+    return found if _encodes(found) else None
+
+
+def relative_file_path(file_path: str, project_root: Path) -> str:
+    """The path relative to the project, or its base name; always one the history can store."""
+    raw: Path = Path(file_path)
+    if raw.is_absolute():
+        resolved: str | None = _resolved_or_tidied(raw)
+        root: str | None = _resolved_or_tidied(project_root)
+        rel: str | None = None
+        if resolved is not None and root is not None:
+            rel = contained_relative(resolved, root)
+        if rel is not None:
+            return rel
     # Fall back to basename so shared files still MERGE (README.md, .env).
-    return raw.name
+    return _storable(raw.name)
+
+
+def _word_path(token: str, root: Path) -> str:
+    """`relative_file_path` for a word of a command. A word over `MAX_PATH_WORD` is not looked up
+    (§5, as `_is_file_in`): it is saved by its base name, also an absolute one inside the project,
+    which `relative_file_path` would save relative to the root (a change from before V5b-fix2)."""
+    if len(token) > MAX_PATH_WORD:
+        return _storable(Path(token).name)
+    return relative_file_path(token, root)
+
+
+def _is_file_in(root: Path, token: str) -> bool:
+    """Whether a word that survived cleaning names something in the project. Never raises."""
+    if len(token) > MAX_PATH_WORD:
+        return False
+    try:
+        return (root / token).exists()
+    except (OSError, ValueError):
+        return False
 
 
 def hosts_from_cleaned(cleaned: str) -> tuple[str, ...]:
@@ -335,13 +393,16 @@ def build_step_record(
     *,
     order: int,
     marks: bool = False,
+    rule_text: str | None = None,
     user_message: str | None = None,
     agent_message: str | None = None,
 ) -> StepRecord:
     """Build a cleaned StepRecord. Uses session.next_step only via `order` arg.
 
     `marks` is what `SessionStore.apply_mark` said about this event: it made the chat marked.
-    The messages are the ones the hook answer for this event sent, if it sent any (V8b).
+    `rule_text` is the winning rule's message, which the caller already has (V5b: the rule is
+    looked up once per hook). The messages are the ones the hook answer for this event sent, if
+    it sent any (V8b).
     """
     event: str = str(payload.get("hook_event_name", ""))
     kind: str = kind_from_event(event)
@@ -371,11 +432,11 @@ def build_step_record(
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:
                 continue
             if is_sensitive(token):
-                file_path = relative_file_path(token, root)
+                file_path = _word_path(token, root)
                 file_sensitive = True
                 break
-            if file_path is None and (root / token).exists():
-                file_path = relative_file_path(token, root)
+            if file_path is None and _is_file_in(root, token):
+                file_path = _word_path(token, root)
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
         tool_input: Any = payload.get("tool_input")
@@ -387,17 +448,10 @@ def build_step_record(
 
     if kind == "shell" and not file_sensitive:
         # The rule engine's own test, whatever this chat's mark is: the history and R1 agree.
-        # (A read step already used it above: `mark()` tests the same file name.)
-        if mark(payload, replace(session, marked=False)).marked:
+        # (A read step already used it above: the same lists decide a file name.)
+        if reads_secret(payload):
             file_sensitive = True
             file_path = None  # the cleaner hid the name; do not show another file as touched
-
-    rule_description: str | None = None
-    if rule_id is not None:
-        for rule in RULES:
-            if rule.id == rule_id:
-                rule_description = rule.message
-                break
 
     prev_step_id: str | None = None
     if order > 1:
@@ -419,7 +473,7 @@ def build_step_record(
         command=command,
         hosts=hosts,
         rule_id=rule_id,
-        rule_description=rule_description,
+        rule_description=rule_text,
         prev_step_id=prev_step_id,
         workspace_root=first_workspace_root(payload),
         marks=marks,

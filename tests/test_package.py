@@ -6,6 +6,7 @@ tests skip; with `CI` set they fail, so a runner that lost the network cannot pa
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -24,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from agentfly.install import elevate
-from tests.helpers import free_port, make_legacy, package_files
+from tests.helpers import RECORDER_CODE, free_port, make_legacy, package_files
 from tests.test_hook_client import EVENT, check_allow_and_log, run_client
 
 REPO = Path(__file__).resolve().parents[1]
@@ -147,6 +148,8 @@ def test_wheel_carries_the_page_and_nothing_private(installed: Installed) -> Non
         "agentfly/cli/__main__.py",
         "agentfly/install/installer.py",
         "agentfly/recorder/app.py",
+        "agentfly/recorder/rulefile.py",
+        "agentfly/rules/default.toml",
     ):
         assert needed in names, needed
     assert any(n.startswith("agentfly/ui_dist/assets/") for n in names)
@@ -227,6 +230,35 @@ def test_a_real_uv_tool_environment_passes_the_package_check(installed: Installe
     assert "agentfly-recorder" in found["dists"] and len(found["dists"]) > 5
 
 
+DEFAULT_SCRIPT = (
+    "import json; from agentfly.install import installer, packages; "
+    "check = packages.inspect(packages.tool_environment(), None); "
+    "data = installer._packaged_default(check); "
+    "print(json.dumps({'problems': check.problems, 'bytes': len(data), "
+    "'recorded': packages.recorded_hash(check, installer.DEFAULT_RECORD_PATH)}))"
+)
+
+
+def test_the_wheels_record_lists_the_default_rules_and_init_would_write_them(
+    installed: Installed,
+) -> None:
+    """D28 on the real wheel: RECORD lists `agentfly/rules/default.toml` with its hash, and the
+    installer's check of that file (RECORD hash, then a clean parse) passes in the installed
+    tool."""
+    result = subprocess.run(
+        [str(installed.python), "-I", "-B", "-c", DEFAULT_SCRIPT],
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    found = json.loads(result.stdout)
+    default = installed.package_dir / "rules" / "default.toml"
+    assert found["problems"] == [] and found["bytes"] == default.stat().st_size
+    assert found["recorded"] == hashlib.sha256(default.read_bytes()).hexdigest()
+
+
 def test_a_planted_file_and_a_changed_file_in_a_real_environment_are_named(
     installed: Installed,
 ) -> None:
@@ -259,8 +291,11 @@ def running_recorder(installed: Installed, tmp_path: Path) -> Iterator[tuple[int
     make_legacy(home)
     port = free_port()
     env = {**installed.env, "HOME": str(home)}
+    # The wheel's own modules, not the repo's `agentfly/` (see `test_the_child_..._wheel`), and a
+    # rules file that does not exist: `RECORDER_CODE` never lets a child read the real one.
     process = subprocess.Popen(
-        [str(installed.bin / "agentfly"), "serve", "--port", str(port)],
+        [str(installed.python), "-I", "-B", "-c", RECORDER_CODE, "serve", "--port", str(port)],
+        cwd=tmp_path,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -279,6 +314,96 @@ def running_recorder(installed: Installed, tmp_path: Path) -> Iterator[tuple[int
     finally:
         process.terminate()
         process.wait(timeout=10)
+
+
+def test_the_child_recorder_imports_the_wheel_and_not_the_source_tree(
+    installed: Installed, tmp_path: Path
+) -> None:
+    """Without `-I` the repo's `agentfly/` would shadow the wheel and these tests would test it."""
+    code = (
+        "import agentfly, agentfly.recorder.rulefile as r; print(agentfly.__file__, r.ACTIVE_RULES)"
+    )
+    result = subprocess.run(
+        [str(installed.python), "-I", "-B", "-c", code],
+        cwd=REPO,
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    where, rules = result.stdout.split(maxsplit=1)
+    assert Path(where).resolve().is_relative_to(installed.package_dir.resolve()), where
+    assert (installed.package_dir / "rules" / "default.toml").is_file()
+    assert rules.strip() == "/Library/Application Support/AgentFly/rules.toml"
+
+
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_the_installed_tool_checks_and_tests_the_default_rules_it_carries(
+    installed: Installed, command: str
+) -> None:
+    """Always with an explicit FILE: a child process must never read the real rules file."""
+    default = installed.package_dir / "rules" / "default.toml"
+    result = subprocess.run(
+        [str(installed.bin / "agentfly"), "rules", command, str(default)],
+        env=installed.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(default) in result.stdout and result.stderr == ""
+
+
+def hook_bytes(port: int, home: Path, body: dict[str, object]) -> bytes:
+    """POST one event as the hook client would (it only ever talks to port 8787, so not it)."""
+    token = (home / ".config/agentfly/token").read_text(encoding="utf-8").strip()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/hook",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Recorder-Token": token},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        answer: bytes = response.read()
+    return answer
+
+
+def test_the_demo_replays_with_byte_identical_answers_from_the_wheel(
+    running_recorder: tuple[int, Path],
+) -> None:
+    """R1 is loaded from the default rules file inside the wheel; the answers do not change."""
+    port, home = running_recorder
+    scenario = json.loads((REPO / "demo" / "scenario.json").read_text(encoding="utf-8"))
+    sent = [
+        {**{k: v for k, v in item["event"].items() if k != "content"}, "conversation_id": "wheel"}
+        for item in scenario["demo"]["events"]
+    ]
+    answers = [hook_bytes(port, home, body) for body in sent]
+    assert answers[:2] == [b'{"permission":"allow"}'] * 2
+    assert answers[2] == (
+        b'{"permission":"deny","user_message":"Blocked by rule R1: a secret was read earlier in '
+        b'this session, and now data is being sent out.","agent_message":"Blocked by rule R1: a '
+        b"secret was read earlier in this session, and now data is being sent out. Do not retry "
+        b'with another tool or language. Stop and tell the user."}'
+    )
+    # The chat read .env: the entry that ships beside R1 now denies `npm publish` in it.
+    publish = {**sent[2], "command": "npm publish"}
+    assert json.loads(hook_bytes(port, home, publish))["user_message"] == (
+        "Blocked: a .env file was read earlier in this session, so npm publish is off."
+    )
+    fresh = {**publish, "conversation_id": "wheel-fresh", "workspace_roots": ["/elsewhere"]}
+    assert hook_bytes(port, home, fresh) == b'{"permission":"allow"}'
+
+
+def test_the_wheels_recorder_lists_the_default_rules_it_carries(
+    installed: Installed, running_recorder: tuple[int, Path]
+) -> None:
+    port, _ = running_recorder
+    listing = json.loads(fetch(port, "/api/rules")[1])
+    assert listing["source"] == "default" and listing["problem"] is None
+    assert listing["file"] == str(installed.package_dir / "rules" / "default.toml")
+    assert [r["id"] for r in listing["rules"]][:3] == ["R0", "R1", "npm-publish-after-env"]
+    assert "rules_problem" not in json.loads(fetch(port, "/health")[1])
 
 
 def test_serve_answers_health_and_serves_the_page_from_the_wheel(

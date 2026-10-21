@@ -67,7 +67,10 @@ def _as_root(version: str, build: pythons.PythonBuild) -> int:
     for line in outcome.messages:
         print(line)
     if outcome.changed:
-        print("Quit and reopen Cursor so it loads the hooks (its Hooks panel does not list them).")
+        if outcome.cursor_reload:  # a rules-only refresh changes nothing Cursor reads
+            print(
+                "Quit and reopen Cursor so it loads the hooks (its Hooks panel does not list them)."
+            )
         print("Next: `agentfly start` (or `agentfly serve` in a terminal) runs the recorder.")
     return 0
 
@@ -78,7 +81,15 @@ def _as_user(version: str, build: pythons.PythonBuild) -> int:
     bad = installer.status(SYSTEM, build, installer.client_source(), current)
     if not bad:
         print("already installed and intact; nothing changed")
+        # An edited rules file is the owner's, and a readable one needs no password to be said.
+        notice = installer.rules_notice(
+            SYSTEM, packages.recorded_hash(current, installer.DEFAULT_RECORD_PATH)
+        )
+        if notice:
+            print(notice)
         return 0
+    # A damaged default, or a link or folder at the rules path, stops before the password.
+    installer.check_packaged_default(SYSTEM, current)
     packages.ensure_confirmed(current)
     print("AgentFly will ask for your password once, to write into /Library/Application Support.")
     if "python" not in bad:

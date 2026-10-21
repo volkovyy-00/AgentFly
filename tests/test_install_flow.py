@@ -69,6 +69,7 @@ def test_install_writes_the_files_the_record_and_the_hooks(
         "hashes.json",
         "hook_client.py",
         "python",
+        "rules.toml",
     ]
     record = records.read(layout)
     assert record is not None

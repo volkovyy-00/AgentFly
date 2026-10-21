@@ -33,6 +33,7 @@ from agentfly.install import (
 )
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 from tests.install_helpers import (
     TOOL_DISTS,
     fake_python_tar,
@@ -41,6 +42,7 @@ from tests.install_helpers import (
     upgrade,
     write_archive,
 )
+from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
 
 IDS = [
@@ -48,6 +50,7 @@ IDS = [
     "python",
     "lock",
     "client",
+    "rules",
     "package",
     "hooks",
     "events",
@@ -211,6 +214,153 @@ def test_every_line_says_what_it_found(world: World) -> None:
     assert all(check.text and "\n" not in check.text for check in world.results().values())
 
 
+# ---------------------------------------------------------------- the rules file (V5b)
+
+
+def serve_health(monkeypatch: pytest.MonkeyPatch, answer: dict[str, Any] | None) -> None:
+    monkeypatch.setattr(service, "health", lambda timeout=2.0: answer)
+
+
+HEALTHY = {"ok": True, "offline_guard_count": 0, "last_hook_at": None}
+
+
+def test_the_rules_line_is_ok_for_the_file_init_wrote(world: World) -> None:
+    check = world.results()["rules"]
+    assert check.level == "ok" and str(world.layout.rules) in check.text
+
+
+def test_a_recorder_that_does_not_answer_never_fails_the_rules_line(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_health(monkeypatch, None)
+    assert world.results()["rules"].level == "ok"
+
+
+def test_a_missing_rules_file_is_a_warning_that_names_init(world: World) -> None:
+    world.layout.rules.unlink()
+    check = world.results()["rules"]
+    assert check.level == "warn" and "agentfly init -g" in check.text and "default" in check.text
+    assert world.levels("fail") == set(), "one fault turns one line"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [BROKEN_TOML, "not toml", "", "schema = 2\n"],
+)
+def test_an_invalid_rules_file_fails_only_the_rules_line_and_says_the_default_runs(
+    world: World, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    world.layout.rules.write_text(text, encoding="utf-8")
+    serve_health(monkeypatch, {**HEALTHY, "rules_problem": "rules.toml: not valid TOML"})
+    check = world.results()["rules"]
+    assert check.level == "fail" and "default rules are in force" in check.text
+    assert world.levels("fail") == {"rules"}
+
+
+def test_an_entry_for_r0_fails_the_rules_line(world: World) -> None:
+    text = world.layout.rules.read_text(encoding="utf-8") + R0_ENTRY
+    world.layout.rules.write_text(text, encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "fail" and "R0" in check.text
+
+
+def test_an_invalid_file_that_a_running_recorder_has_not_read_yet_still_fails(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.layout.rules.write_text("garbage", encoding="utf-8")
+    serve_health(monkeypatch, HEALTHY)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "restart" in check.text and "next start" in check.text
+
+
+def test_an_invalid_file_with_the_recorder_down_says_what_will_happen_at_its_start(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.layout.rules.write_text("garbage", encoding="utf-8")
+    serve_health(monkeypatch, None)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "default" in check.text
+
+
+def test_a_fixed_file_with_a_recorder_still_on_the_default_asks_for_a_restart(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_health(monkeypatch, {**HEALTHY, "rules_problem": "rules.toml: not valid TOML"})
+    check = world.results()["rules"]
+    assert check.level == "fail" and "restart" in check.text and "agentfly start" in check.text
+
+
+def test_an_unedited_older_default_is_only_a_warning_that_names_init(world: World) -> None:
+    older = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))[0]
+    world.layout.rules.write_bytes(older.read_bytes())
+    check = world.results()["rules"]
+    assert check.level == "warn" and "agentfly init -g" in check.text and "restart" in check.text
+    assert world.levels("fail") == set()
+
+
+def test_an_edited_file_is_fine_even_if_it_started_from_an_older_default(world: World) -> None:
+    older = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))[0]
+    world.layout.rules.write_text("# mine\n" + older.read_text(encoding="utf-8"), encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "ok" and "all valid" in check.text
+
+
+def test_a_rules_file_the_recorder_would_refuse_for_its_owner_fails_the_rules_line_only(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`doctor` reads the file as the recorder does: who owns it counts (V5b-fix)."""
+    monkeypatch.setattr(rulefile, "ACTIVE_OWNER_UID", os.getuid() + 1)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "is owned by" in check.text
+    assert world.levels("fail") == {"rules"}
+
+
+def test_a_rules_file_others_can_write_fails_the_rules_line(world: World) -> None:
+    world.layout.rules.chmod(0o666)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "written by group or others" in check.text
+    assert "rules" in world.levels("fail")
+
+
+def test_a_link_in_place_of_the_rules_file_fails_the_rules_line(
+    world: World, tmp_path: Path
+) -> None:
+    target = tmp_path / "elsewhere.toml"
+    target.write_text(world.layout.rules.read_text(encoding="utf-8"), encoding="utf-8")
+    world.layout.rules.unlink()
+    world.layout.rules.symlink_to(target)
+    check = world.results()["rules"]
+    assert check.level == "fail" and "symbolic link" in check.text
+
+
+def test_a_file_without_r1_fails_the_rules_line_and_names_r1(world: World) -> None:
+    default = world.layout.rules.read_text(encoding="utf-8")
+    world.layout.rules.write_text(default[: default.index('[[rule]]\nid = "R1"')], encoding="utf-8")
+    check = world.results()["rules"]
+    assert check.level == "fail" and "rule R1: missing" in check.text
+    assert world.levels("fail") == {"rules"}
+
+
+def test_the_rules_line_is_one_line_however_many_problems_there_are(world: World) -> None:
+    world.layout.rules.write_text(
+        "schema = 1\n[[rule]]\nid = 1\n[[rule]]\nid = 2\n[[rule]]\nid = 3\n", encoding="utf-8"
+    )
+    check = world.results()["rules"]
+    assert check.level == "fail" and "\n" not in check.text and "more" in check.text
+
+
+def test_a_rules_file_the_user_could_not_read_is_a_lock_fault_not_a_rules_crash(
+    world: World,
+) -> None:
+    world.layout.rules.chmod(0o000)
+    try:
+        results = world.results()
+    finally:
+        world.layout.rules.chmod(0o644)
+    assert results["lock"].level == "fail"
+    assert results["rules"].level == "fail"
+
+
 # ---------------------------------------------------------------- one fault, one failing line
 
 
@@ -279,7 +429,9 @@ def put_another_agentfly_first(w: World) -> None:
     w.search_path = [str(other), *w.search_path]
 
 
-FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
+# The line each fault turns to fail. "a file the system user does not own" is two: the temporary
+# tree belongs to this user, so the rules file in it is not root's either, and `rules` says so.
+FAULTS: dict[str, tuple[str | set[str], Callable[[World], None]]] = {
     "a changed hook client": ("client", change_client),
     "a changed bundled Python": ("python", change_python),
     "a changed file of the package": ("package", change_package_file),
@@ -290,7 +442,7 @@ FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
     "no hooks.json": ("hooks", lambda w: w.layout.hooks_file.unlink()),
     "no hash record": ("record", lambda w: w.layout.record.unlink()),
     "a group-writable bundled Python": ("lock", make_python_group_writable),
-    "a file the system user does not own": ("lock", expect_another_owner),
+    "a file the system user does not own": ({"lock", "rules"}, expect_another_owner),
     "a missing hook client": ("client", lambda w: w.layout.client.unlink()),
     "KeepAlive off in the service file": ("keepalive", keepalive_off),
     "the service not loaded": ("service", lambda w: w.launchd.update(jobs={})),
@@ -325,7 +477,9 @@ FAULTS: dict[str, tuple[str, Callable[[World], None]]] = {
 def test_each_fault_turns_only_its_own_line_to_fail(name: str, world: World) -> None:
     expected, inject = FAULTS[name]
     inject(world)
-    assert world.levels("fail") == {expected}, world.results()
+    assert world.levels("fail") == ({expected} if isinstance(expected, str) else expected), (
+        world.results()
+    )
 
 
 def test_a_missing_record_leaves_what_needs_it_unchecked(world: World) -> None:

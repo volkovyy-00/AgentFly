@@ -29,7 +29,7 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Hook client | `agentfly/hook_client.py` | Stdlib only; strip, POST `/hook`, offline guard when the recorder is down |
 | Shim | `hooks/hook.py` | What `./install.sh` wires; runs the hook client (goes away with V3) |
 | Server | `agentfly/recorder/app.py` | Host + token gates; mark/decide; R1 deny |
-| Rules | `agentfly/recorder/rules.py` | `Rule` list; `mark` then `decide`; `WATCH_ONLY` |
+| Rules | `agentfly/recorder/rules.py`, `rulefile.py`, `agentfly/rules/default.toml` | R0 in code; the rules file's rules (`match`, `after_then`); `mark` then `decide` (strictest wins) |
 | Sessions | `agentfly/recorder/sessions.py` | Memory + `~/.local/share/agentfly/sessions.json` |
 | Names | `agentfly/recorder/names.py` | Sensitive paths + local hosts (pure) |
 | Clean | `agentfly/recorder/clean.py` | SPEC §4 command cleaner; `CLEAN_COMMANDS` (default on) |
@@ -144,14 +144,32 @@ uv run agentfly serve              # or: AGENTFLY_PORT=N uv run agentfly serve (
   file). `T` is the time of the last `/hook` request that passed the token check, as UTC ISO 8601
   with milliseconds (`2026-10-19T09:30:05.123+00:00`); `null` until the first one since the
   recorder started. A request with a wrong or missing token does not change it. It is kept in
-  process memory only.
-- `POST /hook` → Host → token → Content-Type → JSON → mark session → R1 decide →
-  allow or deny. Sessions persist in `~/.local/share/agentfly/sessions.json`.
+  process memory only. When the active rules file was rejected at start, a fourth key
+  `rules_problem` (one line, at most 400 characters) says why. After a hook left a rule unfinished
+  (the rules limit, SPEC section 5), `rules_limit` (one line, at most 400 characters) gives the
+  count since the recorder started, the last time and the rule ids. A healthy recorder sends
+  exactly the three.
+- `GET /api/rules` → `{"file", "source", "problem", "rules": [{id, kind, severity, message}]}`: the
+  rules in force, R0 first (`kind` `builtin`), the file they came from, `source` `active` or
+  `default`, and `problem` (why the active file was not used, else `null`). Host check only; every
+  other method is 405.
+- `POST /hook` → Host → token → Content-Type → JSON → mark session → decide (the strictest
+  firing rule) → answer. Sessions persist in `~/.local/share/agentfly/sessions.json`.
 - Listens on `127.0.0.1` only; token file mode `600`.
+- The answer follows the winning rule's severity: **block** is a `deny` with the rule text in both
+  messages (`agent_message` adds `Do not retry with another tool or language. Stop and tell the
+  user.`); **warn** on `beforeShellExecution` is `ask` with the text in both messages
+  (`agent_message` adds `If the user skips this, do not retry with another tool or language.`); a
+  warn on any other event and every **highlight** are a plain `{"permission":"allow"}`.
+- **Rules limit:** a file `block` rule the hook's matching budget could not finish answers `deny`
+  with the message `AgentFly's rules took too long to check this action (the rules limit). …` and
+  records no trigger; an unfinished `warn` on `beforeShellExecution` answers `ask` with it; an
+  unfinished highlight is skipped. R0 and R1 are never cut short.
 - R1 message (exact): `Blocked by rule R1: a secret was read earlier in this
-  session, and now data is being sent out.` `WATCH_ONLY` turns blocks into
-  warnings (allow + warned verdict).
-- Decision stays in-process (never waits on Neo4j). R0 is not implemented yet.
+  session, and now data is being sent out.` R1 is the first entry of
+  `agentfly/rules/default.toml`; the recorder reads the active
+  `/Library/Application Support/AgentFly/rules.toml` once at start (SPEC section 5).
+- Decision stays in-process (never waits on Neo4j).
 
 ---
 
@@ -292,14 +310,14 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
     `session` and `steps`; with `all=1` and no `limit` it has `session`, `steps` and
     `marked_order` (the same value `?limit=1` sends).
 - Step object fields: `order`, `kind` (`read|shell|edit|tool`), `verdict`
-  (`allowed|blocked|warned`), `tool`, `file`, `sensitive`, `command`, `host`,
+  (`allowed|blocked|warned|highlighted`), `tool`, `file`, `sensitive`, `command`, `host`,
   `rule` (nullables as needed). Built from `StepRecord` in `apply_rules`
   (sync append) — Neo4j enqueue stays separate and async.
 - Three more keys, **present only when they apply** (never `null`), for the page's Why card:
-  `rule_text` (the message of the rule that fired, on a blocked or warned step), and
+  `rule_text` (the message of the rule that fired, on a blocked, warned or highlighted step), and
   `user_message` and `agent_message` (exactly the strings the hook answer for that step sent, so
-  only on a step whose answer was a deny; a warned step's answer is a plain allow, so it has
-  `rule_text` and neither message). A merged step (two hooks, one `tool_use_id`) carries those of
+  only on a step whose answer was a deny or an `ask`; a warn on another event and a highlight are
+  plain allows, so they have `rule_text` and neither message). A merged step (two hooks, one `tool_use_id`) carries those of
   the half whose verdict it shows; on a tie the earlier half stays. They live in process memory
   only: not in `history.db`, not in Neo4j, not in `/api/sessions`.
 - Empty state: `{"session": null, "steps": []}`; with `all=1`, also `marked_order: null`; with

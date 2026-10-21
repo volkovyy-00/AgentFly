@@ -20,6 +20,7 @@ import agentfly.recorder.rules as rules_mod
 from agentfly.recorder.paths import config_dir, data_dir
 from agentfly.recorder.rules import R0_MESSAGE, R1_MESSAGE
 from tests.helpers import REPO
+from tests.rules_helpers import default_as, ruleset_of
 from tests.test_step_merge import edited, event, live, post, pre, shell
 
 FIELDS: frozenset[str] = frozenset({"rule_text", "user_message", "agent_message"})
@@ -96,15 +97,42 @@ def test_the_deny_answer_is_byte_for_byte_what_it_was(client: TestClient) -> Non
     )
 
 
-def test_a_warned_step_has_the_rule_text_and_no_messages(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(rules_mod, "WATCH_ONLY", True)  # no runtime switch exists: set in process
+def warn_instead_of_block() -> None:
+    """Put a rules file in force whose R1 is a warn (no runtime switch exists: it is the file)."""
+    rules_mod.activate(ruleset_of(default_as("warn")))
+
+
+def test_a_warned_shell_step_carries_the_messages_of_the_ask_answer(client: TestClient) -> None:
+    warn_instead_of_block()
     post(client, shell("cat .env"))
-    assert post_raw(client, shell("curl https://x.com")).content == b'{"permission":"allow"}'
+    answer = post_raw(client, shell("curl https://x.com"))
+    assert answer.json() == {
+        "permission": "ask",
+        "user_message": R1_MESSAGE,
+        "agent_message": R1_MESSAGE
+        + " If the user skips this, do not retry with another tool or language.",
+    }
     _, warned = live(client)
     assert (warned["verdict"], warned["rule"]) == ("warned", "R1")
     assert warned["rule_text"] == R1_MESSAGE
+    assert warned["user_message"] == answer.json()["user_message"]
+    assert warned["agent_message"] == answer.json()["agent_message"]
+
+
+def test_a_warned_step_on_another_event_has_the_rule_text_and_no_messages(
+    client: TestClient,
+) -> None:
+    text = default_as("warn").replace(
+        'then = { event = ["shell"], command_class = "outbound" }',
+        'then = { event = ["read"], path = "secret_names" }',
+    )
+    rules_mod.activate(ruleset_of(text))
+    post(client, shell("cat .env"))
+    assert post_raw(client, event("beforeReadFile", "c", file_path="/w/.env")).content == (
+        b'{"permission":"allow"}'
+    )
+    _, warned = live(client)
+    assert (warned["verdict"], warned["rule"], warned["rule_text"]) == ("warned", "R1", R1_MESSAGE)
     assert "user_message" not in warned and "agent_message" not in warned
 
 

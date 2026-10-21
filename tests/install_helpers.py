@@ -30,6 +30,7 @@ import pytest
 from agentfly.install import installer, packages, records
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 from tests.helpers import client_env
 
 OTHER_TOOL_ENTRY = '{"command": "/opt/other/audit.sh", "timeout": 5}'
@@ -182,6 +183,8 @@ TOOL_DISTS: dict[str, tuple[str, dict[str, bytes]]] = {
         {
             "agentfly/__init__.py": b"",
             "agentfly/module.py": b"VALUE = 1\n",
+            # the wheel's RECORD lists the packaged default rules; `init -g` checks them (D28)
+            "agentfly/rules/default.toml": rulefile.default_path().read_bytes(),
             "../../../bin/agentfly": b"#!/bin/sh\nexit 0\n",
         },
     ),

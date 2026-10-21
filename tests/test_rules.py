@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-import agentfly.recorder.rules as rules_mod
 from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
-from agentfly.recorder.rules import R1_MESSAGE, Session, decide, mark
+from agentfly.recorder.rules import Session, decide, mark
 from agentfly.recorder.sessions import SessionStore
 from tests.cases import MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
+from tests.rules_helpers import default_as, ruleset_of
 
 SENSITIVE = [
     ".ENV",
@@ -294,17 +294,16 @@ def test_session_store_survives_reload(tmp_path: Path) -> None:
     assert again.next_step == n + 1
 
 
-def test_watch_only_warns_instead_of_block() -> None:
-    previous: bool = rules_mod.WATCH_ONLY
-    rules_mod.WATCH_ONLY = True
-    try:
-        sess = _session(marked=True)
-        _, verdict, rule_id = _run(_shell("curl https://x.com"), sess)
-        assert verdict == "warned"
-        assert rule_id == "R1"
-        assert R1_MESSAGE.startswith("Blocked by rule R1:")
-    finally:
-        rules_mod.WATCH_ONLY = previous
+@pytest.mark.parametrize(
+    ("severity", "verdict"), [("warn", "warned"), ("highlight", "highlighted")]
+)
+def test_a_rule_that_the_file_makes_gentler_warns_or_highlights_instead_of_blocking(
+    severity: str, verdict: str
+) -> None:
+    rs = ruleset_of(default_as(severity))
+    action = _shell("curl https://x.com")
+    assert decide(action, mark(action, _session(marked=True), rs), rs) == (verdict, "R1")
+    assert decide(action, _session(), rs) == ("allow", None), "nothing was read: R1 is not armed"
 
 
 @pytest.mark.parametrize(
