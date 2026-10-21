@@ -7,6 +7,7 @@ import posixpath
 import re
 import shlex
 import stat
+from functools import cached_property
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -354,10 +355,8 @@ def contained_relative(path: str, root: str) -> str | None:
 
 
 def _folded(text: str) -> str:
-    """A path with `.` and `..` folded as text, no file system. `normpath` keeps a leading `//`,
-    which the system reads as `/`."""
-    folded: str = posixpath.normpath(text)
-    return folded[1:] if folded.startswith("//") else folded
+    """An absolute path with `.` and `..` folded as text, no file system."""
+    return posixpath.normpath("/" + text.lstrip("/"))  # normpath keeps a leading `//`
 
 
 class _OverBudget(Exception):
@@ -383,58 +382,46 @@ class Lookups:
         self.left: int = LOOKUP_STEPS if steps is None else steps  # read now: a test lowers it
         self._project_root: Path = project_root
         self._sent: str | None = _folded(str(project_root)) if project_root.is_absolute() else None
-        self._root: str | None = None  # the resolved root; None until asked, or when unusable
-        self._root_asked: bool = False
         self._answers: dict[str, str | None] = {}
         self._plain: set[str] = set()  # paths seen to be no link (so every part above is a folder)
         self._links: dict[str, str] = {}
 
     def project_relative(self, word: str) -> str | None:
         """The word as a path inside the project when it names an existing file there, else None.
-
-        Never raises. A word over `MAX_PATH_WORD` characters is not looked up: it is cheap to
-        refuse and costly to resolve.
-        """
+        Never raises; a word over `MAX_PATH_WORD` characters is not looked up."""
         if len(word) > MAX_PATH_WORD:
             return None
-        if word in self._answers:
-            return self._answers[word]
-        try:
-            rel: str | None = self._look_up(word)
-        except _OverBudget:
-            rel = None
-        self._answers[word] = rel
-        if rel is not None:
-            self._answers.setdefault(rel, rel)  # a result is a path of plain folders already seen
-        return rel
+        if word not in self._answers:
+            try:
+                self._answers[word] = self._look_up(word)
+            except _OverBudget:
+                self._answers[word] = None
+        return self._answers[word]
 
     def names_file(self, word: str) -> bool:
         return self.project_relative(word) is not None
 
-    def _resolved_root(self) -> str | None:
+    @cached_property
+    def _root(self) -> str | None:
         """The resolved root, worked out once: None when the system cannot say or it is gone."""
-        if not self._root_asked:
-            self._root_asked = True
-            resolved: Path | None = resolved_or_none(self._project_root)
-            if resolved is not None:
-                try:
-                    os.lstat(resolved)
-                except (OSError, ValueError):
-                    return None
-                self._root = resolved.as_posix()
-                self._plain.add(self._root)
-        return self._root
-
-    def _bases(self, root: str) -> tuple[str, ...]:
-        """The root as sent (when it is a whole path) and as resolved: a word may sit in either."""
-        return (root,) if self._sent is None or self._sent == root else (self._sent, root)
+        resolved: Path | None = resolved_or_none(self._project_root)
+        if resolved is None:
+            return None
+        try:
+            os.lstat(resolved)
+        except (OSError, ValueError):
+            return None
+        self._plain.add(resolved.as_posix())
+        return resolved.as_posix()
 
     def _look_up(self, word: str) -> str | None:
-        root: str | None = self._resolved_root()
+        root: str | None = self._root
         if root is None:
             return None
         absolute: bool = word.startswith("/")
-        bases: tuple[str, ...] = self._bases(root)
+        bases: tuple[str, ...] = (root,)
+        if self._sent is not None and self._sent != root:
+            bases = (self._sent, root)  # a word may sit in either
         if not any(
             contained_relative(_folded(word if absolute else f"{base}/{word}"), base) is not None
             for base in bases
@@ -442,19 +429,18 @@ class Lookups:
             return None  # outside as text: never looked up
         # A word that starts with the root as typed walks from the resolved root, whose parts are
         # known; any other absolute word walks from `/`.
-        start: str = "/" if absolute else root
-        parts: list[str] = word.split("/")
+        start, rest = ("/", word) if absolute else (root, word)
         for base in bases if absolute else ():
-            if contained_relative(word, base) is not None:
-                start, parts = root, word[len(base) :].split("/")
+            rel: str | None = contained_relative(word, base)
+            if rel is not None:
+                start, rest = root, rel
                 break
         # Words in one folder share all but the last part: when the folder is already known to be
         # plain (no link above it), only the last part is looked at.
-        whole: str = f"{start.rstrip('/')}/{'/'.join(parts).lstrip('/')}"
-        head, _, leaf = whole.rpartition("/")
+        head, _, leaf = f"{start.rstrip('/')}/{rest.lstrip('/')}".rpartition("/")
         if leaf not in ("", ".", "..") and (head or "/") in self._plain:
-            start, parts = head or "/", [leaf]
-        end: str | None = self._walk(start, parts)
+            start, rest = head or "/", leaf
+        end: str | None = self._walk(start, rest.split("/"))
         return None if end is None else contained_relative(end, root)
 
     def _spend(self, steps: int) -> None:
@@ -501,6 +487,6 @@ class Lookups:
         return here
 
 
-def _project_relative(word: str, project_root: Path, lookups: Lookups | None = None) -> str | None:
-    """`Lookups.project_relative` for one word (the cleaner shares one `Lookups` per command)."""
-    return (lookups or Lookups(project_root)).project_relative(word)
+def _project_relative(word: str, project_root: Path) -> str | None:
+    """`Lookups.project_relative` for one word, with a budget of its own."""
+    return Lookups(project_root).project_relative(word)

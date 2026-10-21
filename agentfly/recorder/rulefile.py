@@ -25,11 +25,12 @@ import sys
 import tomllib
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from itertools import accumulate
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -608,6 +609,11 @@ class _Sizes(NamedTuple):
     sizes: tuple[int, ...]
     sums: tuple[int, ...]  # sums[k] is the total of the k smallest sizes
 
+    @classmethod
+    def of(cls, counts: Iterable[int]) -> _Sizes:
+        sizes: tuple[int, ...] = tuple(sorted(counts))
+        return cls(sizes, tuple(accumulate(sizes, initial=0)))
+
     def looked_up(self, listed: int) -> int:
         below: int = bisect_right(self.sizes, listed)
         return self.sums[below] + listed * (len(self.sizes) - below)
@@ -615,17 +621,11 @@ class _Sizes(NamedTuple):
 
 @lru_cache(maxsize=4)  # as `_simple_commands`: one line, all the clauses of a hook
 def _program_sizes(parsed: Parsed) -> _Sizes:
-    sizes: tuple[int, ...] = tuple(sorted(len(view.first) for view in _simple_commands(parsed)))
-    sums: list[int] = [0]
-    for size in sizes:
-        sums.append(sums[-1] + size)
-    return _Sizes(sizes, tuple(sums))
+    return _Sizes.of(len(view.first) for view in _simple_commands(parsed))
 
 
 def _charge_program_walk(listed: int, parsed: Parsed) -> None:
-    """Charge a clause that lists `listed` programs for the look-ups its walk over the line may
-    make, before it walks (V5d). Up to `PROGRAM_LOOKUPS_FREE` costs nothing, so a clause that is
-    cheap answers on a spent meter; a heavier one on a spent meter raises without walking."""
+    """Charge a clause that lists `listed` programs for its walk over the line, before it walks."""
     over: int = _program_sizes(parsed).looked_up(listed) - PROGRAM_LOOKUPS_FREE
     if over > 0:
         _charge(PROGRAM_LOOKUP_STEPS * over)

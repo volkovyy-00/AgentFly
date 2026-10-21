@@ -11,7 +11,6 @@ With no meter set, nothing is charged or raised.
 
 from __future__ import annotations
 
-import itertools
 import random
 from typing import Any
 
@@ -473,9 +472,7 @@ def test_the_lookup_table_adds_up_like_the_walk_does() -> None:
     rng = random.Random(21)
     for _ in range(300):
         sizes = [rng.randrange(1, 12) for _ in range(rng.randrange(1, 40))]
-        table = rulefile._Sizes(
-            tuple(sorted(sizes)), tuple(itertools.accumulate(sorted(sizes), initial=0))
-        )
+        table = rulefile._Sizes.of(sizes)
         for listed in range(1, 14):
             assert table.looked_up(listed) == sum(min(listed, size) for size in sizes)
 

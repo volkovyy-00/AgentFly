@@ -44,6 +44,7 @@ from tests.install_helpers import (
 )
 from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
+from tests.test_install_rules import another_user
 
 IDS = [
     "record",
@@ -941,18 +942,12 @@ def test_a_rules_file_readable_through_the_users_group_does_not_fail_the_lock_li
 ) -> None:
     os.chown(world.layout.rules, -1, os.getegid())
     world.layout.rules.chmod(0o640)
-    nobody = 2_000_000_000  # the tree is this user's: only another user shows the group clause
-    monkeypatch.setattr(
-        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid()}))
-    )
+    # The tree is this user's, so only another user shows the group clause.
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid()))
     assert world.results()["lock"].level == "ok"
-    monkeypatch.setattr(
-        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid() + 1}))
-    )
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid() + 1))
     check = world.results()["lock"]
     assert check.level == "fail" and "could not load it" in check.text
     world.layout.rules.chmod(0o660)  # group-writable, in a group the user is in
-    monkeypatch.setattr(
-        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid()}))
-    )
+    monkeypatch.setattr(installer, "current_reader", lambda: another_user(os.getegid()))
     assert world.results()["lock"].level == "fail"

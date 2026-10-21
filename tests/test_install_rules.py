@@ -59,10 +59,17 @@ def archive(tmp_path: Path) -> tuple[Path, PythonBuild]:
     return write_archive(tmp_path / "download", fake_python_tar())
 
 
-def do_install(layout: Layout, archive: tuple[Path, PythonBuild]) -> installer.Outcome:
+def do_install(
+    layout: Layout, archive: tuple[Path, PythonBuild], run_as: tuple[int, int] | None = None
+) -> installer.Outcome:
     path, build = archive
     return installer.install(
-        layout, build, cursor_version="3.24.12", source=installer.client_source(), archive=path
+        layout,
+        build,
+        cursor_version="3.24.12",
+        source=installer.client_source(),
+        archive=path,
+        run_as=run_as,
     )
 
 
@@ -730,16 +737,17 @@ def test_the_owner_bit_counts_for_the_owner_and_root_reads_nothing_by_owner_or_g
     layout: Layout, archive: tuple[Path, PythonBuild]
 ) -> None:
     edited_rules(layout, archive, 0o600)
+    unread = f"{layout.rules} cannot be read by the user, so the recorder could not load it"
     mine = installer.Reader(os.getuid(), frozenset())
     assert installer.lock_problems(layout, check_owner=False, reader=mine) == []
-    assert installer.lock_problems(layout, check_owner=False, reader=another_user()) != []
+    assert installer.lock_problems(layout, check_owner=False, reader=another_user()) == [unread]
     layout.rules.chmod(0o640)  # root could read it, which says nothing about the user
     root = installer.Reader(0, frozenset({os.getegid()}))
-    assert installer.lock_problems(layout, check_owner=False, reader=root) != []
+    assert installer.lock_problems(layout, check_owner=False, reader=root) == [unread]
     layout.rules.chmod(0o644)
     assert installer.lock_problems(layout, check_owner=False, reader=root) == []
     layout.rules.chmod(0o000)
-    assert installer.lock_problems(layout, check_owner=False, reader=mine) != []
+    assert installer.lock_problems(layout, check_owner=False, reader=mine) == [unread]
 
 
 def test_the_other_files_still_have_to_be_readable_by_others(
@@ -752,27 +760,13 @@ def test_the_other_files_still_have_to_be_readable_by_others(
     assert problems == [f"{layout.client} cannot be read by the user, so the hook would fail"]
 
 
-def run_as_install(
-    layout: Layout, archive: tuple[Path, PythonBuild], run_as: tuple[int, int]
-) -> installer.Outcome:
-    path, build = archive
-    return installer.install(
-        layout,
-        build,
-        cursor_version="3.24.12",
-        source=installer.client_source(),
-        archive=path,
-        run_as=run_as,
-    )
-
-
 def test_a_repair_goes_on_past_a_rules_file_the_user_reads_through_its_group(
     layout: Layout, archive: tuple[Path, PythonBuild]
 ) -> None:
     edited_rules(layout, archive, 0o640)
     before = fingerprint(layout.rules)
     tamper_with_the_client(layout)
-    outcome = run_as_install(layout, archive, (NOBODY, os.getegid()))
+    outcome = do_install(layout, archive, (NOBODY, os.getegid()))
     assert outcome.changed
     assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
     assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o640
@@ -785,7 +779,7 @@ def test_a_repair_stops_when_the_user_the_installer_serves_is_not_in_the_group(
     before = fingerprint(layout.rules)
     tamper_with_the_client(layout)
     with pytest.raises(InstallError, match="could not load it"):
-        run_as_install(layout, archive, (NOBODY, os.getegid() + 1))
+        do_install(layout, archive, (NOBODY, os.getegid() + 1))
     assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
 
 

@@ -101,12 +101,14 @@ def command_lists() -> tuple[str, list[str]]:
     return list_line("l", *entries), [match_rule(i, 'command = "l"') for i in range(150)]
 
 
-def command_list_on_one_program() -> tuple[str, list[str]]:
+def command_list_on_one_program(
+    severity: str = "highlight", entries: int = rulefile.MAX_LIST_ENTRIES
+) -> tuple[str, list[str]]:
     """Every entry names a program the hook's command has (`cat`): each one has to look at the
     words after it, in every one of the 198 rules the file may hold beside the default's two."""
-    entries = [f"cat w{i}" for i in range(rulefile.MAX_LIST_ENTRIES)]
-    rules = [match_rule(i, 'command = "l"') for i in range(rulefile.MAX_RULES - 2)]
-    return list_line("l", *entries), rules
+    names = [f"cat w{i}" for i in range(entries)]
+    rules = [match_rule(i, 'command = "l"', severity) for i in range(rulefile.MAX_RULES - 2)]
+    return list_line("l", *names), rules
 
 
 def bipartite_list(severity: str = "highlight") -> tuple[str, list[str]]:
@@ -119,15 +121,8 @@ def bipartite_list(severity: str = "highlight") -> tuple[str, list[str]]:
     return list_line("l", *entries), rules
 
 
-def program_walk_list(severity: str = "highlight") -> tuple[str, list[str]]:
-    """V5d's crafted file: 50 entries `cat wN` in each of 198 rules. Every simple command of
-    `PROGRAM_WALK_LINE` has `cat` and no `wN`, so a clause finds nothing and has to say so for
-    each of the line's 1,000 simple commands."""
-    entries = [f"cat w{i}" for i in range(50)]
-    rules = [match_rule(i, 'command = "l"', severity) for i in range(rulefile.MAX_RULES - 2)]
-    return list_line("l", *entries), rules
-
-
+# V5d: against 198 rules of 50 `cat wN` (`command_list_on_one_program`), a line of 1,000 simple
+# commands that each hold `cat` and no `wN`: a clause has to say so 1,000 times.
 PROGRAM_WALK_LINE = " ; ".join(f"cat z{k} y" for k in range(1_000))  # 3,000 words
 
 

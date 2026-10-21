@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Iterator
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -51,8 +52,8 @@ from tests.test_rules_cost import (
     PROGRAM_WALK_LINE,
     bipartite_list,
     command,
+    command_list_on_one_program,
     match_rule,
-    program_walk_list,
 )
 from tests.test_severities import push
 from tests.test_severities import rule as severity_rule
@@ -454,8 +455,8 @@ def test_a_hit_in_one_test_is_not_seen_by_the_next(rec: Recorder) -> None:
 LIST_IDS = {f"m{i}" for i in range(rulefile.MAX_RULES - 2)}
 
 
-def heavy_lists(severity: str, *, before_r1: bool = False) -> RuleSet:
-    lists, rules = bipartite_list(severity)
+def heavy_lists(severity: str, *, before_r1: bool = False, shape: Any = bipartite_list) -> RuleSet:
+    lists, rules = shape(severity)
     if not before_r1:
         return ruleset_of(default_with(lists, *rules))
     text = default_with(lists)
@@ -500,8 +501,8 @@ def test_a_heavy_command_list_stops_at_the_budget_and_the_count_proves_it(
 
 
 def walk_lists(severity: str) -> RuleSet:
-    lists, rules = program_walk_list(severity)
-    return ruleset_of(default_with(lists, *rules))
+    """198 rules of 50 `cat wN` (V5d); `PROGRAM_WALK_LINE` is the line that is hard on them."""
+    return heavy_lists(severity, shape=partial(command_list_on_one_program, entries=50))
 
 
 def test_a_long_line_on_many_lists_stops_at_the_budget_and_the_count_proves_it(

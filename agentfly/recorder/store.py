@@ -26,7 +26,7 @@ from agentfly.recorder.clean import (
     website_name,
 )
 from agentfly.recorder.config_env import neo4j_settings
-from agentfly.recorder.names import is_sensitive, words
+from agentfly.recorder.names import is_sensitive
 from agentfly.recorder.paths import config_dir
 from agentfly.recorder.rules import Session, reads_secret
 
@@ -339,11 +339,8 @@ def relative_file_path(file_path: str, project_root: Path) -> str:
 
 
 def _word_path(token: str, lookups: Lookups) -> str:
-    """The file a surviving word of a command is saved as (V5d): the base name, or, for an
-    absolute word that names something inside the project, the path relative to the root. The
-    project is asked through the hook's `Lookups` (a word over `MAX_PATH_WORD` is not looked up,
-    a link that leads out is not inside), where `relative_file_path` resolves the word and the
-    root on its own. A relative word is saved by its base name, as before."""
+    """The file a surviving word of a command is saved as: its base name, or, for an absolute word
+    inside the project (a link must lead inside), the path relative to the root."""
     if token.startswith("/"):
         rel: str | None = lookups.project_relative(token)
         if rel is not None and _encodes(rel):
@@ -351,10 +348,10 @@ def _word_path(token: str, lookups: Lookups) -> str:
     return _storable(Path(token).name)
 
 
-def hosts_from_cleaned(cleaned: str, tokens: list[str] | None = None) -> tuple[str, ...]:
-    """The hosts a cleaned command names. `tokens` is `words(cleaned)` when the caller has it."""
+def hosts_from_cleaned(tokens: list[str]) -> tuple[str, ...]:
+    """The hosts the words of a cleaned command name."""
     found: list[str] = []
-    for token in words(cleaned) if tokens is None else tokens:
+    for token in tokens:
         if token in {"<arg>", "<unparsed>", "<removed>"}:
             continue
         if token.startswith("-"):
@@ -423,8 +420,8 @@ def build_step_record(
         command = clean_command(raw_cmd, root, lookups)
         if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
-        tokens: list[str] = cleaned_words(command)  # split once, as `words` would
-        hosts = hosts_from_cleaned(command, tokens)
+        tokens: list[str] = cleaned_words(command)  # split once
+        hosts = hosts_from_cleaned(tokens)
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in tokens:
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:

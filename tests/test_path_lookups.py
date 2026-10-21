@@ -28,8 +28,7 @@ from agentfly.recorder.rules import Session
 from agentfly.recorder.store import build_step_record
 from tests.helpers import wallclock
 from tests.recorder_harness import Recorder
-
-CLIENT_WAIT = 0.5  # agentfly/hook_client.py `_BUDGET_S`: the recorder gets this long
+from tests.test_rules_cost import CLIENT_WAIT
 
 
 @pytest.fixture()
@@ -102,7 +101,7 @@ def test_the_root_is_looked_up_once_however_many_words_there_are(
 ) -> None:
     clean_command("cat /net/x/0", tree)
     one_word = list(fs_calls)
-    assert one_word and all(call.startswith(str(tree)[:3]) for call in one_word)
+    assert one_word and all(str(tree).startswith(call) for call in one_word)  # it and above
     fs_calls.clear()
     clean_command("cat " + " ".join(f"/net/x/{k}" for k in range(50)), tree)
     assert fs_calls == one_word  # the root's own calls, the same for 50 words
@@ -265,17 +264,14 @@ def test_the_cleaner_and_the_step_record_share_one_budget(tree: Path, fs_calls: 
     assert len(fs_calls) == calls
 
 
-def payload(tree: Path, command: str) -> dict[str, Any]:
-    return {
+def record(tree: Path, command: str) -> Any:
+    session = Session(id="s", marked=False, start_time="", next_step=1)
+    payload = {
         "hook_event_name": "beforeShellExecution",
         "command": command,
         "workspace_roots": [str(tree)],
     }
-
-
-def record(tree: Path, command: str) -> Any:
-    session = Session(id="s", marked=False, start_time="", next_step=1)
-    return build_step_record(payload(tree, command), session, "allow", None, order=1)
+    return build_step_record(payload, session, "allow", None, order=1)
 
 
 def test_past_the_budget_the_words_are_saved_as_arg_and_are_not_the_file(
@@ -297,7 +293,6 @@ def test_the_cleaned_command_is_split_once(tree: Path, monkeypatch: pytest.Monke
         return real(command)
 
     monkeypatch.setattr(store_module, "cleaned_words", spy)
-    monkeypatch.setattr(store_module, "words", lambda text: pytest.fail("a second split"))
     record(tree, "cat sub/a.py https://x.com/y")
     assert splits == ["cat sub/a.py x.com"]
 
