@@ -977,6 +977,39 @@ def test_the_command_prints_a_package_name_with_control_characters_as_one_plain_
     assert f"x{SHOWN}y.py is not listed in any RECORD" in line
 
 
+def set_record_versions(w: World, *, agentfly: object, cursor: object) -> None:
+    """The record as an install left it, with other values for the two versions it names."""
+    record = records.read(w.layout)
+    assert record is not None
+    record["agentfly_version"], record["cursor_version"] = agentfly, cursor
+    w.layout.record.write_text(records.dumps(record), encoding="utf-8")
+
+
+def test_the_record_line_shows_versions_with_control_characters_escaped(world: World) -> None:
+    set_record_versions(world, agentfly=f"0.1{BAD}", cursor=f"3.25.9{BAD}")
+    line = world.results()["record"]
+    assert line.level == "ok"
+    assert line.text == f"hash record present (AgentFly 0.1{SHOWN}, Cursor 3.25.9{SHOWN})"
+    assert_plain(line.text)
+    assert "\n" not in line.text
+
+
+def test_the_record_line_shows_a_version_that_is_not_text(world: World) -> None:
+    set_record_versions(world, agentfly=3, cursor=None)
+    assert world.results()["record"].text == "hash record present (AgentFly 3, Cursor None)"
+
+
+def test_the_command_prints_a_record_version_with_control_characters_as_one_plain_line(
+    command: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    set_record_versions(command, agentfly=f"0.1{BAD}", cursor=f"3.25.9{BAD}")
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert_plain(out)
+    [line] = [line for line in out.split("\n") if line.startswith("ok    record")]
+    assert line.endswith(f"(AgentFly 0.1{SHOWN}, Cursor 3.25.9{SHOWN})")
+
+
 # ---------------------------------------------------------------- the rules file's group (V5d)
 
 
