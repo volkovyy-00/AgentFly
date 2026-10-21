@@ -455,12 +455,12 @@ lines for them (R0 and normalisation: V5).
   `str.isprintable` calls false as an escape (`\x1b`, `\n`, `\u202e`; `packages.visible`) and
   leaves other text alone, `café.py` and a backslash included. `inspect` escapes `Check.problems`
   and `Check.changes` when it builds them and `confirm` escapes what it prints; the hash record
-  keeps names as read. Tests plant `ESC [2K`, a newline or U+202E in an unlisted file, a listed
-  file that fails its hash or cannot be read, a RECORD row outside the environment, a dist-info
-  folder, the environment path and a `METADATA` Name or Version (a newline there is a folded
-  header: a plain one ends it); `init -g` and `uninstall` stop with one printable line and no
-  password, nothing raw reaches stdout before "Go on? [y/N]", `doctor` prints one plain line.
-  Expected texts are written out, never computed with `visible`.
+  keeps names as read. Tests plant a name holding `ESC [2K`, a newline and U+202E in an unlisted
+  file, a listed file that fails its hash or cannot be read, a RECORD row outside the
+  environment, a dist-info folder and the environment path, and each of them in a `METADATA` Name
+  or Version (a newline there is a folded header: a plain one ends it); `init -g` and `uninstall`
+  stop with one printable line and no password, nothing raw reaches stdout before "Go on? [y/N]",
+  `doctor` prints one plain line. Expected texts are written out, never computed with `visible`.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;

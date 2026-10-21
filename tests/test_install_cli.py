@@ -43,8 +43,9 @@ from tests.install_helpers import (
 )
 from tests.service_helpers import Launchd
 from tests.test_install_packages import (
-    HOSTILE,
+    BAD,
     REAL_TOOL_ENVIRONMENT,
+    SHOWN,
     assert_plain,
     fake_agentfly,
 )
@@ -440,21 +441,18 @@ def test_an_extra_file_in_site_packages_stops_it_too(
 
 
 @pytest.mark.parametrize("command", [["init", "-g"], ["uninstall"]])
-@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
-def test_a_file_with_a_control_character_in_its_name_stops_with_one_plain_line(
+def test_a_file_with_control_characters_in_its_name_stops_with_one_plain_line(
     command: list[str],
-    bad: str,
-    shown: str,
     system: Layout,
     installed: pythons.PythonBuild,
     tool_env: packages.Environment,
     sudo: Sudo,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    (tool_env.site / "agentfly" / f"x{bad}y.py").write_text("x = 1\n")
+    (tool_env.site / "agentfly" / f"x{BAD}y.py").write_text("x = 1\n")
     assert main(command) == 1
     err = capsys.readouterr().err
-    assert f"/agentfly/x{shown}y.py is not listed in any RECORD" in err
+    assert f"/agentfly/x{SHOWN}y.py is not listed in any RECORD" in err
     assert err.endswith("\n") and err[:-1].isprintable()  # one line; nothing a terminal acts on
     assert sudo.calls == [] and system.system_root.exists()
 

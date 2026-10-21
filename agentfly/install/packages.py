@@ -67,7 +67,6 @@ class Distribution:
 @dataclass(frozen=True)
 class Check:
     distributions: dict[str, Distribution]  # what is on disk now: what the record should hold
-    # `problems` and `changes` are text for the owner's terminal and are already through `visible`.
     problems: list[str]  # a changed or extra file; empty when nothing is wrong
     changes: list[str]  # what differs from the record (every file matches its RECORD): to confirm
     extra: bool  # a problem is a file that should not be there: installing over it keeps it
@@ -330,8 +329,9 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     problems += [f"{path} is not listed in any RECORD" for path in unlisted]
     problems += [f"{why}, so what it holds cannot be checked" for why in unlistable]
     changes = _changes(found, stored_from(record))
-    # Every sentence holds names from a folder the user can write: escaped here, once, for all
-    # readers (the refusal, the question, `doctor`), whichever site built the sentence.
+    # Every sentence holds names from a folder the user can write. `problems` and `changes` are
+    # escaped here, once, for all readers (the refusal, the question, `doctor`), whichever site
+    # above built the sentence; a new sentence needs no escape of its own.
     return Check(
         found,
         [visible(text) for text in problems],
@@ -406,7 +406,11 @@ def require(record: dict[str, Any] | None, then: str) -> Check:
 
 
 def confirm(changes: list[str], ask: Callable[[str], str] | None = None) -> bool:
-    """Show what changed since the record was made and ask the owner; only a terminal can answer."""
+    """Show what changed since the record was made and ask the owner; only a terminal can answer.
+
+    The lines of a `Check` are already escaped; this escapes again because it takes any list and
+    is the last step before the terminal.
+    """
     print("AgentFly's package changed since the last `agentfly init -g`:")
     for line in changes:
         print(f"  {visible(line)}")
