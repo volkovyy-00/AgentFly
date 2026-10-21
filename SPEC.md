@@ -20,13 +20,8 @@ code as it is today.
 Sections 7, 8 and 11 are technical reference for the people building it; the
 rest is written for the owner.
 
-Two kinds of marker appear below:
-
-- **Pending D16** marks the one open question: memory across sessions (goal 4,
-  section 12). The spikes S3 and S5 are done and their results are written into
-  the sections they affect.
-- Numbers like (D5) point to the owner's decisions, kept in the maintainers'
-  private process repo; `git show 3871787:docs/DECISIONS.md` has them up to D31.
+Numbers like (D5) point to the owner's decisions, kept in the maintainers'
+private process repo; `git show 3871787:docs/DECISIONS.md` has them up to D31.
 
 ---
 
@@ -178,8 +173,8 @@ Only *facts about actions*. Never the contents of files.
 Compared with the hackathon version, v1 adds the workspace root path (the one
 item D14 asked the owner to approve), a session end time, and the *highlighted*
 verdict below. The workspace path lets History tell projects apart once AgentFly
-watches every project. It is stored in the local store, and also in Neo4j if you
-turn that copy on.
+watches every project. It is stored in the local store only, not in the optional
+Neo4j copy (D14).
 
 The two marked yes/no items (owner, 2026-10-19) are stored in the local store
 only. They record what the rules decided, so History does not have to guess from
@@ -960,18 +955,18 @@ adds its line to the whitelist.
 
 ---
 
-## 12. Not in v1, and still pending
+## 12. Not in v1
 
 - **Plain-language drafting** (D13): not in v1; drafts come from flags
   (section 5).
-- **Memory across sessions** (D16, goal 4): **Pending D16.** Experiments only,
-  and the answer to "does it help" is a yes, partly or no with one small test.
+- **Memory across sessions** (D16, goal 4): not in v1 (owner, 2026-10-21); it may
+  come back after the release as an experiment with one small test.
   One idea is an option on R1 where a secret read in this workspace in the last
   24 hours still counts, loaded into memory at start and never queried live.
   Another is a short brief given to the agent at session start. Spike S5 was a
   smoke test of that brief (two chats per arm): it reached the agent, which
   used it. That says nothing about value; it only unlocks the pre-registered
-  A/B test. D16 is still proposed; as proposed, neither is a v1 feature.
+  A/B test.
 - **A per-project `agentfly init`** (D20): deferred. The global install already
   covers every project. If you later want only some projects watched, a
   system-owned watch list is the safe shape and needs no change to the hooks.
