@@ -6,7 +6,7 @@ Pending decisions: D16
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
 - Order (owner 2026-10-19/20/21): F9 ∥ F13 ∥ F11 ∥ V5d (wave 1; V5d's file overlap with F11 checked at its brief) → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F12 after V5c and F13 (shares `agentfly/install/`, `packages.py`).
-- Briefs: wave 1 dispatched 2026-10-21 (briefs against 41fcc24): V5d (new, fresh pass 2), F9, F13 (re-stamped), F11 (re-stamped; CR1 added to scope and criteria). V5c (pass 2, 2026-10-18; D27/D28 and V5b's npm dodges added 2026-10-20; full re-check after V5b merges; A3 + D30 to add). V7, V9, F8, F12: not written. F8 needs first: count pyright basic-mode errors; check whether pyright downloads Node on first run. `tests/test_ci_workflow.py` pins ci.yml strictly, so F8/F9 edit that test on purpose. Standing rule: the lead writes or re-checks each brief with agent-ready-tickets and a fresh pass-2 reviewer before every dispatch; the owner says "go". Dispatch with `docs/roles/dispatch.sh <card> <slug>` (F9 `security-scans`, F13 `escape-names`, F11 `session-state`, V5d `long-commands`); the owner starts each worker.
+- Briefs: wave 1 dispatched 2026-10-21 (against 41fcc24). V5c (pass 2 2026-10-18; re-check after wave 1; add A3 + D30). V7, V9, F8, F12: not written; F8 first counts pyright basic-mode errors and checks pyright's Node download. Standing rule: brief via agent-ready-tickets + fresh pass 2, owner says "go", `docs/roles/dispatch.sh <card> <slug>`, owner starts each worker.
 - Worker closing rule (owner 2026-10-19, docs/reports/README.md): `/final-verification` on main...HEAD, commit, then `/code-review high`; verdict in the report.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT. CI runs on GitHub's macos-15 (arm64); V4 may use a runner for its checks; rework then.
 - Merge: trial-merge in a scratch worktree, 3× full check (~2–3 min each; no other suite running while timed), a fresh reviewer per branch, fixes back to the worker, merge with `--no-commit`, keep main's STATE/BOARD, check merged tree = trial tree. Before every trial merge: `git fetch`, then the push run for origin/main's exact SHA must be green.
@@ -18,7 +18,8 @@ Pending decisions: D16
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
 (dispatched 2026-10-21 from main 61e2981; owner started all four workers)
-- F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits). One trial merge + one PR (D26 B) for all four.
+- F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits).
+- F13 done 2026-10-21 (8bd1e94; 4525 passed; needs owner: none); fresh reviewer running. Raw names left in other installer/doctor messages (record line's Version) → cleanup card. One trial merge + one PR (D26 B) for all four.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -26,8 +27,8 @@ Pending decisions: D16
 - Recorder: not running (no listener on 8787, no launchd job). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees and branches: main; wave 1 (see In flight); ag-v5b-rules-file (merged, head 549cec1) kept with the worker's git-ignored `.superpowers/sdd/` (1.1 MB, advisor analysis and reviews) until the owner says remove; remote `merge/v5b` (PR #7) the owner may delete. Disk 23 GiB free.
-- Git: origin/main = 0473d58 (owner pushed 2026-10-21 ~12:16; carries V5b; PR #7 merged); CI 39583473122 and CodeQL 39583470949 green on it (checked 2026-10-21); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
-- GitHub CI green on main: 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. PR #7: CI check green; CodeQL's 3 `py/path-injection` alerts (stat-only, pre-existing behaviour) dismissed by the owner (won't fix) → V5d. Fork PR workflows need approval (owner 2026-10-19).
+- Git: origin/main = 0473d58 (V5b, PR #7); CI 39583473122 and CodeQL green on it. Lead commits after it are local (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes (incl. `gh api`), Read ~/.config/agentfly.
+- CI history: git show 41fcc24:docs/STATE.md. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode CLT (`make` opens a dialog).
 
