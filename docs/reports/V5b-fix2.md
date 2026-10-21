@@ -1,9 +1,100 @@
 # V5b-fix2: Second review round for V5b (hook-cost bound, R1's minimum on every name, honest "intact", long words)
-Status: in progress (as of 2026-10-21 09:40)
-Result: One per-hook budget now bounds floating patterns and command lists; R1's minimum is a structural rule; long words never raise; init -g rewrites only checked bytes. Slowest 300-word, 60-deep hook 116 ms. Open: /final-verification and /code-review high (the controller runs them).
-Evidence: Branch ag-v5b-rules-file, 15 code commits 81fbd3d..84f8412 plus docs and this report. Check: ruff clean, 4437 passed, 5 skipped, green 3x under load. Replay: test_package + test_step_fields 31 passed. Nothing pushed.
-Needs owner: none. The owner decided command-list metering and highlight skipping on 2026-10-21; no gate stopped on anything else.
-Details: see "## 2026-10-21 09:40" below.
+Status: in progress (as of 2026-10-21 10:35)
+Result: One per-hook budget bounds floating patterns (now also within one walk) and command lists; R1's minimum is structural; long words never raise; every saved path encodes; init -g rewrites only checked bytes. Review and audit findings fixed inside Touches; CR1 is outside them.
+Evidence: Branch ag-v5b-rules-file at e43239e (11 fix commits 49f6988..e43239e after the simplify 69c9d0e). Check: ruff clean, 4452 passed, 5 skipped. Smoke summary in the newest section. Nothing pushed.
+Needs owner: CR1, a security gap in sessions.py (outside this card): a fallback-linked subagent can miss a later R1 mark. Recommended: fix in the next card that may touch sessions.py (OR the parent's mark and triggers into an already-pending Task record).
+Details: see "## 2026-10-21 10:35" below.
+
+### Final verification and code review
+
+The controller ran the final whole-card review (ready to merge, minors only), `/final-verification`
+(smoke OK; simplify commit 69c9d0e, behaviour-preserving; the audit found A1-A4) and `/code-review
+high` on `main...HEAD` (CR1-CR10). This wave fixes the findings inside the card's Touches, each with a
+test that failed first (except M3, text only). Hook answers, deny bytes, the demo replay and stored
+values are unchanged for everything that worked before; `MAX_WORK`, `WORK_*`, `FLOAT_STEPS`, `DIV`,
+`MAX_PATH_WORD` and the meter's prices are unchanged.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| A1: one floating walk overspent the meter (one `.ssh/**` on a path 800,000 folders deep: left -1,555,004, 0.84 s) | `_place_middle` reads what the meter has left before each block's walk and charges as soon as the walk passes it (one integer compare per start), so the meter ends at most one start's work below 0. The repro now ends at -2 (0.25 s, the default rules alone 0.20 s). The counting test's steps are 45,004 (were 45,086). Test: `test_rules_meter.py::test_a_walk_stops_once_it_has_spent_what_the_meter_has_left` (50,000 folders: -99,002 before, -2 after) | 49f6988 |
+| A2: a Read/Write path the history cannot encode lost the row and `/api/steps` answered 500 | A path that does not encode is "outside" whether `resolve()` failed or succeeded (macOS resolves U+DC80..U+DCFF), and the base name is stored with **U+FFFD for each lone surrogate** (`store._storable`; a path that encodes keeps its exact value). `<ws>/a/\udcff/b` is saved `b` (as `a/\ud800/b` was), `<ws>/x/\udcff` and `<ws>/x/\ud800` as `\ufffd`. Tests: `test_long_words.py::test_a_read_path_the_history_cannot_encode_still_reaches_it_and_the_page` (3 cases), the updated `test_an_unencodable_absolute_path_is_saved_as_its_base_name` and `test_a_word_the_system_cannot_encode_is_not_a_path`. Closes residual 10 | f3f40c4 |
+| Final M2: the sensitive-word branch looked up a 60 kB program word (0.52 s) | `store._word_path`: a word over `MAX_PATH_WORD` is saved by its base name without asking the system, as `_is_file_in` already did (same value as before: such a word is outside the project). Test: `test_long_words.py::test_a_long_program_word_naming_a_secret_is_not_looked_up`. Closes residual 11's first half | f3f40c4 |
+| CR3 / A4: a broken rule `R10` hid R1's D27 errors | `_with_minimum` matches `"rule R1:"`. Test: `test_rules_minimum.py::test_a_broken_rule_whose_id_starts_like_r1_does_not_hide_r1s_errors` (R10, R1x, R2 control; R1 as warn and R1 missing) | eb69442 |
+| CR5: `rules check` said "(file given)" for the active path itself | The label comes from `rulefile.is_active_path`. Test: `test_rules_trust.py::test_rules_check_calls_the_active_file_so_however_it_is_given` | e6832a0 |
+| CR6: with the packaged default damaged and the active file refused, the start-up error said "the packaged default rules are in force" | `rules._refusal` ends the line with the default's own reason ("the packaged default rules cannot be used: ...") when the default is damaged. Test: `test_rules_load.py::test_a_refused_active_file_on_a_damaged_default_does_not_claim_the_default_is_in_force` | 58f5930 |
+| CR7: a link or folder at the rules path was refused only after the password | `installer.check_packaged_default` raises root's own `_blocked` error first. Test: `test_install_cli.py::test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password` (link, folder; no sudo, no prompt). Closes the "`blocked` reaches the password prompt" gap | 8119f73 |
+| Final M4: the limit log line held the whole chat id | At most 80 characters (`chat[:80]`). Test: `test_rules_limit.py::test_the_log_line_holds_at_most_80_characters_of_the_chat_id` (10,002 characters) | 07f1e58 |
+| Final M6: `LIMIT_MESSAGE` promised "`rules check` names the heavy ones" (false for a probe-heavy list) | "... may name the heavy ones"; spec §4.3 and §4.4 follow. Test pins the text: `test_rules_limit.py::test_the_limit_message_does_not_promise_that_rules_check_names_every_heavy_rule`. Closes residual 4's message half (the list still has no lint line) | 5692dbb |
+| Final M3 (no test): stale text | `app.py`'s budget comment names command lists too; `test_rules_meter.py`'s "spent meter" comment; the spec's two `Status:` lines are one (revision 4, and what it changed) | 0e4906e |
+| CR2 / final M1: a trigger held only through a parent (or the workspace fallback) is re-evaluated by `mark`; if the meter ran out there the hook got the limit answer | Fixed, cleanly: `decide` already receives the effective session (`SessionStore.apply_mark` returns `effective(stored)`), so `rules._outcome` runs the check for a rule whose trigger that session holds even when `mark` left it unfinished. What `mark` records is unchanged; `sessions.py` is untouched. Test: `test_rules_limit.py::test_an_inherited_trigger_left_unfinished_in_mark_is_judged_as_held` (a subagent of a parent holding a heavy block trigger, on a heavy `echo` its `then` does not match: allow, was the limit deny; a chat without the trigger still gets the limit deny); spec §4.3 says so | de89ead |
+| AGENTS.md "Testing" | Lines for each new test, the counting test's 45,004 | e43239e |
+
+### Listed, not fixed (one line each, with why)
+
+- **CR1 `sessions.py:298` (security gap, for the lead and the owner).** The pending Task record is a
+  one-time snapshot of the parent's mark and triggers. When a chat holding only a non-R1 trigger starts
+  a Task and is marked afterwards, a child reached only through the 30-minute workspace fallback
+  inherits the trigger but not the mark, so R1 does not block its `curl`. Custom rules only (the
+  default's npm-publish trigger also marks). Reproduced by the code review. `sessions.py` is outside
+  this card's Touches. Recommended fix: when the call is already pending, OR the parent's current
+  `marked` and `triggers` into the pending record (a few lines in `record_call`), with a test; in the
+  next card that may touch `sessions.py`.
+- **CR4 `store.py:413`**: R1's `after` runs three times per shell hook (`mark`, `is_sensitive` per
+  word, `reads_secret`); the measured hooks are well under budget, and reuse needs plumbing from `app`
+  to `store`.
+- **CR8 `rules.py:467`**: the `RULES` list and `deny_messages` are test-only leftovers; removing them
+  touches tests of earlier cards.
+- **CR9 `rulefile.py:458`**: `Parsed`'s hash is not cached; `Parsed` lives in `normalize.py`, outside
+  Touches.
+- **CR10 `rulefile.py:641`**: `os.path.expanduser("~")` reads `$HOME`, against AGENTS.md's "reads no
+  environment" wording; pre-existing, and the wording is the lead's.
+- **A3**: a root-owned 0600 edited rules file: as root `init -g` says "kept your edited rules file",
+  but the user-run recorder cannot read it and runs the default; every unprivileged `init -g` asks for
+  the password (residual 7). Needs a decision on what `unknown` means, not a few lines.
+- **Final M5**: `distinct_candidates` keeps 64 `Parsed` trees (memory only, same scale as the argv memos).
+- **Final M7**: `_anchored_hint` advises anchoring for patterns already anchored (`/etc/**/ssl/**`)
+  and for `/a/**/b/**`, which anchoring does not fix; message quality only.
+- A file whose every rule is broken and that has no R1 does not also say "R1 missing" (`_with_minimum`
+  treats "no rules read" as "refused before its rules were read"); it is refused all the same.
+
+### Changes an edited rules file may notice
+
+Each makes an existing edited file fall back to the packaged default (`rules_problem` set, `doctor`
+fails the rules line, `rules check` exits 1), or makes a hook answer the limit:
+- R1 with a floating folder pattern (`.ssh/**`, `**/x/**`) is refused (anchor it: `~/.ssh/**`).
+- A floating pattern in any `path_except` is refused.
+- An R1 spelled as a union of narrow patterns that together cover a secret family, but no one of them
+  covers it, is refused (D27 by structure, residual 9).
+- Command lists now count against the hook's rules limit (owner 2026-10-21): a crafted heavy list on a
+  long command gets the limit deny (block), `ask` (warn) or is skipped (highlight).
+
+### Command output
+
+```
+$ uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
+All checks passed!
+209 files already formatted
+4452 passed, 5 skipped, 8 warnings in 143.47s (0:02:23)      (at e43239e; 4437 at 69c9d0e)
+```
+
+Smoke test (`scratchpad/final/smoke_test.py`, the controller's):
+
+```
+SMOKE SUMMARY
+reviewer pem x8, 300 words 60 deep                            30.7 ms  allow
+reviewer json x10, 300 words 60 deep                          31.7 ms  allow
+floating block rule, 300 words 60 deep                        41.9 ms  deny  AgentFly's rules took too long to check this action (the rul
+same file, marked chat + curl                                 18.4 ms  deny  Blocked by rule R1: a secret was read earlier in this sessio
+bipartite command lists x198 block, 300 words                 37.2 ms  deny  AgentFly's rules took too long to check this action (the rul
+default, bash -c 300 paths 60 deep                            12.2 ms  allow
+default, .env read then curl with a 300-char word              0.0 ms  deny  Blocked by rule R1: a secret was read earlier in this sessio
+default, echo a 300-char word                                  0.0 ms  allow
+default, .env read then curl with a 5000-char word             0.0 ms  deny  Blocked by rule R1: a secret was read earlier in this sessio
+default, echo a 5000-char word                                 0.0 ms  allow
+1 passed in 3.52s
+```
+
+## 2026-10-21 09:40" below.
 
 ## 2026-10-21 09:40
 
@@ -71,7 +162,9 @@ cd9708c V5b-fix2: the cleaner's baseline is trimmed (outputs byte-identical)
 0fe4062 V5b-fix2: R1's minimum is judged by pattern structure (D27)
 c0d217e V5b-fix2: init -g rewrites only known bytes, and never calls an untrusted rules file intact
 84f8412 V5b-fix2: rules check through a link judges the active file
-(this commit) V5b-fix2: AGENTS.md testing lines and the report draft
+ade67ce V5b-fix2: AGENTS.md testing lines and the report draft
+69c9d0e V5b-fix2: simplify (final verification)
+(the final fixes: see the newest section)
 ```
 
 `git diff --shortstat efa9848..84f8412` (V5b-fix's last commit to this card's last code commit): 26
@@ -355,4 +448,4 @@ full list and the reviewers' reasons).
 
 Not run yet: the controller runs `/final-verification` and `/code-review high` on `main...HEAD` and
 updates the status line and this section. The AGENTS.md check above is green at 84f8412 plus the
-AGENTS.md and spec edits of this commit.
+AGENTS.md and spec edits of ade67ce (the newest section has the results).
