@@ -11,7 +11,6 @@ from __future__ import annotations
 import plistlib
 import re
 from pathlib import Path
-from xml.parsers.expat import ExpatError
 
 from agentfly.install import InstallError, packages
 
@@ -51,25 +50,16 @@ _MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, a
 def installed_version(app: Path) -> str:
     """The version in Cursor.app's Info.plist, or InstallError.
 
-    The agent can write the file: whatever plistlib makes of it, the answer is a version or this
-    one error (a root that is not a dictionary, a date it cannot read and a nesting it cannot
-    follow end in TypeError, AttributeError and RecursionError).
+    The agent can write the file, and plistlib raises whatever a malformed one makes it raise
+    (ExpatError, LookupError, IndexError, TypeError, RecursionError, ...): whatever it is, the
+    answer is a version or this one error, so `init -g` and `doctor` never end in a traceback.
     """
     plist: Path = app / "Contents" / "Info.plist"
     try:
         with plist.open("rb") as handle:
             info = plistlib.load(handle)
         version = info["CFBundleShortVersionString"]
-    except (
-        OSError,
-        plistlib.InvalidFileException,
-        ExpatError,
-        KeyError,
-        ValueError,
-        TypeError,
-        AttributeError,
-        RecursionError,
-    ) as exc:
+    except Exception as exc:
         raise InstallError(
             f"cannot read the Cursor version from {plist} ({type(exc).__name__}); "
             "is Cursor installed in /Applications?"

@@ -140,6 +140,11 @@ MALFORMED_PLISTS = {
     b"<key>CFBundleShortVersionString</key><string>3.26&#x1b;</string></dict></plist>",
     "not a plist": b"\xff\xfe junk",
     "empty": b"",
+    "an encoding Python does not know (LookupError)": b'<?xml version="1.0" encoding="UTFa8"?>'
+    b'<plist version="1.0"><dict><key>CFBundleShortVersionString</key>'
+    b"<string>3.26.13</string></dict></plist>",
+    "a tag plistlib does not know (IndexError)": b'<?xml version="1.0"?><plist version="1.0">'
+    b"<dact><key>CFBundleShortVersionString</key><string>3.26.13</string></dict></plist>",
     "a list, not a dictionary": plistlib.dumps(["3.26.13"], fmt=plistlib.FMT_BINARY),
     "a date plistlib cannot read": b'<?xml version="1.0"?><plist version="1.0"><dict>'
     b"<key>CFBundleShortVersionString</key><date>9999999-01-01T00:00:00Z</date></dict></plist>",

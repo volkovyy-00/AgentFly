@@ -577,9 +577,10 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   Cursor version. A Cursor version newer than the newest listed one (compared part
   by part, as numbers) gets that newest version's events, and `init -g` prints one
   warning line naming both versions; it says to quit and reopen Cursor after any
-  Cursor update and then run `agentfly doctor` (D32). The hash record keeps the real
-  version. Any other version that is not listed (older, between two listed ones, or
-  not dotted numbers) is refused with nothing written, as is an unknown event (D23).
+  Cursor update and then run `agentfly doctor` (D32). The hash record keeps the
+  real version as of the install or repair that wrote it. Any other version that
+  is not listed (older, between two listed ones, or not dotted numbers) is
+  refused with nothing written, as is an unknown event (D23).
   The move from `~/.config/flightrecorder` (D7) has already happened at the
   recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
@@ -702,9 +703,10 @@ events are untested.
 up with every Cursor release, so a version newer than the newest listed one,
 compared part by part and as numbers, is accepted: it gets the newest listed
 version's events, `init -g` warns once, and the hash record keeps the real
-version. A version that is not newer and not listed is still refused, and so is
-anything that is not dotted numbers (it is read from Cursor.app's `Info.plist`,
-which the agent can rewrite, and is only ever compared). The risk is accepted:
+version as of the install or repair that wrote it. A version that is not newer
+and not listed is still refused, and so is anything that is not dotted numbers
+(it is read from Cursor.app's `Info.plist`, which the agent can rewrite, and is
+only ever compared). The risk is accepted:
 if that Cursor dropped one of the events, it would ignore the whole hooks file
 (S5), and protection would be off with no sign inside Cursor. So `doctor` fails
 when Cursor's Hooks log shows AgentFly's hooks rejected or not loaded, and
