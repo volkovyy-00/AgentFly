@@ -189,6 +189,11 @@ V7 and V9 can run in parallel.
 - **Scope:** `SessionStore.save` rewrites and fsyncs all of `sessions.json` inside every `/hook` answer, and nothing prunes it (lead measured 2026-10-20: `put()` 1.3 ms at 10 chats, 61 ms median at 5000). Settle what must be on disk before the answer (marks; `next_step`, since `steps` rows are `INSERT OR REPLACE` on (session_id, ord)), and add retention like D14.
 - **Done when:** a hook answer no longer waits on a whole-file rewrite; marks and step order survive a crash and a restart; the file stays bounded.
 
+### F14 · A Task started before the parent was marked (CR1 sub-case)
+- **Owner:** worker-backend · brief not written · after F11 (shares `sessions.py`) · approved by the owner 2026-10-21 as its own card
+- **Scope:** a chat with no mark and no trigger when it starts a Task, marked later, does not mark a subagent reached only through the 30-minute workspace fallback (F11 report and review). Closing it needs a pending record for every Task with a bound, and changes D21, SPEC §5 and the tests that pin today's allow. Likelihood very low (Cursor sends `parent_tool_call_id` on every child event in 3.24.12 and 3.25.9).
+- **Done when:** that subagent's outbound send is blocked by R1, also after a restart; pending records stay bounded.
+
 ### F12 · Package check: linked folders inside the tool environment
 - **Owner:** worker-backend · brief not written · after V5c and F13 (shares `agentfly/install/`, `packages.py`) · approved by the owner 2026-10-20
 - **Scope:** `agentfly/install/packages.py` § `inspect` resolves the whole site-packages path, so a linked folder between the environment root and site-packages is either reported as "outside the environment" or not at all (SPEC §7: a file behind a linked folder inside the environment is a mismatch).
