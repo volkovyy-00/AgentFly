@@ -84,6 +84,11 @@ class Context:
     health: dict[str, Any] | None = None  # what the recorder's /health answers; None: nothing
 
     @property
+    def version_is_listed(self) -> bool:
+        """Whether Cursor's version is one AgentFly has verified; an unreadable one is not (D32)."""
+        return self.cursor_version is not None and self.cursor_version in cursor.KNOWN_VERSIONS
+
+    @property
     def valid_events(self) -> frozenset[str] | None:
         """What this Cursor version is checked against; None when AgentFly refuses it (D32)."""
         return cursor.accepted_events(self.cursor_version) if self.cursor_version else None
@@ -426,18 +431,44 @@ def _log_problem(status: hookslog.LogStatus, ours: set[str]) -> str | None:
     return None
 
 
+def _unconfirmed(ctx: Context, what: str) -> Finding:
+    """A Hooks-log result that shows neither that Cursor loaded our hooks nor that it refused them.
+
+    On a verified Cursor version it is a warning. On any other (newer, refused or unreadable: the
+    agent can make the version unreadable) the log is the only sign that the hooks run (D32), so
+    not being able to confirm it from the log fails.
+    """
+    if ctx.version_is_listed:
+        return warn(what)
+    if ctx.cursor_version is None:
+        why = "AgentFly cannot read the Cursor version"
+    else:
+        version = cursor.shown(ctx.cursor_version)
+        why = f"Cursor {version} is not on AgentFly's list of verified versions"
+    return fail(
+        f"{what}; {why}, so it cannot confirm that Cursor loaded its hooks. {cursor.ADVICE}"
+    )
+
+
 def check_hooks_log(ctx: Context) -> Finding:
-    folder, files = hookslog.latest(ctx.home)
-    if folder is None:
-        return warn("Cursor has no logs yet (has it been started?)")
-    if not files:
-        return warn(f"Cursor's newest log folder {folder.name} has no Hooks log yet")
+    logs = hookslog.latest(ctx.home)
+    if logs.folder is None:
+        return _unconfirmed(ctx, "Cursor has no logs yet (has it been started?)")
+    name = logs.folder.name
+    if logs.too_many:
+        return _unconfirmed(
+            ctx,
+            f"Cursor's newest log folder {name} holds more than {hookslog.MAX_LOGS} Hooks logs, "
+            "and AgentFly reads none of them",
+        )
+    if not logs.files:
+        return _unconfirmed(ctx, f"Cursor's newest log folder {name} has no Hooks log yet")
     ours = {entry.event for entry in installer.desired_entries(ctx.layout)}
     statuses: list[hookslog.LogStatus] = []
-    for path in files:
+    for path in logs.files:
         try:
             status = hookslog.status_of(hookslog.read_tail(path))
-        except OSError:
+        except OSError:  # a pipe, a device or a folder among them is skipped, never waited on
             continue
         if status is not None:
             statuses.append(status)
@@ -445,8 +476,8 @@ def check_hooks_log(ctx: Context) -> Finding:
     if problems:
         return fail(f"Cursor did not load AgentFly's hooks ({problems[0]}); quit and reopen Cursor")
     if statuses:
-        return ok(f"Cursor loaded AgentFly's {len(ours)} hooks ({folder.name})")
-    return warn(f"no line about the system hooks in Cursor's Hooks log ({folder.name})")
+        return ok(f"Cursor loaded AgentFly's {len(ours)} hooks ({name})")
+    return _unconfirmed(ctx, f"no line about the system hooks in Cursor's Hooks log ({name})")
 
 
 def check_claude_settings(ctx: Context) -> Finding:

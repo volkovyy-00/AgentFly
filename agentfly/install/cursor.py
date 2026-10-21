@@ -3,7 +3,8 @@
 One unknown event name makes Cursor reject the whole hooks.json (S5), so an unknown event means
 nothing is written. A listed version is matched exactly. A version newer than the newest listed one
 gets that one's events and a warning (D32); any other version is refused. The version comes from
-Cursor.app's Info.plist, which the agent can rewrite, so it is compared only as dotted numbers.
+Cursor.app's Info.plist, which the agent can rewrite, so the file is read as XML only, at most
+MAX_PLIST_BYTES of it, and the version is compared only as dotted numbers.
 """
 
 from __future__ import annotations
@@ -48,21 +49,45 @@ ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly do
 _DOTTED = re.compile(r"[0-9]+(?:\.[0-9]+)*")  # [0-9]: `\d` also takes other scripts' digits
 _MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, and printed cut
 MAX_PLIST_BYTES = 1 << 20  # Cursor's Info.plist is a few KB; the agent can write a huge one
+_BOM = b"\xef\xbb\xbf"
+_XML_START = (b"<?xml", b"<plist")  # what plistlib itself takes for XML
+
+
+class _Refused(ValueError):
+    """A file the Cursor version is not read from; the text says why."""
 
 
 def _read_plist(plist: Path) -> bytes:
-    """The bytes of a plain file of at most MAX_PLIST_BYTES, else ValueError or OSError.
+    """The bytes of a plain file of at most MAX_PLIST_BYTES, else _Refused or OSError.
 
     `O_NONBLOCK` lets a named pipe open and then fail the type check, where a plain `open` would
-    wait for a writer for ever (the same care as the rules file's, `rulefile._trust_fd`).
+    wait for a writer for ever (the same care as the rules file's, `rulefile._trust_fd`). The type
+    is checked on the descriptor before it is wrapped: `os.fdopen` on a folder raises and keeps the
+    descriptor open.
     """
     fd = os.open(plist, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
-    with os.fdopen(fd, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise ValueError("not a regular file")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _Refused("not a regular file")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with handle:
         data = handle.read(MAX_PLIST_BYTES + 1)
     if len(data) > MAX_PLIST_BYTES:
-        raise ValueError("too large")
+        raise _Refused("too large")
+    return data
+
+
+def _require_xml(data: bytes) -> bytes:
+    """`data` if it starts as an XML property list, else _Refused.
+
+    A binary plist is refused unparsed: plistlib's binary reader copies an object once for each
+    object number that points at it, so under 1 MiB can cost hundreds. XML has no shared objects.
+    """
+    if not data.removeprefix(_BOM).startswith(_XML_START):
+        raise _Refused("not XML: AgentFly reads only an XML property list")
     return data
 
 
@@ -70,17 +95,18 @@ def installed_version(app: Path) -> str:
     """The version in Cursor.app's Info.plist, or InstallError.
 
     The agent can write the file, and plistlib raises whatever a malformed one makes it raise
-    (ExpatError, LookupError, IndexError, TypeError, RecursionError, ...): whatever it is, the
+    (ExpatError, LookupError, IndexError, TypeError, AttributeError, ...): whatever it is, the
     answer is a version or this one error, so `init -g` and `doctor` never end in a traceback.
-    A named pipe or a file over MAX_PLIST_BYTES is refused unread, so neither can stall them.
+    A named pipe, a file over MAX_PLIST_BYTES and a file that is not XML are refused unparsed.
     """
     plist: Path = app / "Contents" / "Info.plist"
     try:
-        info = plistlib.loads(_read_plist(plist))
+        info = plistlib.loads(_require_xml(_read_plist(plist)), fmt=plistlib.FMT_XML)
         version = info["CFBundleShortVersionString"]
     except Exception as exc:
+        reason = str(exc) if isinstance(exc, _Refused) else type(exc).__name__
         raise InstallError(
-            f"cannot read the Cursor version from {plist} ({type(exc).__name__}); "
+            f"cannot read the Cursor version from {plist} ({reason}); "
             "is Cursor installed in /Applications?"
         ) from exc
     if not isinstance(version, str):

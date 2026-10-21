@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import random
+import re
 import shutil
 import stat
 import subprocess
@@ -25,6 +27,7 @@ from agentfly.install import (
     InstallError,
     checks,
     cursor,
+    hookslog,
     installer,
     packages,
     pythons,
@@ -48,9 +51,11 @@ from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
 from tests.test_install_cursor import (
     ADVICE,
+    ESCAPE_VERSION,
     MALFORMED_PLISTS,
     NEWER,
     NEWEST,
+    NOT_XML_PLISTS,
     REFUSED,
     write_plist,
     write_version,
@@ -134,6 +139,10 @@ class World:
 
     def write_log(self, *lines: str) -> None:
         self.log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def failing(results: dict[str, checks.Check]) -> set[str]:
+    return {id_ for id_, check in results.items() if check.level == "fail"}
 
 
 def fake_command(folder: Path, text: str = "#!/bin/sh\nexit 0\n") -> Path:
@@ -555,7 +564,7 @@ def test_a_version_older_than_the_newest_listed_only_warns_about_the_events(worl
 
 def test_every_refused_version_is_one_plain_unchecked_events_line(world: World) -> None:
     context = world.context()  # one install, the version swapped in the context (it is frozen)
-    for name, version in REFUSED.items():
+    for name, version in {**REFUSED, "an escape sequence": ESCAPE_VERSION}.items():
         line = checks.check_events(replace(context, cursor_version=version))
         assert line.level == "warn" and "could not be checked" in line.text, name
         assert "\n" not in line.text and "\x1b" not in line.text and len(line.text) < 400, name
@@ -619,8 +628,24 @@ def test_a_named_pipe_for_the_plist_does_not_hang_doctor(world: World) -> None:
     plist = world.layout.cursor_app / "Contents" / "Info.plist"
     plist.unlink()
     os.mkfifo(plist)
-    results = call_unless_it_hangs(world.results, plist)
+    # Only the read that could wait is bounded: the rest of doctor (a stub launchctl run, hashing
+    # the Python) is slow on a busy machine and has nothing to hang on.
+    with pytest.raises(InstallError, match="cannot read the Cursor version"):
+        call_unless_it_hangs(lambda: cursor.installed_version(world.layout.cursor_app), plist)
+    results = world.results()
     assert results["events"].level == "warn" and world.levels("fail") == set()
+
+
+@pytest.mark.parametrize("data", NOT_XML_PLISTS.values(), ids=NOT_XML_PLISTS.keys())
+def test_a_plist_that_is_not_xml_leaves_the_version_unread_and_doctor_answers(
+    world: World, data: bytes
+) -> None:
+    write_plist(world.layout, data)
+    results = world.results()
+    assert results["events"].level == "warn" and "cannot read the Cursor version" in (
+        results["events"].text
+    )
+    assert world.levels("fail") == set()  # the listed-version case: the log says it loaded
 
 
 def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:
@@ -697,6 +722,299 @@ def test_a_hooks_log_that_says_nothing_only_warns(world: World, setup: str) -> N
     else:
         world.write_log("[t] Reloading hooks configuration...")
     assert world.results()["hooks-log"].level == "warn" and world.levels("fail") == set()
+
+
+# What `hooks-log` prints on a verified Cursor (3.24.12 here) for each way the log can say nothing:
+# these are the texts of e6e6894, unchanged, plus the one new case.
+LOG_NAME = "20261019T100000"
+SAYS_NOTHING_TEXT = {
+    "no logs": "Cursor has no logs yet (has it been started?)",
+    "no Hooks log": f"Cursor's newest log folder {LOG_NAME} has no Hooks log yet",
+    "no recognised line": f"no line about the system hooks in Cursor's Hooks log ({LOG_NAME})",
+    "65 logs": f"Cursor's newest log folder {LOG_NAME} holds more than 64 Hooks logs, "
+    "and AgentFly reads none of them",
+}
+
+
+def make_logs(w: World, count: int) -> None:
+    """Replace the world's one log by `count` that all say Cursor loaded the hooks."""
+    w.log.unlink()
+    for number in range(count):
+        (w.log.parent / f"cursor.hooks.workspaceId-{number:03}.log").write_text(LOADED + "\n")
+
+
+SAYS_NOTHING = {
+    "no logs": lambda w: shutil.rmtree(w.log.parents[3]),
+    "no Hooks log": lambda w: w.log.unlink(),
+    "no recognised line": lambda w: w.write_log("[t] Reloading hooks configuration..."),
+    "65 logs": lambda w: make_logs(w, 65),
+}
+
+
+@pytest.mark.parametrize("case", SAYS_NOTHING)
+def test_on_a_listed_version_a_log_that_says_nothing_warns_with_the_same_text(
+    world: World, case: str
+) -> None:
+    SAYS_NOTHING[case](world)
+    results = world.results()
+    check = results["hooks-log"]
+    assert (check.level, check.text) == ("warn", SAYS_NOTHING_TEXT[case])
+    assert failing(results) == set()
+
+
+def test_on_a_listed_version_a_log_that_loaded_the_hooks_prints_the_same_text(world: World) -> None:
+    check = world.results()["hooks-log"]
+    assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+def test_the_events_line_for_a_listed_version_has_the_same_text(world: World) -> None:
+    check = world.results()["events"]
+    assert (check.level, check.text) == (
+        "ok",
+        "every registered event is accepted by Cursor 3.24.12",
+    )
+
+
+# A Cursor version that is not on the verified list, however it came to be one (D32).
+UNVERIFIED = {
+    "newer": (
+        lambda w: write_version(w.layout, NEWER),
+        f"Cursor {NEWER} is not on AgentFly's list",
+    ),
+    "refused": (
+        lambda w: write_version(w.layout, "1.0.0"),
+        "Cursor 1.0.0 is not on AgentFly's list",
+    ),
+    "unreadable": (
+        lambda w: (w.layout.cursor_app / "Contents" / "Info.plist").unlink(),
+        "AgentFly cannot read the Cursor version",
+    ),
+    "a binary plist": (
+        lambda w: write_plist(w.layout, NOT_XML_PLISTS["a binary plist"]),
+        "AgentFly cannot read the Cursor version",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", SAYS_NOTHING)
+@pytest.mark.parametrize("version", UNVERIFIED)
+def test_on_any_version_not_on_the_list_a_log_that_says_nothing_fails_with_the_advice(
+    world: World, version: str, case: str
+) -> None:
+    make_unverified, why = UNVERIFIED[version]
+    make_unverified(world)
+    SAYS_NOTHING[case](world)
+    results = world.results()
+    check = results["hooks-log"]
+    assert check.level == "fail", check
+    assert check.text.startswith(SAYS_NOTHING_TEXT[case] + "; ") and why in check.text
+    assert check.text.endswith(cursor.ADVICE) and ADVICE in check.text and "\n" not in check.text
+    assert failing(results) == {"hooks-log"}
+
+
+@pytest.mark.parametrize("version", UNVERIFIED)
+def test_on_any_version_not_on_the_list_a_log_that_loaded_the_hooks_is_ok(
+    world: World, version: str
+) -> None:
+    UNVERIFIED[version][0](world)
+    results = world.results()
+    assert results["hooks-log"].level == "ok"  # a forged line is taken, as it always was
+    assert failing(results) == set()
+
+
+@pytest.mark.parametrize("version", UNVERIFIED)
+def test_on_any_version_not_on_the_list_a_log_that_rejects_the_hooks_still_fails(
+    world: World, version: str
+) -> None:
+    UNVERIFIED[version][0](world)
+    for name in HOOKS_LOG_FAULTS:  # each writes the whole log again, so one install serves all
+        FAULTS[name][1](world)
+        results = world.results()
+        check = results["hooks-log"]
+        assert check.level == "fail" and check.text.startswith("Cursor did not load"), name
+        assert failing(results) == {"hooks-log"}, name
+
+
+@pytest.mark.parametrize("count", [64, 65, 300])
+@pytest.mark.parametrize("version", ["listed", "newer"])
+def test_at_most_64_logs_are_read_and_none_beyond(
+    world: World, monkeypatch: pytest.MonkeyPatch, count: int, version: str
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    make_logs(world, count)
+    read: list[Path] = []
+    real = hookslog.read_tail
+    monkeypatch.setattr(hookslog, "read_tail", lambda path: read.append(path) or real(path))
+    level = world.results()["hooks-log"].level
+    assert len(read) == (count if count <= 64 else 0)  # counted reads, not seconds
+    expected = "ok" if count <= 64 else ("warn" if version == "listed" else "fail")
+    assert level == expected
+
+
+# ---- files the agent's user can plant among Cursor's logs: skipped, never waited on or read
+
+
+def plant_pipe(folder: Path) -> tuple[Path, Path]:
+    """A named pipe named like a Hooks log; also returns the pipe to release a stuck reader."""
+    pipe = folder / "cursor.hooks.pipe.log"
+    os.mkfifo(pipe)
+    return pipe, pipe
+
+
+def plant_link_to_a_pipe(folder: Path) -> tuple[Path, Path]:
+    pipe = folder / "a_pipe"  # not named like a Hooks log: only the link is
+    os.mkfifo(pipe)
+    link = folder / "cursor.hooks.linkpipe.log"
+    link.symlink_to(pipe)
+    return link, pipe
+
+
+def plant_link_to_dev_zero(folder: Path) -> tuple[Path, None]:
+    link = folder / "cursor.hooks.zero.log"
+    link.symlink_to("/dev/zero")  # a read of it never ends
+    return link, None
+
+
+def plant_a_folder(folder: Path) -> tuple[Path, None]:
+    (folder / "cursor.hooks.1.log").mkdir()
+    return folder / "cursor.hooks.1.log", None
+
+
+PLANTED = {
+    "a named pipe": plant_pipe,
+    "a link to a named pipe": plant_link_to_a_pipe,
+    "a link to /dev/zero": plant_link_to_dev_zero,
+    "a folder": plant_a_folder,
+}
+
+
+@pytest.mark.parametrize("kind", PLANTED)
+def test_a_planted_special_file_among_the_logs_is_skipped_and_doctor_answers(
+    world: World, kind: str
+) -> None:
+    _, release = PLANTED[kind](world.log.parent)
+    context = world.context()  # built outside the bound: only the log read can hang
+    check = call_unless_it_hangs(lambda: checks.check_hooks_log(context), release)
+    assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+@pytest.mark.parametrize("version", ["listed", "newer"])
+@pytest.mark.parametrize("kind", PLANTED)
+def test_a_special_file_alone_is_no_line_about_the_hooks(
+    world: World, kind: str, version: str
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    world.log.unlink()
+    _, release = PLANTED[kind](world.log.parent)
+    context = world.context()
+    check = call_unless_it_hangs(lambda: checks.check_hooks_log(context), release)
+    assert check.level == ("warn" if version == "listed" else "fail")
+    assert check.text.startswith(SAYS_NOTHING_TEXT["no recognised line"])
+
+
+@pytest.mark.parametrize("kind", PLANTED)
+def test_read_tail_refuses_anything_but_a_plain_file(world: World, kind: str) -> None:
+    planted, release = PLANTED[kind](world.log.parent)
+    with pytest.raises(OSError):
+        call_unless_it_hangs(lambda: hookslog.read_tail(planted), release)
+
+
+def test_read_tail_reads_a_plain_file_and_a_link_to_one(world: World, tmp_path: Path) -> None:
+    link = world.log.parent / "cursor.hooks.link.log"
+    link.symlink_to(world.log)
+    assert hookslog.read_tail(world.log) == hookslog.read_tail(link) == world.log.read_text()
+
+
+def test_read_tail_returns_at_most_the_last_tail_bytes(world: World) -> None:
+    big = world.log.parent / "cursor.hooks.big.log"
+    big.write_bytes(b"x" * (hookslog._TAIL_BYTES + (1 << 20)) + b"END\n")
+    tail = hookslog.read_tail(big)
+    assert len(tail) == hookslog._TAIL_BYTES and tail.endswith("END\n")
+
+
+def test_a_folder_among_the_logs_leaks_no_descriptor(world: World) -> None:
+    planted, _ = plant_a_folder(world.log.parent)
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(20):
+        with pytest.raises(OSError):
+            hookslog.read_tail(planted)
+    assert len(os.listdir("/dev/fd")) == before
+
+
+# ---- a line of a log is matched in time linear in its length (the agent's user can write it)
+
+STEPS = ", ".join(cursor.EVENTS)
+STATUS_LINES = {
+    "loaded": (LOADED, ("loaded", tuple(cursor.EVENTS))),
+    "loaded, trailing blanks": (LOADED + "   ", ("loaded", tuple(cursor.EVENTS))),
+    "none": ("[t] No enterprise hooks configuration found", ("none", ())),
+    "invalid, system": (
+        "[t] ERROR: Invalid enterprise config: Unknown hook type",
+        ("error", ()),
+    ),
+    "invalid, unnamed": ("[t] ERROR: Invalid config: Unknown hook type", ("error", ())),
+    "invalid, two blanks": ("[t] ERROR: Invalid  config: x", ("error", ())),
+    "failed to parse, system": (
+        "[t] ERROR: Failed to parse enterprise hooks configuration",
+        ("error", ()),
+    ),
+    "invalid, user": ("[t] ERROR: Invalid user config: x", None),
+    "invalid, claude user": ("[t] ERROR: Invalid claude user config: x", None),
+    "failed to parse, project": ("[t] ERROR: Failed to parse project hooks configuration", None),
+    "configuration is not config": ("[t] ERROR: Invalid enterprise configuration: x", None),
+    "the word starts inside another": ("[t] xInvalid enterprise config: x", None),
+    "a first Invalid that names a user": ("[t] Invalid user Invalid enterprise config", None),
+    "nothing about the file": ("[t] Reloading hooks configuration...", None),
+}
+
+
+@pytest.mark.parametrize("line, expected", STATUS_LINES.values(), ids=STATUS_LINES.keys())
+def test_status_of_gives_the_same_answers_as_before_the_rewrite(
+    line: str, expected: tuple[str, tuple[str, ...]] | None
+) -> None:
+    status = hookslog.status_of(line + "\n")
+    if expected is None:
+        assert status is None
+    else:
+        assert status is not None and (status.kind, status.steps) == expected
+
+
+# The patterns the rewrite replaced, kept here as the oracle.
+OLD_INVALID = re.compile(r"\bInvalid (?P<source>.*?)\s*config\b")
+OLD_UNPARSED = re.compile(r"\bFailed to parse (?P<source>.*?)\s*hooks configuration\b")
+PIECES = [
+    "Invalid ", "Invalid", "Failed to parse ", "hooks configuration", "config", "configuration",
+    "enterprise ", "user ", " ", "  ", "\t", "x", "_", ":", "é", "1",
+]  # fmt: skip
+
+
+def test_error_sources_equal_the_old_regexes_on_generated_lines() -> None:
+    rng = random.Random(7)
+    for _ in range(20_000):
+        line = "".join(rng.choice(PIECES) for _ in range(rng.randint(1, 10)))
+        match = OLD_INVALID.search(line) or OLD_UNPARSED.search(line)
+        old = match["source"].strip() if match else None
+        assert hookslog._error_source(line) == old, repr(line)
+
+
+HOSTILE_LINES = {  # each is 200 KB; the regexes this replaced took minutes on every one
+    "Loaded, then blanks": "Loaded 1 enterprise hook(s) for steps: " + " " * 200_000 + "x",
+    "Invalid, then blanks": "Invalid" + " " * 200_000 + "x",
+    "Failed to parse, then blanks": "Failed to parse " + " " * 200_000 + "x",
+    "Invalid, then blanks, then a miss": "Invalid " + " " * 200_000 + "configuration",
+    "a run of Invalid": "Invalid " * 25_000,
+    "a run of xInvalid": "xInvalid " * 22_000,
+    "Invalid, then a run of configx": "Invalid " + "configx" * 28_000,
+    "a run of Failed to parse": "Failed to parse " * 12_000,
+}
+
+
+@pytest.mark.parametrize("line", HOSTILE_LINES.values(), ids=HOSTILE_LINES.keys())
+def test_one_hostile_line_does_not_hold_up_the_log_read(line: str) -> None:
+    # Bounded only because the call is the one that could take minutes; linear takes milliseconds.
+    call_unless_it_hangs(lambda: hookslog.status_of(line + "\n"), None)
 
 
 # ---------------------------------------------------------------- ~/.claude/settings.json (D24)

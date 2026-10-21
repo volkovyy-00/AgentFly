@@ -13,7 +13,7 @@ from typing import IO
 
 import pytest
 
-from agentfly.cli import build_parser, init, main, uninstall
+from agentfly.cli import build_parser, doctor, init, main, uninstall
 from agentfly.install import (
     InstallError,
     cursor,
@@ -49,6 +49,7 @@ from tests.test_install_cursor import (
     MALFORMED_PLISTS,
     NEWER,
     NEWEST,
+    NOT_XML_PLISTS,
     REFUSED,
     plist_bytes,
     write_plist,
@@ -177,6 +178,24 @@ def first_install_with(
     assert main(["init", "-g"]) == 0
 
 
+def first_install_output(system: Layout) -> list[str]:
+    """What `agentfly init -g` printed for a first install at e6e6894, before V3d: written out.
+
+    The fake sudo makes the user's run and the root child print into one stream, as they do in a
+    terminal. Only the paths are this root's; the rest is the text itself, never computed here.
+    """
+    return [
+        "AgentFly will ask for your password once, to write into /Library/Application Support.",
+        "downloading fake-python.tar.gz ...",
+        "installed fake-python.tar.gz",
+        f"wrote the default rules to {system.rules}",
+        "recorded the hashes of 2 packages",
+        f"registered 8 hooks in {system.hooks_file}",
+        "Quit and reopen Cursor so it loads the hooks (its Hooks panel does not list them).",
+        "Next: `agentfly start` (or `agentfly serve` in a terminal) runs the recorder.",
+    ]
+
+
 def warnings_in(out: str) -> list[str]:
     return [line for line in out.splitlines() if line.startswith("warning:")]
 
@@ -213,10 +232,10 @@ def test_a_newer_cursor_gets_the_same_hooks_file_and_output_as_the_newest_listed
     listed_out = capsys.readouterr().out
     assert system.hooks_file.read_bytes() == newer_bytes
     assert len(warnings_in(newer_out)) == 1 and warnings_in(listed_out) == []
-    # the two runs print the same lines, but for the one warning
-    assert [line for line in newer_out.splitlines() if not line.startswith("warning:")] == (
-        listed_out.splitlines()
-    )
+    # the lines are the ones e6e6894 printed (written out above), and the newer run adds the warning
+    assert listed_out.splitlines() == first_install_output(system)
+    assert newer_out.splitlines()[:-1] == first_install_output(system)
+    assert newer_out.splitlines()[-1].startswith("warning:")
 
 
 def test_a_newer_cursor_on_an_intact_install_warns_once_and_asks_for_no_password(
@@ -251,6 +270,29 @@ def test_a_hand_typed_sudo_init_on_a_newer_cursor_warns_once(
     assert len(warnings_in(capsys.readouterr().out)) == 1
 
 
+def test_doctor_after_init_on_a_newer_cursor_shows_the_real_version_and_wants_the_log(
+    system: Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first_install_with(system, tmp_path, monkeypatch, NEWER)
+    capsys.readouterr()
+    monkeypatch.setattr(doctor, "SYSTEM", system)
+    main(["doctor"])
+    # In this fake world other lines fail (no service), so the exit code says nothing: read lines.
+    lines = {
+        id_: (level, text)
+        for level, id_, text in (
+            line.split(None, 2) for line in capsys.readouterr().out.splitlines()
+        )
+    }
+    assert f"Cursor {NEWER}" in lines["record"][1]  # the real version, not the listed one
+    assert lines["events"][0] == "warn" and "unchecked Cursor version" in lines["events"][1]
+    level, text = lines["hooks-log"]  # Cursor has not been started: nothing confirms the load
+    assert level == "fail" and "no logs yet" in text and ADVICE in text
+
+
 @pytest.mark.parametrize("version", ["3.24.12", NEWEST])
 def test_a_listed_cursor_installs_with_no_warning(
     version: str,
@@ -262,6 +304,7 @@ def test_a_listed_cursor_installs_with_no_warning(
     first_install_with(system, tmp_path, monkeypatch, version)
     out = capsys.readouterr().out
     assert warnings_in(out) == [] and "warning" not in out.lower()
+    assert out.splitlines() == first_install_output(system)
     record = records.read(system)
     assert record is not None and record["cursor_version"] == version
 
@@ -275,9 +318,9 @@ REFUSED_BY_INIT = {
             "a beta tag",
             "10,000 characters of newer parts",
             "an embedded newline",
-            "an escape sequence",
         )
     },
+    "a plist with an escape character in it": MALFORMED_PLISTS["an escape character"],
     "a plist that is not XML": MALFORMED_PLISTS["a control character reference"],
 }
 
@@ -299,6 +342,23 @@ def test_init_refuses_any_other_version_in_one_line_before_the_password(
     )
     assert "Traceback" not in captured.err and "\x1b" not in captured.err
     assert len(captured.err) < 600
+    assert not system.system_root.exists() and not system.hooks_file.exists()
+
+
+@pytest.mark.parametrize("plist", NOT_XML_PLISTS.values(), ids=NOT_XML_PLISTS.keys())
+def test_init_refuses_a_plist_that_is_not_xml_in_one_line_that_says_so(
+    plist: bytes,
+    system: Layout,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_plist(system, plist)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and len(captured.err.strip().splitlines()) == 1
+    assert captured.err.startswith("agentfly init: cannot read the Cursor version")
+    assert "not XML" in captured.err and "Traceback" not in captured.err
     assert not system.system_root.exists() and not system.hooks_file.exists()
 
 
