@@ -39,8 +39,9 @@ issue or pull request as the card and puts the gap notes in the pull request.
   `init -g` also installed, every event arrives twice.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
 - Rules: `agentfly rules check [FILE]` and `agentfly rules test [FILE]` (no FILE: the file the
-  recorder would load). SPEC §5 says which file is in force and what a file may cost. The active
-  file is read once, at start, and only if root owns it and others cannot write it (D3). Add the
+  recorder would load). SPEC §5 says which file is in force; a file must stay under
+  `rulefile.MAX_WORK` (200 units; SPEC §5). The active file is read once, at start, and
+  only if it is a plain file owned by root that group and others cannot write (D3). Add the
   hash of a changed `default.toml` to `rulefile.SHIPPED_DEFAULTS` (D28).
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; `env` keeps byte-code out (a stray `.pyc` breaks
