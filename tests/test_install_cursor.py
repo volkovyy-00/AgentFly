@@ -318,8 +318,8 @@ def test_reading_a_binary_plist_built_to_blow_up_stays_under_64_mib(tmp_path: Pa
     layout = make_layout(tmp_path)
     write_plist(layout, blowup_plist(300))
     outcome, peak = peak_mib(lambda: cursor.installed_version(layout.cursor_app))
+    assert peak < PEAK_LIMIT_MIB, peak  # first: the memory, whatever the message says
     assert isinstance(outcome, InstallError) and "not XML" in str(outcome)
-    assert peak < PEAK_LIMIT_MIB, peak
 
 
 @pytest.mark.parametrize("fill", XML_SHAPES.values(), ids=XML_SHAPES.keys())
