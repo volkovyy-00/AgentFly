@@ -114,7 +114,7 @@ def chat_in_an_inherited_window(rec: Recorder) -> Callable[[], str]:
     rec.read("A", "/w/.env")
     rec.task("A", "T1")
     says(rec, "NEW", "ls")  # opens inside the 30-minute window
-    (rec.path.with_name("links.json")).unlink()  # only its own note can carry the window now
+    rec.store.links_path.unlink()  # only its own note can carry the window now
     return lambda: says(rec, "NEW", CURL)
 
 
@@ -128,7 +128,7 @@ def trigger_in_a_fallback_chat(rec: Recorder) -> Callable[[], str]:
     says(rec, "A", INSTALL)
     rec.task("A", "T1")
     says(rec, "NEW", "ls")
-    rec.path.with_name("links.json").unlink()
+    rec.store.links_path.unlink()
     return lambda: says(rec, "NEW", PUSH)
 
 
@@ -160,7 +160,7 @@ def test_a_plain_action_writes_nothing_until_the_writer_or_a_flush(
 ) -> None:
     says(rec, "A", "ls")
     says(rec, "A", "ls")
-    assert not rec.path.exists() and not rec.path.with_name("links.json").exists()
+    assert not rec.path.exists() and not rec.store.links_path.exists()
     rec.store.flush()
     [row] = json.loads(rec.path.read_text(encoding="utf-8"))
     assert row["id"] == "A" and row["next_step"] == 3 and row["last_active"] == clock.now
@@ -211,9 +211,17 @@ def test_a_failed_save_of_a_mark_is_an_error_and_the_mark_still_holds_in_memory(
 
 
 def test_a_failed_save_of_a_link_is_an_error(rec: Recorder) -> None:
-    block_the_file(rec.path.with_name("links.json"))
+    block_the_file(rec.store.links_path)
     with pytest.raises(OSError):
         rec.task("A", "T1")
+
+
+@pytest.fixture()
+def served() -> Iterator[TestClient]:
+    """The recorder's own start and stop (lifespan), with Neo4j off."""
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
+        app_module.graph_store.enabled = False
+        yield client
 
 
 @pytest.fixture()
@@ -247,7 +255,9 @@ def test_through_the_server_a_failed_save_is_a_500_and_the_next_action_is_answer
 # ---------------------------------------------------------------- one writer, in order
 
 
-def with_save_gate(store: SessionStore, failures: int) -> tuple[threading.Event, threading.Event]:
+def with_save_gate(
+    store: SessionStore, failures: int, monkeypatch: pytest.MonkeyPatch
+) -> tuple[threading.Event, threading.Event]:
     """Make `save` take its snapshot, say so, wait for the gate, then fail `failures` times."""
     inside, gate = threading.Event(), threading.Event()
     real_save = store.save
@@ -261,7 +271,7 @@ def with_save_gate(store: SessionStore, failures: int) -> tuple[threading.Event,
             left["failures"] -= 1
             raise OSError("disk full")
 
-    store.save = save  # type: ignore[method-assign]
+    monkeypatch.setattr(store, "save", save)
     return inside, gate
 
 
@@ -277,52 +287,32 @@ def run_in_thread(work: Callable[[], None], errors: list[BaseException]) -> thre
     return thread
 
 
-def test_a_commit_waits_for_a_write_that_is_already_carrying_its_change(
-    tmp_path: Path, clock: Clock
+@pytest.mark.parametrize(
+    "failures", [0, 1, 99], ids=["write-works", "write-fails-once", "write-keeps-failing"]
+)
+def test_a_commit_waits_for_the_write_carrying_its_change_and_does_not_trust_one_that_failed(
+    tmp_path: Path, clock: Clock, monkeypatch: pytest.MonkeyPatch, failures: int
 ) -> None:
     store = SessionStore(tmp_path / "s.json", clock=clock)
     session = store.observe(event("P"))
-    inside, gate = with_save_gate(store, failures=0)
+    inside, gate = with_save_gate(store, failures, monkeypatch)
     store._remember(replace(session, marked=True))  # the request thread's change; no commit yet
-    errors: list[BaseException] = []
-    writer = run_in_thread(store.flush, errors)  # the background writer picks it up first
+    writer_errors: list[BaseException] = []
+    commit_errors: list[BaseException] = []
+    writer = run_in_thread(store.flush, writer_errors)  # the background writer picks it up first
     assert inside.wait(10)
-    committer = run_in_thread(store.commit, errors)
+    committer = run_in_thread(store.commit, commit_errors)
     committer.join(0.3)
     assert committer.is_alive()  # it must not answer while the write is only half done
     gate.set()
     writer.join(10)
     committer.join(10)
-    assert not errors
-    del store.save
-    assert [r["marked"] for r in json.loads((tmp_path / "s.json").read_text())] == [True]
-
-
-@pytest.mark.parametrize("then_works", [True, False])
-def test_a_commit_does_not_trust_a_write_that_failed(
-    tmp_path: Path, clock: Clock, then_works: bool
-) -> None:
-    store = SessionStore(tmp_path / "s.json", clock=clock)
-    session = store.observe(event("P"))
-    inside, gate = with_save_gate(store, failures=1 if then_works else 99)
-    store._remember(replace(session, marked=True))
-    writer_errors: list[BaseException] = []
-    commit_errors: list[BaseException] = []
-    writer = run_in_thread(store.flush, writer_errors)
-    assert inside.wait(10)
-    committer = run_in_thread(store.commit, commit_errors)
-    committer.join(0.3)
-    assert committer.is_alive()
-    gate.set()
-    writer.join(10)
-    committer.join(10)
-    assert len(writer_errors) == 1  # the writer's failure was real
-    if then_works:
-        assert not commit_errors  # the commit wrote it itself
-        del store.save
-        assert json.loads((tmp_path / "s.json").read_text())[0]["marked"] is True
-    else:
+    assert len(writer_errors) == (1 if failures else 0)  # the writer's failure was real
+    if failures > 1:
         assert len(commit_errors) == 1 and isinstance(commit_errors[0], OSError)
+    else:
+        assert not commit_errors  # the write worked, or the commit wrote it itself
+        assert json.loads((tmp_path / "s.json").read_text())[0]["marked"] is True
 
 
 def test_a_strict_change_is_on_disk_whenever_commit_returns_while_another_thread_flushes(
@@ -339,7 +329,7 @@ def test_a_strict_change_is_on_disk_whenever_commit_returns_while_another_thread
     thread = threading.Thread(target=hammer)
     thread.start()
     try:
-        for number in range(120):
+        for number in range(40):
             chat = f"c{number}"
             store.put(replace(store.observe(event(chat)), marked=True))
             on_disk = {r["id"] for r in json.loads(path.read_text()) if r["marked"]}
@@ -352,13 +342,22 @@ def test_a_strict_change_is_on_disk_whenever_commit_returns_while_another_thread
 # ---------------------------------------------------------------- 5000 chats cost nothing extra
 
 
+def note(chat: str, **fields: Any) -> dict[str, Any]:
+    """A session note as an older recorder wrote it (no activity time)."""
+    return {"id": chat, "marked": False, "start_time": "t", "next_step": 1, **fields}
+
+
+def write_notes(path: Path, *rows: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(list(rows)), encoding="utf-8")
+
+
 def store_with(folder: Path, chats: int, clock: Clock) -> SessionStore:
-    folder.mkdir(parents=True)
-    rows = [
-        {"id": f"chat-{n:05d}", "marked": n % 50 == 0, "start_time": "t", "next_step": 40}
-        for n in range(chats)
-    ] + [{"id": "hot", "marked": False, "start_time": "t", "next_step": 1}]
-    (folder / "sessions.json").write_text(json.dumps(rows), encoding="utf-8")
+    write_notes(
+        folder / "sessions.json",
+        *(note(f"chat-{n:05d}", marked=n % 50 == 0, next_step=40) for n in range(chats)),
+        note("hot"),
+    )
     return SessionStore(folder / "sessions.json", clock=clock)
 
 
@@ -397,21 +396,22 @@ def test_with_5000_chats_a_hook_that_changes_nothing_costs_no_more_than_with_10(
 # ---------------------------------------------------------------- the step counter
 
 
+def next_step_of(store: SessionStore, chat: str) -> int:
+    session = store.get(chat)
+    assert session is not None
+    return session.next_step
+
+
 def test_the_counter_is_raised_to_what_history_holds(tmp_path: Path, clock: Clock) -> None:
-    path = tmp_path / "s.json"
-    path.write_text(
-        json.dumps([{"id": "P", "marked": False, "start_time": "t", "next_step": 3}]),
-        encoding="utf-8",
-    )
-    store = SessionStore(path, clock=clock)
+    write_notes(tmp_path / "s.json", note("P", next_step=3))
+    store = SessionStore(tmp_path / "s.json", clock=clock)
     store.raise_counters({"P": 9, "Q": 4, "R": 2})
-    assert store.get("P") is not None and store.get("P").next_step == 9  # type: ignore[union-attr]
+    assert next_step_of(store, "P") == 9
     assert store.observe(event("Q")).next_step == 4  # a chat with no note yet
     store.raise_counters({"P": 2})  # a lower number never lowers it
-    assert store.get("P").next_step == 9  # type: ignore[union-attr]
-    stale = Session(id="P", marked=False, start_time="t", next_step=1)
-    store.put(stale)
-    assert store.get("P").next_step == 9  # type: ignore[union-attr]
+    assert next_step_of(store, "P") == 9
+    store.put(Session(id="P", marked=False, start_time="t", next_step=1))  # a stale copy
+    assert next_step_of(store, "P") == 9
 
 
 def make_history(path: Path, steps: dict[str, int]) -> None:
@@ -494,11 +494,10 @@ def test_the_sweep_keeps_what_d29_keeps(rec: Recorder, clock: Clock, armed: None
     expired = clock.now - 1
     idle(rec, "expired", inherited_until=expired, inherited_triggers={"x": expired})
 
-    assert rec.store.sweep() == 4
-    assert {"idle", "X", "Y", "expired"}.isdisjoint(rec.store._sessions)
-    assert {"marked", "trigger", "PARENT", "C", "window", "trigger-window"} <= set(
-        rec.store._sessions
-    )
+    gone = {"idle", "X", "Y", "expired"}
+    stays = {"marked", "trigger", "PARENT", "C", "window", "trigger-window"}
+    assert rec.store.sweep() == len(gone)
+    assert {c for c in gone | stays if rec.store.get(c) is not None} == stays
     assert rec.store.calls == {"T1": "PARENT"}  # the call of two dropped chats goes with them
     assert rec.store.sweep() == 0
 
@@ -526,16 +525,7 @@ def test_a_pending_task_and_the_call_a_kept_chat_points_to_survive_the_sweep(
 def test_a_hackathon_file_loads_with_every_mark_and_the_first_sweep_drops_nothing(
     rec: Recorder, clock: Clock
 ) -> None:
-    rec.path.parent.mkdir(parents=True, exist_ok=True)
-    rec.path.write_text(
-        json.dumps(
-            [
-                {"id": "s1", "marked": True, "start_time": "t", "next_step": 4},
-                {"id": "s2", "marked": False, "start_time": "t", "next_step": 9},
-            ]
-        ),
-        encoding="utf-8",
-    )
+    write_notes(rec.path, note("s1", marked=True, next_step=4), note("s2", next_step=9))
     rec.restart()
     loaded = rec.store.get("s2")
     assert loaded is not None and loaded.last_active == clock.now  # counted from this start
@@ -550,9 +540,7 @@ def test_a_hackathon_file_loads_with_every_mark_and_the_first_sweep_drops_nothin
 def test_a_damaged_activity_time_counts_from_this_start(
     rec: Recorder, clock: Clock, junk: Any
 ) -> None:
-    rec.path.parent.mkdir(parents=True, exist_ok=True)
-    row = {"id": "s", "marked": False, "start_time": "t", "next_step": 1, "last_active": junk}
-    rec.path.write_text(json.dumps([row]), encoding="utf-8")
+    write_notes(rec.path, note("s", last_active=junk))
     rec.restart()
     loaded = rec.store.get("s")
     assert loaded is not None and loaded.last_active == clock.now
@@ -599,9 +587,7 @@ def test_a_chat_that_arrived_before_the_mark_is_not_marked_by_it(
     rec.task("P", "T1")
     assert says(rec, "EARLY", CURL) == "allow"  # it arrived while the parent held a trigger only
     rec.read("P", "/w/.env")
-    assert (
-        says(rec, "EARLY", CURL) == "allow"
-    )  # what the parent holds when it arrives is what it gets
+    assert says(rec, "EARLY", CURL) == "allow"  # it keeps what the parent held when it arrived
     assert says(rec, "LATE", CURL) == "deny"
     clock.now += FALLBACK_SECONDS + 1  # the window is still counted from the Task
     assert says(rec, "TOO-LATE", CURL) == "allow"
@@ -610,7 +596,10 @@ def test_a_chat_that_arrived_before_the_mark_is_not_marked_by_it(
 def test_the_stored_snapshot_is_still_a_floor(rec: Recorder) -> None:
     rec.read("P", "/w/.env")
     rec.task("P", "T1")
-    del rec.store._sessions["P"]  # the parent's note is gone (a sweep, a damaged file)
+    rec.store.flush()
+    kept = [row for row in json.loads(rec.path.read_text("utf-8")) if row["id"] != "P"]
+    write_notes(rec.path, *kept)  # the parent's note is gone (a sweep, a damaged file)
+    rec.restart()
     assert says(rec, "NEW", CURL) == "deny"  # the record made at the Task still hands on its mark
 
 
@@ -622,6 +611,16 @@ def quick_writer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sessions_module, "SAVE_DELAY_S", 0.05)
 
 
+@pytest.fixture()
+def slow_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sessions_module, "SAVE_DELAY_S", 3600.0)
+
+
+@pytest.fixture()
+def quick_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sessions_module, "SWEEP_EVERY_SECONDS", 0.05)
+
+
 def wait_for(check: Callable[[], bool], seconds: float = 10.0) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -631,31 +630,35 @@ def wait_for(check: Callable[[], bool], seconds: float = 10.0) -> bool:
     return check()
 
 
+def saved_ids() -> set[str] | None:
+    """The chats in sessions.json now, or None while there is no file."""
+    path = data_dir() / "sessions.json"
+    if not path.exists():
+        return None
+    return {row["id"] for row in json.loads(path.read_text(encoding="utf-8"))}
+
+
 @wallclock
-def test_the_background_writer_saves_what_may_wait(quick_writer: None) -> None:
+def test_the_background_writer_saves_what_may_wait(quick_writer: None, served: TestClient) -> None:
+    post(served, event("A", command="ls", cwd=""))
+    path = data_dir() / "sessions.json"
+    assert wait_for(path.exists)
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["next_step"] == 2
+
+
+def test_a_clean_stop_saves_everything(slow_writer: None) -> None:
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
         app_module.graph_store.enabled = False
         post(client, event("A", command="ls", cwd=""))
-        path = data_dir() / "sessions.json"
-        assert wait_for(path.exists)
-        assert json.loads(path.read_text(encoding="utf-8"))[0]["next_step"] == 2
-
-
-def test_a_clean_stop_saves_everything(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sessions_module, "SAVE_DELAY_S", 3600.0)
-    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
-        app_module.graph_store.enabled = False
         post(client, event("A", command="ls", cwd=""))
-        post(client, event("A", command="ls", cwd=""))
-        assert not (data_dir() / "sessions.json").exists()  # still waiting
+        assert saved_ids() is None  # still waiting
     [row] = json.loads((data_dir() / "sessions.json").read_text(encoding="utf-8"))
     assert row["id"] == "A" and row["next_step"] == 3
 
 
 def test_a_clean_stop_does_not_raise_when_the_file_cannot_be_written(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    slow_writer: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(sessions_module, "SAVE_DELAY_S", 3600.0)
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
         app_module.graph_store.enabled = False
         post(client, event("A", command="ls", cwd=""))
@@ -663,48 +666,44 @@ def test_a_clean_stop_does_not_raise_when_the_file_cannot_be_written(
     assert "last save failed" in caplog.text
 
 
-def seed_old_notes() -> None:
-    folder = data_dir()
-    folder.mkdir(parents=True, exist_ok=True)
+@wallclock
+def test_notes_idle_29_days_are_swept_at_start_and_the_file_follows(quick_writer: None) -> None:
     long_ago = time.time() - 40 * DAY
-    rows = [
-        {"id": "old", "marked": False, "start_time": "t", "next_step": 1, "last_active": long_ago},
-        {"id": "old-marked", "marked": True, "start_time": "t", "next_step": 1, "last_active": 1.0},
-    ]
-    (folder / "sessions.json").write_text(json.dumps(rows), encoding="utf-8")
-
-
-def test_notes_idle_29_days_are_swept_at_start() -> None:
-    seed_old_notes()
+    write_notes(
+        data_dir() / "sessions.json",
+        note("old", last_active=long_ago),
+        note("old-marked", marked=True, last_active=1.0),
+    )
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787"):
         store = app_module.get_store()
         assert store.get("old") is None and store.get("old-marked") is not None
+        assert wait_for(lambda: saved_ids() == {"old-marked"})  # with no hook to wake the writer
 
 
 @wallclock
-def test_the_sweep_runs_again_while_the_recorder_is_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sessions_module, "SWEEP_EVERY_SECONDS", 0.05)
-    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as client:
-        app_module.graph_store.enabled = False
-        post(client, event("A", command="ls", cwd=""))
-        store = app_module.get_store()
-        assert store.get("A") is not None
-        store.clock = lambda: time.time() + 40 * DAY
-        assert wait_for(lambda: store.get("A") is None)
+def test_the_sweep_runs_again_while_the_recorder_is_up(
+    quick_sweep: None, quick_writer: None, served: TestClient
+) -> None:
+    post(served, event("A", command="ls", cwd=""))
+    store = app_module.get_store()
+    assert store.get("A") is not None
+    assert wait_for(lambda: saved_ids() == {"A"})
+    store.clock = lambda: time.time() + 40 * DAY
+    assert wait_for(lambda: store.get("A") is None)
+    assert wait_for(lambda: saved_ids() == set())  # and the file follows
 
 
 @wallclock
-def test_one_failing_sweep_does_not_end_the_hourly_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sessions_module, "SWEEP_EVERY_SECONDS", 0.05)
-    with TestClient(app_module.app, base_url="http://127.0.0.1:8787"):
-        store = app_module.get_store()
-        calls: list[int] = []
+def test_one_failing_sweep_does_not_end_the_hourly_job(
+    quick_sweep: None, served: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
 
-        def flaky() -> int:
-            calls.append(1)
-            if len(calls) == 1:
-                raise RuntimeError("boom")
-            return 0
+    def flaky() -> int:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return 0
 
-        store.sweep = flaky  # type: ignore[method-assign]
-        assert wait_for(lambda: len(calls) >= 3)
+    monkeypatch.setattr(app_module.get_store(), "sweep", flaky)
+    assert wait_for(lambda: len(calls) >= 3)

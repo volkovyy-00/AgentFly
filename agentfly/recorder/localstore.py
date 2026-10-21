@@ -38,7 +38,6 @@ REOPEN_AFTER_S: float = 5.0
 WRITE_TIMEOUT_S: float = 5.0
 WIPE_BUDGET_S: float = 10.0  # `agentfly wipe` gives up after this long, however busy the file is
 READ_TIMEOUT_S: float = 2.0
-START_READ_TIMEOUT_S: float = 3.0  # the one read at start-up (`next_orders`)
 PROGRESS_OPS: int = 1000  # SQLite VM steps between two looks at the read deadline
 SESSIONS_CAP: int = 500
 STEPS_CAP: int = 10_000
@@ -277,6 +276,31 @@ def wipe_file(path: Path) -> tuple[int, int]:
     return sessions, steps
 
 
+def read_only(path: Path, work: Callable[[sqlite3.Connection], Any]) -> Any:
+    """Run `work` on a short-lived read-only connection with a time limit.
+
+    None when the file has no tables yet (the writer has made it but not filled it). Any other
+    sqlite problem, or the time limit, is `StoreUnavailable`.
+    """
+    deadline = time.monotonic() + READ_TIMEOUT_S
+    try:
+        conn = sqlite3.connect(
+            f"{path.as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT_S, isolation_level=None
+        )
+    except sqlite3.Error as exc:
+        raise StoreUnavailable(type(exc).__name__) from None
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
+        return work(conn)
+    except sqlite3.Error as exc:
+        if str(exc).startswith("no such table"):
+            return None  # the writer has made the file but not the tables yet: nothing saved
+        raise StoreUnavailable(type(exc).__name__) from None
+    finally:
+        conn.close()
+
+
 def next_orders(path: Path) -> dict[str, int]:
     """Chat id -> first order number its saved steps have not used (F11); {} if nothing can be read.
 
@@ -286,24 +310,15 @@ def next_orders(path: Path) -> dict[str, int]:
     """
     if not path.exists():
         return {}
-    deadline = time.monotonic() + START_READ_TIMEOUT_S
     try:
-        conn = sqlite3.connect(
-            f"{path.as_uri()}?mode=ro", uri=True, timeout=START_READ_TIMEOUT_S, isolation_level=None
+        found: dict[str, int] | None = read_only(
+            path,
+            lambda conn: {str(sid): int(first) for sid, first in conn.execute(NEXT_ORDERS_QUERY)},
         )
-    except sqlite3.Error as exc:
-        logger.warning("local store: step numbers not read (%s)", type(exc).__name__)
+    except StoreUnavailable as exc:
+        logger.warning("local store: step numbers not read (%s)", exc)
         return {}
-    try:
-        conn.execute("PRAGMA query_only=ON")
-        conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
-        return {str(sid): int(first) for sid, first in conn.execute(NEXT_ORDERS_QUERY)}
-    except sqlite3.Error as exc:
-        if not str(exc).startswith("no such table"):  # the file is there but never got its tables
-            logger.warning("local store: step numbers not read (%s)", type(exc).__name__)
-        return {}
-    finally:
-        conn.close()
+    return found or {}
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -549,23 +564,7 @@ class LocalStore:
         path = self.path
         if path is None or not path.exists():
             return None
-        deadline = time.monotonic() + READ_TIMEOUT_S
-        try:
-            conn = sqlite3.connect(
-                f"{path.as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT_S, isolation_level=None
-            )
-        except sqlite3.Error as exc:
-            raise StoreUnavailable(type(exc).__name__) from None
-        try:
-            conn.execute("PRAGMA query_only=ON")
-            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
-            return work(conn)
-        except sqlite3.Error as exc:
-            if str(exc).startswith("no such table"):
-                return None  # the writer has made the file but not the tables yet: nothing saved
-            raise StoreUnavailable(type(exc).__name__) from None
-        finally:
-            conn.close()
+        return read_only(path, work)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """Past sessions, newest first. Empty when nothing was ever saved."""

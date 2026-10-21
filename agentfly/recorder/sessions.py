@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import islice
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
@@ -55,14 +56,22 @@ def _ids(value: Any) -> frozenset[str]:
     )
 
 
+def _number(value: Any) -> float | None:
+    """A saved number; a bool or anything else is None."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
 def _windows(value: Any) -> dict[str, float]:
     """Trigger id -> end time from a saved row; damaged entries are left out."""
     if not isinstance(value, dict):
         return {}
     found: dict[str, float] = {}
     for key, until in value.items():
-        if isinstance(key, str) and isinstance(until, int | float) and not isinstance(until, bool):
-            found[key] = float(until)
+        number: float | None = _number(until)
+        if isinstance(key, str) and number is not None:
+            found[key] = number
     return found
 
 
@@ -78,25 +87,37 @@ def _roots(payload: dict[str, Any]) -> list[str]:
     return sorted({r.rstrip("/").casefold() for r in roots if isinstance(r, str) and r.strip("/")})
 
 
-def _hold(session: Session | None) -> tuple[Any, ...]:
-    """What makes a chat stricter. A change in it must be on disk before the hook answers."""
-    if session is None:
-        return (False, frozenset(), 0.0, (), "", "")
-    return (
-        session.marked,
-        session.triggers,
-        session.inherited_until,
-        tuple(sorted(session.inherited_triggers.items())),
-        session.parent_call,
-        session.parent_id,
-    )
+# What makes a chat stricter. A change in it must be on disk before the hook answers. A chat that
+# is not there yet holds nothing, which is what a blank row says.
+_HOLD = attrgetter(
+    "marked", "triggers", "inherited_until", "inherited_triggers", "parent_call", "parent_id"
+)
+_BLANK = Session(id="", marked=False, start_time="", next_step=1)
 
 
 def _active_time(value: Any) -> float:
     """A saved last-activity time; anything that is not a positive number is 0 (unknown)."""
-    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
-        return float(value)
-    return 0.0
+    number: float | None = _number(value)
+    return number if number is not None and number > 0 else 0.0
+
+
+def _write_atomic(path: Path, text: str, prefix: str, sync: bool) -> None:
+    """Replace `path` with `text` in one step: a reader sees the old file or the new, never half."""
+    private_dir(path.parent)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=prefix, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+            if sync:
+                handle.flush()
+                os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class SessionStore:
@@ -134,6 +155,7 @@ class SessionStore:
             return
         if not isinstance(raw, list):
             return
+        now: float = self.clock()
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -142,7 +164,7 @@ class SessionStore:
                 continue
             active: float = _active_time(item.get("last_active"))
             if not active:  # a note from before F11 counts as active from this start (D29)
-                active = self.clock()
+                active = now
                 self._lazy_dirty = True
             self._sessions[sid] = Session(
                 id=sid,
@@ -185,7 +207,6 @@ class SessionStore:
 
     def save(self) -> None:
         """Write sessions.json now: the whole file, from a copy of the table."""
-        private_dir(self.path.parent)
         # One C call, so the request thread cannot change the table under it (CPython, GIL).
         # Sessions are replaced, never changed in place, so each row of the copy is whole.
         rows: list[Session] = list(self._sessions.values())
@@ -210,46 +231,15 @@ class SessionStore:
             for s in rows
         ]
         # No `indent`: the C encoder runs only without it (3x faster at 5000 chats).
-        data: str = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        fd: int
-        tmp_name: str
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(self.path.parent),
-            prefix=".sessions-",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp_name, self.path)
-        except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+        data: str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        _write_atomic(self.path, data, ".sessions-", sync=True)
 
     def save_links(self) -> None:
         """Write links.json (calls and pending Tasks). Rare: only when a Task or link changes."""
-        private_dir(self.links_path.parent)
         calls: dict[str, str] = dict(self.calls)  # copies: the request thread may be changing them
         pending: dict[str, dict[str, Any]] = dict(self.pending)  # entries are replaced, not edited
         data: str = json.dumps({"calls": calls, "pending": pending}, sort_keys=True)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(self.links_path.parent), prefix=".links-", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(data + "\n")
-            os.replace(tmp_name, self.links_path)
-        except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+        _write_atomic(self.links_path, data, ".links-", sync=False)
 
     # ------------------------------------------------------------ when things reach the disk (F11)
 
@@ -262,7 +252,7 @@ class SessionStore:
             session = replace(session, last_active=self.clock())
         old: Session | None = self._sessions.get(session.id)
         self._sessions[session.id] = session
-        if _hold(old) != _hold(session):
+        if _HOLD(old or _BLANK) != _HOLD(session):
             self._strict_seq += 1
         self._lazy_dirty = True
         return session
@@ -270,8 +260,11 @@ class SessionStore:
     def _links_touched(self) -> None:
         """calls / pending changed on a hook: links.json is owed before the answer."""
         self._links_dirty = True
-        self._lazy_dirty = True
         self._strict_seq += 1
+
+    def _wake_writer(self) -> None:
+        if not self._wake.is_set():  # it stays set for the whole delay: one hook, one call at most
+            self._wake.set()
 
     def commit(self) -> None:
         """End of a hook's changes. Wait for the disk only if this hook made a chat stricter.
@@ -287,7 +280,7 @@ class SessionStore:
                 if self._saved_seq < seq:
                     self._write_locked()
         elif self._lazy_dirty:
-            self._wake.set()
+            self._wake_writer()
 
     def flush(self) -> None:
         """Write whatever is not on disk yet, now (tests, shutdown, the writer thread)."""
@@ -306,7 +299,7 @@ class SessionStore:
                 self.save_links()
             self.save()
         except BaseException:
-            self._links_dirty = self._links_dirty or links
+            self._links_dirty |= links
             self._lazy_dirty = True
             self._wake.set()  # the writer thread, if there is one, tries again
             raise
@@ -319,6 +312,8 @@ class SessionStore:
         self._stop.clear()
         self._thread = threading.Thread(target=self._write_later, name="session-notes", daemon=True)
         self._thread.start()
+        if self._lazy_dirty or self._links_dirty:  # what loading and the start-up sweep changed
+            self._wake.set()
 
     def close(self) -> None:
         """Stop the writer and save everything (clean stop). Never raises."""
@@ -342,13 +337,12 @@ class SessionStore:
             try:
                 self.flush()
                 failing = False
-            except Exception as exc:  # noqa: BLE001 - keep trying; the notes stay in memory
+            except Exception as exc:  # noqa: BLE001 - `_write_locked` has woken us for a retry
                 if not failing:
                     logger.warning(
                         "session notes: not saved (%s); trying again", type(exc).__name__
                     )
                 failing = True
-                self._wake.set()
 
     def raise_counters(self, floors: Mapping[str, int]) -> None:
         """Never hand out an order number history already holds (a crash can lose the counter).
@@ -366,16 +360,21 @@ class SessionStore:
         existing: Session | None = self._sessions.get(session_id)
         if existing is not None:
             return existing
-        created = self._remember(
-            Session(
-                id=session_id,
-                marked=False,
-                start_time=datetime.now(UTC).isoformat(),
-                next_step=self._floors.pop(session_id, 1),
-            )
-        )
+        created = self._new_session(session_id, last_active=self.clock())
         self.commit()
         return created
+
+    def _new_session(self, sid: str, **fields: Any) -> Session:
+        """A chat seen for the first time: its counter starts after what history already holds."""
+        return self._remember(
+            Session(
+                id=sid,
+                marked=False,
+                start_time=datetime.now(UTC).isoformat(),
+                next_step=self._floors.pop(sid, 1),
+                **fields,
+            )
+        )
 
     def put(self, session: Session) -> None:
         """Replace session and persist (call when marked/next_step change).
@@ -420,17 +419,12 @@ class SessionStore:
         links_changed: bool = False
         if session is None:
             inherit: bool = linkable and not call  # a chat with no parent link may inherit
-            session = self._remember(
-                Session(
-                    id=sid,
-                    marked=False,
-                    start_time=datetime.now(UTC).isoformat(),
-                    next_step=self._floors.pop(sid, 1),
-                    parent_call=call,
-                    inherited_until=self.fallback_until(payload) if inherit else 0.0,
-                    inherited_triggers=self.fallback_triggers(payload) if inherit else {},
-                    last_active=now,
-                )
+            session = self._new_session(
+                sid,
+                parent_call=call,
+                inherited_until=self.fallback_until(payload) if inherit else 0.0,
+                inherited_triggers=self.fallback_triggers(payload) if inherit else {},
+                last_active=now,
             )
             changed = True
         else:
@@ -624,7 +618,7 @@ class SessionStore:
 
         Kept: a chat with activity in the last 29 days, a marked one, one with a trigger, one with
         an open inherited window, and every parent of a chat that stays. A call stays while a kept
-        chat points to it, it is pending, or its parent stays. Nothing is written here.
+        chat points to it, it is pending, or its parent stays. The writer saves the result.
         """
         now: float = self.clock()
         links: bool = self.prune_pending()
@@ -635,8 +629,9 @@ class SessionStore:
             if s.last_active > cutoff or self._holds_on(s, now)
         }
         for sid in list(keep):  # the parents, found while every link is still there
-            for ancestor in islice(self.chain(self._sessions[sid]), 1, None):
-                keep.add(ancestor.id)
+            child: Session = self._sessions[sid]
+            if child.parent_id or child.parent_call:  # most chats have none
+                keep.update(a.id for a in islice(self.chain(child), 1, None))
         dropped: set[str] = set(self._sessions) - keep
         if dropped:
             held: set[str] = {self._sessions[sid].parent_call for sid in keep}
@@ -646,9 +641,10 @@ class SessionStore:
                 if parent in dropped and call not in held and call not in self.pending:
                     del self.calls[call]
                     links = True
+        if dropped or links:
             self._lazy_dirty = True
-        if links:
-            self._links_dirty = self._lazy_dirty = True
+            self._links_dirty |= links
+            self._wake_writer()
         return len(dropped)
 
     def apply_mark(self, payload: dict[str, Any], stored: Session) -> tuple[Session, Session, bool]:

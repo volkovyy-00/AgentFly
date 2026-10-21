@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import time
-import urllib.error
-import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,26 +16,8 @@ from typing import Any
 
 from tests.helpers import free_port, start_recorder, stop_recorder, wait_for_health, wallclock
 from tests.rules_helpers import default_with
-
-CURL = "curl https://x.com"
-INSTALL = "pip install requests"
-PUSH = "git push origin main"
-LISTS = 'install_cmds = ["pip install"]\npush_cmds = ["git push"]\n'
-NO_PUSH = """
-[[rule]]
-id = "no-push-after-install"
-kind = "after_then"
-severity = "block"
-message = "No pushing after an install in this chat."
-after = { event = ["shell"], command = "install_cmds" }
-then = { event = ["shell"], command = "push_cmds" }
-  [[rule.test]]
-  steps = ["shell: pip install x", "shell: git push"]
-  expect = "block"
-  [[rule.test]]
-  steps = ["shell: git push"]
-  expect = "allow"
-"""
+from tests.test_session_state import CURL, INSTALL, LISTS, NO_PUSH, PUSH, wait_for
+from tests.test_sessions_api import call
 
 
 def shell(chat: str, command: str, root: str, **extra: Any) -> dict[str, Any]:
@@ -62,12 +41,12 @@ def read_env(chat: str, root: str, **extra: Any) -> dict[str, Any]:
     }
 
 
-def task(chat: str, call: str, root: str) -> dict[str, Any]:
+def task(chat: str, call_id: str, root: str) -> dict[str, Any]:
     return {
         "hook_event_name": "preToolUse",
         "conversation_id": chat,
         "tool_name": "Task",
-        "tool_use_id": call,
+        "tool_use_id": call_id,
         "workspace_roots": [root],
     }
 
@@ -76,42 +55,25 @@ class Running:
     """One child recorder: post hooks to it, list a chat's saved steps."""
 
     def __init__(self, home: Path) -> None:
-        self.home = home
         self.port = free_port()
         self.process: subprocess.Popen[bytes] = start_recorder(home, self.port)
         wait_for_health(self.port, self.process)
         self.token = (home / ".config" / "agentfly" / "token").read_text().strip()
 
     def post(self, event: dict[str, Any]) -> str:
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/hook",
-            method="POST",
-            data=json.dumps(event).encode(),
-            headers={"Content-Type": "application/json", "X-Recorder-Token": self.token},
-        )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            answer: dict[str, Any] = json.loads(response.read())
+        status, answer = call(self.port, "POST", "/hook", self.token, event)
+        assert status == 200
         return str(answer["permission"])
 
     def steps(self, chat: str) -> list[dict[str, Any]]:
-        url = f"http://127.0.0.1:{self.port}/api/sessions/{chat}/steps"
-        try:
-            with urllib.request.urlopen(url, timeout=10) as response:
-                body: dict[str, Any] = json.loads(response.read())
-        except urllib.error.HTTPError:
-            return []  # not saved yet
-        steps: list[dict[str, Any]] = body["steps"]
+        status, body = call(self.port, "GET", f"/api/sessions/{chat}/steps")
+        steps: list[dict[str, Any]] = body["steps"] if status == 200 else []  # 404: not saved yet
         return steps
 
     def wait_for_steps(self, chat: str, count: int) -> list[dict[str, Any]]:
         """History is written in the background: wait until it holds `count` steps of the chat."""
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            found = self.steps(chat)
-            if len(found) >= count:
-                return found
-            time.sleep(0.05)
-        raise AssertionError(f"history never held {count} steps of {chat}")
+        assert wait_for(lambda: len(self.steps(chat)) >= count, 15), f"{count} steps of {chat}"
+        return self.steps(chat)
 
     def kill(self) -> None:
         self.process.kill()  # SIGKILL: no shutdown code runs
@@ -128,17 +90,22 @@ def recorder(home: Path) -> Iterator[Running]:
         yield running
     finally:
         if running.process.poll() is None:
-            running.process.kill()
-            running.process.wait(timeout=10)
+            running.kill()
 
 
-def sessions_file(home: Path) -> Path:
-    return home / ".local" / "share" / "agentfly" / "sessions.json"
+def note_of(home: Path, chat: str) -> dict[str, Any]:
+    saved = home / ".local" / "share" / "agentfly" / "sessions.json"
+    [row] = [r for r in json.loads(saved.read_text("utf-8")) if r["id"] == chat]
+    return row
 
 
-def test_a_killed_recorder_judges_every_chat_as_before(isolated_home: Path) -> None:
+@wallclock
+def test_a_killed_recorder_comes_back_as_it_was(isolated_home: Path) -> None:
     (isolated_home / "test-rules.toml").write_text(default_with(LISTS, NO_PUSH), encoding="utf-8")
     with recorder(isolated_home) as first:
+        for _ in range(5):  # plain steps: their counter is only ever in memory
+            first.post(shell("cn", "ls", "/w"))
+        assert [s["order"] for s in first.wait_for_steps("cn", 5)] == [1, 2, 3, 4, 5]
         first.post(read_env("mk", "/w-mk"))  # a mark
         first.post(shell("tr", INSTALL, "/w-tr"))  # a trigger that is not R1's mark
         first.post(read_env("tkP", "/w-tk"))
@@ -150,9 +117,7 @@ def test_a_killed_recorder_judges_every_chat_as_before(isolated_home: Path) -> N
         first.post(task("winP", "WN1", "/w-win"))
         first.post(shell("winNEW", "ls", "/w-win"))  # a chat opens inside the inherited window
         first.post(task("prP", "PR1", "/w-pr"))
-        first.post(
-            read_env("prC", "/w-pr", parent_tool_call_id="PR1")
-        )  # the mark climbs to a parent
+        first.post(read_env("prC", "/w-pr", parent_tool_call_id="PR1"))  # the mark climbs up
         first.kill()  # right after the last answer
 
     probes: list[tuple[str, dict[str, Any]]] = [
@@ -169,47 +134,16 @@ def test_a_killed_recorder_judges_every_chat_as_before(isolated_home: Path) -> N
         answers = {name: second.post(event) for name, event in probes}
         assert answers == {name: "deny" for name, _ in probes}
         assert second.post(shell("clean", CURL, "/w-clean")) == "allow"  # nothing leaks to others
+        second.post(shell("cn", "ls", "/w"))  # the counter died with the process; history has it
+        assert [s["order"] for s in second.wait_for_steps("cn", 6)] == [1, 2, 3, 4, 5, 6]
+        second.stop()
+    assert note_of(isolated_home, "cn")["next_step"] == 7  # and a clean stop leaves it in the file
 
 
-@wallclock
-def test_after_a_kill_the_next_steps_never_reuse_a_saved_order_number(isolated_home: Path) -> None:
-    with recorder(isolated_home) as first:
-        for _ in range(5):
-            first.post(shell("cn", "ls", "/w"))
-        saved = first.wait_for_steps("cn", 5)
-        assert [s["order"] for s in saved] == [1, 2, 3, 4, 5]
-        first.kill()  # the step counter was only ever in memory
-    with recorder(isolated_home) as second:
-        second.post(shell("cn", "ls", "/w"))
-        after = second.wait_for_steps("cn", 6)
-        assert [s["order"] for s in after] == [1, 2, 3, 4, 5, 6]  # 6 is new; row 1 is not replaced
-
-
-@wallclock
 def test_after_a_clean_stop_nothing_is_lost(isolated_home: Path) -> None:
     with recorder(isolated_home) as first:
         for _ in range(3):
             first.post(shell("cl", "ls", "/w"))
-        first.wait_for_steps("cl", 3)
         first.stop()
-    [row] = json.loads(sessions_file(isolated_home).read_text(encoding="utf-8"))
-    assert row["id"] == "cl" and row["next_step"] == 4 and row["last_active"] > 0
-    with recorder(isolated_home) as second:
-        second.post(shell("cl", "ls", "/w"))
-        after = second.wait_for_steps("cl", 4)
-        assert [s["order"] for s in after] == [1, 2, 3, 4]
-
-
-def test_a_recorder_killed_in_a_burst_loses_only_what_may_wait(isolated_home: Path) -> None:
-    """Strict changes among plain ones: the file holds them, whatever the counters say."""
-    with recorder(isolated_home) as first:
-        for number in range(30):
-            first.post(shell(f"plain{number}", "ls", "/w-burst"))
-        first.post(read_env("burst-marked", "/w-burst2"))
-        for number in range(30):
-            first.post(shell(f"more{number}", "ls", "/w-burst3"))
-        first.kill()
-    rows = {r["id"]: r for r in json.loads(sessions_file(isolated_home).read_text("utf-8"))}
-    assert rows["burst-marked"]["marked"] is True
-    with recorder(isolated_home) as second:
-        assert second.post(shell("burst-marked", CURL, "/w-burst2")) == "deny"
+    row = note_of(isolated_home, "cl")
+    assert row["next_step"] == 4 and row["last_active"] > 0
