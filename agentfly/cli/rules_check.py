@@ -31,8 +31,9 @@ def named(path: Path) -> Path:
 def choose_file(given: Path | None) -> tuple[Path, str]:
     """The file to read and a few words on where it came from."""
     if given is not None:
-        path = named(given)
-        return path, "the active file" if path != given else "file given"
+        if rulefile.is_active_path(given):  # the path itself or a link to it (CR5)
+            return rulefile.ACTIVE_RULES, "the active file"
+        return given, "file given"
     path, active = rulefile.in_force_path()
     return path, "the active file" if active else "the packaged default; there is no active file"
 

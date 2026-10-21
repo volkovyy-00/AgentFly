@@ -255,6 +255,23 @@ def test_rules_check_through_a_link_to_the_active_file_judges_the_active_file(
         assert "symbolic link" not in err and str(link) not in err
 
 
+def test_rules_check_calls_the_active_file_so_however_it_is_given(
+    active_rules: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CR5: the active path itself once said "(file given)", a link to it "(the active file)"."""
+    active_rules.write_text(GOOD, encoding="utf-8")
+    active_rules.chmod(0o644)
+    link = tmp_path / "link.toml"
+    link.symlink_to(active_rules)
+    draft = tmp_path / "draft.toml"
+    draft.write_text(GOOD, encoding="utf-8")
+    for given, what in ((active_rules, "the active file"), (link, "the active file")):
+        assert main(["rules", "check", str(given)]) == 0
+        assert f"in {active_rules} ({what})" in capsys.readouterr().out
+    assert main(["rules", "check", str(draft)]) == 0
+    assert f"in {draft} (file given)" in capsys.readouterr().out
+
+
 def test_a_missing_file_given_as_the_active_path_is_not_a_crash(
     active_rules: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
