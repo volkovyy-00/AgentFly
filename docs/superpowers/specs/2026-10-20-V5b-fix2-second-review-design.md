@@ -544,7 +544,9 @@ command whose simple command names 200 listed programs does at most `200 + 1` ke
 **Install.** With a layout owner different from the file's, as the doctor tests do:
 - current bytes with the wrong owner, with mode 664 and with mode 0600 are each rewritten, and the
   message asks for a restart;
-- an edited, untrusted file keeps its bytes and mode, `init -g` exits 0 and prints the notice;
+- an edited, untrusted file keeps its bytes and mode; on an intact re-run `init -g` exits 0 and
+  prints the notice, and on a repair run (any other work to do) `assert_locked` still fails closed:
+  the bytes and mode are untouched and the repair is undone (controller ruling R-n, 2026-10-21);
 - an intact re-run with an edited file prints the pinned line, then the notice;
 - an unreadable file is `unknown`, not `edited`;
 - `rules check <link to the active file>` gives the recorder's verdict.
