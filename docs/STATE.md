@@ -4,8 +4,8 @@ Phase: V5b-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V5b, V6,
 Pending decisions: D16
 
 ## Spikes and cards
-- Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
-- Order (owner 2026-10-19/20/21): F9 ∥ F13 ∥ F11 ∥ V5d (wave 1; V5d's file overlap with F11 checked at its brief) → F8 (alone) → V5c (shares `agentfly/install/` and the CLI with V5b) → V7 ∥ V9; F12 after V5c and F13 (shares `agentfly/install/`, `packages.py`).
+- Done cards: one line each under BOARD `## Done`. V5a not red-teamed (conformance review open).
+- Order after wave 1: D31 move → cleanup card → F8 (alone) → V5c → V7 ∥ V9; F12 after V5c; F14 any time after F11.
 - Briefs: wave 1 dispatched 2026-10-21 (against 41fcc24). V5c (pass 2 2026-10-18; re-check after wave 1; add A3 + D30). V7, V9, F8, F12: not written; F8 first counts pyright basic-mode errors and checks pyright's Node download. Standing rule: brief via agent-ready-tickets + fresh pass 2, owner says "go", `docs/roles/dispatch.sh <card> <slug>`, owner starts each worker.
 - Worker closing rule (owner 2026-10-19, docs/reports/README.md): `/final-verification` on main...HEAD, commit, then `/code-review high`; verdict in the report.
 - V4 on hold: this Mac is x86_64 with no Xcode CLT. CI runs on GitHub's macos-15 (arm64); V4 may use a runner for its checks; rework then.
@@ -17,9 +17,8 @@ Pending decisions: D16
 - F13 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f13-escape-names · ag-f13-escape-names · docs/reports/F13.md · docs/briefs/F13.md
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
-Note: F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits).
-Note: F13 done 2026-10-21 (8bd1e94; 4525 passed); reviewer MERGE (hostile probe clean, printable output byte-identical). Lead accepts NBSP/ZWJ now shown escaped (brief's `isprintable` rule). Raw names left in other installer/doctor messages (record Version, `_packaged_default` OSError) → cleanup card.
-Note: F11 done (a695b75; 4529 passed); V5d done (cddb8b1; 4541 passed; three intended store-less changes). F11 reviewer MERGE + 2 low findings → small fix round to the F11 worker (sweep keeps a chat marked through its parent; hourly sweep keeps the dropped chat's counter floor). CR1 sub-case → F14 (owner 2026-10-21). F11 fix round done (a695b75; 4531 passed; lead read the diff). V5d reviewer MERGE (160k-command differential: never stores more; resolver = realpath on 900k words); lead accepts its extra store-less cases. Trial wave1 rebuilt 46c85cd = main cf40df9 + F9 squash + F13 + F11 (a695b75) + V5d, same two union resolutions; 3× check running (scratchpad trial-wave1-runs.log).
+Note: F9 (4d387ae; squash: OS username in two commits) and F13 (8bd1e94; NBSP/ZWJ shown escaped, accepted) reviewer MERGE. Raw names left in other installer/doctor messages (record Version, `_packaged_default` OSError) → cleanup card.
+Note: F11 done (a695b75; 4529 passed); V5d done (cddb8b1; 4541 passed; three intended store-less changes). F11 reviewer MERGE + 2 low findings → small fix round to the F11 worker (sweep keeps a chat marked through its parent; hourly sweep keeps the dropped chat's counter floor). CR1 sub-case → F14 (owner 2026-10-21). F11 fix round done (a695b75; 4531 passed; lead read the diff). V5d reviewer MERGE (never stores more; resolver = realpath); lead accepts its extra store-less cases. Trial 46c85cd (main cf40df9 + F9 squash + F13 + F11 a695b75 + V5d; two union resolutions): 3× 4673 passed, 5 skipped; web 443; stale-build clean. `merge/wave1` = main (this commit) + the same merges, built next; no main commits until it lands.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -33,7 +32,8 @@ Note: F11 done (a695b75; 4529 passed); V5d done (cddb8b1; 4541 passed; three int
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
+1. Push `merge/wave1` (`! AGENTFLY_ALLOW_PUSH=1 git push origin merge/wave1`), open one PR to main, wait for CI green, tell the lead.
+2. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
@@ -53,7 +53,7 @@ Note: F11 done (a695b75; 4529 passed); V5d done (cddb8b1; 4541 passed; three int
 - V5b leftovers (V5b-fix2 report 549cec1): now in V5d and F11 briefs; V5c: A3 root 0600 edited rules.toml (said kept, recorder runs the default) + D30. Spurious limit deny for an inherited trigger on a heavy command (fails closed). CR4, CR8–CR10, M5, M7 listed. `_ALARMS` drops highlighted steps (page card).
 
 ## Next 3 actions
-1. Read each wave-1 report's head when the owner says it is ready; trial-merge one at a time.
+1. When merge/wave1's CI is green: `git merge --ff-only merge/wave1` on main, handoff commit, owner pushes main.
 2. A3 + D30 → V5c brief; re-check V5c against main.
 3. After wave 1 merges: D31 move with the owner, then the hackathon-cleanup card; F10's AGENTS.md Testing lines and moving AGENTS.md "Testing" to tests/README.md fold into it.
 
