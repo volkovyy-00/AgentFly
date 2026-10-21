@@ -41,7 +41,9 @@
       "Bash(gh run rerun*)",
       "Bash(gh run cancel*)",
       "Bash(gh run delete*)",
-      "Read(~/.config/agentfly/**)"
+      "Read(~/.config/agentfly/**)",
+      "Edit(~/.config/agentfly/**)",
+      "Bash(*.config/agentfly*)"
     ]
   }
 }
