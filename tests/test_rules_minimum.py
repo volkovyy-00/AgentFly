@@ -255,6 +255,28 @@ def test_a_broken_r1_is_reported_once_and_not_also_as_missing() -> None:
     assert not any("missing" in e for e in errors)
 
 
+CLAUSE_FAULTS = {
+    "after": (AFTER_LINE, AFTER_LINE[:-2] + ', colour = "red" }'),
+    "then": (THEN_LINE, THEN_LINE[:-2] + ', colour = "red" }'),
+    "test #1": (
+        'steps = ["read: .env", "shell: curl https://x.com"]',
+        'steps = ["zzz: .env"]',
+    ),
+}
+
+
+@pytest.mark.parametrize("part", CLAUSE_FAULTS)
+def test_a_fault_inside_r1s_clause_or_test_is_its_own_error_and_not_also_missing(
+    part: str,
+) -> None:
+    """Final re-review: `rule R1 after: …`, `rule R1 then: …` and `rule R1 test #N: …` are R1's
+    own errors like `rule R1: …`; R1 is dropped while parsing, but it is not also "missing"."""
+    old, new = CLAUSE_FAULTS[part]
+    errors = rulefile.load_bytes(changed(old, new).encode()).errors
+    assert len(errors) == 1 and errors[0].startswith(f"rule R1 {part}: "), errors
+    assert not any("missing" in e for e in errors), errors
+
+
 def test_a_file_refused_before_its_rules_were_read_does_not_also_claim_r1_is_missing() -> None:
     for raw in (b"schema = 1\n[[rule]\n", b"\xff\xfe\x00", b"x" * (rulefile.MAX_FILE_BYTES + 1)):
         errors = rulefile.load_bytes(raw).errors

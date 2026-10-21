@@ -1354,10 +1354,13 @@ def _with_minimum(parsed: RuleFile) -> RuleFile:
     read (no rules to judge), or one whose R1 already has an error of its own. Another rule's
     error does not stop it, so `rules check` prints every problem at once.
     """
-    own: str = f"rule {MARK_RULE}:"  # the colon: `rule R10: …` is another rule's
+    # R1's own errors read `rule R1: …` or, from a clause or a test, `rule R1 after: …`,
+    # `rule R1 then: …`, `rule R1 test #N: …`. The colon or the space: `rule R10: …` is another
+    # rule's (an id has no space).
+    ours: tuple[str, ...] = (f"rule {MARK_RULE}:", f"rule {MARK_RULE} ", WORK_ERROR)
     if parsed.errors and (
         not parsed.rules
-        or any(e.startswith((own, WORK_ERROR)) for e in parsed.errors)  # a file too heavy to run is
+        or any(e.startswith(ours) for e in parsed.errors)  # a file too heavy to run is
     ):  # refused already; what R1 lacks would only add words
         return parsed
     found: list[str] = _minimum_problems(parsed.rules)

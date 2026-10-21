@@ -306,7 +306,8 @@ lines for them (R0 and normalisation: V5).
   recorder (the default runs); `.env*` for `.env` and `.env.*`, extra names, no exceptions, a
   reworded message and extra rules load; another rule's error does not hide R1's (also one whose
   id starts like it, `R10` or `R1x`), a broken R1 is
-  not also "missing". The check does not read `default.toml`.
+  not also "missing" (also when the fault is in its `after`, its `then` or an inline test). The
+  check does not read `default.toml`.
   V5b-fix2 (`tests/test_rules_minimum.py`, `tests/r1_grid.py`): the names are judged by the shape
   of R1's patterns, not on sample names. SPEC §5's six bullets are one table
   (`rulefile.SECRET_FAMILIES`, which `spec_secret` also reads and which answers as the old
