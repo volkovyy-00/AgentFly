@@ -19,7 +19,7 @@ Pending decisions: D16
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
 (dispatched 2026-10-21 from main 61e2981; owner started all four workers)
 - F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits).
-- F13 done 2026-10-21 (8bd1e94; 4525 passed; needs owner: none); fresh reviewer running. Raw names left in other installer/doctor messages (record line's Version) → cleanup card. One trial merge + one PR (D26 B) for all four.
+- F13 done 2026-10-21 (8bd1e94; 4525 passed); reviewer MERGE (hostile probe clean, printable output byte-identical). Lead accepts NBSP/ZWJ now shown escaped (brief's `isprintable` rule). Raw names left in other installer/doctor messages (record Version, `_packaged_default` OSError) → cleanup card. One trial merge + one PR (D26 B) for all four.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -27,7 +27,7 @@ Pending decisions: D16
 - Recorder: not running (no listener on 8787, no launchd job). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees and branches: main; wave 1 (see In flight); ag-v5b-rules-file (merged, head 549cec1) kept with the worker's git-ignored `.superpowers/sdd/` (1.1 MB, advisor analysis and reviews) until the owner says remove; remote `merge/v5b` (PR #7) the owner may delete. Disk 23 GiB free.
-- Git: origin/main = 0473d58 (V5b, PR #7); CI 39583473122 and CodeQL green on it. Lead commits after it are local (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes (incl. `gh api`), Read ~/.config/agentfly.
+- Git: origin/main = 0473d58 (V5b, PR #7); CI 39583473122 and CodeQL green on it. Lead commits after it are local (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes (a `gh api` GET was denied 2026-10-21), Read ~/.config/agentfly.
 - CI history: git show 41fcc24:docs/STATE.md. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode CLT (`make` opens a dialog).
