@@ -59,6 +59,8 @@ class Session:
     # `inherited_triggers` is replaced, never changed in place.
     triggers: frozenset[str] = frozenset()
     inherited_triggers: Mapping[str, float] = field(default_factory=dict)
+    # F11 (D29): when the chat last had an event (epoch). 0.0 means unknown; the store fills it in.
+    last_active: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -109,6 +109,9 @@ STEPS_QUERY: str = """
 SELECT ord, time, kind, verdict, tool, file_path, file_sensitive, command, hosts, rule_id
 FROM steps WHERE session_id = ? ORDER BY ord LIMIT ?
 """
+# F11: the first order number each chat's saved steps have not used (`INSERT OR REPLACE` on
+# (session_id, ord) means a counter that goes back overwrites history).
+NEXT_ORDERS_QUERY: str = "SELECT session_id, MAX(ord) + 1 FROM steps GROUP BY session_id"
 # Not limited by STEPS_CAP: the marking step is named even when the list is cut.
 MARKING_STEP_QUERY: str = "SELECT MIN(ord) FROM steps WHERE session_id = ? AND marks = 1"
 
@@ -271,6 +274,51 @@ def wipe_file(path: Path) -> tuple[int, int]:
     finally:
         conn.close()
     return sessions, steps
+
+
+def read_only(path: Path, work: Callable[[sqlite3.Connection], Any]) -> Any:
+    """Run `work` on a short-lived read-only connection with a time limit.
+
+    None when the file has no tables yet (the writer has made it but not filled it). Any other
+    sqlite problem, or the time limit, is `StoreUnavailable`.
+    """
+    deadline = time.monotonic() + READ_TIMEOUT_S
+    try:
+        conn = sqlite3.connect(
+            f"{path.as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT_S, isolation_level=None
+        )
+    except sqlite3.Error as exc:
+        raise StoreUnavailable(type(exc).__name__) from None
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
+        return work(conn)
+    except sqlite3.Error as exc:
+        if str(exc).startswith("no such table"):
+            return None  # the writer has made the file but not the tables yet: nothing saved
+        raise StoreUnavailable(type(exc).__name__) from None
+    finally:
+        conn.close()
+
+
+def next_orders(path: Path) -> dict[str, int]:
+    """Chat id -> first order number its saved steps have not used (F11); {} if nothing can be read.
+
+    Read once at start-up, before the writer opens the file, so a recorder that was killed can
+    not number new steps over old rows. It works on a log a killed writer left behind. A file that
+    cannot be read gives {} and one warning: the numbers then come from sessions.json alone.
+    """
+    if not path.exists():
+        return {}
+    try:
+        found: dict[str, int] | None = read_only(
+            path,
+            lambda conn: {str(sid): int(first) for sid, first in conn.execute(NEXT_ORDERS_QUERY)},
+        )
+    except StoreUnavailable as exc:
+        logger.warning("local store: step numbers not read (%s)", exc)
+        return {}
+    return found or {}
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -516,23 +564,7 @@ class LocalStore:
         path = self.path
         if path is None or not path.exists():
             return None
-        deadline = time.monotonic() + READ_TIMEOUT_S
-        try:
-            conn = sqlite3.connect(
-                f"{path.as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT_S, isolation_level=None
-            )
-        except sqlite3.Error as exc:
-            raise StoreUnavailable(type(exc).__name__) from None
-        try:
-            conn.execute("PRAGMA query_only=ON")
-            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
-            return work(conn)
-        except sqlite3.Error as exc:
-            if str(exc).startswith("no such table"):
-                return None  # the writer has made the file but not the tables yet: nothing saved
-            raise StoreUnavailable(type(exc).__name__) from None
-        finally:
-            conn.close()
+        return read_only(path, work)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """Past sessions, newest first. Empty when nothing was ever saved."""
