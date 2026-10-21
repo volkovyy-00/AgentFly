@@ -502,3 +502,12 @@ def test_r0_and_r1_answer_as_usual_with_a_heavy_command_list_before_r1() -> None
     with one_hook():
         rule = winning_rule(shell(f"{BIPARTITE_LINE} ~/.config/agentfly/token"), session(), rs)
     assert rule is not None and rule.id == "R0"
+
+
+def test_the_limit_message_does_not_promise_that_rules_check_names_every_heavy_rule() -> None:
+    """Final review M6: a list heavy with key probes gets no `rules check` line, so the message
+    says `rules check` may name the heavy ones, not that it does."""
+    assert LIMIT_MESSAGE == (
+        "AgentFly's rules took too long to check this action (the rules limit). Simplify the rules "
+        "file's patterns or command lists; `agentfly rules check` may name the heavy ones."
+    )

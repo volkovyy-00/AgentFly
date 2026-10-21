@@ -373,7 +373,7 @@ def _never(action: Action) -> bool:  # noqa: ARG001
 LIMIT_ID: str = "rules limit"
 LIMIT_MESSAGE: str = (
     "AgentFly's rules took too long to check this action (the rules limit). Simplify the rules "
-    "file's patterns or command lists; `agentfly rules check` names the heavy ones."
+    "file's patterns or command lists; `agentfly rules check` may name the heavy ones."
 )
 
 

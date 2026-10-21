@@ -185,8 +185,9 @@ file order that fired or was left unfinished decides.
   the warn rule's too, and `app.hook_answer` picks deny or ask from the verdict, so both answers carry
   the limit message (plus `BLOCK_TAIL` or `SKIP_TAIL`).
 - `LIMIT_MESSAGE`: "AgentFly's rules took too long to check this action (the rules limit). Simplify
-  the rules file's patterns or command lists; `agentfly rules check` names the heavy ones." The
-  wording may be polished.
+  the rules file's patterns or command lists; `agentfly rules check` may name the heavy ones." The
+  wording may be polished ("may name": a list heavy only with key probes gets no lint line, final
+  review M6).
 
 ### 4.4 Lint and reporting
 
@@ -200,8 +201,8 @@ For a command list (revision 4), `rules check` prints one `warn:` line per list 
 heaviest bucket weighs more than 20 (`rulefile.HEAVY_BUCKET`; ten entries of one word left each
 weigh 20): "rule X: N entries of list 'l' share the word 'w' and are each checked when a command
 holds it; on long commands the rule may reach the rules limit", with N and w those of the heaviest
-bucket. So `LIMIT_MESSAGE`'s "`agentfly rules check` names the heavy ones" holds for lists too. The
-packaged default's one list (`publish_tools`) has buckets of one entry, so it carries no lint.
+bucket. So `LIMIT_MESSAGE`'s "`agentfly rules check` may name the heavy ones" holds for lists
+too. The packaged default's one list (`publish_tools`) has buckets of one entry, so it carries no lint.
 
 **Reporting.** After the hook, `app.apply_rules` reads the meter:
 - if anything was unfinished, it logs one warning line with the chat id, the unfinished rule ids and
