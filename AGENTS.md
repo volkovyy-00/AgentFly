@@ -393,9 +393,9 @@ lines for them (R0 and normalisation: V5).
   again); the line is cut to 400 characters with "and K more"; the log line names the chat and
   the rule ids and holds no command text (and at most 80 characters of the chat id); a merged
   pair with a limit half shows the limit rule; the limit message says `rules check` may name the
-  heavy rules. A trigger a subagent holds only through its parent, left unfinished by `mark` on a
-  heavy command, is judged as held: a follow-up its `then` does not match is allowed, and a chat
-  without the trigger still gets the limit deny (CR2).
+  heavy rules. A trigger a chat holds only through the workspace fallback is evaluated again by
+  `mark`; a heavy command that leaves it unfinished and also performs the trigger action gets the
+  limit deny and nothing is recorded for that chat (it fails closed).
 - Long words (`tests/test_long_words.py`, V5b-fix2): a quoted word of 300 or 5,000 characters
   (with and without `/`), 128 emoji, a program name as long and a Read `file_path` with a part
   over the system's name limit each get the answer the short word gets, R1 still blocks after a

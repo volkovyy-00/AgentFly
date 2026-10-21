@@ -313,6 +313,25 @@ def test_a_limit_deny_records_no_trigger_and_a_restart_judges_as_before(rec: Rec
     assert rec.run("K", "cat notes.txt")["permission"] == "deny"  # a trigger that was set stays
 
 
+def test_a_heavy_command_that_would_set_a_fallback_trigger_gets_the_limit_deny(
+    rec: Recorder,
+) -> None:
+    """Final re-review: a block trigger a chat holds only through the 30-minute workspace fallback
+    is evaluated again by `mark`, and on a heavy command that also performs the trigger action the
+    meter can run out there. The rule stays unfinished, so the hook fails closed with the limit
+    deny (a held trigger is not judged as held in that case: it would be allowed and then lost
+    once the window ended)."""
+    rules_mod.activate(heavy("block", "after_then"))
+    trigger_path = "/w/d/d/d/z0/f.py"
+    assert rec.run("P", f"ls {trigger_path}")["permission"] == "allow"  # P holds the trigger
+    rec.task("P", "T1")  # no child names T1: a chat in this workspace falls back to P's trigger
+    heavy_echo = "echo" + command(20).removeprefix("cat") + f" {trigger_path}"
+    answer = rec.run("F", heavy_echo)
+    assert (answer["permission"], answer["user_message"]) == ("deny", LIMIT_MESSAGE)
+    stored = rec.store.get("F")
+    assert stored is not None and TRIGGER_ID not in stored.triggers  # nothing recorded for F
+
+
 def test_health_says_rules_limit_only_after_a_hit(app_client: TestClient) -> None:
     rules_mod.activate(heavy("block"))  # `lifespan` activated the rules it loaded: after it
     assert set(app_client.get("/health").json()) == HEALTHY_KEYS
