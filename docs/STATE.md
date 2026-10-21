@@ -21,13 +21,13 @@ none
 - Recorder: not running (no listener on 8787, no launchd job). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees and branches: main; ag-v5b-rules-file (merged, head 549cec1) kept with the worker's git-ignored `.superpowers/sdd/` (1.1 MB, advisor analysis and reviews) until the owner says remove; remote `merge/v5b` (PR #7) the owner may delete. Disk 23 GiB free.
-- Git: origin/main = b342323 until the owner pushes main (de0aee7 + handoff); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
+- Git: origin/main = 0473d58 (owner pushed 2026-10-21 ~12:25; carries V5b; PR #7 merged); CI 39583473122 and CodeQL 39583470949 running on it; lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. PR #7: CI check green; CodeQL's 3 `py/path-injection` alerts (stat-only, pre-existing behaviour) dismissed by the owner (won't fix) → V5d. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Push main: `! AGENTFLY_ALLOW_PUSH=1 git push origin main` (PR #7 then reads merged); say "go" for V5d's brief and the wave-1 brief re-checks.
+1. Say "go" for V5d's brief and the wave-1 brief re-checks (main CI on 0473d58 must be green first).
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
