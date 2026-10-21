@@ -21,6 +21,7 @@ import os
 import posixpath
 import re
 import stat
+import sys
 import tomllib
 from bisect import bisect_right
 from collections import Counter
@@ -176,13 +177,17 @@ def _place_middle(
     follows the one before. Between `**` a block has a fixed length, so the earliest place is
     always the safe one. This is the only walk through the path: every start position tried is a
     step, charged with the compares it made once the block's walk is done, and a pattern with no
-    middle block never gets here."""
+    middle block never gets here. A walk that has spent what the meter had left when it began is
+    charged there and then (the charge raises), so it ends at most one start's work past the
+    budget, however deep the path."""
     at: int = start
     for block in middle:
         last: int = end - len(block)  # the last place the block can start
+        room: int = _room()
         starts: int = 0
         steps: int = 0
         stars: int = 0
+        hit: bool = False
         while at <= last:
             starts += 1
             hit, cost, star = _priced_run(block, segments, at)
@@ -191,9 +196,13 @@ def _place_middle(
             if hit:
                 break
             at += 1
+            if steps > room:  # a test that lifts the bound walks on, charging as it goes
+                _tally(starts, stars)
+                _charge(steps)
+                room, starts, steps, stars = _room(), 0, 0, 0
         _tally(starts, stars)
         _charge(steps)
-        if at > last:
+        if not hit:
             return False
         at += len(block)
     return True
@@ -447,6 +456,12 @@ def _charge(steps: int) -> None:
     meter.left -= steps
     if meter.left < 0:
         raise WorkLimit
+
+
+def _room() -> int:
+    """What the meter has left, read once before a walk (with no meter, more than any walk)."""
+    meter: Meter | None = _METER.get()
+    return sys.maxsize if meter is None else meter.left
 
 
 def _tally(starts: int, stars: int) -> None:

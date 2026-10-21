@@ -86,6 +86,26 @@ def test_past_the_budget_every_floating_test_raises() -> None:
         assert not compile_pattern("*.pem").matches(deep, None, HOME)
 
 
+def test_a_walk_stops_once_it_has_spent_what_the_meter_has_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One floating test on a very deep path stops its walk at the budget (final audit A1): the
+    meter ends at most one start's work below 0, however deep the path, and no more starts are
+    tried than the budget pays for."""
+    pattern = compile_pattern(".ssh/**")  # unanchored: `**/.ssh/**`, one middle block
+    assert rulefile.floating(pattern)
+    deep = "a/" * 50_000 + "f"
+    starts: list[int] = []
+    monkeypatch.setattr(rulefile, "_tally", lambda tried, stars: starts.append(tried))
+    with metered(Meter(left=1_000)) as meter, pytest.raises(WorkLimit):
+        pattern.matches(deep, None, HOME)
+    assert 0 < -meter.left <= 2  # a start of `.ssh` costs 2: the start and one short compare
+    assert sum(starts) <= 501
+    with metered(Meter(left=10**9)) as meter:  # a budget that pays for the walk still walks it
+        assert not pattern.matches(deep, None, HOME)
+    assert meter.left == 10**9 - 2 * 50_001
+
+
 def test_without_a_meter_nothing_is_charged_or_raised() -> None:
     assert rulefile.current_meter() is None
     assert not clause_of("zz/**").matches(shell(command(60)), {})

@@ -138,7 +138,9 @@ The answers are the same (`any` over the same set). This keeps the unmetered wor
   kind costs at most **20 ms** on this Mac. The start value is 40,000 (about 0.5 µs a step). It does
   not grow with the command.
 - **Charging.** A floating pattern's test adds its steps to a local counter and charges the meter
-  after each block, so a hook overshoots the budget by at most one block's walk. A charge that takes
+  after each block, so a hook overshoots the budget by at most one block's walk; a walk that has
+  spent what the meter had left when it began is charged at once (final audit A1), so that walk is
+  itself bounded by the budget and ends at most one start's work past it. A charge that takes
   the budget below 0 raises `WorkLimit`. Once the budget is spent, every later floating test raises
   at its first charge.
 - **One pass.** The hook runs as today: `mark`, then `decide`, each over the rules in file order.
