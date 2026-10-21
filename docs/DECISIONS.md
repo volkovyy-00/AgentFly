@@ -38,7 +38,7 @@ hand; "approved" always means the owner's explicit yes):
 - D28 approved 2026-10-20 · `init -g` refreshes an unedited rules file
 - D29 approved 2026-10-20 · How long the recorder keeps a chat's session note
 - D30 approved 2026-10-20 · `agentfly uninstall` keeps a copy of an edited rules file
-- D31 proposed · Process docs move to a private repo
+- D31 approved 2026-10-21 · Process docs move to a private repo
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -764,7 +764,7 @@ and prints where it went. An unedited default is not copied. A failed copy stops
 before anything is removed. Restoring the copy is by hand (V7 may add more).
 
 ## D31. Process docs move to a private repo
-Status: **proposed (2026-10-21)** · Cards: ops-repo move (lead with the owner, after wave 1), hackathon cleanup (worker card after it) · Tested by: those cards
+Status: **approved (2026-10-21), as written; the move starts only after F9, F13, F11 and V5d are all merged** · Cards: ops-repo move (lead with the owner, after wave 1), hackathon cleanup (worker card after it) · Tested by: those cards
 Two repos. The public `AgentFly` keeps the product: code, tests, `ui/`, README (with `docs/media`),
 SPEC.md, HOOKS.md, LICENSE, CI, and a short AGENTS.md/CLAUDE.md for contributors. A private repo
 next to it (`~/Projects/AgentFly-ops`, a private GitHub repo the owner creates) gets everything

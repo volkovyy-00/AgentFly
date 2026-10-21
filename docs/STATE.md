@@ -1,7 +1,7 @@
 # STATE (lead handoff; overwrite, never append)
 Updated: 2026-10-21 12:17 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: V5b-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V5b, V6, V6b, V8, V8b, F3, F5, F6, F7, F10 ✅ (BOARD Done; last merge V5b de0aee7 via PR #7 = trial 9169ed6 tree + lead SPEC/HOOKS edits, 3× 4480 passed, 5 skipped).
-Pending decisions: D16 D31
+Pending decisions: D16
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
@@ -31,12 +31,13 @@ Pending decisions: D16 D31
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Say yes (or change) D31: process docs to a private repo, public tree only, no history rewrite.
+1. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
 - Owner 2026-10-21 (worker session, V5b-fix2 Task 6b): command lists count against the per-hook rules limit; an unfinished highlight is skipped (brief amended).
 - Owner 2026-10-20: D27 (changed), D28, D29, D30 approved; F10 merged; F13 approved. Details: DECISIONS.md, `git show 41fcc24:docs/STATE.md`.
+- Owner 2026-10-21: D31 approved (process docs to a private repo); starts after wave 1 is merged.
 - Lead 2026-10-21: V5d per-hook disk look-up budget (words past it stored as `<arg>`); the owner may override.
 
 ## Open risks and findings
@@ -52,6 +53,6 @@ Pending decisions: D16 D31
 ## Next 3 actions
 1. Read each wave-1 report's head when the owner says it is ready; trial-merge one at a time.
 2. A3 + D30 → V5c brief; re-check V5c against main.
-3. Add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md.
+3. After wave 1 merges: D31 move with the owner, then the hackathon-cleanup card; F10's AGENTS.md Testing lines and moving AGENTS.md "Testing" to tests/README.md fold into it.
 
 Rehearsals: Grok 4.7 High in Cursor.
