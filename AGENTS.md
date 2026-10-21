@@ -275,7 +275,8 @@ lines for them (R0 and normalisation: V5).
   `tomllib` oddities such as deep nesting never crash); the recorder runs the default when the
   active file is missing or invalid and says why in `/health` (`rules_problem`, only then) and
   `GET /api/rules`; a damaged packaged default leaves only R0, does not stop `uninstall` from
-  importing and stops the recorder from starting; `rules check` / `rules test` exit 1 and name the
+  importing and stops the recorder from starting (with a refused active file too, and then the
+  reason says the default is damaged, not in force); `rules check` / `rules test` exit 1 and name the
   rule. Tests never read the real rules file: the conftest redirects `rulefile.ACTIVE_RULES` and
   sets `rulefile.ACTIVE_OWNER_UID` to the test's own user (and the umask to 022), and
   `RECORDER_CODE` does both in a child recorder. A path pattern with a `*` or a `[...]` and no
@@ -296,13 +297,15 @@ lines for them (R0 and normalisation: V5).
   V5b-fix2: `rulefile.trust_problem` is the recorder's trust test alone (the same open, the same
   wording for each kind above, no read, no descriptor left open; none for modes 0644, 0640, 0600
   and 0444); `rules check LINK` and `rules test LINK`, where LINK points at the active file, judge
-  the active file and name its path, not the link (a group-writable one is refused as that).
+  the active file and name its path, not the link (a group-writable one is refused as that);
+  `rules check` calls the active path "the active file" given itself or through a link.
 - R1 minimum (`tests/test_rules_minimum.py`, D27): the packaged default passes; about thirty
   weakened files (R1 missing, as a match, warn or highlight, `after` on one event, `then` with a
   condition, lists that miss names, exceptions for a literal name, a file type or a folder) are
   each valid TOML refused with an error that starts `rule R1`, by `rules check` (exit 1) and by the
   recorder (the default runs); `.env*` for `.env` and `.env.*`, extra names, no exceptions, a
-  reworded message and extra rules load; another rule's error does not hide R1's, a broken R1 is
+  reworded message and extra rules load; another rule's error does not hide R1's (also one whose
+  id starts like it, `R10` or `R1x`), a broken R1 is
   not also "missing". The check does not read `default.toml`.
   V5b-fix2 (`tests/test_rules_minimum.py`, `tests/r1_grid.py`): the names are judged by the shape
   of R1's patterns, not on sample names. SPEC §5's six bullets are one table
@@ -336,7 +339,9 @@ lines for them (R0 and normalisation: V5).
   (the reviewer's block rule `d*/d*/d*/zN/**` five times is in `SHAPES`) stops at `FLOAT_STEPS`
   plus one block's walk: through `Recorder.run` the hook answers the limit deny, the real steps
   (`fnmatch.fnmatchcase` calls on the heavy parts plus the starts and bare `*` parts seen at
-  `_tally`) number 45,086 here, and with `_charge` a no-op it answers allow after 306,000.
+  `_tally`) number 45,004 here, and with `_charge` a no-op it answers allow after 306,000. A walk
+  stops once it has spent what the meter had left when it began: one `.ssh/**` on a path 50,000
+  folders deep ends at most one start's work below 0 (final audit A1).
   The price of a long compare and of a bare `*` is pinned. The whole hook (`apply_rules`, 300
   words, paths 20 folders deep, `=` and `@` in the words; also 198 rules whose command lists all
   name the program in the command) is under the client's own 0.5 s wait (`@wallclock`, best of
@@ -354,7 +359,8 @@ lines for them (R0 and normalisation: V5).
   never charge (a meter's budget is the same after a 300-word command under the default, the
   reviewer's two files and a 167-name list); a floating pattern charges `1 + n * m // 256` for an
   `fnmatch` compare (`DIV`), and 1 for a start and for a bare `*`; past the budget `WorkLimit` is
-  raised and every later charge raises; with no meter nothing is charged; a partly parsed command
+  raised and every later charge raises, and one walk stops at the budget however deep the path;
+  with no meter nothing is charged; a partly parsed command
   is walked once per distinct candidate. The command index (a list is looked up by program, then
   by the entry's rarest extra word) answers as the old loop on 3,000 seeded cases; a command
   naming 200 listed programs makes at most 201 key look-ups; 198 rules of 200 `cat` entries on
@@ -385,14 +391,21 @@ lines for them (R0 and normalisation: V5).
   Outside a hook nothing is charged. A 167-name list on 300 words of 30-character names gets no
   limit deny. `/health` has `rules_limit` only after a hit (a fresh start has the three keys
   again); the line is cut to 400 characters with "and K more"; the log line names the chat and
-  the rule ids and holds no command text; a merged pair with a limit half shows the limit rule.
+  the rule ids and holds no command text (and at most 80 characters of the chat id); a merged
+  pair with a limit half shows the limit rule; the limit message says `rules check` may name the
+  heavy rules. A trigger a subagent holds only through its parent, left unfinished by `mark` on a
+  heavy command, is judged as held: a follow-up its `then` does not match is allowed, and a chat
+  without the trigger still gets the limit deny (CR2).
 - Long words (`tests/test_long_words.py`, V5b-fix2): a quoted word of 300 or 5,000 characters
   (with and without `/`), 128 emoji, a program name as long and a Read `file_path` with a part
   over the system's name limit each get the answer the short word gets, R1 still blocks after a
   `.env` read, and the step reaches the history cleaned; the cleaner asks the system about no
   word over 1,024 characters; the root itself is `.`, and `ws2` beside `ws` is outside it; a
-  lone surrogate or NUL makes a word not a path, an absolute path the system cannot encode is
-  saved as its base name, and a link loop never raises (shell word, Read and Write answer allow
+  lone surrogate or NUL makes a word not a path, an absolute path the system cannot encode (also
+  one macOS resolves, U+DC80..U+DCFF) is saved as its base name, and a base name that does not
+  encode is saved with U+FFFD for each lone surrogate, so a Read of `<ws>/x/\udcff` reaches the
+  history and `/api/steps` answers 200; a 60 kB program word naming a secret is not looked up;
+  a link loop never raises (shell word, Read and Write answer allow
   and reach the history); `bash -c` with 300 paths 60 deep is cleaned as one word and is under
   the client's wait (`@wallclock`). `tests/leak_cases.py` and `tests/test_clean.py` pass unedited.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
@@ -415,7 +428,8 @@ lines for them (R0 and normalisation: V5).
   message asks for a recorder restart; an edited file, valid or not, is kept with one notice line;
   a default changed after the check, one that does not parse or is weak, or one RECORD does not
   list stops the install before anything is written; a link or folder in its place is refused
-  before any repair; `uninstall` removes the file with the folder.
+  before any repair, and in the unprivileged run before the password (`tests/test_install_cli.py`);
+  `uninstall` removes the file with the folder.
   V5b-fix2 (`tests/test_install_rules.py`, `tests/test_install_cli.py`,
   `tests/test_rules_trust.py`): the principle is that `init -g` writes only bytes it has checked
   and never changes the trust of bytes it has not. Current bytes in a file that is not exactly
