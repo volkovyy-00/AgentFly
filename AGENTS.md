@@ -468,6 +468,28 @@ lines for them (R0 and normalisation: V5).
   link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
   rejected the file (the default is in force), asks for a restart after a fix, and never fails
   because the recorder is down. An edited file that started from an older default is ok.
+- Session state (`tests/test_session_state.py`, `tests/test_session_kill.py`, F11): a mark, a trigger,
+  an inherited window, a parent link, a parent changed by propagation and every `links.json` change
+  are on disk when `SessionStore.commit` returns (a store read right after, with no flush, is a killed
+  recorder); a plain action writes nothing until the writer (`SAVE_DELAY_S`, 10 s) or `flush()`, and a
+  clean store writes nothing. One writer: a commit waits for a write already in flight and writes
+  itself if that write failed (`_strict_seq` / `_saved_seq`; the in-flight write is held open by the
+  test, and a thread flushes in a loop while strict changes are made); a failed save of a mark or a
+  link is an error once (a 500, so the client's offline guard applies) and later actions that change
+  nothing are answered from memory. `private_dir` re-chmods the folder on every save, so a test makes
+  `sessions.json` a folder to make a write fail. With 5000 chats a hook that changes nothing is within
+  5 ms of the 10-chat median (interleaved in one `@wallclock` test) and writes nothing. The counter
+  is raised at start to history's `MAX(ord) + 1` (`localstore.next_orders`, also for a log a killed
+  writer left) and `put` never lowers it or the activity time. Child recorders: after SIGKILL every
+  chat is judged as before (mark, trigger, Task, link, window, parent), SIGKILL and SIGTERM never
+  reuse a saved order number, and a clean stop leaves `next_step` in the file. D29 (`sweep`): idle 29
+  days goes, 28 stays; a marked chat, a trigger, an open window and a parent of a kept chat stay with
+  their calls; swept at start and by the hourly job (one failing sweep does not end it); a pre-F11 or
+  hackathon file loads with every mark and the first sweep drops nothing. CR1: a chat holding only a
+  non-R1 trigger that is marked after its `Task` hands R1 to a subagent reached only through the
+  workspace fallback, also after a restart; one that arrived earlier is not marked; the record made
+  at the `Task` stays a floor. An unmarked chat with no trigger at its `Task` still hands on nothing
+  (`test_a_task_started_by_an_unmarked_chat_gives_no_workspace_mark`).
 - Parallel run (`tests/test_parallel.py`, F7): under `-n auto --dist loadgroup` every test has
   its own `HOME`, temporary folders and ports. `free_port` picks a random free port from
   20000-32767, below where the system hands out port 0 (macOS 49152-65535), whose remainder by

@@ -148,7 +148,13 @@ without any database); past sessions come from the local store. Section 6.
 
 **Where files live (D7).** Config (token, `config.toml`, rule drafts, the
 optional `neo4j.env`, mode 600): `~/.config/agentfly/`. Data (session notes, the store,
-logs): `~/.local/share/agentfly/`. System-owned parts (hooks file, hook client,
+logs): `~/.local/share/agentfly/`. A chat's session note is written before the recorder
+answers whenever it makes that chat stricter (a mark, a trigger, an inherited window, a link to a
+parent or a subagent), so a crash or a kill forgets none of them. The rest of a note (the step
+counter, when the chat was last active) is saved a few seconds later, off the answer, by one
+writer; at start the step counter is raised to what the local store holds, so a restart never
+numbers a step over a saved one. A note is dropped 29 days after the chat's last activity (D29,
+section 5). System-owned parts (hooks file, hook client,
 bundled Python, active rules): `/Library/Application Support/AgentFly/`. The
 hackathon folder `~/.config/flightrecorder` is migrated once, by the recorder's
 first start (so `agentfly serve` and `init -g` both find it moved).
@@ -417,9 +423,13 @@ These lists are in the default rules file (G2) as `secret_names` and
 
 **Scope of the mark.** It belongs to one chat (Cursor's conversation id). A
 secret read in one chat does not affect another, except for the chat's own
-subagents (below). It is saved to a small file so
-that a restart of the recorder does not forget it, and it clears only when a
-new chat starts.
+subagents (below). It is saved to a small file before the recorder answers, so
+that a restart or a crash of the recorder does not forget it, and it clears only
+when a new chat starts. The note of a chat that has had no activity for 29 days
+is dropped (one day past the history's 28, D29; checked at start and every hour),
+unless the chat is marked, holds a trigger or an inherited mark or trigger that is
+still open, or is the parent of a chat that stays; the Task links that tie them stay
+too.
 
 **Subagents (D21, D9).** When the agent starts a helper (a subagent), Cursor
 gives it its own chat id. Spike S5 found that every event inside a subagent
@@ -429,9 +439,11 @@ marked chat is marked, and a mark set inside a subagent also marks its parent.
 Without that, a send handed to a subagent could slip past the mark. The
 `subagentStart` event is registered too, record-only, as a second source of the
 same link. Nothing depends on `subagentStop`: a background subagent never fires
-it. As a fallback for a Cursor version that drops the field: if a marked chat
-starts a `Task` and no event with that id ever arrives, new chats in the same
-workspace inherit the mark for 30 minutes.
+it. As a fallback for a Cursor version that drops the field: if a chat that holds
+a mark or a trigger starts a `Task` and no event with that id ever arrives, a new
+chat in the same workspace inherits, for 30 minutes counted from the `Task`, what that
+chat holds at the moment the new chat appears (so a mark it gets after starting the
+`Task` still reaches the new chat; a chat that appeared earlier is not changed by it).
 
 **Command normalisation.** Before any rule looks at a shell command, it is
 normalised: `bash -c`, `sh -c`, `env` and `sudo` are unwrapped, `$(…)` and

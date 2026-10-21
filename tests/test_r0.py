@@ -255,6 +255,7 @@ def test_r0_steps_are_recorded_as_blocked_by_r0(client: TestClient) -> None:
 
 def test_r0_does_not_store_the_command_text_it_denied(client: TestClient) -> None:
     post(client, shell("cat ~/.config/agentfly/token"))
+    app_module.get_store().flush()  # F11: a note that may wait is written on demand
     stored = (Path.home() / ".local/share/agentfly/sessions.json").read_text(encoding="utf-8")
     assert "token" not in stored
 

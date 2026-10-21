@@ -1,10 +1,19 @@
-"""In-memory session notes with atomic JSON persistence."""
+"""In-memory session notes with atomic JSON persistence (F11).
+
+What makes a chat stricter (a mark, a trigger, an inherited window, a parent link) and every
+`links.json` change is on disk before the hook answers (`commit`). The rest (step counter, last
+activity, a plain new chat) is saved later by one background writer. Both go through
+`_write_locked`, which takes its snapshot under the lock, so an older snapshot never overwrites a
+newer one. Notes idle for 29 days are dropped by `sweep` unless they matter (D29).
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
@@ -16,6 +25,8 @@ from typing import Any
 from agentfly.recorder.paths import private_dir
 from agentfly.recorder.rules import Session, mark
 
+logger = logging.getLogger("agentfly")
+
 # D21 A fallback: a marked chat starts a Task and no child event names it, so a new chat in the
 # same workspace inherits the mark for this long (counted from the Task).
 FALLBACK_SECONDS: float = 30 * 60
@@ -24,6 +35,11 @@ FALLBACK_SECONDS: float = 30 * 60
 _MAX_CALLS: int = 2000
 _MAX_DEPTH: int = 32  # parent links followed when asking whether a chat is marked
 _UNKNOWN: str = "unknown"  # `apply_rules` maps a missing conversation id to this shared name
+# F11: how long a change that may wait is held back, so a burst of hooks is one write.
+SAVE_DELAY_S: float = 10.0
+# D29: a note idle this long is dropped (one day past history's 28), unless it still matters.
+IDLE_DROP_SECONDS: float = 29 * 24 * 3600
+SWEEP_EVERY_SECONDS: float = 3600.0
 
 
 def _text(value: Any) -> str:
@@ -62,8 +78,29 @@ def _roots(payload: dict[str, Any]) -> list[str]:
     return sorted({r.rstrip("/").casefold() for r in roots if isinstance(r, str) and r.strip("/")})
 
 
+def _hold(session: Session | None) -> tuple[Any, ...]:
+    """What makes a chat stricter. A change in it must be on disk before the hook answers."""
+    if session is None:
+        return (False, frozenset(), 0.0, (), "", "")
+    return (
+        session.marked,
+        session.triggers,
+        session.inherited_until,
+        tuple(sorted(session.inherited_triggers.items())),
+        session.parent_call,
+        session.parent_id,
+    )
+
+
+def _active_time(value: Any) -> float:
+    """A saved last-activity time; anything that is not a positive number is 0 (unknown)."""
+    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return 0.0
+
+
 class SessionStore:
-    """session id -> Session; persists to sessions.json on change."""
+    """session id -> Session; persists to sessions.json (see the module docstring)."""
 
     def __init__(self, path: Path, clock: Callable[[], float] = time.time) -> None:
         self.path: Path = path
@@ -73,6 +110,18 @@ class SessionStore:
         # Task call id -> the chat that started it (D21 A), and calls no child event has named yet.
         self.calls: dict[str, str] = {}
         self.pending: dict[str, dict[str, Any]] = {}
+        # F11 saving state. The request thread bumps `_strict_seq` / sets the flags AFTER it changes
+        # memory; `_write_locked` reads them under `_lock` BEFORE it takes its snapshot.
+        self._lock: threading.Lock = threading.Lock()
+        self._strict_seq: int = 0  # last change that makes a chat stricter, or changes the links
+        self._saved_seq: int = 0  # the `_strict_seq` the last successful write covered
+        self._asked_seq: int = 0  # the `_strict_seq` a `commit` has already waited for
+        self._lazy_dirty: bool = False  # something that may wait is not on disk
+        self._links_dirty: bool = False  # links.json needs writing
+        self._floors: dict[str, int] = {}  # chat id -> first order number history has not used
+        self._wake: threading.Event = threading.Event()
+        self._stop: threading.Event = threading.Event()
+        self._thread: threading.Thread | None = None
         self.load()
 
     def load(self) -> None:
@@ -91,6 +140,10 @@ class SessionStore:
             sid: str = str(item.get("id", ""))
             if not sid:
                 continue
+            active: float = _active_time(item.get("last_active"))
+            if not active:  # a note from before F11 counts as active from this start (D29)
+                active = self.clock()
+                self._lazy_dirty = True
             self._sessions[sid] = Session(
                 id=sid,
                 marked=bool(item.get("marked", False)),
@@ -101,6 +154,7 @@ class SessionStore:
                 inherited_until=float(item.get("inherited_until", 0.0) or 0.0),
                 triggers=_ids(item.get("triggers")),
                 inherited_triggers=_windows(item.get("inherited_triggers")),
+                last_active=active,
             )
         self.load_links()
 
@@ -130,7 +184,11 @@ class SessionStore:
                     }
 
     def save(self) -> None:
+        """Write sessions.json now: the whole file, from a copy of the table."""
         private_dir(self.path.parent)
+        # One C call, so the request thread cannot change the table under it (CPython, GIL).
+        # Sessions are replaced, never changed in place, so each row of the copy is whole.
+        rows: list[Session] = list(self._sessions.values())
         payload: list[dict[str, Any]] = [
             {
                 "id": s.id,
@@ -140,6 +198,7 @@ class SessionStore:
                 "parent_call": s.parent_call,
                 "parent_id": s.parent_id,
                 "inherited_until": s.inherited_until,
+                "last_active": s.last_active,
                 # V5b: only when there is something, so the file does not grow for chats without
                 **({"triggers": sorted(s.triggers)} if s.triggers else {}),
                 **(
@@ -148,9 +207,10 @@ class SessionStore:
                     else {}
                 ),
             }
-            for s in self._sessions.values()
+            for s in rows
         ]
-        data: str = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        # No `indent`: the C encoder runs only without it (3x faster at 5000 chats).
+        data: str = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         fd: int
         tmp_name: str
         fd, tmp_name = tempfile.mkstemp(
@@ -174,7 +234,9 @@ class SessionStore:
     def save_links(self) -> None:
         """Write links.json (calls and pending Tasks). Rare: only when a Task or link changes."""
         private_dir(self.links_path.parent)
-        data: str = json.dumps({"calls": self.calls, "pending": self.pending}, sort_keys=True)
+        calls: dict[str, str] = dict(self.calls)  # copies: the request thread may be changing them
+        pending: dict[str, dict[str, Any]] = dict(self.pending)  # entries are replaced, not edited
+        data: str = json.dumps({"calls": calls, "pending": pending}, sort_keys=True)
         fd, tmp_name = tempfile.mkstemp(
             dir=str(self.links_path.parent), prefix=".links-", suffix=".tmp"
         )
@@ -189,39 +251,153 @@ class SessionStore:
                 pass
             raise
 
+    # ------------------------------------------------------------ when things reach the disk (F11)
+
+    def _remember(self, session: Session) -> Session:
+        """Keep this row. A change that makes the chat stricter is owed to disk before the answer.
+
+        Returns the row as stored (a row with no activity time gets now).
+        """
+        if session.last_active <= 0:
+            session = replace(session, last_active=self.clock())
+        old: Session | None = self._sessions.get(session.id)
+        self._sessions[session.id] = session
+        if _hold(old) != _hold(session):
+            self._strict_seq += 1
+        self._lazy_dirty = True
+        return session
+
+    def _links_touched(self) -> None:
+        """calls / pending changed on a hook: links.json is owed before the answer."""
+        self._links_dirty = True
+        self._lazy_dirty = True
+        self._strict_seq += 1
+
+    def commit(self) -> None:
+        """End of a hook's changes. Wait for the disk only if this hook made a chat stricter.
+
+        A write already in flight (the background writer's) is waited for, not trusted: if it
+        fails, this call writes again and raises. A failed write raises here once; the next hook
+        that changes nothing is answered from memory, and the writer keeps trying.
+        """
+        seq: int = self._strict_seq
+        if seq > self._asked_seq:
+            self._asked_seq = seq
+            with self._lock:
+                if self._saved_seq < seq:
+                    self._write_locked()
+        elif self._lazy_dirty:
+            self._wake.set()
+
+    def flush(self) -> None:
+        """Write whatever is not on disk yet, now (tests, shutdown, the writer thread)."""
+        with self._lock:
+            self._write_locked()
+
+    def _write_locked(self) -> None:
+        """The only code that writes. Needs `_lock`. Writes nothing when nothing is owed."""
+        links: bool = self._links_dirty
+        seq: int = self._strict_seq
+        if not (links or self._lazy_dirty or seq > self._saved_seq):
+            return
+        self._links_dirty = self._lazy_dirty = False  # before the copy: a later change sets them
+        try:
+            if links:
+                self.save_links()
+            self.save()
+        except BaseException:
+            self._links_dirty = self._links_dirty or links
+            self._lazy_dirty = True
+            self._wake.set()  # the writer thread, if there is one, tries again
+            raise
+        self._saved_seq = seq
+
+    def start(self) -> None:
+        """Save the changes that may wait in the background. The recorder starts it; tests flush."""
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._write_later, name="session-notes", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        """Stop the writer and save everything (clean stop). Never raises."""
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            self._stop.set()
+            self._wake.set()
+            thread.join(timeout=10.0)
+        try:
+            self.flush()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("session notes: last save failed (%s)", type(exc).__name__)
+
+    def _write_later(self) -> None:
+        failing: bool = False
+        while True:
+            self._wake.wait()
+            if self._stop.wait(SAVE_DELAY_S):  # a burst of hooks becomes one write
+                return
+            self._wake.clear()
+            try:
+                self.flush()
+                failing = False
+            except Exception as exc:  # noqa: BLE001 - keep trying; the notes stay in memory
+                if not failing:
+                    logger.warning(
+                        "session notes: not saved (%s); trying again", type(exc).__name__
+                    )
+                failing = True
+                self._wake.set()
+
+    def raise_counters(self, floors: Mapping[str, int]) -> None:
+        """Never hand out an order number history already holds (a crash can lose the counter).
+
+        `floors` maps a chat id to the first order number its saved steps have not used.
+        """
+        for sid, first_free in floors.items():
+            session: Session | None = self._sessions.get(sid)
+            if session is None:
+                self._floors[sid] = first_free  # a chat with no note yet: used when it appears
+            elif first_free > session.next_step:
+                self._remember(replace(session, next_step=first_free))
+
     def get_or_create(self, session_id: str) -> Session:
         existing: Session | None = self._sessions.get(session_id)
         if existing is not None:
             return existing
-        created = Session(
-            id=session_id,
-            marked=False,
-            start_time=datetime.now(UTC).isoformat(),
-            next_step=1,
+        created = self._remember(
+            Session(
+                id=session_id,
+                marked=False,
+                start_time=datetime.now(UTC).isoformat(),
+                next_step=self._floors.pop(session_id, 1),
+            )
         )
-        self._sessions[session_id] = created
-        self.save()
+        self.commit()
         return created
 
     def put(self, session: Session) -> None:
         """Replace session and persist (call when marked/next_step change).
 
-        Marks only get stricter: a stale copy never clears a mark or a trigger, shortens a fallback
-        or replaces a parent link that is already set.
+        Marks only get stricter: a stale copy never clears a mark or a trigger, shortens a fallback,
+        replaces a parent link that is already set, or moves the step counter or activity time back.
         """
         old: Session | None = self._sessions.get(session.id)
         if old is not None:
             session = replace(
                 session,
                 marked=session.marked or old.marked,
+                next_step=max(session.next_step, old.next_step),
                 inherited_until=max(session.inherited_until, old.inherited_until),
                 parent_call=old.parent_call or session.parent_call,
                 parent_id=old.parent_id or session.parent_id,
                 triggers=session.triggers | old.triggers,
                 inherited_triggers=_longer(session.inherited_triggers, old.inherited_triggers),
+                last_active=max(session.last_active, old.last_active),
             )
-        self._sessions[session.id] = session
-        self.save()
+        self._remember(session)
+        self.commit()
 
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
@@ -238,41 +414,46 @@ class SessionStore:
         sid: str = _text(payload.get("conversation_id")) or _UNKNOWN
         linkable: bool = sid != _UNKNOWN
         call: str = _text(payload.get("parent_tool_call_id")) if linkable else ""
+        now: float = self.clock()
         session: Session | None = self._sessions.get(sid)
-        changed: bool = False
+        changed: bool = False  # a link appeared: marks may have to travel (`propagate`)
         links_changed: bool = False
         if session is None:
             inherit: bool = linkable and not call  # a chat with no parent link may inherit
-            session = Session(
-                id=sid,
-                marked=False,
-                start_time=datetime.now(UTC).isoformat(),
-                next_step=1,
-                parent_call=call,
-                inherited_until=self.fallback_until(payload) if inherit else 0.0,
-                inherited_triggers=self.fallback_triggers(payload) if inherit else {},
+            session = self._remember(
+                Session(
+                    id=sid,
+                    marked=False,
+                    start_time=datetime.now(UTC).isoformat(),
+                    next_step=self._floors.pop(sid, 1),
+                    parent_call=call,
+                    inherited_until=self.fallback_until(payload) if inherit else 0.0,
+                    inherited_triggers=self.fallback_triggers(payload) if inherit else {},
+                    last_active=now,
+                )
             )
-            self._sessions[sid] = session
             changed = True
-        elif call and not session.parent_call:
-            # The first link sticks and a fallback mark is never cut short: no later event, whatever
-            # call id it names, may move the link or release the chat.
-            session = replace(session, parent_call=call)
-            self._sessions[sid] = session
-            changed = True
+        else:
+            # Activity time only (it may wait); not `changed`, or propagate() runs on every hook.
+            session = self._remember(replace(session, last_active=now))
+            if call and not session.parent_call:
+                # The first link sticks and a fallback mark is never cut short: no later event,
+                # whatever call id it names, may move the link or release the chat.
+                session = self._remember(replace(session, parent_call=call))
+                changed = True
         link: str = session.parent_call
         if call and call == link and self.pending.pop(call, None) is not None:
             links_changed = True  # a child event linked this Task: no fallback needed
         if linkable:
             links_changed |= self.register_task(payload, sid)
         if link in self.calls and not session.parent_id:
-            self._sessions[sid] = session = replace(session, parent_id=self.calls[link])
+            session = self._remember(replace(session, parent_id=self.calls[link]))
             changed = True
+        if links_changed:
+            self._links_touched()
         if changed or links_changed:
             self.propagate()
-            if links_changed:
-                self.save_links()
-            self.save()
+        self.commit()
         return self._sessions[sid]
 
     def register_task(self, payload: dict[str, Any], sid: str) -> bool:
@@ -341,16 +522,33 @@ class SessionStore:
             if now - entry["t0"] <= FALLBACK_SECONDS and roots & set(entry["roots"])
         ]
 
+    def _handed_on(self, entry: dict[str, Any]) -> tuple[bool, frozenset[str]]:
+        """What the chat that started a pending Task holds NOW (CR1), not only when it started it.
+
+        The record made at the Task is kept as a floor: an old links.json, or a parent whose note
+        is gone, still hands on what the record says.
+        """
+        marked: bool = bool(entry["marked"])
+        triggers: frozenset[str] = frozenset(entry["triggers"])
+        parent: Session | None = self._sessions.get(entry["parent"])
+        if parent is not None:
+            held: Session = self.effective(parent)
+            marked = marked or held.marked
+            triggers = triggers | held.triggers
+        return marked, triggers
+
     def fallback_until(self, payload: dict[str, Any]) -> float:
         """For a new chat with no parent link: when an inherited workspace mark ends (0: none)."""
-        ends = (e["t0"] + FALLBACK_SECONDS for e in self._inheritable(payload) if e["marked"])
+        ends = (
+            e["t0"] + FALLBACK_SECONDS for e in self._inheritable(payload) if self._handed_on(e)[0]
+        )
         return max(ends, default=0.0)
 
     def fallback_triggers(self, payload: dict[str, Any]) -> dict[str, float]:
         """For a new chat with no parent link: each trigger it inherits and when that ends."""
         until: dict[str, float] = {}
         for entry in self._inheritable(payload):
-            for trigger in entry["triggers"]:
+            for trigger in self._handed_on(entry)[1]:
                 until[trigger] = max(until.get(trigger, 0.0), entry["t0"] + FALLBACK_SECONDS)
         return until
 
@@ -400,13 +598,58 @@ class SessionStore:
                     ancestor.marked or not session.marked
                 ) and session.triggers <= ancestor.triggers:
                     continue  # nothing to hand up
-                self._sessions[ancestor.id] = replace(
-                    ancestor,
-                    marked=ancestor.marked or session.marked,
-                    triggers=ancestor.triggers | session.triggers,
+                self._remember(
+                    replace(
+                        ancestor,
+                        marked=ancestor.marked or session.marked,
+                        triggers=ancestor.triggers | session.triggers,
+                    )
                 )
                 changed = True
         return changed
+
+    # ------------------------------------------------------------ old notes (D29)
+
+    def _holds_on(self, session: Session, now: float) -> bool:
+        """A mark, a trigger or an open inherited window: the note matters whatever its age."""
+        return bool(
+            session.marked
+            or session.triggers
+            or session.inherited_until > now
+            or any(until > now for until in session.inherited_triggers.values())
+        )
+
+    def sweep(self) -> int:
+        """Drop notes idle for 29 days unless they matter (D29). Returns how many went.
+
+        Kept: a chat with activity in the last 29 days, a marked one, one with a trigger, one with
+        an open inherited window, and every parent of a chat that stays. A call stays while a kept
+        chat points to it, it is pending, or its parent stays. Nothing is written here.
+        """
+        now: float = self.clock()
+        links: bool = self.prune_pending()
+        cutoff: float = now - IDLE_DROP_SECONDS
+        keep: set[str] = {
+            sid
+            for sid, s in self._sessions.items()
+            if s.last_active > cutoff or self._holds_on(s, now)
+        }
+        for sid in list(keep):  # the parents, found while every link is still there
+            for ancestor in islice(self.chain(self._sessions[sid]), 1, None):
+                keep.add(ancestor.id)
+        dropped: set[str] = set(self._sessions) - keep
+        if dropped:
+            held: set[str] = {self._sessions[sid].parent_call for sid in keep}
+            for sid in dropped:
+                del self._sessions[sid]
+            for call, parent in list(self.calls.items()):
+                if parent in dropped and call not in held and call not in self.pending:
+                    del self.calls[call]
+                    links = True
+            self._lazy_dirty = True
+        if links:
+            self._links_dirty = self._lazy_dirty = True
+        return len(dropped)
 
     def apply_mark(self, payload: dict[str, Any], stored: Session) -> tuple[Session, Session, bool]:
         """Run the marking rule for one event: (session to save, session the rules see, marks).
@@ -419,8 +662,7 @@ class SessionStore:
         was_marked: bool = self.effective_marked(stored)
         fired: Session = mark(payload, stored)  # a superset of `stored`: marks only get stricter
         if fired != stored:
-            stored = fired
-            self._sessions[stored.id] = stored
+            stored = self._remember(fired)
             self.propagate()
         session: Session = self.effective(stored)
         return stored, session, session.marked and not was_marked

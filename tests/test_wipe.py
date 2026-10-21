@@ -54,6 +54,7 @@ def test_wipe_empties_the_history_and_a_marked_session_still_blocks(
     assert local_store.flush()
     assert client.get("/api/sessions").json()["sessions"][0]["marked"] is True
     post(client, {"hook_event_name": "preToolUse", "tool_name": "Task", "tool_use_id": "T1"})
+    app_module.get_store().flush()  # F11: step counters wait for the writer; pin the files first
     marks_file, links_file = data_dir() / "sessions.json", data_dir() / "links.json"
     marks_before, links_before = marks_file.read_bytes(), links_file.read_bytes()
     assert b"T1" in links_before

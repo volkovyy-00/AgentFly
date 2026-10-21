@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -19,9 +20,10 @@ from fastapi.staticfiles import StaticFiles
 
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_module
+from agentfly.recorder import sessions as sessions_module
 from agentfly.recorder.api import rules as rules_api
 from agentfly.recorder.api import sessions as sessions_api
-from agentfly.recorder.localstore import DB_NAME, local_store
+from agentfly.recorder.localstore import DB_NAME, local_store, next_orders
 from agentfly.recorder.memory import memory_steps, parse_limit
 from agentfly.recorder.merge import step_merger
 from agentfly.recorder.paths import config_dir, data_dir, migrate_legacy, private_dir
@@ -104,12 +106,25 @@ def get_store() -> SessionStore:
     return _store
 
 
+async def sweep_old_notes(store: SessionStore) -> None:
+    """D29: drop idle notes every hour (the first sweep ran at start)."""
+    while True:
+        await asyncio.sleep(sessions_module.SWEEP_EVERY_SECONDS)
+        try:
+            store.sweep()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("session notes: sweep failed (%s)", type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _token, _store, _last_hook_at
     migrate_legacy()
     _token = write_token(config_dir())
-    _store = SessionStore(data_dir() / "sessions.json")
+    store = _store = SessionStore(data_dir() / "sessions.json")
+    # F11: a recorder that was killed may not have saved its step counters; history has the truth.
+    store.raise_counters(next_orders(data_dir() / DB_NAME))
+    store.sweep()
     _last_hook_at = None
     reset_rules_limit()
     memory_steps.clear()
@@ -122,10 +137,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     local_store.start(data_dir() / DB_NAME)
     if neo4j_opt_in():  # D14: neo4j.env alone does not turn Neo4j on
         graph_store.start()
+    store.start()
+    sweeper = asyncio.create_task(sweep_old_notes(store))
     logger.info("recorder listening; token written under %s", config_dir())
-    yield
-    graph_store.stop()
-    local_store.stop()
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        await asyncio.gather(sweeper, return_exceptions=True)
+        store.close()  # first: the notes matter most, and the stops below can take seconds
+        graph_store.stop()
+        local_store.stop()
 
 
 # D19: no generated docs or schema; every served route is listed in tests/test_app.py.

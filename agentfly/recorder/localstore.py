@@ -38,6 +38,7 @@ REOPEN_AFTER_S: float = 5.0
 WRITE_TIMEOUT_S: float = 5.0
 WIPE_BUDGET_S: float = 10.0  # `agentfly wipe` gives up after this long, however busy the file is
 READ_TIMEOUT_S: float = 2.0
+START_READ_TIMEOUT_S: float = 3.0  # the one read at start-up (`next_orders`)
 PROGRESS_OPS: int = 1000  # SQLite VM steps between two looks at the read deadline
 SESSIONS_CAP: int = 500
 STEPS_CAP: int = 10_000
@@ -109,6 +110,9 @@ STEPS_QUERY: str = """
 SELECT ord, time, kind, verdict, tool, file_path, file_sensitive, command, hosts, rule_id
 FROM steps WHERE session_id = ? ORDER BY ord LIMIT ?
 """
+# F11: the first order number each chat's saved steps have not used (`INSERT OR REPLACE` on
+# (session_id, ord) means a counter that goes back overwrites history).
+NEXT_ORDERS_QUERY: str = "SELECT session_id, MAX(ord) + 1 FROM steps GROUP BY session_id"
 # Not limited by STEPS_CAP: the marking step is named even when the list is cut.
 MARKING_STEP_QUERY: str = "SELECT MIN(ord) FROM steps WHERE session_id = ? AND marks = 1"
 
@@ -271,6 +275,35 @@ def wipe_file(path: Path) -> tuple[int, int]:
     finally:
         conn.close()
     return sessions, steps
+
+
+def next_orders(path: Path) -> dict[str, int]:
+    """Chat id -> first order number its saved steps have not used (F11); {} if nothing can be read.
+
+    Read once at start-up, before the writer opens the file, so a recorder that was killed can
+    not number new steps over old rows. It works on a log a killed writer left behind. A file that
+    cannot be read gives {} and one warning: the numbers then come from sessions.json alone.
+    """
+    if not path.exists():
+        return {}
+    deadline = time.monotonic() + START_READ_TIMEOUT_S
+    try:
+        conn = sqlite3.connect(
+            f"{path.as_uri()}?mode=ro", uri=True, timeout=START_READ_TIMEOUT_S, isolation_level=None
+        )
+    except sqlite3.Error as exc:
+        logger.warning("local store: step numbers not read (%s)", type(exc).__name__)
+        return {}
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_progress_handler(lambda: int(time.monotonic() > deadline), PROGRESS_OPS)
+        return {str(sid): int(first) for sid, first in conn.execute(NEXT_ORDERS_QUERY)}
+    except sqlite3.Error as exc:
+        if not str(exc).startswith("no such table"):  # the file is there but never got its tables
+            logger.warning("local store: step numbers not read (%s)", type(exc).__name__)
+        return {}
+    finally:
+        conn.close()
 
 
 def step_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
