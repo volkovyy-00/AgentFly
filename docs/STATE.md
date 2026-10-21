@@ -20,14 +20,13 @@ none
 - Recorder: not running (owner had the lead run `agentfly stop` 2026-10-21 16:40 on the old V3b-build service started 16:10; no listener on 8787, no launchd job, plist removed). The offline guard applies in this repo's Cursor while it is down. `uv tool` agentfly-recorder 0.1.0 is still the old V3b wheel: reinstall from main before any manual check. Harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees: main; merged and kept until the owner says remove: ag-f9-security-scans, ag-f13-escape-names, ag-f11-session-state, ag-v5d-long-commands, ag-v5b-rules-file (with git-ignored `.superpowers/sdd/`, 1.1 MB). Local branch merge/wave1 = main. Remote `merge/v5b`, `merge/wave1` the owner may delete. Disk 17 GiB free.
-- Git: main 0ad2eac + this handoff, not yet pushed; origin/main = 0473d58. Owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main` (GitHub then marks PR #8 merged). Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes; a `gh api` GET was denied 2026-10-21 (the owner runs those with `!`).
+- Git: origin/main = 3871787 (owner pushed 2026-10-21 16:58; PR #8 marked merged); CI 39621577693 and CodeQL 39621577847 queued on it. Lead commits after it are local. Owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`. Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes; a `gh api` GET was denied 2026-10-21 (the owner runs those with `!`).
 - CI: PR #8 check 39613747155 green (2m37s); main 0473d58 green (39583473122). History: git show 41fcc24:docs/STATE.md. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security (owner 2026-10-20): Dependabot alerts and security updates on, auto-triage GitHub preset, CodeQL default setup on; `.github/dependabot.yml` (F9) now on main. CodeQL #5–#7 and PR #8's two `clean.py` path alerts dismissed by the owner 2026-10-21.
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Push main (`! AGENTFLY_ALLOW_PUSH=1 git push origin main`); then the lead checks the push run on that SHA.
-2. Create an empty private GitHub repo for D31 (any name); then the move starts with the lead.
+1. Create an empty private GitHub repo for D31 (any name); then the move starts with the lead.
 
 ## Decisions changed since last handoff (41fcc24; earlier: git show 41fcc24:docs/STATE.md)
 - Owner 2026-10-21: D31 approved (process docs to a private repo; public tree only, no history rewrite); starts now that wave 1 is merged.
@@ -46,7 +45,7 @@ none
 - V5d leftovers: free program look-ups are per clause (198 clauses ≈ 130 ms unmetered, admin-written files only); deep shared prefix then a different middle folder re-walks (~200 ms CPU for 300 words). F11: `links.json` not fsynced (crash-safe, not power-loss).
 
 ## Next 3 actions
-1. After the owner's push: check CI on main's new SHA; then the D31 move with the owner (private repo, lead tools, `git rm` from the public tree).
+1. Check CI on 3871787 is green; then the D31 move with the owner (private repo, lead tools, `git rm` from the public tree).
 2. F15 brief (after the move), then V5c re-check with A3 + D30.
 3. F8 prep: count pyright basic-mode errors; check pyright's Node download.
 
