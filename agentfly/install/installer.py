@@ -232,7 +232,12 @@ def rules_notice(layout: Layout, wanted: str | None) -> str | None:
     kept as well, but the recorder will not read it: the reason is the recorder's own
     (`rulefile.trust_problem`, which says what to do), and the default rules run instead.
     """
-    if rules_state(layout, wanted) != "edited":
+    return _kept_notice(layout, rules_state(layout, wanted))
+
+
+def _kept_notice(layout: Layout, state: str) -> str | None:
+    """`rules_notice` for a `rules_state` the caller has already looked up."""
+    if state != "edited":
         return None
     problem = rulefile.trust_problem(layout.rules, rules_owner_uid(layout))
     if problem is None:
@@ -319,13 +324,9 @@ def status(layout: Layout, build: PythonBuild, source: Path, current: packages.C
     if record is None:
         return everything
     bad: set[str] = set()
-    if rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH)) in {
-        "missing",
-        "older",
-        "untrusted",
-        "unknown",
-        "blocked",
-    }:
+    if rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH)) in (
+        RULES_WRITTEN | {"unknown", "blocked"}
+    ):
         bad.add("rules")
     try:
         python = record["python"]
@@ -646,15 +647,15 @@ def install(
     # defence, root has imported that code already; the check that matters ran before the password.
     current = packages.require(previous, "agentfly init -g")
     bad = status(layout, build, source, current)
-    wanted = packages.recorded_hash(current, DEFAULT_RECORD_PATH)
-    notice = rules_notice(layout, wanted)  # about an edited file only; it is never written below
+    # One look at the rules file: the notice and what is written below come from the same state.
+    rules = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
+    notice = _kept_notice(layout, rules)  # about an edited file only; it is never written below
     if not bad:
         return Outcome(
             False, ["already installed and intact; nothing changed", *([notice] if notice else [])]
         )
     if layout.system_root.is_symlink():
         raise InstallError(f"{layout.system_root} is a symbolic link; remove it first")
-    rules = rules_state(layout, wanted)
     if rules == "blocked":
         raise _blocked(layout)  # before anything is changed, not halfway through
     rules_data = _packaged_default(current) if rules in RULES_WRITTEN else None

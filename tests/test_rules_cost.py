@@ -37,7 +37,7 @@ from tests.rules_helpers import default_with, list_line, ruleset_of
 DEFAULT_WORK = rulefile.file_work(rulefile.load_default().rules)
 ROOM = rulefile.MAX_WORK - DEFAULT_WORK  # what an owner's own rules may use
 WORDS = 300
-CLIENT_WAIT = 0.5  # hooks/hook_client.py: the recorder gets this long
+CLIENT_WAIT = 0.5  # agentfly/hook_client.py `_BUDGET_S`: the recorder gets this long
 
 
 def match_rule(i: int, body: str, severity: str = "highlight", event: str = "shell") -> str:

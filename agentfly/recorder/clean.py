@@ -306,7 +306,7 @@ def _host_looks_encoded(host: str) -> bool:
     return any(_label_triggers_reduction(p) for p in host.split("."))
 
 
-def _resolved(path: Path) -> Path | None:
+def resolved_or_none(path: Path) -> Path | None:
     """`path.resolve()`, or None when the system cannot say: a part over its name limit, a lone
     surrogate or a NUL (`OSError`, `ValueError`), a link that leads back to itself
     (`RuntimeError`)."""
@@ -336,11 +336,11 @@ def _project_relative(word: str, project_root: Path) -> str | None:
     """
     if len(word) > MAX_PATH_WORD:
         return None
-    root: Path | None = _resolved(project_root)
+    root: Path | None = resolved_or_none(project_root)
     if root is None:
         return None
     raw: Path = Path(word)
-    resolved: Path | None = _resolved(raw if raw.is_absolute() else root / raw)
+    resolved: Path | None = resolved_or_none(raw if raw.is_absolute() else root / raw)
     if resolved is None:
         return None
     rel: str | None = contained_relative(resolved.as_posix(), root.as_posix())

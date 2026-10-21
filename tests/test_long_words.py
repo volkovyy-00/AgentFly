@@ -28,7 +28,7 @@ from tests.recorder_harness import Recorder
 
 SHORT = "x"
 ALLOW = {"permission": "allow"}
-CLIENT_WAIT = 0.5  # hooks/hook_client.py: the recorder gets this long
+CLIENT_WAIT = 0.5  # agentfly/hook_client.py `_BUDGET_S`: the recorder gets this long
 
 # Name -> the quoted word. The two lengths come with and without a `/`; a part of 19 characters
 # is under every name limit, so those words get as far as the system. Then 128 emoji (512 bytes in

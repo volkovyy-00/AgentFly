@@ -17,7 +17,13 @@ from typing import Any
 from neo4j import Driver, GraphDatabase
 
 from agentfly.recorder import clean as clean_settings
-from agentfly.recorder.clean import MAX_PATH_WORD, clean_command, contained_relative, website_name
+from agentfly.recorder.clean import (
+    MAX_PATH_WORD,
+    clean_command,
+    contained_relative,
+    resolved_or_none,
+    website_name,
+)
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
@@ -294,10 +300,10 @@ def _resolved_or_tidied(path: Path) -> str | None:
     A tidied path that does not encode as UTF-8 comes back as None, "outside": the history could
     not store it, so the caller saves the base name, as it did before there was a fallback.
     """
-    try:
-        return path.resolve().as_posix()
-    except (OSError, ValueError, RuntimeError):
-        tidied: str = os.path.normpath(path.as_posix())
+    resolved: Path | None = resolved_or_none(path)
+    if resolved is not None:
+        return resolved.as_posix()
+    tidied: str = os.path.normpath(path.as_posix())
     try:
         tidied.encode("utf-8")
     except UnicodeEncodeError:

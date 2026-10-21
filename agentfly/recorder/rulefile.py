@@ -321,13 +321,15 @@ class Pattern:
     name_only: bool
     anchor: str  # "", "root" or "home"
     parts: tuple[str, ...]
-    # The parts split at `**` once, here, not at every test (`compile_pattern`; slash patterns).
-    _blocks: _Blocks | None = None
+    # The parts split at `**` once, here, not at every test. It follows from `anchor` and `parts`,
+    # so it is no part of the pattern's identity (as `Clause._index`).
+    _blocks: _Blocks = dataclasses.field(init=False, hash=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_blocks", _split(_effective(self.anchor, self.parts)))
 
     def blocks(self) -> _Blocks:
-        if self._blocks is not None:
-            return self._blocks
-        return _split(_effective(self.anchor, self.parts))
+        return self._blocks
 
     def matches(self, path: str, name: str | None = None, home: str | None = None) -> bool:
         """`name` is the path's folded file name when the caller has it already (one per path),
@@ -342,17 +344,17 @@ class Pattern:
             base: tuple[str, ...] = _home_segments(home)
             if segments[: len(base)] != base:
                 return False
-            return _glob(self.parts, segments[len(base) :], self.blocks())
+            return _glob(self.parts, segments[len(base) :], self._blocks)
         if self.anchor == "root":
-            return resolved.startswith("/") and _glob(self.parts, segments, self.blocks())
-        return _glob(self.parts, segments, self.blocks())
+            return resolved.startswith("/") and _glob(self.parts, segments, self._blocks)
+        return _glob(self.parts, segments, self._blocks)
 
 
 def floating(pattern: Pattern) -> bool:
     """True when the pattern has a run of parts with `**` on both sides (an unanchored pattern
     has an implicit `**` in front): `.ssh/**`, `a/**/b`, `**/x/**`. Only such a pattern walks the
     path; every other one compares each part at most once whatever the depth."""
-    return not pattern.name_only and pattern.blocks().floats
+    return not pattern.name_only and pattern._blocks.floats
 
 
 def compile_pattern(raw: str) -> Pattern:
@@ -371,7 +373,7 @@ def compile_pattern(raw: str) -> Pattern:
             parts.append(part)
     if text.endswith("/") and parts[-1:] != ["**"]:  # `~/.ssh/` is the folder and all in it
         parts.append("**")
-    return Pattern(text, False, anchor, tuple(parts), _split(_effective(anchor, tuple(parts))))
+    return Pattern(text, False, anchor, tuple(parts))
 
 
 # ---------------------------------------------------------------- meter
@@ -550,12 +552,11 @@ def _entry_follows(last: Mapping[str, int], at: int, extras: tuple[str, ...]) ->
 
 
 class _Simple(NamedTuple):
-    """One simple command as the command lists read it (read only): the command, where each
-    program first stands, where each case-folded word last stands, and those words ordered by
-    where they last stand with the positions. The words after position p are the tail from
+    """One simple command as the command lists read it (read only): where each program first
+    stands, where each case-folded word last stands, and those words ordered by where they last
+    stand with the positions. The words after position p are the tail from
     `bisect_right(positions, p)`, so how many there are is one search, not a scan."""
 
-    argv: tuple[str, ...]
     first: dict[str, int]
     last: dict[str, int]
     words: tuple[str, ...]
@@ -566,7 +567,7 @@ def _simple_view(argv: tuple[str, ...]) -> _Simple:
     last: dict[str, int] = _last_positions(argv)
     ordered: list[str] = sorted(last, key=last.__getitem__)
     return _Simple(
-        argv, _first_positions(argv), last, tuple(ordered), tuple(last[word] for word in ordered)
+        _first_positions(argv), last, tuple(ordered), tuple(last[word] for word in ordered)
     )
 
 
