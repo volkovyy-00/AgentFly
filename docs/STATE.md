@@ -17,7 +17,7 @@ none
 
 ## Machine state (verified 2026-10-21 16:30 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
-- Recorder: RUNNING as LaunchAgent `dev.agentfly.recorder` (pid 61760, started 16:10 today, not by the lead) from the OLD `uv tool` agentfly-recorder 0.1.0 (V3b branch wheel, 2026-10-19); `/health` ok, offline_guard_count 34; writes the real ~/.local/share/agentfly. Owner to say whether to keep it (stop: `agentfly stop`). Reinstall from main before any manual check. Harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
+- Recorder: not running (owner had the lead run `agentfly stop` 2026-10-21 16:40 on the old V3b-build service started 16:10; no listener on 8787, no launchd job, plist removed). The offline guard applies in this repo's Cursor while it is down. `uv tool` agentfly-recorder 0.1.0 is still the old V3b wheel: reinstall from main before any manual check. Harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
 - Worktrees: main; merged and kept until the owner says remove: ag-f9-security-scans, ag-f13-escape-names, ag-f11-session-state, ag-v5d-long-commands, ag-v5b-rules-file (with git-ignored `.superpowers/sdd/`, 1.1 MB). Local branch merge/wave1 = main. Remote `merge/v5b`, `merge/wave1` the owner may delete. Disk 17 GiB free.
 - Git: main 0ad2eac + this handoff, not yet pushed; origin/main = 0473d58. Owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main` (GitHub then marks PR #8 merged). Origin is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4) allows checks and gh reads, denies push, --no-verify, gh writes; a `gh api` GET was denied 2026-10-21 (the owner runs those with `!`).
@@ -27,8 +27,7 @@ none
 
 ## Waiting on owner
 1. Push main (`! AGENTFLY_ALLOW_PUSH=1 git push origin main`); then the lead checks the push run on that SHA.
-2. Say whether the running old-build recorder service stays (`agentfly stop` removes it).
-3. Create an empty private GitHub repo for D31 (any name); then the move starts with the lead.
+2. Create an empty private GitHub repo for D31 (any name); then the move starts with the lead.
 
 ## Decisions changed since last handoff (41fcc24; earlier: git show 41fcc24:docs/STATE.md)
 - Owner 2026-10-21: D31 approved (process docs to a private repo; public tree only, no history rewrite); starts now that wave 1 is merged.
