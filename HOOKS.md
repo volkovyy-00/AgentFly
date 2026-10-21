@@ -27,7 +27,7 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 |---|---|---|
 | Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
 | Hook client | `agentfly/hook_client.py` | Stdlib only; strip, POST `/hook`, offline guard when the recorder is down |
-| Shim | `hooks/hook.py` | What `./install.sh` wires; runs the hook client (goes away with V3) |
+| Shim | `hooks/hook.py` | What `./install.sh` wires (development only); runs the hook client. It stays: `agentfly init -g` installs a copy of `agentfly/hook_client.py` and uses no shim |
 | Server | `agentfly/recorder/app.py` | Host + token gates; mark/decide; R1 deny |
 | Rules | `agentfly/recorder/rules.py`, `rulefile.py`, `agentfly/rules/default.toml` | R0 in code; the rules file's rules (`match`, `after_then`); `mark` then `decide` (strictest wins) |
 | Sessions | `agentfly/recorder/sessions.py` | Memory + `~/.local/share/agentfly/sessions.json` |
@@ -217,7 +217,41 @@ Format details: module docstring of `examples/fake_agent.py`.
 
 **`preToolUse`:** `tool_name`, `tool_input` (omitted in log), `tool_use_id`, `cwd`
 
-Session key for the server: `conversation_id`.
+Session key for the server: `conversation_id`. Later versions: "Observed on Cursor, by version" below.
+
+---
+
+## Observed on Cursor, by version
+
+What the spikes saw on this machine. Cursor changes between versions; check a fact against the
+version in its heading before you rely on it. Add what you learn here.
+
+**3.24.12** (spikes S1, S2, S5)
+- `tool_use_id` arrived on `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it
+  from 3.25.9, below).
+- `preToolUse.tool_input` keys: Shell `command`, `cwd`, `timeout`; Read `file_path`; Write
+  `file_path`, `content`; Grep `file_path`, `pattern`.
+- `ask` from `beforeShellExecution` pauses the agent (Skip / Always Run / Run); an allow with
+  messages shows nothing.
+- The system `hooks.json` runs alongside the user and project hooks.
+- A subagent has its own `conversation_id` and carries `parent_tool_call_id` on every event (D21 A
+  links it to the parent's mark).
+- One unknown event name disables a whole `hooks.json` (D23). `~/.claude/settings.json` is a
+  third hook source (D24).
+
+**3.25.9** (V3a and V2c, 2026-10-18)
+- The system file loads at start-up only (Hooks log: `Loaded N enterprise hook(s)` or `No
+  enterprise hooks configuration found`); Settings → Hooks does not list system hooks.
+- A missing interpreter exits 127 and Cursor lets the action through; a missing client file exits
+  2 and Cursor denies everything.
+- A `~/.claude/settings.json` allow did not cancel our shell deny (one trial).
+- When one turn issues a read and a shell command, Cursor may run the shell hook before the read
+  hook (V3a saw it, same `generation_id`); SPEC §10 "Known gaps".
+- `beforeShellExecution` carries the same `tool_use_id` as its `preToolUse` Shell (34 of 34) and
+  `beforeReadFile` as its `preToolUse` Read (28 of 28; all read paths absolute). One id covers an
+  edit's Read and Write; `afterFileEdit` has no id and fired for a create only; parallel reads'
+  halves can return in reverse order. A Read of a missing file fires no `beforeReadFile`. The
+  server merges by id, with a path fallback (SPEC §8 "Duplicates").
 
 ---
 
@@ -250,10 +284,13 @@ env assigns → `NAME=<removed>`, hard-to-parse → `<program> <unparsed>`).
 
 ## Neo4j background store
 
-After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
-(`agentfly/recorder/store.py`). The decision path never waits on the driver.
+Off by default: Neo4j runs only with `neo4j = true` in `~/.config/agentfly/config.toml`;
+`neo4j.env` alone does not turn it on. When it runs, after each `/hook` answer a cleaned
+`StepRecord` is enqueued to Neo4j (`agentfly/recorder/store.py`). The decision path never
+waits on the driver.
 
 - Constraints + `MERGE` on `id` for Session/Step/File/Command/Host/Rule.
+- `uv run python -m agentfly.recorder.store --counts` prints the node and link counts.
 - `DELETE` only via `uv run python -m agentfly.recorder.store --clear`.
 - `uv run python -m agentfly.recorder.check_db` → `connected` (failures print the
   exception class name only, never the password).
