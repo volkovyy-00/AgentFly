@@ -931,3 +931,28 @@ def test_a_rebuild_at_the_same_version_only_warns(world: World) -> None:
     assert line.level == "warn" and "fakedep: same version 1.0" in line.text
     assert "match RECORD" in line.text and "agentfly init -g" in line.text
     assert world.levels("fail") == set()
+
+
+# ---------------------------------------------------------------- the rules file's group (V5d)
+
+
+def test_a_rules_file_readable_through_the_users_group_does_not_fail_the_lock_line(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    os.chown(world.layout.rules, -1, os.getegid())
+    world.layout.rules.chmod(0o640)
+    nobody = 2_000_000_000  # the tree is this user's: only another user shows the group clause
+    monkeypatch.setattr(
+        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid()}))
+    )
+    assert world.results()["lock"].level == "ok"
+    monkeypatch.setattr(
+        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid() + 1}))
+    )
+    check = world.results()["lock"]
+    assert check.level == "fail" and "could not load it" in check.text
+    world.layout.rules.chmod(0o660)  # group-writable, in a group the user is in
+    monkeypatch.setattr(
+        installer, "current_reader", lambda: installer.Reader(nobody, frozenset({os.getegid()}))
+    )
+    assert world.results()["lock"].level == "fail"

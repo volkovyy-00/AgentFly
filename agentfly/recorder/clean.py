@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
+import stat
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,6 +31,13 @@ _ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
 # A word longer than this (in characters) is never looked up as a file (V5b-fix2 §5).
 MAX_PATH_WORD: int = 1024
+# What the words of one command may cost the file system (V5d): a step for each `lstat` and each
+# `readlink` that is not answered from what the hook already learned. Measured on the author's
+# Mac, a call takes 4.6 us on a short path and 8.5 us on one of 753 characters, so the price is
+# per call. A test pins the number.
+LOOKUP_STEPS: int = 4_000
+# A word's links are followed at most this often (the system's own limit is near it).
+MAX_LINK_HOPS: int = 32
 
 # The scans below read a command in C-speed regular expressions where the old loops read one
 # character at a time in Python (V5b-fix2 §4.5); their answers are the same, character for
@@ -65,8 +74,13 @@ def command_for_storage(cmd: str, project_root: Path) -> str:
     return clean_command(cmd, project_root)
 
 
-def clean_command(cmd: str, project_root: Path) -> str:
-    """Redact secrets from a shell command for safe storage."""
+def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) -> str:
+    """Redact secrets from a shell command for safe storage.
+
+    `lookups` is the hook's budget of file-system look-ups; the caller that goes on to ask more
+    about the same words (the step record) passes the one it also uses. Without one the command
+    gets a budget of its own.
+    """
     stripped: str = cmd.strip()
     if not stripped:
         return ""
@@ -74,10 +88,11 @@ def clean_command(cmd: str, project_root: Path) -> str:
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>"
 
+    disk: Lookups = lookups if lookups is not None else Lookups(project_root)
     parts: list[tuple[str, str]] = _split_keeping_seps(stripped)
     cleaned_bits: list[str] = []
     for text, sep in parts:
-        cleaned_bits.append(_clean_segment(text.strip(), project_root))
+        cleaned_bits.append(_clean_segment(text.strip(), disk))
         if sep:
             cleaned_bits.append(f" {sep} ")
     return "".join(cleaned_bits).strip()
@@ -172,6 +187,16 @@ def _shell_words(segment: str) -> list[str]:
     return words
 
 
+def cleaned_words(command: str) -> list[str]:
+    """The words of a cleaned command as `names.words` gives them (`shlex.split`, and a plain
+    `split` when the quoting does not balance), at regular-expression speed: the cleaner already
+    has the same words as `shlex.split`, and a command of 300 long paths takes `shlex` 0.35 s."""
+    try:
+        return _shell_words(command)
+    except ValueError:
+        return command.split()
+
+
 def _has_quoting(text: str) -> bool:
     return "'" in text or '"' in text or "\\" in text
 
@@ -188,7 +213,7 @@ def _unquote(word: str) -> str:
     return "".join(texts)
 
 
-def _clean_segment(segment: str, project_root: Path) -> str:
+def _clean_segment(segment: str, disk: Lookups) -> str:
     if not segment:
         return ""
     try:
@@ -213,13 +238,13 @@ def _clean_segment(segment: str, project_root: Path) -> str:
 
     while idx < len(tokens):
         word: str = tokens[idx]
-        out.append(_classify_word(word, project_root, web_tool=web_tool))
+        out.append(_classify_word(word, disk, web_tool=web_tool))
         idx += 1
 
     return " ".join(out)
 
 
-def _classify_word(word: str, project_root: Path, *, web_tool: bool) -> str:
+def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
     # (1) options: keep names, drop values, also a value stuck onto its option (-pSECRET)
     if word == "--":
         return word
@@ -241,7 +266,7 @@ def _classify_word(word: str, project_root: Path, *, web_tool: bool) -> str:
             return "<arg>"
 
     # (3) existing file inside project_root
-    rel: str | None = _project_relative(word, project_root)
+    rel: str | None = disk.project_relative(word)
     if rel is not None:
         return rel
 
@@ -328,25 +353,154 @@ def contained_relative(path: str, root: str) -> str | None:
     return path[len(prefix) :] if path.startswith(prefix) else None
 
 
-def _project_relative(word: str, project_root: Path) -> str | None:
-    """The word as a path inside the project when it names an existing file there, else None.
+def _folded(text: str) -> str:
+    """A path with `.` and `..` folded as text, no file system. `normpath` keeps a leading `//`,
+    which the system reads as `/`."""
+    folded: str = posixpath.normpath(text)
+    return folded[1:] if folded.startswith("//") else folded
 
-    Never raises (V5b-fix2 §5). A word over `MAX_PATH_WORD` characters is not looked up: it is
-    cheap to refuse and costly to resolve, one system call per part.
+
+class _OverBudget(Exception):
+    """The hook's look-ups are used up; the word being walked is not looked up."""
+
+
+class Lookups:
+    """The file-system look-ups of one hook's command words (V5d). One per hook, shared by the
+    cleaner and the step record, so the words of a command spend one budget between them.
+
+    A word is judged as text first, with no file-system call: joined to the root when it is
+    relative, `.` and `..` folded, `~` not expanded, and tried against the root as sent and as
+    resolved. A word outside both is outside; a link from outside that leads into the project does
+    not make it inside. Only a word inside as text is walked: one `lstat` per part below the root,
+    a link followed by its target's parts, a missing part ends the walk, and the end must still be
+    inside the resolved root. It answers as `os.path.realpath(strict=True)` does (a test compares
+    them). Each call is a step of the budget; a word that does not fit is left unresolved, which
+    reads as "not a project file", so the record holds less, never more. What the walk learned
+    (folders that are not links, links and their targets, each word's answer) is not asked again.
     """
-    if len(word) > MAX_PATH_WORD:
-        return None
-    root: Path | None = resolved_or_none(project_root)
-    if root is None:
-        return None
-    raw: Path = Path(word)
-    resolved: Path | None = resolved_or_none(raw if raw.is_absolute() else root / raw)
-    if resolved is None:
-        return None
-    rel: str | None = contained_relative(resolved.as_posix(), root.as_posix())
-    if rel is None:
-        return None
-    try:
-        return rel if resolved.exists() else None
-    except (OSError, ValueError):
-        return None
+
+    def __init__(self, project_root: Path, steps: int | None = None) -> None:
+        self.left: int = LOOKUP_STEPS if steps is None else steps  # read now: a test lowers it
+        self._project_root: Path = project_root
+        self._sent: str | None = _folded(str(project_root)) if project_root.is_absolute() else None
+        self._root: str | None = None  # the resolved root; None until asked, or when unusable
+        self._root_asked: bool = False
+        self._answers: dict[str, str | None] = {}
+        self._plain: set[str] = set()  # paths seen to be no link (so every part above is a folder)
+        self._links: dict[str, str] = {}
+
+    def project_relative(self, word: str) -> str | None:
+        """The word as a path inside the project when it names an existing file there, else None.
+
+        Never raises. A word over `MAX_PATH_WORD` characters is not looked up: it is cheap to
+        refuse and costly to resolve.
+        """
+        if len(word) > MAX_PATH_WORD:
+            return None
+        if word in self._answers:
+            return self._answers[word]
+        try:
+            rel: str | None = self._look_up(word)
+        except _OverBudget:
+            rel = None
+        self._answers[word] = rel
+        if rel is not None:
+            self._answers.setdefault(rel, rel)  # a result is a path of plain folders already seen
+        return rel
+
+    def names_file(self, word: str) -> bool:
+        return self.project_relative(word) is not None
+
+    def _resolved_root(self) -> str | None:
+        """The resolved root, worked out once: None when the system cannot say or it is gone."""
+        if not self._root_asked:
+            self._root_asked = True
+            resolved: Path | None = resolved_or_none(self._project_root)
+            if resolved is not None:
+                try:
+                    os.lstat(resolved)
+                except (OSError, ValueError):
+                    return None
+                self._root = resolved.as_posix()
+                self._plain.add(self._root)
+        return self._root
+
+    def _bases(self, root: str) -> tuple[str, ...]:
+        """The root as sent (when it is a whole path) and as resolved: a word may sit in either."""
+        return (root,) if self._sent is None or self._sent == root else (self._sent, root)
+
+    def _look_up(self, word: str) -> str | None:
+        root: str | None = self._resolved_root()
+        if root is None:
+            return None
+        absolute: bool = word.startswith("/")
+        bases: tuple[str, ...] = self._bases(root)
+        if not any(
+            contained_relative(_folded(word if absolute else f"{base}/{word}"), base) is not None
+            for base in bases
+        ):
+            return None  # outside as text: never looked up
+        # A word that starts with the root as typed walks from the resolved root, whose parts are
+        # known; any other absolute word walks from `/`.
+        start: str = "/" if absolute else root
+        parts: list[str] = word.split("/")
+        for base in bases if absolute else ():
+            if contained_relative(word, base) is not None:
+                start, parts = root, word[len(base) :].split("/")
+                break
+        # Words in one folder share all but the last part: when the folder is already known to be
+        # plain (no link above it), only the last part is looked at.
+        whole: str = f"{start.rstrip('/')}/{'/'.join(parts).lstrip('/')}"
+        head, _, leaf = whole.rpartition("/")
+        if leaf not in ("", ".", "..") and (head or "/") in self._plain:
+            start, parts = head or "/", [leaf]
+        end: str | None = self._walk(start, parts)
+        return None if end is None else contained_relative(end, root)
+
+    def _spend(self, steps: int) -> None:
+        if self.left < steps:
+            raise _OverBudget
+        self.left -= steps
+
+    def _walk(self, start: str, parts: list[str]) -> str | None:
+        """The physical path `parts` lead to from `start`, or None when a part is missing or a
+        call fails or there are too many links. Raises `_OverBudget` when the calls do not fit."""
+        here: str = start
+        pending: list[str] = parts[::-1]
+        hops: int = 0
+        while pending:
+            name: str = pending.pop()
+            if name in ("", "."):
+                continue
+            if name == "..":
+                here = posixpath.dirname(here)
+                continue
+            path: str = f"{here}{name}" if here.endswith("/") else f"{here}/{name}"
+            if path in self._plain:
+                here = path
+                continue
+            target: str | None = self._links.get(path)
+            if target is None:
+                self._spend(1)
+                try:
+                    if not stat.S_ISLNK(os.lstat(path).st_mode):
+                        self._plain.add(path)
+                        here = path
+                        continue
+                    self._spend(1)
+                    target = os.readlink(path)
+                except (OSError, ValueError):
+                    return None
+                self._links[path] = target
+            hops += 1
+            if hops > MAX_LINK_HOPS:
+                return None
+            if target.startswith("/"):
+                here = "/"
+            pending.extend(target.split("/")[::-1])
+        return here
+
+
+def _project_relative(word: str, project_root: Path, lookups: Lookups | None = None) -> str | None:
+    """`Lookups.project_relative` for one word (the cleaner shares one `Lookups` per command)."""
+    return (lookups or Lookups(project_root)).project_relative(word)

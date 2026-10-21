@@ -119,6 +119,18 @@ def bipartite_list(severity: str = "highlight") -> tuple[str, list[str]]:
     return list_line("l", *entries), rules
 
 
+def program_walk_list(severity: str = "highlight") -> tuple[str, list[str]]:
+    """V5d's crafted file: 50 entries `cat wN` in each of 198 rules. Every simple command of
+    `PROGRAM_WALK_LINE` has `cat` and no `wN`, so a clause finds nothing and has to say so for
+    each of the line's 1,000 simple commands."""
+    entries = [f"cat w{i}" for i in range(50)]
+    rules = [match_rule(i, 'command = "l"', severity) for i in range(rulefile.MAX_RULES - 2)]
+    return list_line("l", *entries), rules
+
+
+PROGRAM_WALK_LINE = " ; ".join(f"cat z{k} y" for k in range(1_000))  # 3,000 words
+
+
 # 13 simple commands of 22 words (286 words; a 14th would pass 300).
 BIPARTITE_LINE = " ; ".join(
     "cat " + " ".join(f"a{i}" for i in range(20)) + f" z{k}" for k in range(13)

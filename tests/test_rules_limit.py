@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 import logging
 import re
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -41,9 +42,18 @@ from agentfly.recorder.rules import (
     one_hook,
     winning_rule,
 )
+from tests.helpers import wallclock
 from tests.recorder_harness import Recorder
 from tests.rules_helpers import default_with, list_line, ruleset_of
-from tests.test_rules_cost import BIPARTITE_LINE, bipartite_list, command, match_rule
+from tests.test_rules_cost import (
+    BIPARTITE_LINE,
+    CLIENT_WAIT,
+    PROGRAM_WALK_LINE,
+    bipartite_list,
+    command,
+    match_rule,
+    program_walk_list,
+)
 from tests.test_severities import push
 from tests.test_severities import rule as severity_rule
 from tests.test_severities import ruleset as severity_ruleset
@@ -487,6 +497,70 @@ def test_a_heavy_command_list_stops_at_the_budget_and_the_count_proves_it(
     monkeypatch.setattr(rulefile, "_charge", lambda cost: None)
     assert rec.run("Q", BIPARTITE_LINE)["permission"] == "allow"  # it runs to the end, no fire
     assert entries > rulefile.FLOAT_STEPS, entries
+
+
+def walk_lists(severity: str) -> RuleSet:
+    lists, rules = program_walk_list(severity)
+    return ruleset_of(default_with(lists, *rules))
+
+
+def test_a_long_line_on_many_lists_stops_at_the_budget_and_the_count_proves_it(
+    rec: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V5d: 1,000 simple commands of `cat zK y` against 198 lists of 50 `cat wN`. A clause makes
+    1,000 look-ups, 700 past the free ones, and is charged 2,800 steps before it walks: sixteen
+    clauses are walked (16,000 look-ups) and the seventeenth raises, as does every later one, with
+    no walk. Without the charge every clause walks all 1,000 simple commands."""
+    rules_mod.activate(walk_lists("block"))
+    looked = 0
+    real = rulefile._program_hit
+
+    def count(keys: Any, view: Any, at: int) -> bool:
+        nonlocal looked
+        looked += 1
+        return real(keys, view, at)
+
+    monkeypatch.setattr(rulefile, "_program_hit", count)
+    answer = rec.run("P", PROGRAM_WALK_LINE)
+    assert answer["permission"] == "deny" and answer["user_message"] == LIMIT_MESSAGE
+    assert 0 < looked <= 17_000, looked
+
+    looked = 0
+    monkeypatch.setattr(rulefile, "_charge", lambda cost: None)
+    assert rec.run("Q", PROGRAM_WALK_LINE)["permission"] == "allow"  # it runs to the end, no fire
+    assert looked == 198_000, looked
+
+
+def test_a_long_line_on_many_lists_warn_asks_with_the_limit_message(rec: Recorder) -> None:
+    rules_mod.activate(walk_lists("warn"))
+    assert rec.run("P", PROGRAM_WALK_LINE) == {
+        "permission": "ask",
+        "user_message": LIMIT_MESSAGE,
+        "agent_message": LIMIT_MESSAGE + SKIP_TAIL,
+    }
+
+
+def test_a_long_line_on_many_lists_highlight_is_skipped(rec: Recorder) -> None:
+    rs = walk_lists("highlight")
+    with one_hook() as meter:
+        assert winning_rule(shell(PROGRAM_WALK_LINE), session(), rs) is None
+    assert meter.unfinished and set(meter.unfinished) <= LIST_IDS
+    rules_mod.activate(rs)
+    assert rec.run("P", PROGRAM_WALK_LINE) == {"permission": "allow"}
+
+
+@wallclock
+def test_a_long_line_on_many_lists_is_answered_within_the_clients_wait(rec: Recorder) -> None:
+    """The whole real hook (`apply_rules`: mark, decide, the step for the history), best of three.
+    About 0.07 s of rules here against 0.19 to 0.36 s before the charge."""
+    rules_mod.activate(walk_lists("block"))
+    rec.run("warm", PROGRAM_WALK_LINE)
+    best = float("inf")
+    for n in range(3):
+        started = time.perf_counter()
+        rec.run(f"c{n}", PROGRAM_WALK_LINE)
+        best = min(best, time.perf_counter() - started)
+    assert best < CLIENT_WAIT, f"{best:.3f} s of {CLIENT_WAIT} s"
 
 
 def test_a_heavy_command_list_warn_asks_with_the_limit_message(rec: Recorder) -> None:

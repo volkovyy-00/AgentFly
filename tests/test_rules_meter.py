@@ -11,6 +11,7 @@ With no meter set, nothing is charged or raised.
 
 from __future__ import annotations
 
+import itertools
 import random
 from typing import Any
 
@@ -393,6 +394,92 @@ def test_a_run_of_probes_is_charged_one_step_for_four(monkeypatch: pytest.Monkey
     assert charged == []
 
 
+# ---------------------------------------------------------------- the program walk (V5d)
+
+
+def distinct_commands(count: int) -> str:
+    """`count` simple commands, each `cat zK`: one look-up each for a clause that lists `cat`."""
+    return " ; ".join(f"cat z{k}" for k in range(count))
+
+
+def test_the_budgets_are_pinned() -> None:
+    """Every other test reads these by name, so a changed value would pass them. Each number is
+    priced (45,000 steps is about 20 ms, see the comment above `DIV`): re-measure to change one."""
+    assert rulefile.FLOAT_STEPS == 45_000
+    assert rulefile.PROBES_PER_STEP == 4
+    assert rulefile.PROGRAM_LOOKUPS_FREE == 300
+    assert rulefile.PROGRAM_LOOKUP_STEPS == 4
+    with rules_mod.one_hook() as meter:
+        assert meter.left == 45_000
+
+
+@pytest.mark.parametrize(("simple_commands", "charge"), [(300, 0), (301, 4), (310, 40)])
+def test_the_program_walk_is_free_up_to_300_lookups_and_four_steps_each_past_them(
+    simple_commands: int, charge: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    charged: list[int] = []
+    real = rulefile._charge
+
+    def spy(steps: int) -> None:
+        charged.append(steps)
+        real(steps)
+
+    monkeypatch.setattr(rulefile, "_charge", spy)
+    with metered(Meter(left=1_000)) as meter:
+        assert not command_clause(("cat", "w0")).matches(
+            shell(distinct_commands(simple_commands)), {}
+        )
+    assert charged == ([charge] if charge else []) and meter.left == 1_000 - charge
+
+
+def test_the_program_walk_is_charged_before_it_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
+    walked: list[int] = []
+    real = rulefile._program_hit
+
+    def spy(keys: Any, view: Any, at: int) -> bool:
+        walked.append(at)
+        return real(keys, view, at)
+
+    monkeypatch.setattr(rulefile, "_program_hit", spy)
+    clause = command_clause(("cat", "w0"))
+    with metered(Meter(left=3)), pytest.raises(WorkLimit):  # 301 look-ups cost 4
+        clause.matches(shell(distinct_commands(301)), {})
+    assert walked == []
+    with metered(Meter(left=4)) as meter:
+        assert not clause.matches(shell(distinct_commands(301)), {})
+    assert len(walked) == 301 and meter.left == 0
+
+
+def test_a_clause_of_300_lookups_answers_on_a_spent_meter_a_heavier_one_raises() -> None:
+    clause = command_clause(("cat", "w0"))
+    with metered(Meter(left=-50)) as meter:
+        assert not clause.matches(shell(distinct_commands(300)), {})
+        assert meter.left == -50
+        with pytest.raises(WorkLimit):
+            clause.matches(shell(distinct_commands(301)), {})
+
+
+def test_a_clause_that_lists_few_programs_makes_few_lookups() -> None:
+    """A simple command with five words and a clause listing two programs: two look-ups, not five,
+    so 301 of them (the smaller side of each is the listed programs) are 602, and charged."""
+    line = " ; ".join(f"cat a{k} b{k} c{k} d{k}" for k in range(301))
+    clause = command_clause(("cat", "w0"), ("tee", "w0"))
+    with metered(Meter(left=10_000)) as meter:
+        assert not clause.matches(shell(line), {})
+    assert meter.left == 10_000 - 4 * (2 * 301 - 300)
+
+
+def test_the_lookup_table_adds_up_like_the_walk_does() -> None:
+    rng = random.Random(21)
+    for _ in range(300):
+        sizes = [rng.randrange(1, 12) for _ in range(rng.randrange(1, 40))]
+        table = rulefile._Sizes(
+            tuple(sorted(sizes)), tuple(itertools.accumulate(sorted(sizes), initial=0))
+        )
+        for listed in range(1, 14):
+            assert table.looked_up(listed) == sum(min(listed, size) for size in sizes)
+
+
 def text_of_lists(shape: Any) -> str:
     lists, rules = shape()
     return default_with(lists, *rules)
@@ -418,8 +505,18 @@ def realistic_line() -> str:
             lambda: " ; ".join(["cat w x"] * 100),
         ),
         (lambda: text_of_lists(realistic_lists), realistic_line),
+        (
+            lambda: text_of_lists(command_list_on_one_program),
+            lambda: " ; ".join(f"z{i}" for i in range(300)),  # 300 words, 300 simple commands
+        ),
     ],
-    ids=["the default on command(60)", "cat wN on cat zN y", "cat w aN on cat w x", "realistic"],
+    ids=[
+        "the default on command(60)",
+        "cat wN on cat zN y",
+        "cat w aN on cat w x",
+        "realistic",
+        "cat wN on 300 one-word commands",
+    ],
 )
 def test_command_lists_of_real_shapes_are_never_charged(text: Any, line: Any) -> None:
     ruleset = ruleset_of(text())

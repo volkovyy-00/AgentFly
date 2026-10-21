@@ -400,9 +400,15 @@ def compile_pattern(raw: str) -> Pattern:
 # entry and one a word left in it, charged before it is walked, and a run of key probes one step
 # for four (a run of fewer charges nothing). Measured by the advisor: 0.35 us a step for one-word
 # entries, 0.09 for long ones, at most 0.4 for probes, so a whole budget stays inside 20 ms.
+# The walk over a line's simple commands is charged too (V5d): a clause makes at most one look-up
+# of a program a word, so a hook of 300 words makes at most 300 and they are free; past that each
+# costs PROGRAM_LOOKUP_STEPS, charged for the whole clause before it is walked. Measured 2.2 us a
+# look-up against 0.4 us a step, so four steps is not too dear. Tests pin all of these numbers.
 DIV: int = 256
 FLOAT_STEPS: int = 45_000
 PROBES_PER_STEP: int = 4
+PROGRAM_LOOKUPS_FREE: int = 300
+PROGRAM_LOOKUP_STEPS: int = 4
 
 
 class WorkLimit(Exception):
@@ -594,6 +600,37 @@ def _simple_commands(parsed: Parsed) -> tuple[_Simple, ...]:
     return tuple(_simple_view(argv) for argv in dict.fromkeys(parsed.all_commands()))
 
 
+class _Sizes(NamedTuple):
+    """The program counts of a line's simple commands, sorted, with their running sums: a clause
+    that lists `L` programs makes at most `min(L, size)` look-ups in a simple command, so all of
+    them at most `looked_up(L)`, in one search."""
+
+    sizes: tuple[int, ...]
+    sums: tuple[int, ...]  # sums[k] is the total of the k smallest sizes
+
+    def looked_up(self, listed: int) -> int:
+        below: int = bisect_right(self.sizes, listed)
+        return self.sums[below] + listed * (len(self.sizes) - below)
+
+
+@lru_cache(maxsize=4)  # as `_simple_commands`: one line, all the clauses of a hook
+def _program_sizes(parsed: Parsed) -> _Sizes:
+    sizes: tuple[int, ...] = tuple(sorted(len(view.first) for view in _simple_commands(parsed)))
+    sums: list[int] = [0]
+    for size in sizes:
+        sums.append(sums[-1] + size)
+    return _Sizes(sizes, tuple(sums))
+
+
+def _charge_program_walk(listed: int, parsed: Parsed) -> None:
+    """Charge a clause that lists `listed` programs for the look-ups its walk over the line may
+    make, before it walks (V5d). Up to `PROGRAM_LOOKUPS_FREE` costs nothing, so a clause that is
+    cheap answers on a spent meter; a heavier one on a spent meter raises without walking."""
+    over: int = _program_sizes(parsed).looked_up(listed) - PROGRAM_LOOKUPS_FREE
+    if over > 0:
+        _charge(PROGRAM_LOOKUP_STEPS * over)
+
+
 def _bucket_hit(bucket: _Bucket, last: Mapping[str, int], at: int) -> bool:
     _charge(bucket.weight)
     return any(_entry_follows(last, at, rest) for rest in bucket.rests)
@@ -667,6 +704,7 @@ class Clause:
         entries to look at.
         """
         listed: _Index = self._index
+        _charge_program_walk(len(listed), parsed)
         for view in _simple_commands(parsed):
             first: dict[str, int] = view.first
             if len(listed) <= len(first):  # walk the smaller side, look up the other

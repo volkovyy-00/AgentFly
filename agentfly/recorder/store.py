@@ -18,8 +18,9 @@ from neo4j import Driver, GraphDatabase
 
 from agentfly.recorder import clean as clean_settings
 from agentfly.recorder.clean import (
-    MAX_PATH_WORD,
+    Lookups,
     clean_command,
+    cleaned_words,
     contained_relative,
     resolved_or_none,
     website_name,
@@ -337,28 +338,23 @@ def relative_file_path(file_path: str, project_root: Path) -> str:
     return _storable(raw.name)
 
 
-def _word_path(token: str, root: Path) -> str:
-    """`relative_file_path` for a word of a command. A word over `MAX_PATH_WORD` is not looked up
-    (§5, as `_is_file_in`): it is saved by its base name, also an absolute one inside the project,
-    which `relative_file_path` would save relative to the root (a change from before V5b-fix2)."""
-    if len(token) > MAX_PATH_WORD:
-        return _storable(Path(token).name)
-    return relative_file_path(token, root)
+def _word_path(token: str, lookups: Lookups) -> str:
+    """The file a surviving word of a command is saved as (V5d): the base name, or, for an
+    absolute word that names something inside the project, the path relative to the root. The
+    project is asked through the hook's `Lookups` (a word over `MAX_PATH_WORD` is not looked up,
+    a link that leads out is not inside), where `relative_file_path` resolves the word and the
+    root on its own. A relative word is saved by its base name, as before."""
+    if token.startswith("/"):
+        rel: str | None = lookups.project_relative(token)
+        if rel is not None and _encodes(rel):
+            return rel
+    return _storable(Path(token).name)
 
 
-def _is_file_in(root: Path, token: str) -> bool:
-    """Whether a word that survived cleaning names something in the project. Never raises."""
-    if len(token) > MAX_PATH_WORD:
-        return False
-    try:
-        return (root / token).exists()
-    except (OSError, ValueError):
-        return False
-
-
-def hosts_from_cleaned(cleaned: str) -> tuple[str, ...]:
+def hosts_from_cleaned(cleaned: str, tokens: list[str] | None = None) -> tuple[str, ...]:
+    """The hosts a cleaned command names. `tokens` is `words(cleaned)` when the caller has it."""
     found: list[str] = []
-    for token in words(cleaned):
+    for token in words(cleaned) if tokens is None else tokens:
         if token in {"<arg>", "<unparsed>", "<removed>"}:
             continue
         if token.startswith("-"):
@@ -423,20 +419,22 @@ def build_step_record(
             file_sensitive = is_sensitive(raw_path)
     elif kind == "shell":
         raw_cmd: str = str(payload.get("command", "") or "")
-        command = clean_command(raw_cmd, root)
+        lookups = Lookups(root)  # the cleaner and the word loop below share one budget
+        command = clean_command(raw_cmd, root, lookups)
         if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
-        hosts = hosts_from_cleaned(command)
+        tokens: list[str] = cleaned_words(command)  # split once, as `words` would
+        hosts = hosts_from_cleaned(command, tokens)
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
-        for token in words(command):
+        for token in tokens:
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:
                 continue
             if is_sensitive(token):
-                file_path = _word_path(token, root)
+                file_path = _word_path(token, lookups)
                 file_sensitive = True
                 break
-            if file_path is None and _is_file_in(root, token):
-                file_path = _word_path(token, root)
+            if file_path is None and lookups.names_file(token):
+                file_path = _word_path(token, lookups)
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
         tool_input: Any = payload.get("tool_input")
