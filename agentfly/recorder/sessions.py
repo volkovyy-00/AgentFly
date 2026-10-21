@@ -360,7 +360,8 @@ class SessionStore:
         for sid, first_free in floors.items():
             session: Session | None = self._sessions.get(sid)
             if session is None:
-                self._floors[sid] = first_free  # a chat with no note yet: used when it appears
+                # a chat with no note yet (never seen, or swept): used when it appears
+                self._floors[sid] = max(self._floors.get(sid, 1), first_free)
             elif first_free > session.next_step:
                 self._remember(replace(session, next_step=first_free))
 
@@ -613,20 +614,31 @@ class SessionStore:
     # ------------------------------------------------------------ old notes (D29)
 
     def _holds_on(self, session: Session, now: float) -> bool:
-        """A mark, a trigger or an open inherited window: the note matters whatever its age."""
-        return bool(
+        """A mark, a trigger or an open inherited window: the note matters whatever its age.
+
+        Judged as the rules judge the chat (SPEC section 5): a subagent is marked and triggered as
+        its parents are, so one that holds only through a marked parent matters too.
+        """
+        if (
             session.marked
             or session.triggers
             or session.inherited_until > now
             or any(until > now for until in session.inherited_triggers.values())
-        )
+        ):
+            return True
+        if not (session.parent_id or session.parent_call):  # most chats have no parent
+            return False
+        held: Session = self.effective(session)
+        return bool(held.marked or held.triggers)
 
     def sweep(self) -> int:
         """Drop notes idle for 29 days unless they matter (D29). Returns how many went.
 
         Kept: a chat with activity in the last 29 days, a marked one, one with a trigger, one with
-        an open inherited window, and every parent of a chat that stays. A call stays while a kept
-        chat points to it, it is pending, or its parent stays. The writer saves the result.
+        an open inherited window (its own, or through its parents), and every parent of a chat that
+        stays. A call stays while a kept chat points to it, it is pending, or its parent stays. A
+        dropped chat's step counter becomes a floor, so it never reuses an order number if it
+        returns. The writer saves the result.
         """
         now: float = self.clock()
         links: bool = self.prune_pending()
@@ -644,7 +656,8 @@ class SessionStore:
         if dropped:
             held: set[str] = {self._sessions[sid].parent_call for sid in keep}
             for sid in dropped:
-                del self._sessions[sid]
+                gone: Session = self._sessions.pop(sid)
+                self._floors[sid] = max(self._floors.get(sid, 1), gone.next_step)
             for call, parent in list(self.calls.items()):
                 if parent in dropped and call not in held and call not in self.pending:
                     del self.calls[call]

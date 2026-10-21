@@ -427,9 +427,11 @@ subagents (below). It is saved to a small file before the recorder answers, so
 that a restart or a crash of the recorder does not forget it, and it clears only
 when a new chat starts. The note of a chat that has had no activity for 29 days
 is dropped (one day past the history's 28, D29; checked at start and every hour),
-unless the chat is marked, holds a trigger or an inherited mark or trigger that is
-still open, or is the parent of a chat that stays; the Task links that tie them stay
-too.
+unless the chat is marked or holds a trigger (its own, or through its parent chats, as
+a subagent does), holds an inherited mark or trigger that is still open, or is the parent
+of a chat that stays; the Task links that tie them stay too. While the recorder runs it
+remembers where a dropped chat's step numbers stopped, so a chat that comes back never
+numbers a step over one it already has.
 
 **Subagents (D21, D9).** When the agent starts a helper (a subagent), Cursor
 gives it its own chat id. Spike S5 found that every event inside a subagent

@@ -484,7 +484,9 @@ lines for them (R0 and normalisation: V5).
   chat is judged as before (mark, trigger, Task, link, window, parent), SIGKILL and SIGTERM never
   reuse a saved order number, and a clean stop leaves `next_step` in the file. D29 (`sweep`): idle 29
   days goes, 28 stays; a marked chat, a trigger, an open window and a parent of a kept chat stay with
-  their calls; swept at start (before the counters are raised from history, so a swept chat keeps its
+  their calls; marked or triggered through a parent counts (a subagent marked only through its
+  parent survives, and so does its call after 2,500 other Tasks and a restart); a dropped chat's
+  counter becomes a floor, so one that returns after an hourly sweep never reuses an order number; swept at start (before the counters are raised from history, so a swept chat keeps its
   floor) and by the hourly job; a sweep or a counter read that fails only logs and never stops the
   recorder or the job; a clean stop does not wait for ever for a stuck write; a pre-F11 or
   hackathon file loads with every mark and the first sweep drops nothing. CR1: a chat holding only a

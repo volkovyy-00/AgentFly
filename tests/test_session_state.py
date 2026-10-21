@@ -28,6 +28,7 @@ import agentfly.recorder.app as app_module
 import agentfly.recorder.localstore as ls
 import agentfly.recorder.rules as rules_mod
 import agentfly.recorder.sessions as sessions_module
+from agentfly.recorder.memory import memory_steps
 from agentfly.recorder.paths import config_dir, data_dir
 from agentfly.recorder.rules import Session
 from agentfly.recorder.sessions import FALLBACK_SECONDS, IDLE_DROP_SECONDS, SessionStore
@@ -487,6 +488,42 @@ def test_a_note_idle_29_days_goes_and_one_idle_28_days_stays(rec: Recorder, cloc
     clock.now += 28 * DAY  # OLD: 29 days, NEWER: 28
     assert rec.store.sweep() == 1
     assert rec.store.get("OLD") is None and rec.store.get("NEWER") is not None
+
+
+def test_a_chat_that_returns_after_a_sweep_never_reuses_an_order_number(
+    rec: Recorder, clock: Clock
+) -> None:
+    for _ in range(5):
+        says(rec, "A", "ls")
+    clock.now += IDLE_DROP_SECONDS + 1  # a second past the 29 days
+    assert rec.store.sweep() == 1 and rec.store.get("A") is None
+    says(rec, "A", "ls")  # it returns; the recorder was not restarted
+    orders = [step["order"] for step in memory_steps.snapshot(all_steps=True)["steps"]]
+    assert orders == [1, 2, 3, 4, 5, 6]  # the sixth step is number 6, not 1 again
+
+
+def test_a_subagent_marked_only_through_its_parent_survives_the_sweep(
+    rec: Recorder, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec.read("P", "/w/.env")
+    rec.task("P", "T1")
+    says(rec, "C", "ls", parent_tool_call_id="T1")
+    child = rec.store.get("C")
+    assert child is not None and not child.marked  # it holds the mark only through its parent
+    clock.now += 30 * DAY
+    assert rec.store.sweep() == 0 and rec.store.get("C") is not None
+    # 2,500 Task calls from other chats push old calls out of the bounded memory of calls; the one
+    # C points to must stay (writes are skipped as in the F5 flood tests: only memory matters)
+    monkeypatch.setattr(rec.store, "save", lambda: None)
+    monkeypatch.setattr(rec.store, "save_links", lambda: None)
+    for number in range(2500):
+        rec.task("OTHER", f"flood-{number}", workspace_roots=["/elsewhere"])
+    monkeypatch.undo()
+    rec.store.save()
+    rec.store.save_links()
+    assert len(rec.store.calls) <= 2000 and rec.store.calls["T1"] == "P"
+    rec.restart()
+    assert says(rec, "C", CURL, parent_tool_call_id="T1") == "deny"
 
 
 def test_the_sweep_keeps_what_d29_keeps(rec: Recorder, clock: Clock, armed: None) -> None:
