@@ -27,7 +27,7 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 |---|---|---|
 | Config | `.cursor/hooks.json` | Which events call the adapter (`version: 1` required); **not in git** |
 | Hook client | `agentfly/hook_client.py` | Stdlib only; strip, POST `/hook`, offline guard when the recorder is down |
-| Shim | `hooks/hook.py` | What `./install.sh` wires (development only); runs the hook client. It stays: `agentfly init -g` installs a copy of `agentfly/hook_client.py` and uses no shim |
+| Shim | `hooks/hook.py` | Dev only: what `./install.sh` wires; runs the hook client. It stays; `agentfly init -g` installs a copy of `agentfly/hook_client.py` and uses no shim |
 | Server | `agentfly/recorder/app.py` | Host + token gates; mark/decide; R1 deny |
 | Rules | `agentfly/recorder/rules.py`, `rulefile.py`, `agentfly/rules/default.toml` | R0 in code; the rules file's rules (`match`, `after_then`); `mark` then `decide` (strictest wins) |
 | Sessions | `agentfly/recorder/sessions.py` | Memory + `~/.local/share/agentfly/sessions.json` |

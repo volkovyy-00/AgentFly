@@ -5,7 +5,7 @@ Cursor hooks send every agent action to a local server. The server decides
 allow, warn or block using rules, and saves a cleaned copy to a local store
 (Neo4j is an optional extra copy). A web page shows the session live.
 
-`SPEC.md` is the **v1 target**: read the sections your card cites, not all 60 kB.
+`SPEC.md` is the **v1 target**: read the sections your card cites, not the whole file.
 The code moves toward it card by card. So:
 - Inside your card, follow SPEC.md and the card.
 - Outside your card, leave the code as it is and note the gap in your report.
@@ -22,7 +22,8 @@ issue or pull request as the card and puts the gap notes in the pull request.
   `uninstall`, `doctor`, the service. `agentfly/rules/`: the packaged `default.toml`.
 - `agentfly/recorder/`: the server, rules engine, sessions, cleaner, local store, Neo4j.
 - `agentfly/hook_client.py`: the hook client. `hooks/hook.py`: the dev shim `./install.sh` wires.
-  The top-level `recorder/` forwards a stale `hooks.json` to it. Keep both (exit 2 locks the agent).
+  The top-level `recorder/` forwards a stale `hooks.json` to that shim. Keep both files: a
+  missing one exits 2, which locks the agent.
 - `ui/`: the page (`ui/dist` is the committed build). `examples/`: the replay tool.
   `tests/`: see `tests/README.md`.
 
@@ -121,9 +122,9 @@ on GitHub: the lead folds them into a card.
   `rulefile.ACTIVE_RULES` and `rulefile.ACTIVE_OWNER_UID`.
 
 ## Hook client rules
-(`agentfly/hook_client.py`, installed as `agentfly-hook`; `hooks/hook.py` is the dev shim that
-`./install.sh` wires and stays. Called as `agentfly-hook <agent> <event>`; with no arguments it
-acts as `cursor`. SPEC section 8.)
+(`agentfly/hook_client.py`, installed as `agentfly-hook`; the dev shim is under "Where things
+are". Called as `agentfly-hook <agent> <event>`; with no arguments it acts as `cursor`. SPEC
+section 8.)
 - Standard library only, one file. Run it with `python -I -S` on a Python
   directly (never `uv run`, which is slow to start). In v1 that is the bundled
   system-owned Python, not the project's virtualenv or `/usr/bin/python3`.
@@ -140,11 +141,11 @@ acts as `cursor`. SPEC section 8.)
   `agentfly uninstall` has removed the registration. A 401 or 403 from the
   recorder (wrong token) and input the client cannot parse get the same guard,
   never an allow. Every inline `python -c` / `node -e` is denied offline.
-- Strip content before doing anything else (fields: SPEC section 8 "Stripping"; every depth:
-  HOOKS.md "Hook client behaviour" step 2): file contents, edit text, command output,
+- Strip content before doing anything else: file contents, edit text, command output,
   `tool_input` except a file tool's path and an MCP call's names, any nested `content` /
   `output`. The log keeps no command text. Top-level fields such as `parent_tool_call_id` pass
-  through (D21). Session events keep only ids and names; `subagentStart.task` never leaves it.
+  through (D21). Session events keep only ids and names; `subagentStart.task` never leaves the
+  client. Fields: SPEC section 8 "Stripping"; every depth: HOOKS.md "Hook client behaviour" step 2.
 - On deny, put the rule text in BOTH `user_message` and `agent_message`, and
   add to `agent_message`: "Do not retry with another tool or language. Stop
   and tell the user."
@@ -156,8 +157,7 @@ acts as `cursor`. SPEC section 8.)
 - Real credentials (Neo4j URI, user, password) live in a file OUTSIDE the
   repo folder, read only by the server. Names are listed in `.env.example`.
   Never print, export or commit them. Never pass them to the hook client.
-  That file is `~/.config/agentfly/neo4j.env` (mode 600, D7; the move from the hackathon
-  folder is in SPEC §3).
+  That file is `~/.config/agentfly/neo4j.env` (mode 600, D7).
 - Command cleaning (`agentfly/recorder/clean.py`) is **on by default**. Set
   `CLEAN_COMMANDS=0` (or `false` / `off`) when starting the server to store
   raw commands instead (debugging only; secrets may then reach Neo4j).
@@ -169,8 +169,8 @@ acts as `cursor`. SPEC section 8.)
 - Tests never use that login. The live Neo4j tests run only when
   `AGENTFLY_TEST_NEO4J_ENV` names a separate credentials file for a test
   database, and skip otherwise; never point it at the owner's AuraDB.
-- The page: `GET /` (and `/assets/`) and `GET /api/steps` are Host-only (no token). The page
-  never talks to a database; the live trail reads process memory. JSON contract: README / HOOKS.
+- The page: `GET /` (and `/assets/`) and `GET /api/steps` are Host-only (no token). The live
+  trail reads process memory. JSON contract: README / HOOKS.
 
 ## Code style
 - Python 3.12, type hints on function signatures, `pathlib`, small functions.

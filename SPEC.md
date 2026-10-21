@@ -536,8 +536,7 @@ first**:
   banner appears when the page cannot reach the recorder, so a dead recorder
   never fails silently.
 - **Tabs.** History (past sessions, from the local store, by workspace), Rules
-  (the active rules, read-only), and Graph (today's lane graph). The lane graph
-  is already its own tab (`/?view=graph`); the trail is the home view.
+  (the active rules, read-only), and Graph (today's lane graph).
 - **Half-screen first.** The page is mostly used on half of the screen (about
   700 pixels wide), so that is the main layout, not a fallback.
 - The live trail refreshes about once a second. No chat view: the page never

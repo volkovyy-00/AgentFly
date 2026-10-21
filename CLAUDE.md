@@ -10,7 +10,7 @@
 - Specs and plans a skill writes (superpowers puts them under `docs/superpowers/`) go in `~/Projects/AgentFly-process/docs/superpowers/` instead, uncommitted, like the report.
 - Call the project owner "the owner" in every file you write (author lines too). Never write their name.
 - Only the lead edits and commits in the private repo. A git pre-commit hook rejects process files staged here (anything under `docs/` but `docs/media`, and `.claude/commands`).
-- An `@name` outside backticks and code blocks, in this file or in AGENTS.md, is an import (imports nest), and a long file pulled in that way lands in every session. The one import here is the line under the title. Write other file names in backticks or without the `@`.
+- Write file names in backticks or without the `@`: an `@name` outside backticks and code blocks, in this file or in AGENTS.md, is an import (imports nest), and what it pulls in lands in every session. The one import here is the line under the title.
 
 # Compact instructions
 Keep: your role and card, the brief path (`~/Projects/AgentFly-process/docs/briefs/<card>.md`) and the report path (`~/Projects/AgentFly-process/docs/reports/<card>.md`), files you own or changed, decisions by ID (D-numbers) and their status, open questions for the owner, next actions. Drop raw tool output, file contents and logs; they are in the repo.
