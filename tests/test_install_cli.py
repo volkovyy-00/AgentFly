@@ -11,7 +11,15 @@ from typing import IO
 import pytest
 
 from agentfly.cli import build_parser, init, main, uninstall
-from agentfly.install import elevate, installer, packages, pythons, records, service
+from agentfly.install import (
+    InstallError,
+    elevate,
+    installer,
+    packages,
+    pythons,
+    records,
+    service,
+)
 from agentfly.install.layout import SYSTEM, Layout
 from agentfly.recorder import rulefile
 from tests.helpers import REPO
@@ -729,3 +737,33 @@ def test_a_refresh_that_changes_more_than_the_rules_still_asks_for_a_cursor_rest
     assert init._as_root("3.24.12", installed) == 0
     out = capsys.readouterr().out
     assert "restart the recorder" in out and "Quit and reopen Cursor" in out
+
+
+@pytest.mark.parametrize("what", ["link", "folder"])
+def test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password(
+    what: str,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CR7: the unprivileged run refuses with root's own words, and asks for no password."""
+    system.rules.unlink()
+    if what == "link":
+        target = tmp_path / "elsewhere.toml"
+        target.write_text(rulefile.default_text(), encoding="utf-8")
+        system.rules.symlink_to(target)
+    else:
+        system.rules.mkdir()
+    expected = str(installer._blocked(system))
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == f"agentfly init: {expected}\n"
+    assert "ask for your password" not in captured.out and sudo.calls == []
+    with pytest.raises(InstallError, match="remove it first"):  # root says the same
+        installer.install(
+            system, installed, cursor_version="3.24.12", source=installer.client_source()
+        )

@@ -147,14 +147,17 @@ RULES_WRITTEN = frozenset({"missing", "older", "untrusted"})  # states in which 
 
 
 def check_packaged_default(layout: Layout, current: packages.Check) -> None:
-    """Raise the error root's install would raise about the default it is about to write.
+    """Raise the error root's install would raise about the rules file: a link or a folder in its
+    place (CR7), or a damaged default it is about to write.
 
-    The unprivileged run calls this before the password, so a damaged default stops there. Where
-    the file is the owner's (`edited`) or cannot be opened (`unknown`), nothing is written, so
-    nothing here can fail.
+    The unprivileged run calls this before the password, so either stops there. Where the file is
+    the owner's (`edited`) or cannot be opened (`unknown`), nothing is written, so nothing here
+    can fail.
     """
-    wanted = packages.recorded_hash(current, DEFAULT_RECORD_PATH)
-    if rules_state(layout, wanted) in RULES_WRITTEN:
+    state = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
+    if state == "blocked":
+        raise _blocked(layout)
+    if state in RULES_WRITTEN:
         _packaged_default(current)
 
 

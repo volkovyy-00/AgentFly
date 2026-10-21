@@ -88,7 +88,8 @@ def _as_user(version: str, build: pythons.PythonBuild) -> int:
         if notice:
             print(notice)
         return 0
-    installer.check_packaged_default(SYSTEM, current)  # a damaged default stops before the password
+    # A damaged default, or a link or folder at the rules path, stops before the password.
+    installer.check_packaged_default(SYSTEM, current)
     packages.ensure_confirmed(current)
     print("AgentFly will ask for your password once, to write into /Library/Application Support.")
     if "python" not in bad:
