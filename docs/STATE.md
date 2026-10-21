@@ -32,8 +32,7 @@ Pending decisions: D16
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. F9: vite 8.3.2 advisory has no Dependabot alert (check Security → Dependabot → Closed). CodeQL #5–#7 dismissed by the owner 2026-10-21.
-2. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
+1. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
@@ -44,7 +43,7 @@ Pending decisions: D16
 
 ## Open risks and findings
 - CI flake: `test_offline_guard.py` silent recorder took 1.28 s on macos-15 once (b342323); recurs → fix card. F7, V2c, UI-card leftovers: git show 0e34261:docs/STATE.md.
-- F9: test YAML-reader quirks → F8 brief. Dependabot raises no alerts for SHA-pinned actions; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
+- F9: test YAML-reader quirks → F8 brief. vite 8.3.2 advisory: no Dependabot alert open or closed (owner 2026-10-21; files checked 2026-10-20) → bump in the cleanup card; CodeQL #5–#7 dismissed. Dependabot raises no alerts for SHA-pinned actions; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - F10 leftovers: AGENTS.md "Testing" lines for package tests failing (not skipping) under CI and the hand-typed-sudo uninstall path (lead, after V5b); SPEC §10 lacks the "service was not touched" message; `CI=false` counts as CI in `tests/test_package.py`.
 - V3c later-card items: `.pth` runs in the checking process; R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a dist-info); no offline-guard package rule; root runs bundled 3.12 on the env's site-packages.
 - R0 gaps (V5a): `pkill python`; ruby/perl -e; relative paths after `cd`, globs, braces, variables; ~/.claude/settings.json unguarded.
