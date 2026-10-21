@@ -248,13 +248,14 @@ def report_rules_limit(chat: str, rule_ids: Sequence[str], answer: str) -> None:
     """One hook left rules unfinished: log it and count it (V5b-fix2 §4.4).
 
     `answer` is what the limit made of the hook: `deny`, `ask` or `none`. The line holds the chat
-    and the rule ids, never the command or any request text.
+    and the rule ids, never the command or any request text; of the chat id at most 80
+    characters, so a broken one cannot bloat the line.
     """
     global _limit_hits, _limit_last
     _limit_hits += 1
     _limit_last = (utc_now(), tuple(rule_ids))
     logger.warning(
-        "rules limit: chat %r, unfinished %s, answer %s", chat, ", ".join(rule_ids), answer
+        "rules limit: chat %r, unfinished %s, answer %s", chat[:80], ", ".join(rule_ids), answer
     )
 
 

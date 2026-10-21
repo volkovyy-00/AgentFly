@@ -343,6 +343,19 @@ def test_the_health_line_is_cut_to_fit_and_says_how_many_rules_it_left_out() -> 
     assert ids[0] in line and ids[-1] not in line and re.search(r"and \d+ more$", line)
 
 
+def test_the_log_line_holds_at_most_80_characters_of_the_chat_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Final review M4: a broken or hostile chat id does not bloat the warning line."""
+    chat = "c" * 9_990 + "zz-tail-mark"
+    with caplog.at_level(logging.WARNING, logger="agentfly"):
+        app_module.report_rules_limit(chat, ["r1"], "deny")
+    [record] = [r for r in caplog.records if "rules limit" in r.getMessage()]
+    text = record.getMessage()
+    assert text == f"rules limit: chat {chat[:80]!r}, unfinished r1, answer deny"
+    assert "zz-tail-mark" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("severity", "answer"), [("block", "deny"), ("warn", "ask"), ("highlight", "none")]
 )
