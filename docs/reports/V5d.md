@@ -1,7 +1,7 @@
 # V5d: Hook speed on long commands and V5b leftovers
 Status: done (as of 2026-10-21 14:45)
 Result: 300 words of 1,022 chars answer in 48-73 ms via the real recorder (base 124-1,535 ms); 198 list rules on 1,000 `cat zK y` in 58 ms (base 430), with the limit deny/ask/allow. FLOAT_STEPS pinned. A root 0640 rules file in the user's group passes the lock check.
-Evidence: 29d8493 on ag-v5d-long-commands. AGENTS.md check: 4,541 passed, 5 skipped. Web check and stale-build check pass. New: tests/test_path_lookups.py (37), program-walk tests in tests/test_rules_meter.py and tests/test_rules_limit.py, lock tests in tests/test_install_rules.py and tests/test_doctor.py.
+Evidence: 29d8493 on ag-v5d-long-commands. AGENTS.md check: 4,541 passed, 5 skipped. Web and stale-build checks pass. New tests: tests/test_path_lookups.py (37); program-walk tests in test_rules_meter.py and test_rules_limit.py; lock tests in test_install_rules.py and test_doctor.py.
 Needs owner: none. Three behaviour changes below store less than before; I took them from the brief's own scope text.
 Details: see "## 2026-10-21 14:45" below.
 
