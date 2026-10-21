@@ -1,6 +1,6 @@
 {
  "chat": "cap",
- "note": "docs/spikes/V2c-capture.md: Cursor 3.25.9, one chat, seconds from the first event",
+ "note": "Cursor 3.25.9, one chat, seconds from the first event",
  "events": [
   {
    "at": 0,

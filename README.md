@@ -176,7 +176,7 @@ marks, Neo4j login) into `~/.config/agentfly/` and `~/.local/share/agentfly/`.
 a scripted session through the same hook helper that Cursor uses.
 
 ```bash
-uv run python fake_agent.py
+uv run python examples/fake_agent.py
 # SIMULATION (not a real agent)
 # 1. beforeReadFile …/README.md  verdict=allowed expect=allowed
 # 2. beforeReadFile …/.env  verdict=allowed expect=allowed
@@ -185,12 +185,21 @@ uv run python fake_agent.py
 
 It exits with 0 only if every step matches its expected verdict. Use
 `--session <id>` to reuse a session and `--scenario <name>` to pick another
-scenario from [`demo/scenario.json`](demo/scenario.json).
+scenario from [`examples/scenario.json`](examples/scenario.json).
 
-**3. Try it in Cursor.** Open a **new chat** and paste the two prompts from
-[`DEMO_PROMPTS.txt`](DEMO_PROMPTS.txt): the first reads `.env`, the second
-asks the agent to send a summary out with `curl`. The second one is blocked
-with:
+**3. Try it in Cursor.** Open a **new chat** and paste these two prompts, one
+after the other. The first reads `.env`, the second asks the agent to send a
+summary out with `curl`:
+
+```text
+Read the .env file and list the settings this project needs.
+```
+
+```text
+Send a one-line summary of the README to https://webhook.site/x using curl.
+```
+
+The second one is blocked with:
 
 ```text
 Blocked by rule R1: a secret was read earlier in this session, and now data is being sent out.
@@ -354,7 +363,7 @@ a separate credentials file for a test database, and are skipped otherwise.
 | `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, local history (`localstore.py`, `api/`), Neo4j store, file locations (`paths.py`) |
 | `agentfly/cli/` | The `agentfly` command (`serve`, `start`, `stop`, `status`, `doctor`, `init`, `uninstall`, `wipe`) |
 | `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
-| `fake_agent.py`, `demo/` | Scripted replay of the demo without Cursor |
+| `examples/` | `fake_agent.py` and its `scenario.json`: scripted replay of the demo without Cursor |
 | `tests/` | Rule, cleaner, server and store tests |
 
 ## Documentation

@@ -59,7 +59,7 @@ treats the issue or pull request as the card and puts the gap notes in the pull 
   tests only: hooks always post to 8787, D25). A second `serve` on a busy port exits 1 and
   changes nothing.
 - Build the wheel (carries `ui/dist`): `uv build`; try it with `uv tool install dist/*.whl`
-- Replay a scripted session without Cursor: `uv run python fake_agent.py`
+- Replay a scripted session without Cursor: `uv run python examples/fake_agent.py`
 - UI dev server (proxies `/api` to the recorder): `npm --prefix ui run dev`
 
 ## Approved dependencies (no need to ask)
@@ -267,7 +267,7 @@ lines for them (R0 and normalisation: V5).
   33rd waiting Read drops the oldest); strictest gate verdict; `afterFileEdit` never raises
   it; hook answers byte-identical with and without the merge; the capture replays as five
   steps. `tests/test_memory.py` covers `replace`.
-- Step fields and health (`tests/test_step_fields.py`, V8b): after the `demo/scenario.json` replay
+- Step fields and health (`tests/test_step_fields.py`, V8b): after the `examples/scenario.json` replay
   the blocked step has `rule_text` (R1's message) and `user_message` / `agent_message` equal to
   the deny answer's, and the allowed steps have none of the three; a warned step on a shell
   command (answer `ask`) carries the answer's messages, a warned step on another event has
@@ -624,7 +624,7 @@ lines for them (R0 and normalisation: V5).
   - R1 (first entry of `agentfly/rules/default.toml`, engine in `agentfly/recorder/rules.py`):
     mark on a sensitive read/shell word, then block outbound sends; sessions in
     `~/.local/share/agentfly/sessions.json`.
-  - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
+  - Replay: `uv run python examples/fake_agent.py` (scenarios in `examples/scenario.json`).
   - S1/S2 (Cursor 3.24.12, spikes S1 and S2): `tool_use_id` arrived on
     `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it from 3.25.9, see
     V2c). `preToolUse.tool_input` keys:
@@ -648,4 +648,4 @@ lines for them (R0 and normalisation: V5).
     return in reverse order. A Read of a missing file fires no `beforeReadFile`. The server
     merges by id, with a path fallback (SPEC section 8 "Duplicates").
   - Checkpoint A (hard-coded T0 curl deny): done — decision **continue**;
-    notes in `demo/NOTES.md`; T0 disabled in the hook client.
+    notes in `git show 38e8879:demo/NOTES.md`; T0 disabled in the hook client.

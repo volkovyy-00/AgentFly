@@ -373,7 +373,7 @@ def test_the_demo_replays_with_byte_identical_answers_from_the_wheel(
 ) -> None:
     """R1 is loaded from the default rules file inside the wheel; the answers do not change."""
     port, home = running_recorder
-    scenario = json.loads((REPO / "demo" / "scenario.json").read_text(encoding="utf-8"))
+    scenario = json.loads((REPO / "examples" / "scenario.json").read_text(encoding="utf-8"))
     sent = [
         {**{k: v for k, v in item["event"].items() if k != "content"}, "conversation_id": "wheel"}
         for item in scenario["demo"]["events"]

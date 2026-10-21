@@ -6,6 +6,7 @@ these tests write one next to the packaged default's R1 and start the app on it.
 
 from __future__ import annotations
 
+import importlib.util
 import itertools
 import json
 from collections.abc import Callable, Iterator
@@ -261,7 +262,7 @@ def test_the_answers_for_the_demo_do_not_change_with_the_file_format(
     served: Callable[..., TestClient],
 ) -> None:
     client = served()
-    scenario = json.loads((REPO / "demo/scenario.json").read_text(encoding="utf-8"))["demo"][
+    scenario = json.loads((REPO / "examples/scenario.json").read_text(encoding="utf-8"))["demo"][
         "events"
     ]
     answers = []
@@ -288,7 +289,10 @@ def test_r0_keeps_denying_when_the_file_makes_every_other_rule_gentle(
 
 
 def test_the_replay_script_reads_ask_as_warned_and_deny_as_blocked() -> None:
-    import fake_agent
+    spec = importlib.util.spec_from_file_location("fake_agent", REPO / "examples/fake_agent.py")
+    assert spec is not None and spec.loader is not None
+    fake_agent = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake_agent)
 
     assert fake_agent.permission_to_verdict({"permission": "ask"}) == "warned"
     assert fake_agent.permission_to_verdict({"permission": "deny"}) == "blocked"
