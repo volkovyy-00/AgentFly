@@ -198,18 +198,28 @@ def test_a_word_the_system_cannot_encode_is_not_a_path(word: str, workspace: Pat
     """A lone surrogate comes from JSON (`"\\ud800"`), a NUL from a quoted string: `ValueError`."""
     assert _project_relative(word, workspace) is None
     assert clean_command(f"echo '{word}'", workspace) == "echo <arg>"
-    # The history's own look at a path never raises either: a relative word is its base name.
-    assert relative_file_path(word, workspace) == Path(word).name
+    # The history's own look at a path never raises either: a relative word is its base name,
+    # stored with each lone surrogate as U+FFFD.
+    assert relative_file_path(word, workspace) == storable(Path(word).name)
+
+
+def storable(text: str) -> str:
+    """What the history stores for a path: each lone surrogate as U+FFFD (final audit A2)."""
+    return "".join("\ufffd" if "\ud800" <= c <= "\udfff" else c for c in text)
 
 
 def test_an_unencodable_absolute_path_is_saved_as_its_base_name(workspace: Path) -> None:
-    """`resolve()` fails for it and the history could not store the string-only form
-    (`x/\ud800/f`), so it is outside the root: the base name, as before the fallback."""
+    """`resolve()` fails for it (or, on macOS for U+DC80..U+DCFF, succeeds and gives a path that
+    does not encode either) and the history could not store the string-only form (`x/\ud800/f`),
+    so it is outside the root: the base name, as before the fallback."""
     assert relative_file_path(f"{workspace}/sub/../x/\ud800/f", workspace) == "f"
     assert relative_file_path(f"{workspace}/a/\ud800/b", workspace) == "b"
-    # The older case, unchanged: the last part itself holds the surrogate.
-    assert relative_file_path(f"{workspace}/x/\ud800", workspace) == "\ud800"
-    assert relative_file_path(f"{workspace}/../outside/\ud800", workspace) == "\ud800"
+    assert relative_file_path(f"{workspace}/a/\udcff/b", workspace) == "b"
+    # The last part itself holds the surrogate: stored with U+FFFD in its place.
+    assert relative_file_path(f"{workspace}/x/\ud800", workspace) == "\ufffd"
+    assert relative_file_path(f"{workspace}/x/\udcff", workspace) == "\ufffd"
+    assert relative_file_path(f"{workspace}/../outside/\ud800", workspace) == "\ufffd"
+    assert relative_file_path(f"{workspace}/x/\ud800-\udcff.txt", workspace) == "\ufffd-\ufffd.txt"
 
 
 def test_a_path_the_system_cannot_resolve_is_tidied_by_string_alone(
@@ -257,6 +267,50 @@ def test_a_read_path_with_a_surrogate_mid_path_reaches_history_and_the_page(
     response = page.get("/api/steps")
     assert response.status_code == 200
     assert [step["file"] for step in response.json()["steps"]] == ["b", "d"]
+
+
+@pytest.mark.parametrize(
+    ("part", "saved"),
+    [("a/\udcff/b", "b"), ("x/\udcff", "\ufffd"), ("x/\ud800", "\ufffd")],
+    ids=repr,
+)
+def test_a_read_path_the_history_cannot_encode_still_reaches_it_and_the_page(
+    part: str, saved: str, rec: Recorder, workspace: Path, history: None
+) -> None:
+    """Final audit A2: a successful `resolve()` (macOS keeps U+DC80..U+DCFF) or a base name holding
+    the surrogate lost the history row and made `/api/steps` answer 500."""
+    roots = [str(workspace)]
+    assert rec.read("u", f"{workspace}/{part}", workspace_roots=roots) == ALLOW
+    assert [step["file"] for step in steps_of("u")] == [saved]
+    page = TestClient(app_module.app, base_url="http://127.0.0.1:8787")  # no lifespan: memory stays
+    response = page.get("/api/steps")
+    assert response.status_code == 200
+    assert [step["file"] for step in response.json()["steps"]] == [saved]
+
+
+def test_a_long_program_word_naming_a_secret_is_not_looked_up(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Final review M2: the sensitive-word branch of the step asks the system about no word over
+    `MAX_PATH_WORD` (a 60 kB program word took 0.5 s in `resolve()`); it is saved by its base name,
+    as before."""
+    resolve = Path.resolve
+
+    def resolve_short_only(self: Path, strict: bool = False) -> Path:
+        assert len(str(self)) <= 1_024, "a long word reached resolve()"
+        return resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_short_only)
+    payload = {
+        "hook_event_name": "beforeShellExecution",
+        "command": "/" + "a" * 60_000 + "/.env --version",
+        "workspace_roots": [str(workspace)],
+    }
+    session = Session(id="s", marked=False, start_time="", next_step=1)
+    record = build_step_record(payload, session, "allow", None, order=1)
+    assert (record.file_path, record.file_sensitive) == (".env", True)
+    short = dict(payload, command="/a/.env --version")
+    assert build_step_record(short, session, "allow", None, order=1).file_path == ".env"
 
 
 # ---------------------------------------------------------------- a link that leads back to itself

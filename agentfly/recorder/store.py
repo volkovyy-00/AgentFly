@@ -293,25 +293,37 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
     return Path.cwd()
 
 
+def _encodes(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _storable(text: str) -> str:
+    """`text` as the history and the page can hold it: unchanged when it encodes as UTF-8, else
+    with each lone surrogate (the only characters that do not) as U+FFFD."""
+    if _encodes(text):
+        return text
+    return "".join("\ufffd" if "\ud800" <= char <= "\udfff" else char for char in text)
+
+
 def _resolved_or_tidied(path: Path) -> str | None:
     """The resolved path written with `/`, or, when the system cannot resolve it (a part over its
     name limit, a NUL, a lone surrogate, a link loop), the path tidied by string alone (§5).
 
-    A tidied path that does not encode as UTF-8 comes back as None, "outside": the history could
-    not store it, so the caller saves the base name, as it did before there was a fallback.
+    A path that does not encode as UTF-8 comes back as None, "outside": the history could not
+    store it, so the caller saves the base name, as it did before there was a fallback. That holds
+    for a resolved path too (macOS resolves U+DC80..U+DCFF, final audit A2).
     """
     resolved: Path | None = resolved_or_none(path)
-    if resolved is not None:
-        return resolved.as_posix()
-    tidied: str = os.path.normpath(path.as_posix())
-    try:
-        tidied.encode("utf-8")
-    except UnicodeEncodeError:
-        return None
-    return tidied
+    found: str = resolved.as_posix() if resolved is not None else os.path.normpath(path.as_posix())
+    return found if _encodes(found) else None
 
 
 def relative_file_path(file_path: str, project_root: Path) -> str:
+    """The path relative to the project, or its base name; always one the history can store."""
     raw: Path = Path(file_path)
     if raw.is_absolute():
         resolved: str | None = _resolved_or_tidied(raw)
@@ -322,7 +334,15 @@ def relative_file_path(file_path: str, project_root: Path) -> str:
         if rel is not None:
             return rel
     # Fall back to basename so shared files still MERGE (README.md, .env).
-    return raw.name
+    return _storable(raw.name)
+
+
+def _word_path(token: str, root: Path) -> str:
+    """`relative_file_path` for a word of a command. A word over `MAX_PATH_WORD` is not looked up
+    (§5, as `_is_file_in`): it is saved by its base name, as a word outside the project is."""
+    if len(token) > MAX_PATH_WORD:
+        return _storable(Path(token).name)
+    return relative_file_path(token, root)
 
 
 def _is_file_in(root: Path, token: str) -> bool:
@@ -411,11 +431,11 @@ def build_step_record(
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:
                 continue
             if is_sensitive(token):
-                file_path = relative_file_path(token, root)
+                file_path = _word_path(token, root)
                 file_sensitive = True
                 break
             if file_path is None and _is_file_in(root, token):
-                file_path = relative_file_path(token, root)
+                file_path = _word_path(token, root)
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
         tool_input: Any = payload.get("tool_input")
