@@ -13,8 +13,8 @@ are done, not what the code does today. The code is still the hackathon
 version and moves toward this document card by card. Where the two differ, this
 document wins for new work; the cards say which part of the code changes when.
 
-The hackathon version of this document is kept in
-`docs/archive/SPEC-hackathon.md`. HOOKS.md and README.md still describe the
+The hackathon version of this document is in git history:
+`git show 3871787:docs/archive/SPEC-hackathon.md`. HOOKS.md and README.md still describe the
 code as it is today.
 
 Sections 7, 8 and 11 are technical reference for the people building it; the
@@ -25,7 +25,8 @@ Two kinds of marker appear below:
 - **Pending D16** marks the one open question: memory across sessions (goal 4,
   section 12). The spikes S3 and S5 are done and their results are written into
   the sections they affect.
-- Numbers like (D5) point to the owner's decisions in `docs/DECISIONS.md`.
+- Numbers like (D5) point to the owner's decisions, kept in the maintainers'
+  private process repo; `git show 3871787:docs/DECISIONS.md` has them up to D31.
 
 ---
 

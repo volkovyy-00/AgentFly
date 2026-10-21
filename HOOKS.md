@@ -83,7 +83,7 @@ Do **not** use `uv run` in the hook path (slow cold start). `timeout` in
 
 **Before Checkpoint A / demos:** turn Cursor’s “ask before running commands”
 style prompts **OFF** (hackathon demo setup,
-`docs/archive/SPEC-hackathon.md` §8).
+`git show 3871787:docs/archive/SPEC-hackathon.md` §8).
 
 ---
 

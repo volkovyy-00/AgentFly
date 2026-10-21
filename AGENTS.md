@@ -12,7 +12,11 @@ moves toward it card by card. So:
 - Outside your card, leave the code as it is and note the gap in your report.
 - If SPEC.md and your card disagree, stop and ask. Do not silently pick one.
 
-The hackathon spec is `docs/archive/SPEC-hackathon.md` (history only).
+The hackathon spec is in git history only: `git show 3871787:docs/archive/SPEC-hackathon.md`.
+
+A "card" is one of the maintainers' work items; cards, their briefs and reports and the
+decisions (D-numbers, see SPEC.md's header) live in a private repo. An outside contributor
+treats the issue or pull request as the card and puts the gap notes in the pull request.
 
 ## Commands
 - Install deps: `uv sync`
@@ -621,7 +625,7 @@ lines for them (R0 and normalisation: V5).
     mark on a sensitive read/shell word, then block outbound sends; sessions in
     `~/.local/share/agentfly/sessions.json`.
   - Replay: `uv run python fake_agent.py` (scenarios in `demo/scenario.json`).
-  - S1/S2 (Cursor 3.24.12, `docs/spikes/`): `tool_use_id` arrived on
+  - S1/S2 (Cursor 3.24.12, spikes S1 and S2): `tool_use_id` arrived on
     `preToolUse` and `beforeShellExecution` only (`beforeReadFile` has it from 3.25.9, see
     V2c). `preToolUse.tool_input` keys:
     Shell `command`, `cwd`, `timeout`; Read `file_path`; Write `file_path`,
@@ -637,7 +641,7 @@ lines for them (R0 and normalisation: V5).
     Hooks does not list system hooks. A missing interpreter exits 127 and Cursor lets the
     action through; a missing client file exits 2 and Cursor denies everything. A
     `~/.claude/settings.json` allow did not cancel our shell deny (one trial).
-  - V2c (Cursor 3.25.9, `docs/spikes/V2c-capture.md`): `beforeShellExecution` carries the
+  - V2c (Cursor 3.25.9, spike V2c): `beforeShellExecution` carries the
     same `tool_use_id` as its `preToolUse` Shell (34 of 34) and `beforeReadFile` as its
     `preToolUse` Read (28 of 28; all read paths absolute). One id covers an edit's Read and
     Write; `afterFileEdit` has no id and fired for a create only; parallel reads' halves can
