@@ -18,6 +18,7 @@ Pending decisions: D16
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
 (dispatched 2026-10-21 from main 61e2981; owner started all four workers)
+- F9 done 2026-10-21 (4d387ae; 4516 passed): lead accepts its test_ci_workflow.py edit (criterion 3 needs it); fresh reviewer running. Plan: one trial merge and one PR (D26 B) for all four.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -31,7 +32,8 @@ Pending decisions: D16
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
+1. F9: dismiss CodeQL #5, #6, #7 in the UI (comments in docs/reports/F9.md on its branch); vite 8.3.2 advisory has no Dependabot alert (check Security → Dependabot → Closed).
+2. Create an empty private GitHub repo for D31 (any name) before the move; the move starts after all of wave 1 is merged.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
@@ -48,7 +50,7 @@ Pending decisions: D16
 - R0 gaps (V5a): `pkill python`; ruby/perl -e; relative paths after `cd`, globs, braces, variables; ~/.claude/settings.json unguarded.
 - Exact Cursor version list (3.24.12, 3.25.9): `init -g` refuses after each Cursor update until a release adds it.
 - HOOKS.md lacks `/api/sessions` (V9); Neo4j Session lacks workspace_root; no card owns SPEC §10's per-session hash check.
-- V5b leftovers (reports V5b-fix2 549cec1, re-trial): V5d: lexical in-project check before any stat (300 × 1,022-char paths 633 ms > 0.5 s wait → offline guard; `/net` automount look-up of denied words if enabled), `_command_hit` program walk uncharged (3,000 words 439 ms), FLOAT_STEPS unpinned, `lock_problems` refuses a trusted 0640 edited rules.toml. F11: CR1 sessions.py fallback-linked subagent misses a parent's later R1 mark (custom rules). V5c: A3 root 0600 edited rules.toml said kept, recorder runs the default; D30. Spurious limit deny for an inherited trigger on a heavy command (fails closed). CR4, CR8–CR10, M5, M7 listed. `_ALARMS` drops highlighted steps (page card).
+- V5b leftovers (V5b-fix2 report 549cec1): now in V5d and F11 briefs; V5c: A3 root 0600 edited rules.toml (said kept, recorder runs the default) + D30. Spurious limit deny for an inherited trigger on a heavy command (fails closed). CR4, CR8–CR10, M5, M7 listed. `_ALARMS` drops highlighted steps (page card).
 
 ## Next 3 actions
 1. Read each wave-1 report's head when the owner says it is ready; trial-merge one at a time.
