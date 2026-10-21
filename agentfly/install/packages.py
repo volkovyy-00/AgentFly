@@ -331,7 +331,8 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     changes = _changes(found, stored_from(record))
     # Every sentence holds names from a folder the user can write. `problems` and `changes` are
     # escaped here, once, for all readers (the refusal, the question, `doctor`), whichever site
-    # above built the sentence; a new sentence needs no escape of its own.
+    # above built the sentence; a new sentence in either list needs no escape of its own. A
+    # message raised outside `inspect` (`tool_environment`) escapes itself.
     return Check(
         found,
         [visible(text) for text in problems],
