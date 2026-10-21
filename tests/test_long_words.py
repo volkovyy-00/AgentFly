@@ -9,12 +9,14 @@ every such word gets the answer a short one gets, and the step still reaches the
 
 from __future__ import annotations
 
+import errno
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 import agentfly.recorder.app as app_module
 from agentfly.recorder.clean import _project_relative, clean_command
@@ -25,6 +27,7 @@ from tests.helpers import wallclock
 from tests.recorder_harness import Recorder
 
 SHORT = "x"
+ALLOW = {"permission": "allow"}
 CLIENT_WAIT = 0.5  # hooks/hook_client.py: the recorder gets this long
 
 # Name -> the quoted word. The two lengths come with and without a `/`; a part of 19 characters
@@ -199,19 +202,93 @@ def test_a_word_the_system_cannot_encode_is_not_a_path(word: str, workspace: Pat
     assert relative_file_path(word, workspace) == Path(word).name
 
 
-def test_an_unencodable_absolute_path_is_made_relative_without_the_system(
-    workspace: Path,
-) -> None:
-    """`resolve()` fails for it, so the string-only `normpath` stands in (§5)."""
-    bad = f"{workspace}/sub/../x/\ud800/f"
-    assert relative_file_path(bad, workspace) == "x/\ud800/f"
+def test_an_unencodable_absolute_path_is_saved_as_its_base_name(workspace: Path) -> None:
+    """`resolve()` fails for it and the history could not store the string-only form
+    (`x/\ud800/f`), so it is outside the root: the base name, as before the fallback."""
+    assert relative_file_path(f"{workspace}/sub/../x/\ud800/f", workspace) == "f"
+    assert relative_file_path(f"{workspace}/a/\ud800/b", workspace) == "b"
+    # The older case, unchanged: the last part itself holds the surrogate.
+    assert relative_file_path(f"{workspace}/x/\ud800", workspace) == "\ud800"
     assert relative_file_path(f"{workspace}/../outside/\ud800", workspace) == "\ud800"
+
+
+def test_a_path_the_system_cannot_resolve_is_tidied_by_string_alone(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback (§5) when the string is fine: `normpath` of the absolute path."""
+    resolve = Path.resolve
+
+    def refuse_boom(self: Path, strict: bool = False) -> Path:
+        if "boom" in self.parts:
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+        return resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", refuse_boom)
+    assert relative_file_path(f"{workspace}/sub/../boom/f.txt", workspace) == "boom/f.txt"
+    assert relative_file_path(f"{workspace}/../boom/f.txt", workspace) == "f.txt"  # outside
+    assert relative_file_path(f"{workspace}/boom", workspace) == "boom"
 
 
 def test_a_surrogate_in_the_root_does_not_raise(workspace: Path) -> None:
     root = Path("/w/\ud800")
     assert _project_relative("x", root) is None
-    assert relative_file_path("/w/\ud800/a/b", root) == "a/b"
+    # The root does not encode either, so nothing is "inside" it: the base name.
+    assert relative_file_path("/w/\ud800/a/b", root) == "b"
+
+
+def test_a_read_path_with_a_surrogate_mid_path_reaches_history_and_the_page(
+    rec: Recorder, workspace: Path, history: None
+) -> None:
+    """The saved value must be one the history can store and `/api/steps` can send."""
+    roots = [str(workspace)]
+    assert rec.read("s", f"{workspace}/a/\ud800/b", workspace_roots=roots) == ALLOW
+    assert (
+        rec.send(
+            "s",
+            "preToolUse",
+            tool_name="Write",
+            tool_input={"file_path": f"{workspace}/c/\ud800/d"},
+            workspace_roots=roots,
+        )
+        == ALLOW
+    )
+    assert [step["file"] for step in steps_of("s")] == ["b", "d"]
+    page = TestClient(app_module.app, base_url="http://127.0.0.1:8787")  # no lifespan: memory stays
+    response = page.get("/api/steps")
+    assert response.status_code == 200
+    assert [step["file"] for step in response.json()["steps"]] == ["b", "d"]
+
+
+# ---------------------------------------------------------------- a link that leads back to itself
+
+
+@pytest.fixture()
+def loop(workspace: Path) -> Path:
+    """`a -> b -> a` in the workspace: `Path.resolve()` raises `RuntimeError` for either."""
+    (workspace / "a").symlink_to("b")
+    (workspace / "b").symlink_to("a")
+    return workspace
+
+
+def test_a_link_loop_is_not_a_path_and_is_saved_by_name(loop: Path) -> None:
+    assert _project_relative("a", loop) is None
+    assert clean_command("cat a", loop) == "cat <arg>"
+    assert relative_file_path(str(loop / "a"), loop) == "a"
+    assert relative_file_path(str(loop / "sub" / ".." / "b"), loop) == "b"
+
+
+def test_a_link_loop_in_a_shell_word_a_read_and_a_write_gets_a_normal_answer(
+    rec: Recorder, loop: Path, history: None
+) -> None:
+    roots = [str(loop)]
+    assert rec.run("l", "cat a", workspace_roots=roots) == ALLOW
+    assert rec.read("l", str(loop / "a"), workspace_roots=roots) == ALLOW
+    write = {"tool_name": "Write", "tool_input": {"file_path": str(loop / "a")}}
+    assert rec.send("l", "preToolUse", workspace_roots=roots, **write) == ALLOW
+    shell, read, wrote = steps_of("l")
+    assert (shell["kind"], shell["command"]) == ("shell", "cat <arg>")
+    assert (read["kind"], read["file"]) == ("read", "a")
+    assert (wrote["kind"], wrote["file"]) == ("edit", "a")
 
 
 def test_a_step_with_a_long_word_builds_whatever_the_system_says(workspace: Path) -> None:

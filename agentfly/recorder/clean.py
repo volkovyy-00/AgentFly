@@ -293,10 +293,11 @@ def _host_looks_encoded(host: str) -> bool:
 
 def _resolved(path: Path) -> Path | None:
     """`path.resolve()`, or None when the system cannot say: a part over its name limit, a lone
-    surrogate or a NUL (`OSError`, `ValueError`)."""
+    surrogate or a NUL (`OSError`, `ValueError`), a link that leads back to itself
+    (`RuntimeError`)."""
     try:
         return path.resolve()
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return None
 
 

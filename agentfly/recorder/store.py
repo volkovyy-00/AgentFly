@@ -287,21 +287,32 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
     return Path.cwd()
 
 
-def _resolved_or_tidied(path: Path) -> str:
+def _resolved_or_tidied(path: Path) -> str | None:
     """The resolved path written with `/`, or, when the system cannot resolve it (a part over its
-    name limit, a lone surrogate), the path tidied by string alone (V5b-fix2 §5)."""
+    name limit, a NUL, a lone surrogate, a link loop), the path tidied by string alone (§5).
+
+    A tidied path that does not encode as UTF-8 comes back as None, "outside": the history could
+    not store it, so the caller saves the base name, as it did before there was a fallback.
+    """
     try:
         return path.resolve().as_posix()
-    except (OSError, ValueError):
-        return os.path.normpath(path.as_posix())
+    except (OSError, ValueError, RuntimeError):
+        tidied: str = os.path.normpath(path.as_posix())
+    try:
+        tidied.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return tidied
 
 
 def relative_file_path(file_path: str, project_root: Path) -> str:
     raw: Path = Path(file_path)
     if raw.is_absolute():
-        rel: str | None = contained_relative(
-            _resolved_or_tidied(raw), _resolved_or_tidied(project_root)
-        )
+        resolved: str | None = _resolved_or_tidied(raw)
+        root: str | None = _resolved_or_tidied(project_root)
+        rel: str | None = None
+        if resolved is not None and root is not None:
+            rel = contained_relative(resolved, root)
         if rel is not None:
             return rel
     # Fall back to basename so shared files still MERGE (README.md, .env).
