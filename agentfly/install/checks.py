@@ -145,9 +145,12 @@ def check_record(ctx: Context) -> Finding:
     record = records.read(ctx.layout)
     if record is None:
         return fail(f"no readable hash record at {ctx.layout.record}; run `agentfly init -g`")
+    # The versions come from a file: `visible` keeps a control character off the terminal.
     return ok(
-        f"hash record present (AgentFly {record.get('agentfly_version')}, "
-        f"Cursor {record.get('cursor_version')})"
+        packages.visible(
+            f"hash record present (AgentFly {record.get('agentfly_version')}, "
+            f"Cursor {record.get('cursor_version')})"
+        )
     )
 
 

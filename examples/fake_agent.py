@@ -2,15 +2,15 @@
 """Replay scripted Cursor hook events through agentfly/hook_client.py (no model calls).
 
 Usage:
-  uv run python fake_agent.py
-  uv run python fake_agent.py --scenario demo --session my-session-id
-  uv run python fake_agent.py --scenario clean_sample
+  uv run python examples/fake_agent.py
+  uv run python examples/fake_agent.py --scenario demo --session my-session-id
+  uv run python examples/fake_agent.py --scenario clean_sample
 
 Requires the recorder on 127.0.0.1:8787 for blocked steps to succeed.
 When the recorder is down, prints WARNING: recorder unreachable to stderr
 and exits non-zero if any expect does not match.
 
-Scenario file: demo/scenario.json
+Scenario file: examples/scenario.json
   {
     "<name>": {
       "description": "...",
@@ -42,8 +42,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-_ROOT: Path = Path(__file__).resolve().parent
-_SCENARIO_PATH: Path = _ROOT / "demo" / "scenario.json"
+_ROOT: Path = Path(__file__).resolve().parent.parent
+_SCENARIO_PATH: Path = _ROOT / "examples" / "scenario.json"
 _HOOK_SCRIPT: Path = _ROOT / "agentfly" / "hook_client.py"
 _FAKE_SECRET: str = "FAKESECRET_drop_me_XYZ"
 
@@ -120,12 +120,12 @@ def assert_no_secret(*chunks: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Replay demo/scenario.json through agentfly/hook_client.py (simulation)."
+        description="Replay examples/scenario.json through agentfly/hook_client.py (simulation)."
     )
     parser.add_argument(
         "--scenario",
         default="demo",
-        help="Scenario name in demo/scenario.json (default: demo)",
+        help="Scenario name in examples/scenario.json (default: demo)",
     )
     parser.add_argument(
         "--session",

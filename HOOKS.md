@@ -13,7 +13,7 @@ Cursor spawns a short-lived process per action (JSON on stdin → JSON on stdout
 Logic does **not** live under `.cursor/`.
 
 ```
-Cursor agent  (or fake_agent.py)
+Cursor agent  (or examples/fake_agent.py)
     → python3 hooks/hook.py   (thin shim for agentfly/hook_client.py)
         → strip content, POST http://127.0.0.1:8787/hook
            (header X-Recorder-Token from ~/.config/agentfly/token)
@@ -37,7 +37,7 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Neo4j | `agentfly/recorder/store.py` | Background MERGE writer; `--counts` / `--clear` |
 | Creds | `agentfly/recorder/config_env.py` | Hand-parse `~/.config/agentfly/neo4j.env` |
 | Check DB | `agentfly/recorder/check_db.py` | `verify_connectivity` → `connected` |
-| Replay | `fake_agent.py` + `demo/scenario.json` | Pipe events through the helper (no Cursor) |
+| Replay | `examples/fake_agent.py` + `examples/scenario.json` | Pipe events through the helper (no Cursor) |
 | Compat shim | `recorder/` folder at the repo top | A one-file forwarder for a stale `hooks.json`; it delegates to the shim above |
 | Install | `./install.sh` | Writes `hooks.json`, ensures script is executable |
 | Log | `~/.local/share/agentfly/logs/events.jsonl` | Hook log (folder 700, file 600); no commands, no file text |
@@ -54,7 +54,7 @@ Keep the compat shim so an outdated `hooks.json` that still names the old forwar
 does not exit 2.
 
 Project layout: `agentfly/` (hook client, recorder, CLI), `hooks/`, `ui/`, `tests/`,
-`demo/`.
+`examples/`.
 
 ---
 
@@ -129,7 +129,7 @@ exit 0 and a warning on stderr.
    allows everything else and logs the call with `offline: true`.
 
 Checkpoint A's temporary test rule T0 (a hard-coded `curl` deny) was removed from the hook
-client after the decision in `demo/NOTES.md`.
+client after that decision (`git show 38e8879:demo/NOTES.md`).
 
 ---
 
@@ -173,21 +173,21 @@ uv run agentfly serve              # or: AGENTFLY_PORT=N uv run agentfly serve (
 
 ---
 
-## Replay without Cursor (`fake_agent.py`)
+## Replay without Cursor (`examples/fake_agent.py`)
 
-Pipes events from `demo/scenario.json` into `agentfly/hook_client.py` the same way Cursor
+Pipes events from `examples/scenario.json` into `agentfly/hook_client.py` the same way Cursor
 would. First stdout line is `SIMULATION (not a real agent)`.
 
 ```bash
 uv run agentfly serve   # separate terminal
-uv run python fake_agent.py
-uv run python fake_agent.py --scenario demo --session my-id
-uv run python fake_agent.py --scenario clean_sample
+uv run python examples/fake_agent.py
+uv run python examples/fake_agent.py --scenario demo --session my-id
+uv run python examples/fake_agent.py --scenario clean_sample
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--scenario` | `demo` | Key in `demo/scenario.json` |
+| `--scenario` | `demo` | Key in `examples/scenario.json` |
 | `--session` | new uuid | Sets `conversation_id` / `session_id` on every event |
 
 **`demo` scenario:** read README (allowed) → read `.env` with fake `content`
@@ -195,13 +195,13 @@ uv run python fake_agent.py --scenario clean_sample
 Exit 0 only if every step matches its `expect`.
 
 **Server down:** the offline guard answers (a `curl` is denied), so the last step may still
-match; `fake_agent.py` prints `WARNING: recorder unreachable` on stderr and exits non-zero.
+match; `examples/fake_agent.py` prints `WARNING: recorder unreachable` on stderr and exits non-zero.
 
 **`clean_sample`:** holds the cleaning fixture command
 `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1` (expect allowed;
 used later for command-cleaning tests).
 
-Format details: module docstring of `fake_agent.py`.
+Format details: module docstring of `examples/fake_agent.py`.
 
 ---
 
@@ -324,7 +324,7 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
   `limit`, also `hidden` (all zeros), `flagged: []` and `marked_order: null`. Memory clears
   on server restart (lifespan).
 - Wrong Host → 403. No Cypher from the page.
-- Demo: `uv run agentfly serve` → `uv run python fake_agent.py` → open
+- Demo: `uv run agentfly serve` → `uv run python examples/fake_agent.py` → open
   `http://127.0.0.1:8787/` (the trail) or `http://127.0.0.1:8787/?view=graph`
   (the lane graph) — expect the `.env` read marked and the blocked step → R1.
 - UI-only rehearsal without an agent: `/?mock=1` for the trail, `/?view=graph&mock=1` for the graph (needs the recorder or `npm --prefix ui run dev`).
@@ -338,11 +338,11 @@ After each `/hook` answer, a cleaned `StepRecord` is enqueued to Neo4j
 | Checkpoint | Status |
 |---|---|
 | Hooks fire + log + allow | **Done** |
-| Hard-coded deny stops a command | **Done** — decision **continue** (`demo/NOTES.md`) |
+| Hard-coded deny stops a command | **Done** — decision **continue** (`git show 38e8879:demo/NOTES.md`) |
 | Server + token gates (always allow) | **Done** |
 | R1 secret-then-network | **Done** |
-| Replay script `fake_agent.py` | **Done** |
-| Checkpoint B (live R1 deny) | **Done** — decision **continue** (`demo/NOTES.md`) |
+| Replay script `examples/fake_agent.py` | **Done** |
+| Checkpoint B (live R1 deny) | **Done** — decision **continue** (`git show 38e8879:demo/NOTES.md`) |
 | Command cleaning (`agentfly/recorder/clean.py`) | **Done** (toggle `CLEAN_COMMANDS`, default on) |
 | Neo4j background store | **Done** (`neo4j+ssc://` on this host; `check_db` connected) |
 | Page (trail at `/`, lane graph at `/?view=graph`) + `/api/steps` | **Done** (memory; Host only) |

@@ -34,7 +34,7 @@ _S5_VALID: frozenset[str] = frozenset(
 KNOWN_VERSIONS: dict[str, frozenset[str]] = {
     "3.24.12": _S5_VALID,  # verified by spike S5
     # V3a manual check (2026-10-18): Cursor logged "Loaded 8 enterprise hook(s)" for all eight
-    # events and ran them on real actions. docs/reports/V3a.md has the log lines.
+    # events and ran them on real actions.
     "3.25.9": _S5_VALID,
 }
 

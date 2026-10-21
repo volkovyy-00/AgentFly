@@ -19,7 +19,7 @@ from agentfly.recorder.localstore import StoreUnavailable, local_store
 from agentfly.recorder.paths import config_dir
 from tests.helpers import REPO, free_port, start_recorder, stop_recorder, wait_for_health
 
-SCENARIO = json.loads((REPO / "demo" / "scenario.json").read_text(encoding="utf-8"))
+SCENARIO = json.loads((REPO / "examples" / "scenario.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture

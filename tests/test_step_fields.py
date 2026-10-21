@@ -25,9 +25,10 @@ from tests.test_step_merge import edited, event, live, post, pre, shell
 
 FIELDS: frozenset[str] = frozenset({"rule_text", "user_message", "agent_message"})
 RETRY: str = " Do not retry with another tool or language. Stop and tell the user."
-# The events `fake_agent.py` sends, as the hook client passes them on (no `content`). The recorder
-# resolves the workspace path, and macOS's autofs `/home` makes that ~90 ms an event: use /w.
-_SCENARIO: str = (REPO / "demo" / "scenario.json").read_text(encoding="utf-8")
+# The events `examples/fake_agent.py` sends, as the hook client passes them on (no `content`). The
+# recorder resolves the workspace path, and macOS's autofs `/home` makes that ~90 ms an event:
+# use /w.
+_SCENARIO: str = (REPO / "examples" / "scenario.json").read_text(encoding="utf-8")
 DEMO: list[dict[str, Any]] = [
     {k: v for k, v in item["event"].items() if k != "content"}
     for item in json.loads(_SCENARIO.replace("/home/crimson/dev/AgentFly", "/w"))["demo"]["events"]

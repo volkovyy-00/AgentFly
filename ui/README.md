@@ -69,7 +69,7 @@ or its place in the list. Text is at least 16 px at full width; the one exceptio
 Flow's own attribution link, kept on purpose. Tests use a jsdom setup that
 measures nodes like a browser (`src/test-setup.ts`); it cannot check layout,
 so after a UI change also open `/?mock=1` and `/?view=graph&mock=1` and a real
-`fake_agent.py` run in a browser.
+`examples/fake_agent.py` run in a browser.
 
 The 16 px text test (`src/textSize.test.ts`) and the colour test read sources with
 Vite's `?raw` import, which Vitest returns empty for CSS files, so `src/trail/trail.css`

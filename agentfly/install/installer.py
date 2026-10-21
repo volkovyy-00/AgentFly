@@ -129,7 +129,10 @@ def _packaged_default(current: packages.Check) -> bytes:
     try:
         data = rulefile.default_path().read_bytes()
     except OSError as exc:
-        raise InstallError(f"cannot read the packaged default rules ({exc})") from exc
+        # The error's text names the path, which may hold control characters (packages.visible).
+        raise InstallError(
+            f"cannot read the packaged default rules ({packages.visible(str(exc))})"
+        ) from exc
     if rulefile.sha256_of(data) != wanted:
         raise InstallError(
             "the packaged default rules are not the file that was checked a moment ago; nothing "

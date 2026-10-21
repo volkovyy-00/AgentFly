@@ -818,6 +818,41 @@ def test_a_damaged_packaged_default_stops_init_before_the_password(
     assert "ask for your password" not in captured.out and sudo.calls == []
 
 
+class RawTextDefault:
+    """A default that cannot be read, with raw characters in the error's text.
+
+    Python writes the file name of a failed `open` with `repr`, so a real path holding control
+    characters is escaped already; an error whose text names the path another way is not.
+    """
+
+    def read_bytes(self) -> bytes:
+        raise OSError(f"cannot open gone{BAD}.toml")
+
+
+@pytest.mark.parametrize(
+    "raw_text", [False, True], ids=["path holds them", "error text holds them"]
+)
+def test_a_packaged_default_that_cannot_be_read_is_named_with_control_characters_escaped(
+    raw_text: bool,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    system.rules.unlink()  # `init -g` would write the packaged default again
+    unreadable = RawTextDefault() if raw_text else tmp_path / f"gone{BAD}.toml"
+    monkeypatch.setattr(rulefile, "default_path", lambda: unreadable)
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    assert main(["init", "-g"]) == 1
+    captured = capsys.readouterr()
+    assert_plain(captured.err)
+    assert "cannot read the packaged default rules (" in captured.err
+    assert f"gone{SHOWN}.toml" in captured.err
+    assert "ask for your password" not in captured.out and sudo.calls == []
+
+
 def test_a_damaged_packaged_default_does_not_stop_init_when_no_default_is_to_be_written(
     system: Layout,
     installed: pythons.PythonBuild,

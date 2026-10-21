@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import runpy
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -261,7 +262,7 @@ def test_the_answers_for_the_demo_do_not_change_with_the_file_format(
     served: Callable[..., TestClient],
 ) -> None:
     client = served()
-    scenario = json.loads((REPO / "demo/scenario.json").read_text(encoding="utf-8"))["demo"][
+    scenario = json.loads((REPO / "examples/scenario.json").read_text(encoding="utf-8"))["demo"][
         "events"
     ]
     answers = []
@@ -288,9 +289,9 @@ def test_r0_keeps_denying_when_the_file_makes_every_other_rule_gentle(
 
 
 def test_the_replay_script_reads_ask_as_warned_and_deny_as_blocked() -> None:
-    import fake_agent
+    verdict = runpy.run_path(str(REPO / "examples/fake_agent.py"))["permission_to_verdict"]
 
-    assert fake_agent.permission_to_verdict({"permission": "ask"}) == "warned"
-    assert fake_agent.permission_to_verdict({"permission": "deny"}) == "blocked"
-    assert fake_agent.permission_to_verdict({"permission": "allow"}) == "allowed"
-    assert fake_agent.permission_to_verdict({"verdict": "warned"}) == "allowed"
+    assert verdict({"permission": "ask"}) == "warned"
+    assert verdict({"permission": "deny"}) == "blocked"
+    assert verdict({"permission": "allow"}) == "allowed"
+    assert verdict({"verdict": "warned"}) == "allowed"

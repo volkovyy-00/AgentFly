@@ -552,7 +552,7 @@ def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
 
 @wallclock
 def test_latency_with_the_recorder_up(client: Path, isolated_home: Path) -> None:
-    """Spot check only. The 50 ms target is measured and reported in docs/reports/V2b.md."""
+    """Spot check only: the median of 40 hooks is under 150 ms. V2b measured p95 69 ms."""
     port = free_port()
     process = start_recorder(isolated_home, port)
     try:
