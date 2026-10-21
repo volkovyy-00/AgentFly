@@ -18,7 +18,7 @@ Pending decisions: D16
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
 (dispatched 2026-10-21 from main 61e2981; owner started all four workers)
-- F9 done 2026-10-21 (4d387ae; 4516 passed): lead accepts its test_ci_workflow.py edit (criterion 3 needs it); fresh reviewer running. Plan: one trial merge and one PR (D26 B) for all four.
+- F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits). YAML-reader quirks → F8 brief. One trial merge + one PR (D26 B) for all four.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
