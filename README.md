@@ -81,8 +81,8 @@ record there, and adds AgentFly's hooks to Cursor's system-wide
 they are, and a timestamped backup of the old file is kept beside it, in
 `/Library/Application Support/Cursor/agentfly-backups/` (every rewrite of that file takes one
 first, and `uninstall` leaves them). It writes nothing and exits with an error if the
-installed Cursor is older than the newest version AgentFly has verified (3.25.9) or lies between
-two verified ones, if its version is not a plain dotted number or its `Info.plist` is not an XML
+installed Cursor is not one of the verified versions (3.24.12 and 3.25.9) and is not newer than
+the newest of them, if its version is not a plain dotted number or its `Info.plist` is not an XML
 file, if a hook event is not one that version accepts, or if the download fails its checksum. A
 Cursor newer than the newest verified one gets that version's events and one warning: if Cursor
 dropped one of them it would ignore the whole hooks file, so after any Cursor update quit and
@@ -137,7 +137,7 @@ with `KeepAlive` (and, for Homebrew, that no LaunchAgent of AgentFly's is loaded
 `agentfly` on your `PATH` is this install's (not another venv's), and that Cursor's Hooks log says it
 loaded the hooks (so it fails until you restart Cursor after `init -g`). For a Cursor newer than
 the newest verified version, the `events` line warns "unchecked Cursor version". For any Cursor
-version that is not on the verified list (a newer one, an older one, or one it cannot read) that
+version that is not on the verified list (a newer one, any other, or one it cannot read) that
 log is the only sign that the hooks run, so `doctor` also fails when the log cannot confirm it: no
 log yet, no Hooks log, no line about the system hooks, or more than 64 Hooks logs. On a verified
 version those cases are warnings. It warns when `~/.claude/settings.json` has hooks on an event

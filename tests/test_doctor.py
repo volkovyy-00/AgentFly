@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -704,6 +705,11 @@ def test_a_folder_that_only_looks_like_a_start_time_is_not_the_newest(
     assert world.results()["hooks-log"].text == f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})"
 
 
+def test_a_plain_file_named_like_a_start_time_is_not_a_start_folder(world: World) -> None:
+    (world.log.parents[3] / "20271231T000000").write_text("not a folder\n")
+    assert world.results()["hooks-log"].text == f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})"
+
+
 def test_one_window_that_failed_is_enough_to_fail(world: World) -> None:
     second = world.log.parents[2] / "window2_wb1/output_z"
     second.mkdir(parents=True)
@@ -759,9 +765,11 @@ def read_hooks_log(
     return {check.id: check for check in checks.run_all(context)}
 
 
+@pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
 def test_on_a_listed_version_the_hooks_log_and_events_lines_have_the_texts_of_e6e6894(
-    world: World,
+    world: World, version: str
 ) -> None:
+    write_version(world.layout, version)
     context = world.context()
     results = read_hooks_log(world, context)
     assert (results["hooks-log"].level, results["hooks-log"].text) == (
@@ -770,7 +778,7 @@ def test_on_a_listed_version_the_hooks_log_and_events_lines_have_the_texts_of_e6
     )
     assert (results["events"].level, results["events"].text) == (
         "ok",
-        "every registered event is accepted by Cursor 3.24.12",
+        f"every registered event is accepted by Cursor {version}",
     )
     for case, (setup, text) in SAYS_NOTHING.items():
         results = read_hooks_log(world, context, setup)
@@ -846,6 +854,50 @@ def test_at_most_64_logs_are_read_and_none_beyond(
         assert len(read) == (count if count <= 64 else 0), count  # counted reads, not seconds
         expected = "ok" if count <= 64 else ("warn" if version == "listed" else "fail")
         assert results["hooks-log"].level == expected, count
+
+
+def test_each_log_is_reduced_to_a_verdict_before_the_next_is_read(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status can hold a whole 4 MiB line (a `Loaded` line with a million steps): 64 of them
+    kept at once were gigabytes. At most the one being read, and the one before it, may be alive."""
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log is read
+    make_logs(world, 12)
+    seen: list[weakref.ref[hookslog.LogStatus]] = []
+    most_alive = 0
+    real = hookslog.status_of
+
+    def watching(text: str) -> hookslog.LogStatus | None:
+        nonlocal most_alive
+        status = real(text)
+        assert status is not None
+        seen.append(weakref.ref(status))
+        most_alive = max(most_alive, sum(ref() is not None for ref in seen))
+        return status
+
+    monkeypatch.setattr(hookslog, "status_of", watching)
+    assert checks.check_hooks_log(world.context()).level == "ok"
+    assert len(seen) == 12 and most_alive <= 2
+
+
+def test_a_link_to_a_window_folder_is_not_another_window(world: World) -> None:
+    """N links to one folder of M entries must not cost N times M, nor count as N sets of logs."""
+    window = world.log.parents[1]
+    for number in range(70):  # more than MAX_LOGS: followed, they would be 71 logs
+        (window.parent / f"window_link{number}").symlink_to(window)
+    (window / "output_link").symlink_to(world.log.parent)
+    logs = hookslog.latest(world.home)
+    assert logs.files == (world.log,) and not logs.too_many
+
+
+@pytest.mark.parametrize("version", ["3.26\n13", "3.26\u202e13", ESCAPE_VERSION, "9" * 5000])
+def test_the_version_in_the_hooks_log_line_is_shown_cut_and_escaped(
+    world: World, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    shutil.rmtree(world.log.parents[3])  # no logs: the line that names the version
+    check = checks.check_hooks_log(replace(world.context(), cursor_version=version))
+    assert check.level == "fail" and check.text.isprintable() and len(check.text) < 400
 
 
 # ---- files the agent's user can plant among Cursor's logs: skipped, never waited on or read
@@ -1014,7 +1066,7 @@ def test_error_sources_equal_the_old_regexes_on_generated_lines() -> None:
         assert hookslog._error_source(line) == old, repr(line)
 
 
-HOSTILE_LINES = {  # each is 200 KB; the regexes this replaced took minutes on every one
+HOSTILE_LINES = {  # each is 200 KB; the patterns this replaced took minutes on six of them
     "Loaded, then blanks": "Loaded 1 enterprise hook(s) for steps: " + " " * 200_000 + "x",
     "Invalid, then blanks": "Invalid" + " " * 200_000 + "x",
     "Failed to parse, then blanks": "Failed to parse " + " " * 200_000 + "x",

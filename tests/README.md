@@ -362,10 +362,13 @@ lines for them (R0 and normalisation: V5).
   is matched in a child process with a kill timeout; the old patterns took minutes), and read
   within bounds: at most 64 logs and none beyond (the reads are counted), only plain files (a pipe,
   a link to a pipe, a link to `/dev/zero` and a folder are skipped; the hang tests bound only the
-  call that could hang), at most the last 4 MiB of each. On a Cursor version that is not on the
-  list (newer, refused, a binary plist, an unreadable one) a log that says nothing fails with the
-  advice, a log that rejects the hooks fails, and one that loaded them is ok; on a listed version
-  the texts are those of e6e6894 and "nothing" is a warning. The `rules` line warns on a missing rules file and on an
+  call that could hang), at most the last 4 MiB of each, each reduced to a verdict before the next
+  is read (a `Loaded` line can hold a million steps), and the folders walked without following
+  links (70 links to one window are one window). A line of the log and the Cursor version are
+  shown cut and escaped. On a Cursor version that is not on the list (newer, refused, an
+  unreadable one) a log that says nothing fails with the advice, a log that rejects the hooks
+  fails, and one that loaded them is ok; on a listed version (both of them) the texts are those of
+  e6e6894 and "nothing" is a warning. The `rules` line warns on a missing rules file and on an
   unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
   link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
   rejected the file (the default is in force), asks for a restart after a fix, and never fails

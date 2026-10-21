@@ -12,16 +12,18 @@ about the system file in a file is its current state.
 The agent's user can write that folder, so what is read from it is bounded by counts: at most
 MAX_LOGS logs (none when there are more), each only if it is a plain file once opened without
 blocking, at most _TAIL_BYTES from its end, and every line is matched in time linear in its length.
-Listing the start folders is linear in their entries.
+The folders are walked without following links, so listing them is linear in their entries.
 """
 
 from __future__ import annotations
 
 import errno
+import fnmatch
 import itertools
 import os
 import re
 import stat
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,7 +38,7 @@ _OTHER_SOURCES: tuple[str, ...] = ("user", "project", "workspace", "claude", "pl
 _START_FOLDER = re.compile(r"[0-9]{8}T[0-9]{6}")  # fullmatch: `$` would take a trailing newline
 _TAIL_BYTES = 4 << 20  # a long-running Cursor writes a lot; the last lines say how it stands
 MAX_LOGS = 64  # a real start folder holds at most 4, one per window
-_LOG_PATTERN = "window*/output_*/cursor.hooks.*.log"
+_LOG_NAME = "cursor.hooks.*.log"  # in `<start folder>/window*/output_*/`
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,31 @@ def read_tail(path: Path) -> str:
     return tail.decode("utf-8", errors="replace")
 
 
+def _subfolders(parent: Path, prefix: str) -> Iterator[Path]:
+    """The folders in `parent` whose names start with `prefix`. A link is not followed: N links to
+    one folder of M entries would make a walk cost N times M (`Path.glob` follows them)."""
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False):
+                    yield Path(entry.path)
+    except OSError:
+        return
+
+
+def _hooks_logs(start_folder: Path) -> Iterator[Path]:
+    """`<start folder>/window*/output_*/cursor.hooks.*.log`: names only, nothing is opened."""
+    for window in _subfolders(start_folder, "window"):
+        for output in _subfolders(window, "output_"):
+            try:
+                with os.scandir(output) as entries:
+                    for entry in entries:
+                        if fnmatch.fnmatchcase(entry.name, _LOG_NAME):
+                            yield Path(entry.path)
+            except OSError:
+                continue
+
+
 def latest(home: Path) -> Logs:
     """The newest Cursor start folder and its Hooks logs: none of them when there are too many."""
     root = home / "Library" / "Application Support" / "Cursor" / "logs"
@@ -128,7 +155,7 @@ def latest(home: Path) -> Logs:
         newest = None
     if newest is None:
         return Logs(None)
-    found = list(itertools.islice(newest.glob(_LOG_PATTERN), MAX_LOGS + 1))
+    found = list(itertools.islice(_hooks_logs(newest), MAX_LOGS + 1))
     if len(found) > MAX_LOGS:
         return Logs(newest, too_many=True)
     return Logs(newest, tuple(sorted(found)))

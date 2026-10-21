@@ -471,18 +471,19 @@ def check_hooks_log(ctx: Context) -> Finding:
     if not logs.files:
         return _unconfirmed(ctx, f"Cursor's newest log folder {name} has no Hooks log yet")
     ours = {entry.event for entry in installer.desired_entries(ctx.layout)}
-    statuses: list[hookslog.LogStatus] = []
+    answered = False  # some log has a line about the system hooks
+    problem: str | None = None  # why the first log that refused them did
     for path in logs.files:
         try:
             status = hookslog.status_of(hookslog.read_tail(path))
         except OSError:  # a pipe, a device or a folder among them is skipped, never waited on
             continue
-        if status is not None:
-            statuses.append(status)
-    problems = [problem for status in statuses if (problem := _log_problem(status, ours))]
-    if problems:
-        return fail(f"Cursor did not load AgentFly's hooks ({problems[0]}); quit and reopen Cursor")
-    if statuses:
+        if status is not None:  # kept as a short verdict: a status can hold a whole 4 MiB line
+            answered = True
+            problem = problem or _log_problem(status, ours)
+    if problem:
+        return fail(f"Cursor did not load AgentFly's hooks ({problem}); quit and reopen Cursor")
+    if answered:
         return ok(f"Cursor loaded AgentFly's {len(ours)} hooks ({name})")
     return _unconfirmed(ctx, f"no line about the system hooks in Cursor's Hooks log ({name})")
 

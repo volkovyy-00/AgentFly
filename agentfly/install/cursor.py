@@ -100,10 +100,8 @@ def installed_version(app: Path) -> str:
         version = info["CFBundleShortVersionString"]
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Refused) else type(exc).__name__
-        raise InstallError(
-            f"cannot read the Cursor version from {plist} ({reason}); "
-            "is Cursor installed in /Applications?"
-        ) from exc
+        hint = "" if isinstance(exc, _Refused) else "; is Cursor installed in /Applications?"
+        raise InstallError(f"cannot read the Cursor version from {plist} ({reason}){hint}") from exc
     if not isinstance(version, str):
         raise InstallError(f"{plist} has no Cursor version string")
     return version

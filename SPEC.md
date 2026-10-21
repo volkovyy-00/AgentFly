@@ -661,8 +661,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   only if it is a plain file and at most its last 4 MiB: the agent's user can write
   that folder. When Cursor's version is on the verified list, a log that says
   nothing (no logs, no Hooks log, no line about the system file, more than 64 logs)
-  is a warning. When it is not on the list (newer, older, or one `doctor` cannot
-  read, which the agent can bring about), that log is the only sign that the hooks
+  is a warning. When it is not on the list (a newer version, any other, or one
+  `doctor` cannot read, which the agent can bring about), that log is the only sign that the hooks
   run, so each of those cases fails, and the line says to quit and reopen Cursor,
   then run `agentfly doctor` (D32; decided by the owner, 2026-10-21). A "Loaded"
   line is believed: the same people can write a forged one, and no check here can
@@ -720,14 +720,15 @@ version as of the install or repair that wrote it. A version that is not newer
 and not listed is still refused, and so is anything that is not dotted numbers of
 at most 32 characters. The version is read from Cursor.app's `Info.plist`, which
 the agent can rewrite, and is only ever compared: only an XML plist that is a plain
-file of at most 1 MiB is parsed, so a binary plist (plistlib's binary reader copies
-an object once for each object number that points at it, hundreds of megabytes
-from under 1 MiB), a named pipe, a folder or a larger file is refused unread, and
-so is a malformed one. The risk is accepted: if that Cursor dropped one of the
+file of at most 1 MiB is parsed. A binary plist is refused unparsed (plistlib's
+binary reader copies an object once for each object number that points at it,
+hundreds of megabytes from under 1 MiB), a named pipe, a folder or a larger file
+is refused unread, and a malformed one is refused when it fails to parse. The
+risk is accepted: if that Cursor dropped one of the
 events, it would ignore the whole hooks file (S5), and protection would be off
 with no sign inside Cursor. So `doctor` fails when Cursor's Hooks log shows
 AgentFly's hooks rejected or not loaded and, for any version that is not on the
-list (newer, older or unreadable), also when the log cannot confirm that they
+list (newer, any other, or unreadable), also when the log cannot confirm that they
 loaded (section 7; the owner, 2026-10-21). `init -g` and `doctor` both say: after
 any Cursor update, quit and reopen Cursor, then run `agentfly doctor`. A release
 adds a version to the list once it is checked.

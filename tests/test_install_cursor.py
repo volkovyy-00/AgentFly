@@ -254,6 +254,8 @@ def test_cursors_real_header_with_a_doctype_gives_its_version(tmp_path: Path) ->
     assert cursor.installed_version(layout.cursor_app) == NEWER
     write_plist(layout, b"\xef\xbb\xbf" + body)  # a UTF-8 byte-order mark is fine too
     assert cursor.installed_version(layout.cursor_app) == NEWER
+    write_plist(layout, body[body.index(b"<plist") :])  # and so is a file with no declaration
+    assert cursor.installed_version(layout.cursor_app) == NEWER
 
 
 def peak_mib(call: Callable[[], object]) -> tuple[object, float]:
