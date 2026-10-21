@@ -138,7 +138,8 @@ class SessionStore:
         self._saved_seq: int = 0  # the `_strict_seq` the last successful write covered
         self._asked_seq: int = 0  # the `_strict_seq` a `commit` has already waited for
         self._lazy_dirty: bool = False  # something that may wait is not on disk
-        self._links_dirty: bool = False  # links.json needs writing
+        self._links_seq: int = 0  # last change to calls / pending
+        self._links_saved: int = 0  # the `_links_seq` the last links.json write covered
         self._floors: dict[str, int] = {}  # chat id -> first order number history has not used
         self._wake: threading.Event = threading.Event()
         self._stop: threading.Event = threading.Event()
@@ -259,7 +260,7 @@ class SessionStore:
 
     def _links_touched(self) -> None:
         """calls / pending changed on a hook: links.json is owed before the answer."""
-        self._links_dirty = True
+        self._links_seq += 1
         self._strict_seq += 1
 
     def _wake_writer(self) -> None:
@@ -289,21 +290,21 @@ class SessionStore:
 
     def _write_locked(self) -> None:
         """The only code that writes. Needs `_lock`. Writes nothing when nothing is owed."""
-        links: bool = self._links_dirty
+        links_seq: int = self._links_seq
         seq: int = self._strict_seq
+        links: bool = links_seq > self._links_saved
         if not (links or self._lazy_dirty or seq > self._saved_seq):
             return
-        self._links_dirty = self._lazy_dirty = False  # before the copy: a later change sets them
+        self._lazy_dirty = False  # before the copy: a later change sets it again
         try:
             if links:
                 self.save_links()
             self.save()
         except BaseException:
-            self._links_dirty |= links
             self._lazy_dirty = True
             self._wake.set()  # the writer thread, if there is one, tries again
             raise
-        self._saved_seq = seq
+        self._links_saved, self._saved_seq = links_seq, seq
 
     def start(self) -> None:
         """Save the changes that may wait in the background. The recorder starts it; tests flush."""
@@ -312,7 +313,8 @@ class SessionStore:
         self._stop.clear()
         self._thread = threading.Thread(target=self._write_later, name="session-notes", daemon=True)
         self._thread.start()
-        if self._lazy_dirty or self._links_dirty:  # what loading and the start-up sweep changed
+        # what loading and the start-up sweep changed is owed to the disk too
+        if self._lazy_dirty or self._links_seq > self._links_saved:
             self._wake.set()
 
     def close(self) -> None:
@@ -643,7 +645,7 @@ class SessionStore:
                     links = True
         if dropped or links:
             self._lazy_dirty = True
-            self._links_dirty |= links
+            self._links_seq += links  # not strict: no hook waits for a sweep
             self._wake_writer()
         return len(dropped)
 
