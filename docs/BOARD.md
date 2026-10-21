@@ -109,6 +109,10 @@ V7 and V9 can run in parallel.
 - F7 ✅ 2026-10-20 · docs/reports/F7.md · merged ae5dd0e · pytest-xdist check 37–44% of serial; ci.yml (main pushes and PRs, macos-15, read-only, SHA-pinned) pinned by tests/test_ci_workflow.py; CI green on arm64 (PR #6); leftovers → fix card · body: git show ae5dd0e:docs/BOARD.md
 - F10 ✅ 2026-10-20 · docs/reports/F10.md · merged 5239e96 · 7 review defects fixed; leftovers: escape RECORD/METADATA names in package-check messages (proposed card), 5 s hang guards without @wallclock (accepted), AGENTS.md Testing lines for CI fail-not-skip and hand-typed sudo (lead) · body: git show 5239e96:docs/BOARD.md
 - V5b ✅ 2026-10-21 · docs/reports/V5b.md, V5b-fix.md, V5b-fix2.md · merged de0aee7 (PR #7) · changed D27 (structural R1 minimum, no floating R1 patterns), D28, D30 (new; V5c) · two fix rounds; per-hook rules limit (owner 2026-10-21: command lists metered); CodeQL path alerts dismissed (stat only) → V5d; CR1 → F11; A3 → V5c · body: git show aabeec7:docs/BOARD.md
+- F9 ✅ 2026-10-21 · docs/reports/F9.md · merged 691ea93 (squash, PR #8) · changed none · Dependabot for GitHub Actions only; CodeQL #5–#7 dismissed; test YAML-reader quirks → F8 · body: git show 0ad2eac:docs/BOARD.md
+- F13 ✅ 2026-10-21 · docs/reports/F13.md · merged 5d3eebc (PR #8) · changed none · raw names in other installer/doctor messages → F15 · body: git show 0ad2eac:docs/BOARD.md
+- F11 ✅ 2026-10-21 · docs/reports/F11.md · merged 1962b93 (PR #8) · changed none (D29 read as effective marks) · one fix round; CR1 sub-case → F14 · body: git show 0ad2eac:docs/BOARD.md
+- V5d ✅ 2026-10-21 · docs/reports/V5d.md · merged 0ad2eac (PR #8) · changed none · lead: per-hook disk look-up budget; CodeQL path alerts on its lstat/readlink dismissed · body: git show 0ad2eac:docs/BOARD.md
 
 ## Spikes (steps and pass rules are in `docs/SYNTHESIS.md` §3)
 
@@ -141,10 +145,6 @@ V7 and V9 can run in parallel.
 ### V5c · S3 rule additions and the owner's ten rules, with bypass tests
 - **Brief:** `docs/briefs/V5c.md` (authoritative). Split from V5b (owner 2026-10-18). The ten S3 rules ship as an example file, off by default (owner 2026-10-18).
 - **Lane:** backend, after V5b · **Depends on:** V5b
-
-### V5d · Hook speed on long commands and V5b leftovers
-- **Brief:** `docs/briefs/V5d.md` (authoritative; pass 2 2026-10-21 against 41fcc24). Text-only path check before any disk look-up plus a per-hook look-up budget (lead 2026-10-21: words past it are stored as `<arg>`); `_command_hit` charged; `FLOAT_STEPS` pinned; `lock_problems` vs a trusted 0640 rules.toml.
-- **Lane:** backend, ∥ wave 1 (no module shared with F9, F13, F11) · **Depends on:** V5b ✅
 
 ### V7 · Rule change flow: draft, check, diff, backtest, `sudo` approve
 - **Owner:** worker-backend
@@ -184,10 +184,10 @@ V7 and V9 can run in parallel.
 
 ---
 
-### F11 · Session state off the hook path
-- **Owner:** worker-backend · brief `docs/briefs/F11.md` (re-checked 2026-10-21 against 41fcc24; V5b's CR1 added) · approved by the owner 2026-10-20
-- **Scope:** `SessionStore.save` rewrites and fsyncs all of `sessions.json` inside every `/hook` answer, and nothing prunes it (lead measured 2026-10-20: `put()` 1.3 ms at 10 chats, 61 ms median at 5000). Settle what must be on disk before the answer (marks; `next_step`, since `steps` rows are `INSERT OR REPLACE` on (session_id, ord)), and add retention like D14.
-- **Done when:** a hook answer no longer waits on a whole-file rewrite; marks and step order survive a crash and a restart; the file stays bounded.
+### F15 · Hackathon cleanup and small leftovers
+- **Owner:** worker-backend · brief not written · after the D31 move · approved with D31 (owner 2026-10-21)
+- **Scope:** delete `demo_flows/`, `DEMO_PROMPTS.txt`, `demo/NOTES.md`, `scripts/setup_credentials.sh`; move `fake_agent.py` and `demo/scenario.json` under tests or examples; vite 8.3.2 → 8.3.3 and rebuild `ui/dist`; escape names in the other installer/doctor messages (record Version, `_packaged_default` OSError; F13 review); F10's missing AGENTS.md "Testing" lines; AGENTS.md "Testing" moves to `tests/README.md`.
+- **Done when:** none of those files remain or each has its new home with its tests green; README, HOOKS.md and the tests name the new paths.
 
 ### F14 · A Task started before the parent was marked (CR1 sub-case)
 - **Owner:** worker-backend · brief not written · after F11 (shares `sessions.py`) · approved by the owner 2026-10-21 as its own card
@@ -203,16 +203,6 @@ V7 and V9 can run in parallel.
 - **Owner:** worker-backend · brief not written · after F7; alone, not alongside V5b (fixing type errors touches all of `agentfly/`)
 - **Scope (owner 2026-10-19: pyright approved):** before the brief, the lead counts basic-mode errors and checks how the pyright package gets its Node runtime (a first-run download would put the network in the check command; `pyright[nodejs]` would be a new dependency to ask about). Pyright in dev deps and AGENTS.md "Approved dependencies", basic mode, existing errors fixed (not silenced wholesale), a step in `ci.yml` and AGENTS.md's check command.
 - **Done when:** pyright clean locally and in CI; F7's `ci.yml` test covers the new step.
-
-### F9 · Security scans: CodeQL and Dependabot
-- **Owner:** the owner (repo settings, on 2026-10-20) + worker for one YAML file · brief docs/briefs/F9.md (pass 2 against 333f665) · after V5b merges; may run alongside F13
-- **Scope (owner 2026-10-19: CodeQL and Dependabot yes; alerts, security updates and Actions updates only, no uv/npm version-update PRs):** CodeQL default setup (an owner click in repo settings: no workflow file, no write permission in our workflows; runs on GitHub's Linux runners, which "macOS only" does not cover; it is a scanner, not the test CI). Dependabot alerts and security updates (settings) plus `.github/dependabot.yml` for GitHub Actions version updates only; no uv/npm version-update PRs (they bypass the lead and fail the stale-build check); `@xyflow/react` and `motion` stay pinned. Dependabot PRs are never merged on GitHub: the lead folds them into a card.
-- **Done when:** a CodeQL run on main and the alert settings on; findings triaged (fixed, or a later card).
-
-### F13 · Package check: escape names in its messages
-- **Owner:** worker-backend · brief docs/briefs/F13.md (pass 2 against f6bc22b) · after V5b (shares `agentfly/install/checks.py`); may run alongside F9; before F12 (shares `packages.py`) · approved by the owner 2026-10-20
-- **Scope:** names the agent's user controls (site-packages paths, dist-info names, RECORD rows, METADATA Name/Version) reach the refusal, the confirm question and `doctor` raw; control characters can repaint the text shown before the sudo password prompt (F10 report, reviewer agreed).
-- **Done when:** the brief's acceptance criteria hold.
 
 ## Not on the board (on purpose)
 - **Publishing to PyPI and the Homebrew tap:** the lead does it, after your OK
