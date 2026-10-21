@@ -50,7 +50,7 @@ _DOTTED = re.compile(r"[0-9]+(?:\.[0-9]+)*")  # [0-9]: `\d` also takes other scr
 _MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, and printed cut
 MAX_PLIST_BYTES = 1 << 20  # Cursor's Info.plist is a few KB; the agent can write a huge one
 _BOM = b"\xef\xbb\xbf"
-_XML_START = (b"<?xml", b"<plist")  # what plistlib itself takes for XML
+_XML_START = (b"<?xml", b"<plist")  # UTF-8 XML, as Apple writes it; plistlib also takes UTF-16
 
 
 class _Refused(ValueError):
@@ -61,20 +61,15 @@ def _read_plist(plist: Path) -> bytes:
     """The bytes of a plain file of at most MAX_PLIST_BYTES, else _Refused or OSError.
 
     `O_NONBLOCK` lets a named pipe open and then fail the type check, where a plain `open` would
-    wait for a writer for ever (the same care as the rules file's, `rulefile._trust_fd`). The type
-    is checked on the descriptor before it is wrapped: `os.fdopen` on a folder raises and keeps the
-    descriptor open.
+    wait for a writer for ever (the same care as the rules file's, `rulefile._trust_fd`).
     """
     fd = os.open(plist, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise _Refused("not a regular file")
-        handle = os.fdopen(fd, "rb")
-    except BaseException:
+        data = os.pread(fd, MAX_PLIST_BYTES + 1, 0)
+    finally:
         os.close(fd)
-        raise
-    with handle:
-        data = handle.read(MAX_PLIST_BYTES + 1)
     if len(data) > MAX_PLIST_BYTES:
         raise _Refused("too large")
     return data
@@ -87,7 +82,7 @@ def _require_xml(data: bytes) -> bytes:
     object number that points at it, so under 1 MiB can cost hundreds. XML has no shared objects.
     """
     if not data.removeprefix(_BOM).startswith(_XML_START):
-        raise _Refused("not XML: AgentFly reads only an XML property list")
+        raise _Refused("not XML: AgentFly reads only a UTF-8 XML property list")
     return data
 
 

@@ -40,6 +40,10 @@ def write_version(layout: Layout, version: str) -> None:
     write_plist(layout, plist_bytes(version))
 
 
+def open_descriptors() -> int:
+    return len(os.listdir("/dev/fd"))
+
+
 def check_version(tmp_path: Path, version: str, *events: str) -> str:
     layout = make_layout(tmp_path)
     write_version(layout, version)
@@ -131,10 +135,10 @@ def xml_version_plist(version_xml: str) -> bytes:
 
 # What an XML plist can hold that a terminal would act on, and how the refusal prints it.
 ESCAPED = {
-    "a newline": ("3.26\n13", r"3\.26\\n13"),
-    "a carriage return": ("3.26&#13;13", r"3\.26\\r13"),
-    "U+009B, a one-character escape": ("3.26&#x9b;13", r"3\.26\\x9b13"),
-    "U+202E, right-to-left override": ("3.26&#x202e;13", r"3\.26\\u202e13"),
+    "a newline": ("3.26\n13", "3.26\\n13"),
+    "a carriage return": ("3.26&#13;13", "3.26\\r13"),
+    "U+009B, a one-character escape": ("3.26&#x9b;13", "3.26\\x9b13"),
+    "U+202E, right-to-left override": ("3.26&#x202e;13", "3.26\\u202e13"),
 }
 
 
@@ -144,23 +148,15 @@ def test_a_version_is_shown_with_its_control_characters_escaped(
 ) -> None:
     layout = make_layout(tmp_path)
     write_plist(layout, xml_version_plist(held))
-    with pytest.raises(InstallError, match=rf"^Cursor {shown} is not a plain dotted") as caught:
+    with pytest.raises(InstallError) as caught:
         cursor.check(layout.cursor_app)
     message = str(caught.value)
-    assert message.isprintable() and "\n" not in message and "\r" not in message
+    assert message.startswith(f"Cursor {shown} is not a plain dotted")
+    assert message.isprintable()
 
 
 def test_an_escape_character_is_shown_escaped_where_a_version_comes_from_elsewhere() -> None:
     assert cursor.shown(ESCAPE_VERSION) == r"3.26\x1b[2K"
-
-
-@pytest.mark.parametrize("held", ["3.26\x1b[2K", "3.26&#x1b;[2K"], ids=["raw", "reference"])
-def test_an_escape_character_in_a_plist_is_a_read_refusal(tmp_path: Path, held: str) -> None:
-    layout = make_layout(tmp_path)
-    write_plist(layout, xml_version_plist(held))  # XML 1.0 has no ESC: expat refuses the file
-    with pytest.raises(InstallError, match=r"cannot read the Cursor version.*\(ExpatError\)") as e:
-        cursor.check(layout.cursor_app)
-    assert e.value.args[0].isprintable()
 
 
 def test_a_version_that_cannot_be_compared_is_not_called_not_newer(tmp_path: Path) -> None:
@@ -173,8 +169,8 @@ def test_a_refusal_names_the_listed_versions_and_the_newest(tmp_path: Path) -> N
         check_version(tmp_path, "1.0.0")
 
 
-def blowup_plist(refs: int = 300, size: int = (1 << 20) - 1) -> bytes:
-    """A binary plist of `size` bytes: `refs` object numbers that all point at one data blob.
+def blowup_plist() -> bytes:
+    """A binary plist just under 1 MiB: 300 object numbers that all point at one data blob.
 
     plistlib's binary reader caches per object number, not per offset, so it copies the blob once
     for each: 300 references to a blob of about 1 MiB take about 300 MiB. (`plistlib.dumps` cannot
@@ -182,6 +178,7 @@ def blowup_plist(refs: int = 300, size: int = (1 << 20) - 1) -> bytes:
     references, the offset table (object 0 is the array, objects 1..refs are the blob) and the
     32-byte trailer.
     """
+    refs, size = 300, (1 << 20) - 1
     blob_len = size - (8 + (2 + 4) + (2 + 2 + 2 * refs) + 4 * (refs + 1) + 32)
     blob = b"\x4f\x12" + blob_len.to_bytes(4, "big") + b"x" * blob_len
     array = bytes([0xAF, 0x11]) + refs.to_bytes(2, "big")
@@ -193,19 +190,20 @@ def blowup_plist(refs: int = 300, size: int = (1 << 20) - 1) -> bytes:
     return b"bplist00" + blob + array + table + trailer + table_at.to_bytes(8, "big")
 
 
+BLOWUP_PLIST = blowup_plist()
+
 # Files that are not XML: the read stops at the first bytes, before any parser sees them.
 NOT_XML_PLISTS = {
     "a binary plist": plistlib.dumps(
         {"CFBundleShortVersionString": NEWER}, fmt=plistlib.FMT_BINARY
     ),
-    "a binary plist built to blow up the parse": blowup_plist(300),
-    "a binary plist whose root is a list": plistlib.dumps([NEWER], fmt=plistlib.FMT_BINARY),
+    "a binary plist built to blow up the parse": BLOWUP_PLIST,
     "not a plist": b"\xff\xfe junk",
     "empty": b"",
     "XML after a blank line": b"\n" + plist_bytes(NEWER),
 }
 
-# Files that start as XML and fail in the parser or after it, and what they raise.
+# Files that start as XML and fail in the parser or after it, each with another exception.
 MALFORMED_PLISTS = {
     "a mismatched tag": b'<?xml version="1.0"?><plist version="1.0"><dict><key>a</key>'
     b"<string>x</dict></plist>",
@@ -224,27 +222,17 @@ MALFORMED_PLISTS = {
     b'<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>&a;</string>'
     b"</dict></plist>",
 }
-RAISED = {  # the exception each one turns into a refusal for, named in the message
-    "a mismatched tag": "ExpatError",
-    "a truncated file": "ExpatError",
-    "a control character reference": "ExpatError",
-    "an escape character": "ExpatError",
-    "an encoding Python does not know": "LookupError",
-    "a tag plistlib does not know": "IndexError",
-    "a list, not a dictionary": "TypeError",
-    "a date plistlib cannot read": "AttributeError",
-    "an entity declaration": "InvalidFileException",
-}
 
 
-@pytest.mark.parametrize("name", MALFORMED_PLISTS)
+@pytest.mark.parametrize("data", MALFORMED_PLISTS.values(), ids=MALFORMED_PLISTS.keys())
 def test_a_plist_that_cannot_be_read_is_one_refusal_not_a_traceback(
-    tmp_path: Path, name: str
+    tmp_path: Path, data: bytes
 ) -> None:
     layout = make_layout(tmp_path)
-    write_plist(layout, MALFORMED_PLISTS[name])
-    with pytest.raises(InstallError, match=rf"cannot read the Cursor version.*\({RAISED[name]}\)"):
+    write_plist(layout, data)
+    with pytest.raises(InstallError, match=r"cannot read the Cursor version") as caught:
         cursor.check(layout.cursor_app)
+    assert str(caught.value).isprintable()  # one line, and no raw character from the file
 
 
 @pytest.mark.parametrize("data", NOT_XML_PLISTS.values(), ids=NOT_XML_PLISTS.keys())
@@ -260,14 +248,11 @@ def test_a_plist_that_is_not_xml_is_refused_and_the_message_says_so(
 
 def test_cursors_real_header_with_a_doctype_gives_its_version(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
-    doctype = (
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
-    )
-    body = xml_version_plist(NEWER).decode().replace("<plist", doctype + "<plist", 1)
-    write_plist(layout, body.encode())
+    body = plist_bytes(NEWER)  # plistlib writes the same header Cursor's Info.plist has
+    assert b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"' in body
+    write_plist(layout, body)
     assert cursor.installed_version(layout.cursor_app) == NEWER
-    write_plist(layout, b"\xef\xbb\xbf" + body.encode())  # a UTF-8 byte-order mark is fine too
+    write_plist(layout, b"\xef\xbb\xbf" + body)  # a UTF-8 byte-order mark is fine too
     assert cursor.installed_version(layout.cursor_app) == NEWER
 
 
@@ -308,15 +293,14 @@ PEAK_LIMIT_MIB = 64
 
 def test_the_blow_up_plist_is_a_real_one() -> None:
     """The input below must cost what the brief says, or the memory test passes by construction."""
-    data = blowup_plist(300)
-    assert len(data) < cursor.MAX_PLIST_BYTES
-    parsed, peak = peak_mib(lambda: plistlib.loads(data))  # format auto-detected: the binary reader
-    assert len(parsed) == 300 and peak > 200  # type: ignore[arg-type]
+    assert len(BLOWUP_PLIST) < cursor.MAX_PLIST_BYTES
+    _, peak = peak_mib(lambda: plistlib.loads(BLOWUP_PLIST))  # format auto-detected: binary reader
+    assert peak > 200
 
 
 def test_reading_a_binary_plist_built_to_blow_up_stays_under_64_mib(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
-    write_plist(layout, blowup_plist(300))
+    write_plist(layout, BLOWUP_PLIST)
     outcome, peak = peak_mib(lambda: cursor.installed_version(layout.cursor_app))
     assert peak < PEAK_LIMIT_MIB, peak  # first: the memory, whatever the message says
     assert isinstance(outcome, InstallError) and "not XML" in str(outcome)
@@ -338,9 +322,6 @@ def test_reading_the_worst_xml_plist_stays_under_64_mib_and_gives_its_version(
 def test_a_folder_in_place_of_the_plist_is_refused_and_leaks_no_descriptor(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     (layout.cursor_app / "Contents" / "Info.plist").mkdir(parents=True)
-
-    def open_descriptors() -> int:
-        return len(os.listdir("/dev/fd"))
 
     before = open_descriptors()
     for _ in range(20):

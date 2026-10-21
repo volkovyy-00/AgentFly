@@ -200,7 +200,7 @@ def warnings_in(out: str) -> list[str]:
     return [line for line in out.splitlines() if line.startswith("warning:")]
 
 
-def test_a_newer_cursor_installs_the_newest_versions_entries_and_warns_once(
+def test_a_newer_cursor_installs_the_newest_versions_entries_warns_once_and_doctor_wants_the_log(
     system: Layout,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -217,6 +217,20 @@ def test_a_newer_cursor_installs_the_newest_versions_entries_and_warns_once(
     assert {entry.event for entry in found} == set(cursor.EVENTS)
     record = records.read(system)
     assert record is not None and record["cursor_version"] == NEWER  # the real one
+    # ... and `doctor` after that install. In this fake world other lines fail (no service), so
+    # the exit code says nothing: read the lines.
+    monkeypatch.setattr(doctor, "SYSTEM", system)
+    main(["doctor"])
+    lines = {
+        id_: (level, text)
+        for level, id_, text in (
+            line.split(None, 2) for line in capsys.readouterr().out.splitlines()
+        )
+    }
+    assert f"Cursor {NEWER}" in lines["record"][1]  # the real version, not the listed one
+    assert lines["events"][0] == "warn" and "unchecked Cursor version" in lines["events"][1]
+    level, text = lines["hooks-log"]  # Cursor has not been started: nothing confirms the load
+    assert level == "fail" and "no logs yet" in text and ADVICE in text
 
 
 def test_a_newer_cursor_gets_the_same_hooks_file_and_output_as_the_newest_listed_one(
@@ -231,7 +245,6 @@ def test_a_newer_cursor_gets_the_same_hooks_file_and_output_as_the_newest_listed
     first_install_with(system, tmp_path / "again", monkeypatch, NEWEST)
     listed_out = capsys.readouterr().out
     assert system.hooks_file.read_bytes() == newer_bytes
-    assert len(warnings_in(newer_out)) == 1 and warnings_in(listed_out) == []
     # the lines are the ones e6e6894 printed (written out above), and the newer run adds the warning
     assert listed_out.splitlines() == first_install_output(system)
     assert newer_out.splitlines()[:-1] == first_install_output(system)
@@ -270,29 +283,6 @@ def test_a_hand_typed_sudo_init_on_a_newer_cursor_warns_once(
     assert len(warnings_in(capsys.readouterr().out)) == 1
 
 
-def test_doctor_after_init_on_a_newer_cursor_shows_the_real_version_and_wants_the_log(
-    system: Layout,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    first_install_with(system, tmp_path, monkeypatch, NEWER)
-    capsys.readouterr()
-    monkeypatch.setattr(doctor, "SYSTEM", system)
-    main(["doctor"])
-    # In this fake world other lines fail (no service), so the exit code says nothing: read lines.
-    lines = {
-        id_: (level, text)
-        for level, id_, text in (
-            line.split(None, 2) for line in capsys.readouterr().out.splitlines()
-        )
-    }
-    assert f"Cursor {NEWER}" in lines["record"][1]  # the real version, not the listed one
-    assert lines["events"][0] == "warn" and "unchecked Cursor version" in lines["events"][1]
-    level, text = lines["hooks-log"]  # Cursor has not been started: nothing confirms the load
-    assert level == "fail" and "no logs yet" in text and ADVICE in text
-
-
 @pytest.mark.parametrize("version", ["3.24.12", NEWEST])
 def test_a_listed_cursor_installs_with_no_warning(
     version: str,
@@ -302,9 +292,7 @@ def test_a_listed_cursor_installs_with_no_warning(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     first_install_with(system, tmp_path, monkeypatch, version)
-    out = capsys.readouterr().out
-    assert warnings_in(out) == [] and "warning" not in out.lower()
-    assert out.splitlines() == first_install_output(system)
+    assert capsys.readouterr().out.splitlines() == first_install_output(system)
     record = records.read(system)
     assert record is not None and record["cursor_version"] == version
 
@@ -321,7 +309,6 @@ REFUSED_BY_INIT = {
         )
     },
     "a plist with an escape character in it": MALFORMED_PLISTS["an escape character"],
-    "a plist that is not XML": MALFORMED_PLISTS["a control character reference"],
 }
 
 

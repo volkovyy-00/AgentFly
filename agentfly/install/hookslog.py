@@ -26,9 +26,10 @@ from pathlib import Path
 
 LOADED = re.compile(r"Loaded (\d+) enterprise hook\(s\) for steps: (.*)")
 NONE = re.compile(r"No enterprise hooks configuration found")
-# `Invalid <source> config` and `Failed to parse <source> hooks configuration`: see `_between`.
-INVALID = ("Invalid ", "config")
-UNPARSED = ("Failed to parse ", "hooks configuration")
+# `Invalid <source> config` and `Failed to parse <source> hooks configuration`, as the pair of
+# patterns `_between` takes: where the line names its source, and where the source ends.
+INVALID = (re.compile(r"\bInvalid "), re.compile(r"config\b"))
+UNPARSED = (re.compile(r"\bFailed to parse "), re.compile(r"hooks configuration\b"))
 _RELEVANT = re.compile(r"enterprise|Invalid|Failed to parse")
 _OTHER_SOURCES: tuple[str, ...] = ("user", "project", "workspace", "claude", "plugin")
 _START_FOLDER = re.compile(r"^\d{8}T\d{6}$")
@@ -55,29 +56,18 @@ def _about_other_files(source: str) -> bool:
     return any(word in source.casefold() for word in _OTHER_SOURCES)
 
 
-def _word_char(char: str) -> bool:
-    return char.isalnum() or char == "_"
+def _between(line: str, head: re.Pattern[str], tail: re.Pattern[str]) -> str | None:
+    """The text between the first `head` and the first `tail` after it, stripped; None if either
+    is missing.
 
-
-def _between(line: str, head: str, tail: str) -> str | None:
-    """The text between the first `head` that starts a word and the first `tail` after it that
-    ends one, stripped; None when there is no such pair.
-
-    This stands in for the regex `\\bhead(.*?)\\s*tail\\b`, which tries every `head` in the line and
-    scans on to the line's end each time: a few thousand spaces make it cost seconds, and a
-    megabyte of them hours, in a log the agent's user can write. Here no part of the line is looked
-    at twice: if the first `head` has no `tail` after it, no later `head` has one either.
+    This stands in for the one pattern `\\bInvalid (.*?)\\s*config\\b`, which tries every
+    `Invalid ` in the line and scans on to the line's end each time: a few thousand blanks make it
+    cost seconds, and a megabyte of them hours, in a log the agent's user can write. Two searches
+    look at no part of the line twice: if the first `head` has no `tail` after it, no later one has.
     """
-    start = line.find(head)
-    while start > 0 and _word_char(line[start - 1]):
-        start = line.find(head, start + 1)
-    if start < 0:
-        return None
-    begin = start + len(head)
-    end = line.find(tail, begin)
-    while end >= 0 and _word_char(line[end + len(tail) : end + len(tail) + 1]):
-        end = line.find(tail, end + 1)
-    return line[begin:end].strip() if end >= 0 else None
+    start = head.search(line)
+    end = tail.search(line, start.end()) if start else None
+    return line[start.end() : end.start()].strip() if start and end else None
 
 
 def _error_source(line: str) -> str | None:
@@ -110,22 +100,18 @@ def read_tail(path: Path) -> str:
 
     The file is opened without blocking and judged on the descriptor, so a named pipe, a link to
     one, a device such as `/dev/zero` (also behind a link) or a folder is refused, never waited on
-    or read. The type is checked before the descriptor is wrapped: `os.fdopen` on a folder raises
-    and keeps the descriptor open. The same care as `cursor._read_plist` and the rules file's
-    `rulefile._trust_fd`.
+    or read. One `pread` takes at most _TAIL_BYTES, however much the file grows meanwhile. The
+    same care as `cursor._read_plist` and the rules file's `rulefile._trust_fd`.
     """
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
+        size = os.fstat(fd)
+        if not stat.S_ISREG(size.st_mode):
             raise OSError(errno.EINVAL, "not a plain file", str(path))
-        handle = os.fdopen(fd, "rb")
-    except BaseException:
+        tail = os.pread(fd, _TAIL_BYTES, max(0, size.st_size - _TAIL_BYTES))
+    finally:
         os.close(fd)
-        raise
-    with handle:
-        handle.seek(max(0, info.st_size - _TAIL_BYTES))
-        return handle.read(_TAIL_BYTES).decode("utf-8", errors="replace")
+    return tail.decode("utf-8", errors="replace")
 
 
 def latest(home: Path) -> Logs:
