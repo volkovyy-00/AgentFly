@@ -18,7 +18,7 @@ Pending decisions: D16
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
 (dispatched 2026-10-21 from main 61e2981; owner started all four workers)
-- F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits). YAML-reader quirks → F8 brief. One trial merge + one PR (D26 B) for all four.
+- F9 done 2026-10-21 (4d387ae; 4516 passed): Touches deviation accepted; reviewer MERGE. Squash at merge (OS username in two commits). One trial merge + one PR (D26 B) for all four.
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -44,7 +44,7 @@ Pending decisions: D16
 
 ## Open risks and findings
 - CI flake: `test_offline_guard.py` silent recorder took 1.28 s on macos-15 once (b342323); recurs → fix card. F7, V2c, UI-card leftovers: git show 0e34261:docs/STATE.md.
-- F9: Dependabot raises no alerts for SHA-pinned actions; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
+- F9: test YAML-reader quirks → F8 brief. Dependabot raises no alerts for SHA-pinned actions; the bundled CPython (D5) has no alert source; npm security-update PRs will fail the stale-build check (lead folds them into a card).
 - F10 leftovers: AGENTS.md "Testing" lines for package tests failing (not skipping) under CI and the hand-typed-sudo uninstall path (lead, after V5b); SPEC §10 lacks the "service was not touched" message; `CI=false` counts as CI in `tests/test_package.py`.
 - V3c later-card items: `.pth` runs in the checking process; R0 false positives (`uv tool … --with ./x`, `brew upgrade --dry-run`, `ls` of a dist-info); no offline-guard package rule; root runs bundled 3.12 on the env's site-packages.
 - R0 gaps (V5a): `pkill python`; ruby/perl -e; relative paths after `cd`, globs, braces, variables; ~/.claude/settings.json unguarded.
