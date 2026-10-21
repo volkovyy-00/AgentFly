@@ -6,9 +6,9 @@ these tests write one next to the packaged default's R1 and start the app on it.
 
 from __future__ import annotations
 
-import importlib.util
 import itertools
 import json
+import runpy
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -289,12 +289,9 @@ def test_r0_keeps_denying_when_the_file_makes_every_other_rule_gentle(
 
 
 def test_the_replay_script_reads_ask_as_warned_and_deny_as_blocked() -> None:
-    spec = importlib.util.spec_from_file_location("fake_agent", REPO / "examples/fake_agent.py")
-    assert spec is not None and spec.loader is not None
-    fake_agent = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fake_agent)
+    verdict = runpy.run_path(str(REPO / "examples/fake_agent.py"))["permission_to_verdict"]
 
-    assert fake_agent.permission_to_verdict({"permission": "ask"}) == "warned"
-    assert fake_agent.permission_to_verdict({"permission": "deny"}) == "blocked"
-    assert fake_agent.permission_to_verdict({"permission": "allow"}) == "allowed"
-    assert fake_agent.permission_to_verdict({"verdict": "warned"}) == "allowed"
+    assert verdict({"permission": "ask"}) == "warned"
+    assert verdict({"permission": "deny"}) == "blocked"
+    assert verdict({"permission": "allow"}) == "allowed"
+    assert verdict({"verdict": "warned"}) == "allowed"

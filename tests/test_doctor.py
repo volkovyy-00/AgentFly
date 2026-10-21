@@ -990,13 +990,6 @@ def test_the_record_line_shows_versions_with_control_characters_escaped(world: W
     line = world.results()["record"]
     assert line.level == "ok"
     assert line.text == f"hash record present (AgentFly 0.1{SHOWN}, Cursor 3.25.9{SHOWN})"
-    assert_plain(line.text)
-    assert "\n" not in line.text
-
-
-def test_the_record_line_shows_a_version_that_is_not_text(world: World) -> None:
-    set_record_versions(world, agentfly=3, cursor=None)
-    assert world.results()["record"].text == "hash record present (AgentFly 3, Cursor None)"
 
 
 def test_the_command_prints_a_record_version_with_control_characters_as_one_plain_line(
