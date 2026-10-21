@@ -3,14 +3,14 @@ Status: done (as of 2026-10-21 11:05)
 Result: One per-hook budget bounds floating patterns and command lists; R1's minimum is structural; long words never raise; every saved path encodes; init -g rewrites only checked bytes. Findings fixed inside Touches; CR1 is outside them; CR2's fix is reverted (fails closed).
 Evidence: Branch ag-v5b-rules-file, last code commit 0228fe3 (fixes 49f6988..0228fe3 after simplify 69c9d0e). Check: ruff clean, 4455 passed, 5 skipped. /final-verification READY TO COMMIT; /code-review high done. Nothing pushed.
 Needs owner: CR1, a security gap in sessions.py (outside this card): a fallback-linked subagent can miss a later R1 mark. Recommended: fix in the next card that may touch sessions.py (OR the parent's mark and triggers into an already-pending Task record).
-Details: see "## 2026-10-21 10:49" below.
+Details: see "## 2026-10-21 11:05" below.
 
-## 2026-10-21 10:49
+## 2026-10-21 11:05
 
 ### Final verification verdict (pasted)
 
 ```
-## Final verification
+Final verification
 
 **Smoke test** — the brief's scenarios through the whole hook (scratch script, Recorder.run, best of
 three, load ~2.3): reviewer's pem x8 / json x10 files at 300 words 60 deep 32.9 / 33.5 ms allow; a
