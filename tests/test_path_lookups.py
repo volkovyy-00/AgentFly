@@ -324,6 +324,19 @@ def test_past_the_budget_the_words_are_saved_as_arg_and_are_not_the_file(
     assert (spent.command, spent.file_path) == ("cat <arg>", None)
 
 
+def test_a_secret_named_after_the_budget_is_spent_is_still_flagged(
+    tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleaner cannot afford `.env`, so the command shows `<arg>` and no file; the step is
+    flagged all the same, because the rule engine's own test reads the raw command."""
+    (tree / ".env").write_text("K=v\n")
+    kept = record(tree, "cat .env")
+    assert (kept.command, kept.file_path, kept.file_sensitive) == ("cat .env", ".env", True)
+    monkeypatch.setattr(clean, "LOOKUP_STEPS", 0)
+    spent = record(tree, "cat .env")
+    assert (spent.command, spent.file_path, spent.file_sensitive) == ("cat <arg>", None, True)
+
+
 def test_the_cleaned_command_is_split_once(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     splits: list[str] = []
     real = store_module.cleaned_words

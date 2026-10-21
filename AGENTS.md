@@ -385,7 +385,9 @@ lines for them (R0 and normalisation: V5).
   the simple command)` look-ups in each distinct simple command of the line, worked out for the
   whole clause from a table made once a hook (`rulefile._program_sizes`) and charged before the
   clause is walked; `PROGRAM_LOOKUPS_FREE` (300, as many as a hook of 300 words can make) cost
-  nothing, so a clause that cheap answers on a spent meter, and each look-up past them costs
+  nothing for each clause (198 clauses can make 59,400 look-ups, about 130 ms, that the meter
+  never sees; the real shapes below need it), so a clause that cheap answers on a spent meter, and
+  each look-up past them costs
   `PROGRAM_LOOKUP_STEPS` (4; a look-up was measured at 2.2 us against 0.4 us a step). 300 charges
   nothing and 301 charges 4. The target line (1,000 `;`-joined `cat zK y` against 198 rules of 50
   `cat wN`) charges 2,800 a clause, so 16 clauses walk (16,000 `_program_hit` calls, 198,000 with

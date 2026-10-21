@@ -402,9 +402,11 @@ def compile_pattern(raw: str) -> Pattern:
 # for four (a run of fewer charges nothing). Measured by the advisor: 0.35 us a step for one-word
 # entries, 0.09 for long ones, at most 0.4 for probes, so a whole budget stays inside 20 ms.
 # The walk over a line's simple commands is charged too (V5d): a clause makes at most one look-up
-# of a program a word, so a hook of 300 words makes at most 300 and they are free; past that each
-# costs PROGRAM_LOOKUP_STEPS, charged for the whole clause before it is walked. Measured 2.2 us a
-# look-up against 0.4 us a step, so four steps is not too dear. Tests pin all of these numbers.
+# of a program a word, so on a hook of 300 words it makes at most 300, and those are free; past
+# that each costs PROGRAM_LOOKUP_STEPS, charged for the whole clause before it is walked. The free
+# part is for each clause, not for the hook: 198 clauses can make 59,400 look-ups (about 130 ms)
+# that the meter never sees, which real shapes need (198 rules on 150 `cat zN y` are never
+# charged). Measured 2.2 us a look-up against 0.4 us a step. Tests pin all of these numbers.
 DIV: int = 256
 FLOAT_STEPS: int = 45_000
 PROBES_PER_STEP: int = 4
