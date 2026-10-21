@@ -311,10 +311,10 @@ def test_one_unit_over_is_refused_and_names_the_heaviest_rule() -> None:
     assert f"{rulefile.MAX_WORK + 1} units; at most {rulefile.MAX_WORK}" in error
 
 
-def test_the_work_of_a_file_that_is_refused_is_not_also_judged_by_the_r1_grid() -> None:
-    rulefile._unmarked.cache_clear()
+def test_the_work_of_a_file_that_is_refused_is_not_also_judged_by_the_r1_check() -> None:
+    rulefile._coverage_problems.cache_clear()
     rulefile.load_bytes(name_list_file(ROOM).encode())
-    assert rulefile._unmarked.cache_info().misses == 0
+    assert rulefile._coverage_problems.cache_info().misses == 0
 
 
 def test_rules_check_refuses_a_file_over_the_limit_and_accepts_one_at_it(

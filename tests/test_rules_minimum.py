@@ -3,8 +3,10 @@
 SPEC section 5 makes R0 and R1 the two rules v1 must have. R0 is in code; R1 is in the file, so
 the program holds the least R1 may say. A file whose R1 is missing or weaker is refused like an
 entry for R0: the packaged default runs and every place that reports a file says why. The
-minimum is judged on the names SPEC section 5 counts as secrets (and by the shape of the
-exceptions), never on how a list is spelled, so `.env*` in place of `.env` and `.env.*` loads.
+minimum is judged by the shape of R1's patterns (V5b-fix2 §6.2): for every family of SPEC section
+5's secret names one pattern `P` or `P*Q` that covers it, so `.env*` in place of `.env` and `.env.*`
+loads; exceptions by their own shape; and no floating folder pattern in R1 (§6.3). The old sample
+grid (`tests/r1_grid.py`) and a brute force are the second opinions.
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ import pytest
 import agentfly.recorder.rules as rules_mod
 from agentfly.cli import main
 from agentfly.recorder import rulefile
-from tests.rules_helpers import R0_ENTRY, default_as, default_with, list_line
+from tests import r1_grid
+from tests.rules_helpers import R0_ENTRY, default_as, default_with, list_line, ruleset_of
+from tests.test_rules_cost import command
 
 BASE = rulefile.default_text()
 OK_LINE = 'secret_names_ok = [".env*.example", ".env*.sample", ".env*.template", "id_rsa*.pub"]'
@@ -60,11 +64,11 @@ def r1_without_after_then(rest: str) -> str:
 def test_the_packaged_default_meets_the_minimum() -> None:
     loaded = rulefile.load_bytes(BASE.encode())
     assert loaded.errors == () and loaded.lint == ()
-    assert rulefile.SECRET_NAMES, "the check has names to judge by"
+    assert r1_grid.SECRET_NAMES, "the second opinion has names to judge by"
 
 
 def test_the_names_the_check_judges_by_are_the_ones_spec_section_5_counts() -> None:
-    names = set(rulefile.SECRET_NAMES)
+    names = set(r1_grid.SECRET_NAMES)
     assert {".env", ".env.local", "id_rsa", "id_rsa2", "credentials.json", "server.key"} <= names
     assert {"x.pem", ".pem", ".key", ".env.example.local", ".env._x", "id_rsa.example"} <= names
     for sample in (".env.example", ".env.sample", ".env.template", "id_rsa.pub", "x.pem.example"):
@@ -164,18 +168,20 @@ def test_the_recorder_refuses_a_weaker_r1_and_the_default_runs(
     assert (loaded.problem or "").endswith("the packaged default rules are in force")
 
 
-def test_the_error_names_a_name_that_is_left_unmarked() -> None:
+def test_the_error_names_the_bullet() -> None:
     (error,) = r1_errors(with_names(".env", ".env.*", "*.pem", "*.key", "id_rsa*"))
-    assert "'credentials' unmarked" in error and "and 87 more" in error
-    errors = r1_errors(with_exemptions("*.example"))
-    assert any("unmarked" in e and "SPEC section 5" in e for e in errors), errors
-    assert any("exception '*.example' must be .env... ending in" in e for e in errors), errors
+    assert error == (
+        "rule R1: no pattern in its 'after' marks every name SPEC section 5 counts as secret under "
+        "'any file whose name starts with credentials'; add one such as 'credentials*' (a single "
+        "`*` and no `?` or `[`) (D27)"
+    )
+    (error,) = r1_errors(with_exemptions("*.example"))
+    assert "exception '*.example' must be .env... ending in" in error
 
 
-def test_a_literal_exemption_is_refused_for_its_shape_and_for_what_it_hides() -> None:
-    errors = r1_errors(with_exemptions("prod.pem"))
-    assert any("'prod.pem' must be .env... ending in" in e for e in errors)
-    assert any("leaves 'prod.pem' unmarked" in e for e in errors)
+def test_a_literal_exemption_is_refused_for_its_shape() -> None:
+    (error,) = r1_errors(with_exemptions("prod.pem"))
+    assert "'prod.pem' must be .env... ending in" in error
 
 
 # ---------------------------------------------------------------- wider or reworded: accepted
@@ -261,11 +267,11 @@ def test_a_ruleset_cannot_be_built_without_r1() -> None:
         rules_mod.build_ruleset(bare, source="x", path="x")
 
 
-def test_the_grid_is_judged_once_per_clause() -> None:
-    rulefile._unmarked.cache_clear()
+def test_the_coverage_is_judged_once_per_clause() -> None:
+    rulefile._coverage_problems.cache_clear()
     rulefile.load_bytes(BASE.encode())
     rulefile.load_bytes(BASE.encode())
-    assert rulefile._unmarked.cache_info().misses == 1
+    assert rulefile._coverage_problems.cache_info().misses == 1
 
 
 def test_the_minimum_does_not_read_default_toml() -> None:
@@ -296,12 +302,12 @@ def _spec_secret_before(name: str) -> bool:
 
 def _grid_without_the_filter() -> set[str]:
     """The old `_secret_names` grid before it kept only what `spec_secret` counts."""
-    names = {family + tail for family in rulefile._FAMILIES for tail in rulefile._TAILS}
+    names = {family + tail for family in r1_grid._FAMILIES for tail in r1_grid._TAILS}
     for stem in (".env.", "id_rsa", "credentials"):
-        names |= {stem + char for char in rulefile._SWEEP}
-    for char in rulefile._SWEEP:
+        names |= {stem + char for char in r1_grid._SWEEP}
+    for char in r1_grid._SWEEP:
         names |= {char + ".pem", char + ".key", f".env.{char}x"}
-    return names | set(rulefile._LITERALS)
+    return names | set(r1_grid._LITERALS)
 
 
 def _random_names(count: int, seed: int) -> list[str]:
@@ -323,7 +329,7 @@ def _random_names(count: int, seed: int) -> list[str]:
 
 def test_spec_secret_from_the_table_answers_as_before() -> None:
     random_names = _random_names(20_000, seed=2026)
-    names = [*rulefile.SECRET_NAMES, *sorted(_grid_without_the_filter()), *random_names]
+    names = [*r1_grid.SECRET_NAMES, *sorted(_grid_without_the_filter()), *random_names]
     assert len(names) > 20_300
     wrong = [n for n in names if rulefile.spec_secret(n) != _spec_secret_before(n)]
     assert wrong[:5] == []
@@ -351,3 +357,252 @@ def test_the_table_holds_the_six_families_of_spec_section_5_in_order() -> None:
         (".env", (".example", ".sample", ".template")),
         ("id_rsa", (".pub",)),
     )
+
+
+# ---------------------------------------------------------------- D27 by structure (6.2, 6.3)
+
+ENV, ENV_DOT, PEM, KEY, ID_RSA, CREDENTIALS = rulefile.SECRET_FAMILIES
+DEFAULT_NAMES = (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "credentials*")
+# §6.2's examples, per family: what covers it by its shape, and what does not.
+COVERING: dict[rulefile.Family, tuple[str, ...]] = {
+    ENV: (".env", ".env*", ".*", "*env", ".e*v", "*.env"),
+    ENV_DOT: (".env.*", ".env*", ".*", ".en*"),
+    PEM: ("*.pem", "*pem", "*m"),
+    KEY: ("*.key", "*key", "*y"),
+    ID_RSA: ("id_rsa*", "id_*"),
+    CREDENTIALS: ("credentials*", "cred*"),
+}
+NOT_COVERING: dict[rulefile.Family, tuple[str, ...]] = {
+    ENV: (".env*.env", ".env.*", ".env?", "*.env.", "e*"),
+    ENV_DOT: (".env.?*", ".env.[!s]*", ".env", ".env.**", "*."),
+    PEM: ("?*.pem", "*.pe?", "prod.pem", "*.pem*", "x*.pem"),
+    KEY: ("?*.key", "*.ke?", "server.key", "*.pem"),
+    ID_RSA: ("id_rsa", "id_rsa.*", "id_rsa*.pub*", "*id_rsa"),
+    CREDENTIALS: ("credentials", "credentials[!$ ]*", "credentials.*", "credentials**"),
+}
+
+
+def _shape_cases() -> list[tuple[str, rulefile.Family, bool]]:
+    cases = [(text, family, True) for family, texts in COVERING.items() for text in texts]
+    return cases + [
+        (text, family, False) for family, texts in NOT_COVERING.items() for text in texts
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "family", "expected"),
+    _shape_cases(),
+    ids=[f"{t}-{f.start or f.end}-{e}" for t, f, e in _shape_cases()],
+)
+def test_covers_follows_the_shape_rule(text: str, family: rulefile.Family, expected: bool) -> None:
+    assert rulefile.covers(text, family) is expected
+
+
+def test_the_families_have_the_shape_covers_relies_on() -> None:
+    """`covers` is sound because every name of a family starts with its start, ends with its end
+    and is at least as long as both; the exact family is `.env` alone."""
+    names = {*r1_grid.SECRET_NAMES, *_grid_without_the_filter(), *_random_names(5_000, seed=10)}
+    names = {name.casefold() for name in names}
+    for family in rulefile.SECRET_FAMILIES:
+        members = [name for name in names if family.has(name)]
+        assert members, family.bullet
+        if family.exact:
+            assert members == [".env"] and family.start == family.end == ".env"
+            continue
+        for name in members:
+            assert name.startswith(family.start) and name.endswith(family.end), name
+            assert len(name) >= len(family.start) + len(family.end), name
+
+
+REST = ("*.pem", "*.key", "id_rsa*", "credentials*")
+# The brief's three: each loaded under the sample grid and left a SPEC section 5 secret unmarked.
+BRIEF_DODGES: dict[str, tuple[rulefile.Family, tuple[str, ...]]] = {
+    "misses .env.secret": (
+        ENV_DOT,
+        (".env", ".env.[!s]*", ".env.s", ".env.s[!e]*", ".env.se", ".env.se[!c]*", *REST),
+    ),
+    "misses credentials copy.json": (
+        CREDENTIALS,
+        (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "credentials", "credentials[!$ ]*"),
+    ),
+    "misses .env.production-eu-west-1": (
+        ENV_DOT,
+        (".env", *(".env." + "?" * n for n in range(1, 16)), *REST),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", BRIEF_DODGES)
+def test_the_brief_dodge_files_are_refused_naming_r1(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    family, names = BRIEF_DODGES[name]
+    draft = tmp_path / "dodge.toml"
+    draft.write_text(with_names(*names), encoding="utf-8")
+    assert main(["rules", "check", str(draft)]) == 1
+    err = capsys.readouterr().err
+    assert "rule R1: " in err and family.bullet in err, err
+
+
+LOADING: dict[str, str] = {
+    "the default": BASE,
+    "a file that only adds names": with_names(*DEFAULT_NAMES, "*.p12", "secrets.yml"),
+    ".env* in place of .env and .env.*": with_names(
+        ".env*", "*.pem", "*.key", "id_rsa*", "credentials*"
+    ),
+    ".* in place of both": with_names(".*", "*.pem", "*.key", "id_rsa*", "credentials*"),
+    "*pem in place of *.pem": with_names(
+        ".env", ".env.*", "*pem", "*.key", "id_rsa*", "credentials*"
+    ),
+    "the default plus ~/.ssh/**": with_names(*DEFAULT_NAMES, "~/.ssh/**"),
+}
+
+
+@pytest.mark.parametrize("name", LOADING)
+def test_the_brief_loading_list_loads(name: str) -> None:
+    assert rulefile.load_bytes(LOADING[name].encode()).errors == ()
+
+
+@pytest.mark.parametrize("pattern", [".ssh/**", "a/**/b", "**/x/**"])
+def test_r1s_floating_folder_patterns_are_refused(pattern: str) -> None:
+    (error,) = r1_errors(with_names(*DEFAULT_NAMES, pattern))
+    assert error.startswith(
+        f"rule R1: pattern {pattern!r} costs more the deeper a path is, and R1 is never cut short; "
+        "anchor it ("
+    )
+    assert error.endswith(") or put it in a rule of its own (D27)")
+    if pattern == ".ssh/**":
+        assert error == (
+            "rule R1: pattern '.ssh/**' costs more the deeper a path is, and R1 is never cut "
+            "short; anchor it ('~/.ssh/**' or '/...') or put it in a rule of its own (D27)"
+        )
+
+
+@pytest.mark.parametrize(
+    "pattern", ["~/.aws/config", "~/.aws/**", "~/.ssh/**", "/etc/ssl/private/*"]
+)
+def test_r1s_anchored_folder_patterns_load(pattern: str) -> None:
+    assert rulefile.load_bytes(with_names(*DEFAULT_NAMES, pattern).encode()).errors == ()
+
+
+def test_a_floating_r1_is_refused_and_the_recorder_runs_the_default(active_rules: Path) -> None:
+    """Before this check an R1 widened with `.ssh/**` loaded, and its `after` raised the meter's
+    `WorkLimit` out of `mark` (a 500); now it never loads."""
+    active_rules.write_text(with_names(*DEFAULT_NAMES, ".ssh/**"), encoding="utf-8")
+    loaded = rules_mod.load_active()
+    assert loaded.source == "default" and loaded.rules == rules_mod.DEFAULT.rules
+    assert "rule R1: pattern '.ssh/**'" in (loaded.problem or "")
+
+
+def test_the_packaged_r1_never_charges_the_meter(monkeypatch: pytest.MonkeyPatch) -> None:
+    charged: list[int] = []
+    monkeypatch.setattr(rulefile, "_charge", charged.append)
+    ruleset = ruleset_of(BASE)
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    actions = [
+        {"hook_event_name": "beforeShellExecution", "command": command(60)},
+        {"hook_event_name": "beforeReadFile", "file_path": "/w/.env"},
+    ]
+    with rules_mod.one_hook() as meter:
+        after = [rules_mod.mark(action, session, ruleset) for action in actions]
+    assert [s.marked for s in after] == [False, True]
+    assert charged == [] and meter.left == rulefile.FLOAT_STEPS and meter.unfinished == []
+
+
+@pytest.mark.parametrize("name", [*ACCEPTED, *LOADING])
+def test_the_grid_finds_nothing_unmarked_in_any_accepted_file(name: str) -> None:
+    loaded = rulefile.load_bytes((ACCEPTED.get(name) or LOADING[name]).encode())
+    assert loaded.errors == ()
+    (r1,) = [spec for spec in loaded.rules if spec.id == rulefile.MARK_RULE]
+    assert r1.after is not None and r1_grid.unmarked(r1.after) == ()
+
+
+# ---------------------------------------------------------------- the brute force (the brief's)
+
+EDIT_CHARS = ". e n v p m k y i d _ r s a c l * ? [ ! ]".split()
+# The brief's five, and two that would cover `.env` but for its length bound (|P| + |Q| <= 4).
+FIXED_NEAR_MISSES = (
+    *(".env.?*", ".env.[!s]*", "?*.pem", "id_rsa.*", "credentials"),
+    *(".env*.env", ".en*nv"),
+)
+MIDDLE_CHARS = (".", "e", "s", "x", " ", "_")
+EXCEPTION_SETS: tuple[tuple[str, ...] | None, ...] = (
+    (".env*.example", ".env*.sample", ".env*.template", "id_rsa*.pub"),
+    (".env.local*.example", "id_rsa_work*.pub"),
+    None,
+)
+
+
+def _edited(text: str, rng: random.Random) -> str:
+    """`text` after one random one-character insert, delete or replace."""
+    at = rng.randrange(len(text) + 1)
+    how = rng.choice(("insert", "delete", "replace")) if text else "insert"
+    if how == "insert":
+        return text[:at] + rng.choice(EDIT_CHARS) + text[at:]
+    at = min(at, len(text) - 1)
+    keep = "" if how == "delete" else rng.choice(EDIT_CHARS)
+    return text[:at] + keep + text[at + 1 :]
+
+
+def _near_miss(rng: random.Random) -> str:
+    if rng.random() < 0.2:
+        return rng.choice(FIXED_NEAR_MISSES)
+    text = rng.choice(COVERING[rng.choice(rulefile.SECRET_FAMILIES)])
+    for _ in range(rng.randint(1, 2)):
+        text = _edited(text, rng)
+    return text or "x"
+
+
+def _r1_names(rng: random.Random) -> list[str]:
+    names = [rng.choice(COVERING[family]) for family in rulefile.SECRET_FAMILIES]
+    for at in rng.sample(range(len(names)), rng.randint(0, 2)):
+        names[at] = _near_miss(rng)
+    return names + [_near_miss(rng) for _ in range(rng.randint(0, 3))]
+
+
+def _r1_file(names: list[str], exceptions: tuple[str, ...] | None) -> str:
+    if exceptions is None:
+        text = changed(AFTER_LINE, AFTER_LINE.replace(', path_except = "secret_names_ok"', ""))
+    else:
+        text = changed(OK_LINE, list_line("secret_names_ok", *exceptions).rstrip("\n"))
+    names_line = list_line("secret_names", *names).rstrip("\n")
+    assert NAMES_LINE in text
+    return text.replace(NAMES_LINE, names_line, 1)
+
+
+def _brute_names() -> list[str]:
+    """For each family its start, every middle of up to 2 characters, and its end (the exact
+    family: its one name); the same with every exempt ending after it. Only SPEC's secrets."""
+    middles = ["", *MIDDLE_CHARS, *(a + b for a in MIDDLE_CHARS for b in MIDDLE_CHARS)]
+    endings = ["", *(end for family in rulefile.SECRET_FAMILIES for end in family.unless)]
+    names: set[str] = set()
+    for family in rulefile.SECRET_FAMILIES:
+        bases = [family.start] if family.exact else [family.start + m + family.end for m in middles]
+        names |= {base + ending for base in bases for ending in endings}
+    return sorted(name for name in names if rulefile.spec_secret(name))
+
+
+def test_brute_force_finds_no_accepted_r1_that_misses_a_secret_name() -> None:
+    rng = random.Random(27)
+    names = _brute_names()
+    assert len(names) > 500 and all(any(f.has(n) for n in names) for f in rulefile.SECRET_FAMILIES)
+    accepted = refused = 0
+    missed: list[tuple[list[str], str]] = []
+    for _ in range(1000):
+        r1_names = _r1_names(rng)
+        loaded = rulefile.load_bytes(_r1_file(r1_names, rng.choice(EXCEPTION_SETS)).encode())
+        if loaded.errors:
+            refused += 1
+            continue
+        accepted += 1
+        (r1,) = [spec for spec in loaded.rules if spec.id == rulefile.MARK_RULE]
+        assert r1.after is not None
+        for name in names:
+            if not r1.after.matches({"hook_event_name": "beforeReadFile", "file_path": name}, {}):
+                missed.append((r1_names, name))
+        for name in rng.sample(names, 20):
+            shell = {"hook_event_name": "beforeShellExecution", "command": f"cat '{name}'"}
+            if not r1.after.matches(shell, {}):
+                missed.append((r1_names, f"shell: {name}"))
+    assert missed[:5] == []
+    assert accepted >= 100 and refused >= 100, (accepted, refused)

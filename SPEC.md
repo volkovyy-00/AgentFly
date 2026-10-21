@@ -331,9 +331,15 @@ name list that marks at least every file *name* the "R1: secret, then network" b
 as secret, and exceptions no wider than theirs: the two SPEC makes, a name that starts `.env` and
 ends `.example`, `.sample` or `.template`, and one that starts `id_rsa` and ends `.pub`, never a
 folder (so an exception cannot match `credentials-prod.example`, which is a secret). Its `then` is exactly `event = ["shell"]` with
-`command_class = "outbound"`, and nothing else. Judged on those names, not on how a list is
-spelled (`.env*` in place of `.env` and `.env.*` is fine), against the program's own minimum and
-not against `default.toml`, so a wider later default never refuses an older file. Widening the
+`command_class = "outbound"`, and nothing else. The names are judged by the shape of the
+patterns, not on sample names: for each of those bullets the list holds one pattern without `/`,
+`?` or `[` that is the bullet's one name (`.env`) or has a single `*` between a part the bullet's
+fixed start begins with and a part its fixed end ends with, the two together no longer than `.env`
+for that bullet (so `.env*` in place of `.env` and `.env.*`, `.*`, `*env`, `*pem` and
+`cred*` are fine, while `.env.?*`, `?*.pem`, `.env*.env` and a union such as `.env.[!s]*` plus
+`.env.s` are refused). R1 holds no floating folder pattern (`.ssh/**`; an anchored `~/.ssh/**` is
+fine), because R1 is never cut short by the rules limit. Both are measured against the program's
+own minimum and not against `default.toml`, so a wider later default never refuses an older file. Widening the
 lists and rewording the message are allowed. A local exception (a company host) waits for the
 reviewed change path (V7).
 
