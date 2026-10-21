@@ -27,6 +27,8 @@ _ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
+# A word longer than this (in characters) is never looked up as a file (V5b-fix2 §5).
+MAX_PATH_WORD: int = 1024
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -289,24 +291,46 @@ def _host_looks_encoded(host: str) -> bool:
     return any(_label_triggers_reduction(p) for p in host.split("."))
 
 
-def _project_relative(word: str, project_root: Path) -> str | None:
-    root: Path = project_root.resolve()
-    raw: Path = Path(word)
-    candidates: list[Path] = []
-    if raw.is_absolute():
-        candidates.append(raw)
-    else:
-        candidates.append(root / raw)
+def _resolved(path: Path) -> Path | None:
+    """`path.resolve()`, or None when the system cannot say: a part over its name limit, a lone
+    surrogate or a NUL (`OSError`, `ValueError`)."""
+    try:
+        return path.resolve()
+    except (OSError, ValueError):
+        return None
 
-    for cand in candidates:
-        try:
-            resolved: Path = cand.resolve()
-        except OSError:
-            continue
-        try:
-            rel: Path = resolved.relative_to(root)
-        except ValueError:
-            continue
-        if resolved.exists():
-            return rel.as_posix()
-    return None
+
+def contained_relative(path: str, root: str) -> str | None:
+    """`path` relative to `root`, both resolved and written with `/`, or None when it is outside.
+
+    A string test: `Path.relative_to` is quadratic in the depth on Python 3.12. The root itself is
+    ".". A root that already ends in "/" (the folder "/") is used as it is.
+    """
+    if path == root:
+        return "."
+    prefix: str = root if root.endswith("/") else root + "/"
+    return path[len(prefix) :] if path.startswith(prefix) else None
+
+
+def _project_relative(word: str, project_root: Path) -> str | None:
+    """The word as a path inside the project when it names an existing file there, else None.
+
+    Never raises (V5b-fix2 §5). A word over `MAX_PATH_WORD` characters is not looked up: it is
+    cheap to refuse and costly to resolve, one system call per part.
+    """
+    if len(word) > MAX_PATH_WORD:
+        return None
+    root: Path | None = _resolved(project_root)
+    if root is None:
+        return None
+    raw: Path = Path(word)
+    resolved: Path | None = _resolved(raw if raw.is_absolute() else root / raw)
+    if resolved is None:
+        return None
+    rel: str | None = contained_relative(resolved.as_posix(), root.as_posix())
+    if rel is None:
+        return None
+    try:
+        return rel if resolved.exists() else None
+    except (OSError, ValueError):
+        return None

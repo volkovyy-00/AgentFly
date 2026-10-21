@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import queue
 import sys
 import threading
@@ -16,7 +17,7 @@ from typing import Any
 from neo4j import Driver, GraphDatabase
 
 from agentfly.recorder import clean as clean_settings
-from agentfly.recorder.clean import clean_command, website_name
+from agentfly.recorder.clean import MAX_PATH_WORD, clean_command, contained_relative, website_name
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive, words
 from agentfly.recorder.paths import config_dir
@@ -286,16 +287,35 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
     return Path.cwd()
 
 
+def _resolved_or_tidied(path: Path) -> str:
+    """The resolved path written with `/`, or, when the system cannot resolve it (a part over its
+    name limit, a lone surrogate), the path tidied by string alone (V5b-fix2 §5)."""
+    try:
+        return path.resolve().as_posix()
+    except (OSError, ValueError):
+        return os.path.normpath(path.as_posix())
+
+
 def relative_file_path(file_path: str, project_root: Path) -> str:
     raw: Path = Path(file_path)
-    root: Path = project_root.resolve()
-    try:
-        if raw.is_absolute():
-            return raw.resolve().relative_to(root).as_posix()
-    except ValueError:
-        pass
+    if raw.is_absolute():
+        rel: str | None = contained_relative(
+            _resolved_or_tidied(raw), _resolved_or_tidied(project_root)
+        )
+        if rel is not None:
+            return rel
     # Fall back to basename so shared files still MERGE (README.md, .env).
     return raw.name
+
+
+def _is_file_in(root: Path, token: str) -> bool:
+    """Whether a word that survived cleaning names something in the project. Never raises."""
+    if len(token) > MAX_PATH_WORD:
+        return False
+    try:
+        return (root / token).exists()
+    except (OSError, ValueError):
+        return False
 
 
 def hosts_from_cleaned(cleaned: str) -> tuple[str, ...]:
@@ -377,7 +397,7 @@ def build_step_record(
                 file_path = relative_file_path(token, root)
                 file_sensitive = True
                 break
-            if file_path is None and (root / token).exists():
+            if file_path is None and _is_file_in(root, token):
                 file_path = relative_file_path(token, root)
     elif kind == "tool":
         tool = str(payload.get("tool_name", "") or payload.get("name", "") or "tool")
