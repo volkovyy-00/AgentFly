@@ -339,7 +339,8 @@ def relative_file_path(file_path: str, project_root: Path) -> str:
 
 def _word_path(token: str, root: Path) -> str:
     """`relative_file_path` for a word of a command. A word over `MAX_PATH_WORD` is not looked up
-    (§5, as `_is_file_in`): it is saved by its base name, as a word outside the project is."""
+    (§5, as `_is_file_in`): it is saved by its base name, also an absolute one inside the project,
+    which `relative_file_path` would save relative to the root (a change from before V5b-fix2)."""
     if len(token) > MAX_PATH_WORD:
         return _storable(Path(token).name)
     return relative_file_path(token, root)
