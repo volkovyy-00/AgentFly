@@ -1425,13 +1425,32 @@ def _who(uid: int) -> str:
     return "root" if uid == 0 else f"user id {uid}"
 
 
-def _trusted_bytes(path: Path, uid: int) -> bytes:
-    """The active file's bytes, if it is a plain file owned by `uid` that only `uid` can write.
+def _check_trusted(fd: int, uid: int) -> None:
+    """Is the open file regular, owned by `uid` and writable by no one else? (`fstat`; no read)"""
+    info: os.stat_result = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise _Untrusted("is not a regular file")
+    if info.st_uid != uid:
+        raise _Untrusted(
+            f"is owned by {_who(info.st_uid)}, not {_who(uid)}; if you trust what it says, "
+            f"give it to {_who(uid)} (sudo chown, sudo chmod 644)"
+        )
+    if info.st_mode & 0o022:
+        raise _Untrusted(
+            f"can be written by group or others (mode {stat.S_IMODE(info.st_mode):04o}); "
+            f"review what it says first, then sudo chmod 644 it"
+        )
+
+
+def _trust_fd(path: Path, uid: int) -> int:
+    """Open the active file and check it; return the descriptor, which the caller closes.
 
     One descriptor does it all, so nothing can be swapped between the check and the read:
     `O_NOFOLLOW` refuses a link in the last place, `O_NONBLOCK` lets a named pipe open (and then
     fail the type check) instead of hanging the recorder at its start, and `fstat` looks at the
-    file that was opened. A folder above it is not checked: the installer made it root's.
+    file that was opened. A folder above it is not checked: the installer made it root's. The
+    recorder, `doctor` and the installer all judge trust through this one function. A refused
+    file is closed here and raises `_Untrusted`.
     """
     flags: int = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
     try:
@@ -1443,19 +1462,34 @@ def _trusted_bytes(path: Path, uid: int) -> bytes:
             ) from exc
         raise _Untrusted(f"cannot be read: {exc.strerror or type(exc).__name__}") from exc
     try:
-        info: os.stat_result = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise _Untrusted("is not a regular file")
-        if info.st_uid != uid:
-            raise _Untrusted(
-                f"is owned by {_who(info.st_uid)}, not {_who(uid)}; if you trust what it says, "
-                f"give it to {_who(uid)} (sudo chown, sudo chmod 644)"
-            )
-        if info.st_mode & 0o022:
-            raise _Untrusted(
-                f"can be written by group or others (mode {stat.S_IMODE(info.st_mode):04o}); "
-                f"review what it says first, then sudo chmod 644 it"
-            )
+        _check_trusted(fd, uid)
+    except _Untrusted:
+        os.close(fd)
+        raise
+    except OSError as exc:
+        os.close(fd)
+        raise _Untrusted(f"cannot be read: {exc.strerror or type(exc).__name__}") from exc
+    return fd
+
+
+def trust_problem(path: Path, uid: int) -> str | None:
+    """Why the recorder would not believe the file at `path`, or None if it would. Reads nothing.
+
+    The same open and checks as the recorder's read of the active file (a plain file owned by
+    `uid`, which no one else can write), and the same words.
+    """
+    try:
+        fd: int = _trust_fd(path, uid)
+    except _Untrusted as exc:
+        return str(exc)
+    os.close(fd)
+    return None
+
+
+def _trusted_bytes(path: Path, uid: int) -> bytes:
+    """The active file's bytes, if it is a plain file owned by `uid` that only `uid` can write."""
+    fd: int = _trust_fd(path, uid)
+    try:
         chunks: list[bytes] = []
         total: int = 0
         while total <= MAX_FILE_BYTES:

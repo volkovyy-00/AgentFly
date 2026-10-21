@@ -5,7 +5,9 @@ system user's, readable by everybody and writable by nobody else; a file that is
 default the package once carried (the owner never edited it) is replaced by this version's; a
 repair, a second `init -g` and an upgrade leave an edited copy alone; `uninstall` takes it away with
 the folder. What is written is the packaged default as read once, checked against the wheel's
-RECORD hash and parsed cleanly.
+RECORD hash and parsed cleanly. Known bytes in a file that is not exactly what `init -g` writes
+(the owner's, mode 0644) are rewritten; an edited file is never written, chowned or chmodded, and
+an edited one the recorder would not read gets a notice that says so (V5b-fix2).
 """
 
 from __future__ import annotations
@@ -13,12 +15,14 @@ from __future__ import annotations
 import json
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agentfly.install import InstallError, installer, packages, pythons, records
+from agentfly.cli import init
+from agentfly.install import InstallError, elevate, installer, packages, pythons, records
 from agentfly.install.layout import SYSTEM, Layout
 from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
@@ -311,11 +315,28 @@ def test_an_edit_that_is_not_valid_is_kept_too(
     assert layout.rules.read_text() == BROKEN_TOML
 
 
-def test_an_intact_install_with_an_edit_says_only_that_nothing_changed(
+def kept(layout: Layout) -> str:
+    return (
+        f"kept your edited rules file {layout.rules}; this version's default rules were not applied"
+    )
+
+
+def test_an_intact_install_with_an_edit_prints_the_kept_notice_after_the_pinned_line(
     layout: Layout, archive: tuple[Path, PythonBuild]
 ) -> None:
     do_install(layout, archive)
     layout.rules.write_text(EDITED, encoding="utf-8")
+    outcome = do_install(layout, archive)
+    assert (outcome.changed, outcome.messages) == (
+        False,
+        ["already installed and intact; nothing changed", kept(layout)],
+    )
+
+
+def test_an_intact_install_with_no_edit_prints_only_the_pinned_line(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
     outcome = do_install(layout, archive)
     assert (outcome.changed, outcome.messages) == (
         False,
@@ -435,3 +456,232 @@ def test_recorded_hash_is_the_hash_the_check_made() -> None:
     assert digest == rulefile.sha256_of(rulefile.default_path().read_bytes())
     assert packages.recorded_hash(check, "agentfly/nothing.toml") is None
     assert packages.recorded_hash(check, RECORD_PATH, "no-such-package") is None
+
+
+# ------------------------------------------- known bytes in a file that is not exactly ours
+
+
+def wanted_hash() -> str:
+    return rulefile.sha256_of(rulefile.default_path().read_bytes())
+
+
+def make_untrusted(fault: str, layout: Layout, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Spoil the file or who is expected to own it; return a word the reason must hold."""
+    if fault == "owner":  # the layout's owner is root in production; here a user who is not us
+        monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+        return "is owned by"
+    mode = 0o664 if fault == "group-writable" else 0o600
+    layout.rules.chmod(mode)
+    return f"{mode:04o}"
+
+
+FAULTS = ["group-writable", "owner-only", "owner"]
+
+
+@pytest.mark.parametrize("fault", FAULTS)
+def test_current_bytes_that_are_not_exactly_ours_are_rewritten(
+    fault: str, layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    reason = make_untrusted(fault, layout, monkeypatch)
+    assert installer.rules_state(layout, wanted_hash()) == "untrusted"
+    assert status_of(layout, archive[1]) == {"rules"}, "the same bytes, but not an intact file"
+    before = fingerprint(layout.rules)
+    outcome = do_install(layout, archive)
+    after = fingerprint(layout.rules)
+    assert after != before and after[0] != before[0], "a fresh inode, not a chmod of the old file"
+    assert layout.rules.read_bytes() == rulefile.default_path().read_bytes()
+    assert outcome.changed
+    (said,) = [m for m in outcome.messages if "rules" in m]
+    assert reason in said and "rewrote the default rules" in said
+    assert "`agentfly stop`" in said and "`agentfly start`" in said
+
+
+def test_a_rewritten_file_is_exactly_ours_again(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    layout.rules.chmod(0o600)
+    do_install(layout, archive)
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o644
+    assert installer.rules_state(layout, wanted_hash()) == "current"
+    assert status_of(layout, archive[1]) == set()
+    again = do_install(layout, archive)
+    assert (again.changed, again.messages) == (
+        False,
+        ["already installed and intact; nothing changed"],
+    )
+
+
+def test_a_mode_the_recorder_would_load_is_still_not_exactly_ours(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    layout.rules.chmod(0o600)  # the recorder loads it (D3 asks only that others cannot write)
+    assert rulefile.trust_problem(layout.rules, os.getuid()) is None
+    assert installer.rules_state(layout, wanted_hash()) == "untrusted"
+
+
+def test_an_older_default_is_rewritten_whatever_its_mode(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_bytes(SHIPPED[0].read_bytes())
+    layout.rules.chmod(0o664)
+    assert installer.rules_state(layout, wanted_hash()) == "older"
+    do_install(layout, archive)
+    assert layout.rules.read_bytes() == rulefile.default_path().read_bytes()
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o644
+
+
+def test_an_edited_untrusted_file_keeps_its_bytes_and_mode_with_a_notice(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    layout.rules.chmod(0o664)
+    before, owner = fingerprint(layout.rules), layout.rules.stat().st_uid
+    assert status_of(layout, archive[1]) == set(), "an edit is not drift, trusted or not"
+    outcome = do_install(layout, archive)
+    assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o664
+    assert layout.rules.stat().st_uid == owner
+    assert not outcome.changed
+    line, notice = outcome.messages
+    assert line == "already installed and intact; nothing changed"
+    assert notice.startswith(f"kept your edited rules file {layout.rules}, but the recorder will")
+    assert "written by group or others" in notice and notice.endswith(rulefile.DEFAULT_IN_FORCE)
+
+
+def test_the_notice_is_the_recorders_own_reason_for_an_edit_it_would_refuse(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+    reason = rulefile.trust_problem(layout.rules, os.getuid() + 1)
+    assert reason is not None and "is owned by" in reason
+    assert installer.rules_notice(layout, wanted_hash()) == (
+        f"kept your edited rules file {layout.rules}, but the recorder will not read it: "
+        f"{reason}; {rulefile.DEFAULT_IN_FORCE}"
+    )
+
+
+def test_an_edit_with_other_work_to_do_gets_the_notice_in_the_changed_messages(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    before = fingerprint(layout.rules)
+    monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+    tamper_with_the_client(layout)
+    outcome = do_install(layout, archive)
+    assert outcome.changed
+    (notice,) = [m for m in outcome.messages if "kept your edited rules file" in m]
+    assert "but the recorder will not read it: is owned by" in notice
+    assert notice.endswith(rulefile.DEFAULT_IN_FORCE)
+    assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+
+
+def test_a_group_writable_edit_with_other_work_to_do_stops_the_repair_and_is_not_touched(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    # The lock check (`assert_locked`) has always refused a folder with a file others can write.
+    # The edit is not chmodded to get past it: the repair is undone and the file stays as it was.
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    layout.rules.chmod(0o664)
+    before = fingerprint(layout.rules)
+    tamper_with_the_client(layout)
+    with pytest.raises(InstallError, match="can be written by group or others"):
+        do_install(layout, archive)
+    assert fingerprint(layout.rules) == before
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o664
+
+
+@pytest.mark.parametrize("state", ["missing", "current", "older", "untrusted", "blocked"])
+def test_only_an_edited_file_has_a_notice(
+    state: str, layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    assert installer.rules_notice(layout, wanted_hash()) is None  # nothing installed: missing
+    do_install(layout, archive)
+    if state == "older":
+        layout.rules.write_bytes(SHIPPED[0].read_bytes())
+    elif state == "untrusted":
+        layout.rules.chmod(0o600)
+    elif state == "blocked":
+        layout.rules.unlink()
+        layout.rules.mkdir()
+    elif state == "missing":
+        layout.rules.unlink()
+    assert installer.rules_state(layout, wanted_hash()) == state
+    assert installer.rules_notice(layout, wanted_hash()) is None
+
+
+def test_the_owner_who_must_hold_the_file(layout: Layout) -> None:
+    assert layout.owner is None and installer.rules_owner_uid(layout) == os.getuid()
+    assert installer.rules_owner_uid(replace(layout, owner=(0, 0))) == 0
+    assert installer.rules_owner_uid(replace(layout, owner=(501, 20))) == 501
+    assert installer.rules_owner_uid(SYSTEM) == 0
+
+
+def test_init_as_the_user_prints_the_notice_without_a_password(
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(installer, "status", lambda *args, **kwargs: set())
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert init._as_user("3.24.12", archive[1]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "already installed and intact; nothing changed",
+        kept(layout),
+    ]
+
+
+def test_init_as_the_user_prints_nothing_more_without_an_edit(
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    do_install(layout, archive)
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    assert init._as_user("3.24.12", archive[1]) == 0
+    assert capsys.readouterr().out == "already installed and intact; nothing changed\n"
+
+
+# ------------------------------------------------------------------ a file that cannot be read
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_an_unreadable_file_is_unknown_and_counts_as_work_for_root(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    do_install(layout, archive)
+    layout.rules.chmod(0)
+    try:
+        assert installer.rules_state(layout, wanted_hash()) == "unknown"
+        assert "rules" in status_of(layout, archive[1])
+        assert installer.rules_notice(layout, wanted_hash()) is None
+    finally:
+        layout.rules.chmod(0o644)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_root_that_cannot_read_a_file_calls_it_edited_as_before(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    layout.rules.chmod(0)
+    try:
+        monkeypatch.setattr(os, "geteuid", lambda: 0)
+        assert installer.rules_state(layout, wanted_hash()) == "edited"
+        assert "rules" not in status_of(layout, archive[1])
+    finally:
+        layout.rules.chmod(0o644)

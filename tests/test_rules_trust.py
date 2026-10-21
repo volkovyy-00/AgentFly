@@ -131,6 +131,52 @@ def test_a_refused_file_is_not_loaded_and_the_default_runs(
 
 
 @pytest.mark.parametrize("name", REFUSED)
+def test_trust_problem_says_what_the_recorder_says(
+    name: str, untrusted: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = untrusted(name)
+    monkeypatch.setattr(os, "read", lambda *a: pytest.fail("trust_problem read the file"))
+    problem = rulefile.trust_problem(path, rulefile.ACTIVE_OWNER_UID)
+    assert problem is not None and REFUSED[name][1] in problem
+    assert rulefile.load_active_file(path).errors == (problem,), "one test, one wording"
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o600, 0o444])
+def test_trust_problem_is_none_for_a_file_the_recorder_believes_whatever_it_says(
+    mode: int, active_rules: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active_rules.write_text("this is not a rules file\n", encoding="utf-8")
+    active_rules.chmod(mode)  # the recorder's rule is "no one else can write", not "0644" (D3)
+    monkeypatch.setattr(os, "read", lambda *a: pytest.fail("trust_problem read the file"))
+    assert rulefile.trust_problem(active_rules, rulefile.ACTIVE_OWNER_UID) is None
+
+
+def test_trust_problem_leaves_no_descriptor_open(
+    active_rules: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: set[int] = set()
+    real_open, real_close = os.open, os.close
+
+    def spy_open(*args: Any, **kwargs: Any) -> int:
+        fd = real_open(*args, **kwargs)
+        opened.add(fd)
+        return fd
+
+    def spy_close(fd: int) -> None:
+        opened.discard(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "close", spy_close)
+    active_rules.write_text(GOOD, encoding="utf-8")
+    assert rulefile.trust_problem(active_rules, rulefile.ACTIVE_OWNER_UID) is None
+    active_rules.chmod(0o666)  # refused by the check after the open
+    assert rulefile.trust_problem(active_rules, rulefile.ACTIVE_OWNER_UID) is not None
+    assert rulefile.trust_problem(active_rules.with_name("nowhere"), 0) is not None
+    assert opened == set()
+
+
+@pytest.mark.parametrize("name", REFUSED)
 def test_the_page_and_health_say_why(name: str, untrusted: Callable[[str], Path]) -> None:
     untrusted(name)
     with start() as client:
