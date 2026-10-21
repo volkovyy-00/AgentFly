@@ -1,36 +1,52 @@
 # V5b-fix2: Second review round for V5b (hook-cost bound, R1's minimum on every name, honest "intact", long words)
-Status: in progress (as of 2026-10-21 10:35)
-Result: One per-hook budget bounds floating patterns (now also within one walk) and command lists; R1's minimum is structural; long words never raise; every saved path encodes; init -g rewrites only checked bytes. Review and audit findings fixed inside Touches; CR1 is outside them.
-Evidence: Branch ag-v5b-rules-file at e43239e (11 fix commits 49f6988..e43239e after the simplify 69c9d0e). Check: ruff clean, 4452 passed, 5 skipped. Smoke summary in the newest section. Nothing pushed.
+Status: in progress (as of 2026-10-21 10:49)
+Result: One per-hook budget bounds floating patterns and command lists; R1's minimum is structural; long words never raise; every saved path encodes; init -g rewrites only checked bytes. Findings fixed inside Touches; CR1 is outside them; CR2's fix is reverted (fails closed).
+Evidence: Branch ag-v5b-rules-file, last code commit 0228fe3 (15 fix commits 49f6988..0228fe3 after the simplify 69c9d0e; this report in the next one). Check: ruff clean, 4455 passed, 5 skipped. Smoke summary in the newest section. Nothing pushed.
 Needs owner: CR1, a security gap in sessions.py (outside this card): a fallback-linked subagent can miss a later R1 mark. Recommended: fix in the next card that may touch sessions.py (OR the parent's mark and triggers into an already-pending Task record).
-Details: see "## 2026-10-21 10:35" below.
+Details: see "## 2026-10-21 10:49" below.
+
+## 2026-10-21 10:49
 
 ### Final verification and code review
 
 The controller ran the final whole-card review (ready to merge, minors only), `/final-verification`
 (smoke OK; simplify commit 69c9d0e, behaviour-preserving; the audit found A1-A4) and `/code-review
 high` on `main...HEAD` (CR1-CR10). This wave fixes the findings inside the card's Touches, each with a
-test that failed first (except M3, text only). Hook answers, deny bytes, the demo replay and stored
-values are unchanged for everything that worked before; `MAX_WORK`, `WORK_*`, `FLOAT_STEPS`, `DIV`,
-`MAX_PATH_WORD` and the meter's prices are unchanged.
+test that failed first (except M3 and the `_word_path` docstring, text only). The re-review of the
+wave then reverted the CR2 fix (it opened a fail-open, below) and fixed R1's clause messages. Hook
+answers, deny bytes, the demo replay and stored values are unchanged for everything that worked before
+(one exception, the Final M2 row); `MAX_WORK`, `WORK_*`, `FLOAT_STEPS`, `DIV`, `MAX_PATH_WORD` and the
+meter's prices are unchanged.
 
 | Finding | Fix | Commit |
 |---|---|---|
 | A1: one floating walk overspent the meter (one `.ssh/**` on a path 800,000 folders deep: left -1,555,004, 0.84 s) | `_place_middle` reads what the meter has left before each block's walk and charges as soon as the walk passes it (one integer compare per start), so the meter ends at most one start's work below 0. The repro now ends at -2 (0.25 s, the default rules alone 0.20 s). The counting test's steps are 45,004 (were 45,086). Test: `test_rules_meter.py::test_a_walk_stops_once_it_has_spent_what_the_meter_has_left` (50,000 folders: -99,002 before, -2 after) | 49f6988 |
 | A2: a Read/Write path the history cannot encode lost the row and `/api/steps` answered 500 | A path that does not encode is "outside" whether `resolve()` failed or succeeded (macOS resolves U+DC80..U+DCFF), and the base name is stored with **U+FFFD for each lone surrogate** (`store._storable`; a path that encodes keeps its exact value). `<ws>/a/\udcff/b` is saved `b` (as `a/\ud800/b` was), `<ws>/x/\udcff` and `<ws>/x/\ud800` as `\ufffd`. Tests: `test_long_words.py::test_a_read_path_the_history_cannot_encode_still_reaches_it_and_the_page` (3 cases), the updated `test_an_unencodable_absolute_path_is_saved_as_its_base_name` and `test_a_word_the_system_cannot_encode_is_not_a_path`. Closes residual 10 | f3f40c4 |
-| Final M2: the sensitive-word branch looked up a 60 kB program word (0.52 s) | `store._word_path`: a word over `MAX_PATH_WORD` is saved by its base name without asking the system, as `_is_file_in` already did (same value as before: such a word is outside the project). Test: `test_long_words.py::test_a_long_program_word_naming_a_secret_is_not_looked_up`. Closes residual 11's first half | f3f40c4 |
+| Final M2: the sensitive-word branch looked up a 60 kB program word (0.52 s) | `store._word_path`: a word over `MAX_PATH_WORD` is saved by its base name without asking the system, as `_is_file_in` already did. The value changes for one input only: an absolute word over 1,024 characters inside the project used to be saved relative to the root and is now its base name (the docstring said "as before" until the re-review; corrected in 0228fe3). Test: `test_long_words.py::test_a_long_program_word_naming_a_secret_is_not_looked_up`. Closes residual 11's first half | f3f40c4 |
 | CR3 / A4: a broken rule `R10` hid R1's D27 errors | `_with_minimum` matches `"rule R1:"`. Test: `test_rules_minimum.py::test_a_broken_rule_whose_id_starts_like_r1_does_not_hide_r1s_errors` (R10, R1x, R2 control; R1 as warn and R1 missing) | eb69442 |
+| Re-review: that match missed R1's own clause and test errors (`rule R1 after:`, `rule R1 then:`, `rule R1 test #N:`), so a broken R1 clause was also reported as "rule R1: missing" | `_with_minimum` matches `"rule R1:"` and `"rule R1 "` (an id has no space, so `R10` and `R1x` stay another rule's). Test: `test_rules_minimum.py::test_a_fault_inside_r1s_clause_or_test_is_its_own_error_and_not_also_missing` (after, then, test #1: one error each, no "missing"; fails without the fix) | 261bea7 |
 | CR5: `rules check` said "(file given)" for the active path itself | The label comes from `rulefile.is_active_path`. Test: `test_rules_trust.py::test_rules_check_calls_the_active_file_so_however_it_is_given` | e6832a0 |
 | CR6: with the packaged default damaged and the active file refused, the start-up error said "the packaged default rules are in force" | `rules._refusal` ends the line with the default's own reason ("the packaged default rules cannot be used: ...") when the default is damaged. Test: `test_rules_load.py::test_a_refused_active_file_on_a_damaged_default_does_not_claim_the_default_is_in_force` | 58f5930 |
 | CR7: a link or folder at the rules path was refused only after the password | `installer.check_packaged_default` raises root's own `_blocked` error first. Test: `test_install_cli.py::test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password` (link, folder; no sudo, no prompt). Closes the "`blocked` reaches the password prompt" gap | 8119f73 |
 | Final M4: the limit log line held the whole chat id | At most 80 characters (`chat[:80]`). Test: `test_rules_limit.py::test_the_log_line_holds_at_most_80_characters_of_the_chat_id` (10,002 characters) | 07f1e58 |
 | Final M6: `LIMIT_MESSAGE` promised "`rules check` names the heavy ones" (false for a probe-heavy list) | "... may name the heavy ones"; spec §4.3 and §4.4 follow. Test pins the text: `test_rules_limit.py::test_the_limit_message_does_not_promise_that_rules_check_names_every_heavy_rule`. Closes residual 4's message half (the list still has no lint line) | 5692dbb |
 | Final M3 (no test): stale text | `app.py`'s budget comment names command lists too; `test_rules_meter.py`'s "spent meter" comment; the spec's two `Status:` lines are one (revision 4, and what it changed) | 0e4906e |
-| CR2 / final M1: a trigger held only through a parent (or the workspace fallback) is re-evaluated by `mark`; if the meter ran out there the hook got the limit answer | Fixed, cleanly: `decide` already receives the effective session (`SessionStore.apply_mark` returns `effective(stored)`), so `rules._outcome` runs the check for a rule whose trigger that session holds even when `mark` left it unfinished. What `mark` records is unchanged; `sessions.py` is untouched. Test: `test_rules_limit.py::test_an_inherited_trigger_left_unfinished_in_mark_is_judged_as_held` (a subagent of a parent holding a heavy block trigger, on a heavy `echo` its `then` does not match: allow, was the limit deny; a chat without the trigger still gets the limit deny); spec §4.3 says so | de89ead |
-| AGENTS.md "Testing" | Lines for each new test, the counting test's 45,004 | e43239e |
+| AGENTS.md "Testing" | Lines for each new test, the counting test's 45,004; the CR2 line follows the revert and R1's clause errors are in the R1 minimum line | e43239e, 31e781a, 261bea7 |
 
 ### Listed, not fixed (one line each, with why)
 
+- **CR2 / final M1 `rules.py` `_outcome` (reverted; the residual fails closed).** `mark` evaluates
+  again a trigger a chat holds only through its parent or the 30-minute workspace fallback, and on a
+  heavy command the meter can run out there: the rule is unfinished and the hook gets the limit deny
+  although the rule's `then` may not match. That is a spurious answer, not a miss. The fix in de89ead
+  judged such a trigger as held, and the re-review showed it opened a fail-open: a block trigger
+  inherited only through the expiring fallback, left unfinished on a heavy command that also performs
+  the trigger action, was allowed and the trigger was lost (`mark` records nothing for it), so after
+  the window the chat was no longer covered. Reverted in 960d42a (controller ruling R-q). The
+  heavy-fallback case is pinned as the limit deny in
+  `test_rules_limit.py::test_a_heavy_command_that_would_set_a_fallback_trigger_gets_the_limit_deny`
+  (31e781a; it fails on de89ead's code). Not fixed: an inherited trigger on a heavy command still
+  gets the limit deny.
 - **CR1 `sessions.py:298` (security gap, for the lead and the owner).** The pending Task record is a
   one-time snapshot of the parent's mark and triggers. When a chat holding only a non-R1 trigger starts
   a Task and is marked afterwards, a child reached only through the 30-minute workspace fallback
@@ -74,10 +90,10 @@ fails the rules line, `rules check` exits 1), or makes a hook answer the limit:
 $ uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
 All checks passed!
 209 files already formatted
-4452 passed, 5 skipped, 8 warnings in 143.47s (0:02:23)      (at e43239e; 4437 at 69c9d0e)
+4455 passed, 5 skipped, 8 warnings in 123.64s (0:02:03)      (at 0228fe3; 4452 at e43239e, 4437 at 69c9d0e)
 ```
 
-Smoke test (`scratchpad/final/smoke_test.py`, the controller's):
+Smoke test (`scratchpad/final/smoke_test.py`, the controller's, at the final verification; not repeated for the re-review):
 
 ```
 SMOKE SUMMARY
@@ -93,8 +109,6 @@ default, .env read then curl with a 5000-char word             0.0 ms  deny  Blo
 default, echo a 5000-char word                                 0.0 ms  allow
 1 passed in 3.52s
 ```
-
-## 2026-10-21 09:40" below.
 
 ## 2026-10-21 09:40
 
