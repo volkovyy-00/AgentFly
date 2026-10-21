@@ -45,8 +45,8 @@ Do **not** use a Unix socket — HTTP matches the local server + web UI on port 
 | Token | `~/.config/agentfly/token` | Mode 600; written on server start |
 
 The whole `.cursor/` directory is in `.gitignore`. Do not commit `hooks.json` —
-paths and Python choice are machine-local. After clone (or after pulling
-install changes), run `./install.sh` so Cursor has a fresh config.
+paths and Python choice are machine-local. In a dev checkout, after clone (or
+after pulling install changes), run `./install.sh` so Cursor has a fresh config.
 
 **Footgun:** never delete the hook script while `hooks.json` still points at it.
 Python exit code **2** (file missing) is treated as **deny** and can lock the agent.
@@ -62,7 +62,7 @@ Project layout: `agentfly/` (hook client, recorder, CLI), `hooks/`, `ui/`, `test
 
 ```bash
 uv sync
-./install.sh   # required: writes gitignored .cursor/hooks.json
+./install.sh   # dev checkout only: writes gitignored .cursor/hooks.json
 ```
 
 Then:

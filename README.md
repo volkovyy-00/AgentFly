@@ -331,14 +331,15 @@ AgentFly is a first layer of defence, not a sandbox.
   bypass the hooks.
 - If the recorder is not running, the hook client applies the **offline guard**
   instead of allowing everything: it denies outbound commands (except to
-  `localhost` and private addresses) and anything that touches AgentFly's own
-  files, and allows the rest (SPEC.md section 9). Each deny says to run
-  `agentfly start`.
+  `localhost` and private addresses), every inline `python -c` or `node -e`, and
+  anything that touches AgentFly's own files, and allows the rest (SPEC.md
+  section 9). Each deny says to run `agentfly start`.
 - A determined agent can get around AgentFly, for example by hiding the file
   name (`cat .en*`), sending data through DNS, or through a tunnel to a local
   address.
-- Rule R0 stops the agent from touching AgentFly's own files and from stopping,
-  wiping or uninstalling it (SPEC.md section 5).
+- While the recorder runs, rule R0 stops the agent from touching AgentFly's own
+  files and from stopping, wiping or uninstalling it (SPEC.md section 5). With
+  the recorder down, only the offline guard above applies.
 
 > [!WARNING]
 > Do not delete or move `hooks/hook.py` or `agentfly/hook_client.py` while `.cursor/hooks.json` still
