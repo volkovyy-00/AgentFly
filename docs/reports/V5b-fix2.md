@@ -1,11 +1,33 @@
 # V5b-fix2: Second review round for V5b (hook-cost bound, R1's minimum on every name, honest "intact", long words)
-Status: in progress (as of 2026-10-21 10:49)
+Status: done (as of 2026-10-21 11:05)
 Result: One per-hook budget bounds floating patterns and command lists; R1's minimum is structural; long words never raise; every saved path encodes; init -g rewrites only checked bytes. Findings fixed inside Touches; CR1 is outside them; CR2's fix is reverted (fails closed).
-Evidence: Branch ag-v5b-rules-file, last code commit 0228fe3 (15 fix commits 49f6988..0228fe3 after the simplify 69c9d0e; this report in the next one). Check: ruff clean, 4455 passed, 5 skipped. Smoke summary in the newest section. Nothing pushed.
+Evidence: Branch ag-v5b-rules-file, last code commit 0228fe3 (fixes 49f6988..0228fe3 after simplify 69c9d0e). Check: ruff clean, 4455 passed, 5 skipped. /final-verification READY TO COMMIT; /code-review high done. Nothing pushed.
 Needs owner: CR1, a security gap in sessions.py (outside this card): a fallback-linked subagent can miss a later R1 mark. Recommended: fix in the next card that may touch sessions.py (OR the parent's mark and triggers into an already-pending Task record).
 Details: see "## 2026-10-21 10:49" below.
 
 ## 2026-10-21 10:49
+
+### Final verification verdict (pasted)
+
+```
+## Final verification
+
+**Smoke test** — the brief's scenarios through the whole hook (scratch script, Recorder.run, best of
+three, load ~2.3): reviewer's pem x8 / json x10 files at 300 words 60 deep 32.9 / 33.5 ms allow; a
+floating block rule 43.0 ms limit deny; the same file on a marked chat + curl: R1 deny; 198 bipartite
+command-list block rules 36.7 ms limit deny; default `bash -c` with 300 paths 60 deep 11.8 ms allow;
+.env read then curl with a 300 / 5,000-char word: R1 deny; echo of the same word: allow.
+`agentfly rules check` on a dodge file (credentials + credentials[!$ ]*) and on R1 + `.ssh/**`: exit 1
+naming R1; R1 + `~/.ssh/**`: exit 0. Same verdicts re-run after the fixes.
+**Test suite** — AGENTS.md check line: 4437 passed, 5 skipped before simplify; 4437 after (69c9d0e);
+4455 passed, 5 skipped after the fix wave and the corrective round (0228fe3 / 9040510).
+**Simplified** — rulefile.py, installer.py, clean.py, store.py, two tests (69c9d0e, behaviour-preserving).
+**Audit** — 4 findings: A1 (floating walk overspent the meter) confirmed+fixed 49f6988; A2 (unencodable
+saved path) confirmed+fixed f3f40c4; A4 (R10 hid R1's errors) confirmed+fixed eb69442/261bea7; A3
+(root-owned 0600 edited file called kept) confirmed, not fixed: listed below as a gap for the lead.
+
+**Verdict: READY TO COMMIT** — with A3 and CR1 recorded as known gaps (below), not fixed in this card.
+```
 
 ### Final verification and code review
 
@@ -357,7 +379,7 @@ the limit answer; the rules a real owner writes are never charged. Cost if wrong
 large command list could reach the limit on a long command and its block rule would deny; the charge
 is up to about 4x conservative (residual 3).
 
-**The controller's rulings** (R-a to R-n), one line each, with what it costs if wrong:
+**The controller's rulings** (R-a to R-q), one line each, with what it costs if wrong:
 - **R-a** Task 2 routes every meter charge through one function (`_charge`) and exposes a no-op `_tally`
   for counting real steps, because Task 6 needs both and no earlier task named them. Cost: small
   rework in `rulefile`.
@@ -397,6 +419,17 @@ is up to about 4x conservative (residual 3).
   untouched, repair undone); `lock_problems` is not weakened (security-sensitive, outside the brief).
   The spec line is amended in this change. Cost: after an upgrade a user with an untrusted edited file
   sees a lock error, not the friendlier notice, until a later card.
+- **R-o** `/final-verification`'s simplify step covers only the files this card changed (fd1a734..HEAD),
+  not all of `main...HEAD` (V5b and V5b-fix passed their own verification); the audit and
+  `/code-review high` read `main...HEAD`. Cost: earlier cards' code stays unsimplified, as it was.
+- **R-p** One fix wave for the final review, the audit and `/code-review high` (A1, A2, CR3/A4, CR5,
+  CR6, CR7, M2, M3, M4, M6, CR2); CR1, CR4, CR8-CR10, A3, M5 and M7 listed, not fixed. A2's check
+  also covers the older last-part-surrogate case, superseding R-m's note. Cost: a later card picks up
+  the listed ones.
+- **R-q** After the wave's re-review, a small corrective round: revert the CR2 fix (it opened a
+  fail-open through the workspace fallback; the residual fails closed), match R1's clause errors, fix
+  this report's structure. This overrides the review process's "one fix wave" because the wave added
+  a fail-open to a security tool. Cost: one more small pass.
 
 ### Gaps for the lead
 
