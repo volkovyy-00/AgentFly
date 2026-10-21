@@ -143,8 +143,8 @@ V7 and V9 can run in parallel.
 - **Lane:** backend, after V5b · **Depends on:** V5b
 
 ### V5d · Hook speed on long commands and V5b leftovers
-- **Brief:** not written (owner 2026-10-21: merge V5b now, follow-up card). Scope from the V5b re-trial: check as text that a word stays inside the project before any disk lookup (`clean.py` `_project_relative`, `store.py` `_is_file_in`; 300 × 1,022-char paths took 633 ms; also CodeQL's three path alerts and `/net` automount look-ups); charge `_command_hit`'s program walk; pin `FLOAT_STEPS`; `lock_problems` vs a trusted 0640 edited rules.toml.
-- **Lane:** backend, ∥ wave 1 (file overlap with F11 checked when the brief is written) · **Depends on:** V5b ✅
+- **Brief:** `docs/briefs/V5d.md` (authoritative; pass 2 2026-10-21 against 41fcc24). Text-only path check before any disk look-up plus a per-hook look-up budget (lead 2026-10-21: words past it are stored as `<arg>`); `_command_hit` charged; `FLOAT_STEPS` pinned; `lock_problems` vs a trusted 0640 rules.toml.
+- **Lane:** backend, ∥ wave 1 (no module shared with F9, F13, F11) · **Depends on:** V5b ✅
 
 ### V7 · Rule change flow: draft, check, diff, backtest, `sudo` approve
 - **Owner:** worker-backend
@@ -185,7 +185,7 @@ V7 and V9 can run in parallel.
 ---
 
 ### F11 · Session state off the hook path
-- **Owner:** worker-backend · brief not written · after V5b (shares `sessions.py` and `app.py`) · approved by the owner 2026-10-20
+- **Owner:** worker-backend · brief `docs/briefs/F11.md` (re-checked 2026-10-21 against 41fcc24; V5b's CR1 added) · approved by the owner 2026-10-20
 - **Scope:** `SessionStore.save` rewrites and fsyncs all of `sessions.json` inside every `/hook` answer, and nothing prunes it (lead measured 2026-10-20: `put()` 1.3 ms at 10 chats, 61 ms median at 5000). Settle what must be on disk before the answer (marks; `next_step`, since `steps` rows are `INSERT OR REPLACE` on (session_id, ord)), and add retention like D14.
 - **Done when:** a hook answer no longer waits on a whole-file rewrite; marks and step order survive a crash and a restart; the file stays bounded.
 
