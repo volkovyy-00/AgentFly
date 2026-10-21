@@ -927,11 +927,18 @@ def test_read_tail_reads_a_plain_file_and_a_link_to_one(world: World, tmp_path: 
     assert hookslog.read_tail(world.log) == hookslog.read_tail(link) == world.log.read_text()
 
 
-def test_read_tail_returns_at_most_the_last_tail_bytes(world: World) -> None:
+def test_read_tail_returns_at_most_the_last_tail_bytes(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     big = world.log.parent / "cursor.hooks.big.log"
     big.write_bytes(b"x" * (hookslog._TAIL_BYTES + (1 << 20)) + b"END\n")
     tail = hookslog.read_tail(big)
     assert len(tail) == hookslog._TAIL_BYTES and tail.endswith("END\n")
+    # A file that grows while it is read: its size, taken first, is out of date. The read is
+    # still cut at the limit, where a read to the end would go on for as long as it grows.
+    stale = os.stat_result((stat.S_IFREG | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(hookslog.os, "fstat", lambda fd: stale)  # patches `os` for this test
+    assert len(hookslog.read_tail(big)) == hookslog._TAIL_BYTES
 
 
 def test_a_folder_among_the_logs_leaks_no_descriptor(world: World) -> None:
@@ -1013,8 +1020,12 @@ HOSTILE_LINES = {  # each is 200 KB; the regexes this replaced took minutes on e
 
 @pytest.mark.parametrize("line", HOSTILE_LINES.values(), ids=HOSTILE_LINES.keys())
 def test_one_hostile_line_does_not_hold_up_the_log_read(line: str) -> None:
-    # Bounded only because the call is the one that could take minutes; linear takes milliseconds.
-    call_unless_it_hangs(lambda: hookslog.status_of(line + "\n"), None)
+    # A child process, killed after 20 s: a regex holds the GIL, so a thread could not be given up
+    # on as `call_unless_it_hangs` does for a pipe. Linear takes milliseconds; the old took minutes.
+    code = "import sys; from agentfly.install import hookslog; hookslog.status_of(sys.stdin.read())"
+    subprocess.run(
+        [sys.executable, "-I", "-c", code], input=line, text=True, timeout=20, check=True
+    )
 
 
 # ---------------------------------------------------------------- ~/.claude/settings.json (D24)
