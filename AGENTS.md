@@ -14,7 +14,7 @@ The code moves toward it card by card. So:
 The hackathon spec (history only): `git show 3871787:docs/archive/SPEC-hackathon.md`.
 
 A "card" is one of the maintainers' work items; cards, briefs, reports and decisions
-(D-numbers, SPEC.md's header) live in a private repo. An outside contributor treats the
+(D-numbers: SPEC.md section 0) live in a private repo. An outside contributor treats the
 issue or pull request as the card and puts the gap notes in the pull request.
 
 ## Where things are
@@ -187,6 +187,6 @@ change it. Each card adds the lines for its own tests there, not in this file.
 - Gates (can deny): `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`, `preToolUse`.
   Recorded only: `afterFileEdit`, `sessionStart`, `sessionEnd`, `subagentStart`. The session
   key is `conversation_id`.
-- Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}` on stdout, exit
-  0 (exit 2 and invalid JSON also block).
+- Deny answer: `{"permission":"deny","user_message":"...","agent_message":"..."}` on stdout,
+  exit 0 (exit 2 and invalid JSON also block).
 - What Cursor sent, by version: HOOKS.md "Observed on Cursor".

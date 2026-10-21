@@ -330,17 +330,15 @@ AgentFly is a first layer of defence, not a sandbox.
 - It sees only what Cursor hooks report. Cursor's built-in web tools may
   bypass the hooks.
 - If the recorder is not running, the hook client applies the **offline guard**
-  instead of allowing everything. It denies outbound commands (`curl`, `wget`,
-  `ssh`, `git push` and the like, and every inline `python -c` or `node -e`;
-  `localhost` and private addresses are allowed) and anything that touches
-  AgentFly's own files (R0). It allows the rest and logs that it did. Each deny
-  says to run `agentfly start`.
-- A determined agent can get around it, for example by hiding the file name
-  (`cat .en*`), sending data through DNS, or through a tunnel to a local
+  instead of allowing everything: it denies outbound commands (except to
+  `localhost` and private addresses) and anything that touches AgentFly's own
+  files, and allows the rest (SPEC.md section 9). Each deny says to run
+  `agentfly start`.
+- A determined agent can get around AgentFly, for example by hiding the file
+  name (`cat .en*`), sending data through DNS, or through a tunnel to a local
   address.
-- Rule R0 blocks the agent from touching AgentFly's own files (config, history,
-  hook registration, installed program) or from stopping, wiping or
-  uninstalling it (SPEC.md section 5).
+- Rule R0 stops the agent from touching AgentFly's own files and from stopping,
+  wiping or uninstalling it (SPEC.md section 5).
 
 > [!WARNING]
 > Do not delete or move `hooks/hook.py` or `agentfly/hook_client.py` while `.cursor/hooks.json` still
@@ -364,7 +362,7 @@ a separate credentials file for a test database, and are skipped otherwise.
 | Path | Contents |
 |---|---|
 | `agentfly/hook_client.py` | Hook client (`agentfly-hook`): drops file contents, posts to the server, applies the offline guard when the recorder is down |
-| `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it for development, while `agentfly init -g` installs a copy of the client and uses no shim |
+| `hooks/hook.py` | Shim that runs the hook client; `./install.sh` wires it for development (`agentfly init -g` installs a copy of the client instead) |
 | `agentfly/recorder/` | Server (`app.py`), rules, sessions, command cleaner, local history (`localstore.py`, `api/`), Neo4j store, file locations (`paths.py`) |
 | `agentfly/cli/` | The `agentfly` command (`serve`, `start`, `stop`, `status`, `doctor`, `init`, `uninstall`, `wipe`, `rules`) |
 | `ui/` | Web page (Vite + React): the Live Trail at `/`, the lane graph at `/?view=graph`; committed build at `ui/dist` |
@@ -374,7 +372,7 @@ a separate credentials file for a test database, and are skipped otherwise.
 ## Documentation
 
 - [SPEC.md](SPEC.md): the v1 specification and the source of truth (the code
-  moves toward it card by card; the hackathon spec is in git history:
+  is still moving toward it; the hackathon spec is in git history:
   `git show 3871787:docs/archive/SPEC-hackathon.md`)
 - [HOOKS.md](HOOKS.md): hook wiring, real Cursor input fields and server details
 - [AGENTS.md](AGENTS.md): working rules for coding agents on this repo
