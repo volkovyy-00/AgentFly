@@ -185,3 +185,17 @@ def test_a_good_active_file_still_runs_when_the_packaged_default_is_damaged(
     active_rules.write_text(GOOD_DEFAULT, encoding="utf-8")
     with start():
         assert rules_mod.current().source == "active" and not rules_mod.current().broken
+
+
+def test_a_refused_active_file_on_a_damaged_default_does_not_claim_the_default_is_in_force(
+    damaged_default: Path, active_rules: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR6: the recorder refuses to start, and its reason says the default is damaged too."""
+    monkeypatch.setattr(rules_mod, "DEFAULT", rules_mod._load_default())
+    active_rules.write_text(BROKEN_TOML, encoding="utf-8")
+    problem = rules_mod.load_active().problem or ""
+    assert problem.startswith(f"{active_rules}: ") and "are in force" not in problem
+    assert problem.endswith(rules_mod.DEFAULT.problem or "-")  # the default's own reason
+    with pytest.raises(RuntimeError) as refused, start():
+        pass
+    assert str(refused.value) == problem

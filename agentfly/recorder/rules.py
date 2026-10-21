@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT, rulefile
@@ -479,6 +480,16 @@ def activate(ruleset: RuleSet) -> None:
     _active = ruleset
 
 
+def _refusal(path: Path, errors: tuple[str, ...]) -> str:
+    """`rulefile.refusal`, unless the packaged default is damaged too: then nothing runs instead
+    and the recorder refuses to start (`app.lifespan`), so the line ends with the default's own
+    reason, not with "in force" (CR6)."""
+    line: str = rulefile.refusal(path, errors)
+    if not DEFAULT.broken:
+        return line
+    return line.removesuffix(rulefile.DEFAULT_IN_FORCE) + (DEFAULT.problem or "")
+
+
 def load_active() -> RuleSet:
     """The active file's rules if it exists, is trusted and valid, else the packaged default.
 
@@ -492,11 +503,11 @@ def load_active() -> RuleSet:
             return DEFAULT
         loaded: RuleFile = rulefile.load_active_file(path)
         if loaded.errors:
-            return replace(DEFAULT, problem=rulefile.refusal(path, loaded.errors))
+            return replace(DEFAULT, problem=_refusal(path, loaded.errors))
         return build_ruleset(loaded, source="active", path=str(path))
     except Exception as exc:  # noqa: BLE001 - the recorder must start whatever the file holds
         reason = (f"could not be read ({type(exc).__name__})",)
-        return replace(DEFAULT, problem=rulefile.refusal(path, reason))
+        return replace(DEFAULT, problem=_refusal(path, reason))
 
 
 def find_rule(rule_id: str | None) -> Rule | None:
