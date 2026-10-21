@@ -20,14 +20,14 @@ Pending decisions: D16
 - `uv tool` agentfly-recorder 0.1.0 is an old branch build (V3b); reinstall from main before any manual check. No AgentFly launchd job; harmless override `dev.agentfly.v3bprobe54766 => enabled` stays (as of 2026-10-19).
 - Recorder: not running (no listener on 8787). The offline guard applies in this repo's Cursor while it is down. Start: `uv run agentfly serve`.
 - Files (as of 2026-10-19; the lead may not read ~/.config/agentfly): ~/.config/agentfly (neo4j.env, token), ~/.local/share/agentfly. Neo4j off (no config.toml). AuraDB as of 2026-10-16: Session 51, Step 98; owner: leave it.
-- Worktrees and branches: main; ag-v5b-rules-file (66 commits, head 549cec1 = fix2 report); trial worktree `.claude/worktrees/trial-v5b` (detached 9169ed6 = main 0e34261 + 549cec1; union of appended tests in test_install_cli.py); `.claude/worktrees/merge-v5b` on merge/v5b 9b9de52. Disk 25 GiB free.
+- Worktrees and branches: main; ag-v5b-rules-file (66 commits, head 549cec1 = fix2 report); trial worktree `.claude/worktrees/trial-v5b` (detached 9169ed6 = main 0e34261 + 549cec1; union of appended tests in test_install_cli.py); `.claude/worktrees/merge-v5b` on merge/v5b. Disk 25 GiB free.
 - Git: origin/main = b342323 (owner pushed 2026-10-20 ~12:23; carries F10); lead commits after it are local only (owner pushes with `! AGENTFLY_ALLOW_PUSH=1 git push origin main`). Origin repo is PUBLIC. core.hooksPath absolute. `.claude/settings.json` (441ddd4): allow ruff/pytest/npm ui checks, gh run list/view, pr view/checks; deny git push, --no-verify, commit -n, gh writes (owner runs `gh run rerun`), Read ~/.config/agentfly. Guards, not locks.
 - GitHub CI green on main: 39398305268 (3316ee3), 39407614953 (b342323: attempt 1 red on a timing flake, attempt 2 green, 3529 passed). CodeQL b342323 green. Fork PR workflows need approval (owner 2026-10-19).
 - GitHub security settings (owner 2026-10-20 ~11:50): Dependabot alerts on, security updates on (grouped off), auto-triage 1 rule (GitHub preset), malware alerts off, CodeQL default setup on.
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Push `merge/v5b` (9b9de52 = main 976066c + 549cec1 + lead doc edits) and open its PR; tell the lead when CI is green or red.
+1. Push `merge/v5b` (main at this STATE commit + 549cec1 + lead doc edits) and open its PR; tell the lead when CI is green or red.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merges now; long-command speed and the other re-trial leftovers go to follow-up card V5d.
@@ -48,7 +48,7 @@ Pending decisions: D16
 - V5b-fix2 leftovers (report 549cec1; re-trial reviewers add: `_project_relative` realpath per long word, `_command_hit` program walk uncharged, FLOAT_STEPS unpinned, installer `lock_problems` refuses a trusted 0640 edited rules.toml): CR1 sessions.py: a fallback-linked subagent misses a parent's later R1 mark (custom rules only) → F11 brief. A3: root-owned 0600 edited rules.toml: `init -g` says kept, recorder runs the default → V5c brief. An inherited trigger on a heavy command gets a spurious limit deny (fails closed). Command-list charge up to ~4x conservative. CR4, CR8–CR10, M5, M7 listed. `_ALARMS` drops highlighted steps (page card). Pre-existing on main until V5b merges: a shell word >255 chars → hook 500 → offline guard.
 
 ## Next 3 actions
-1. V5b: owner 2026-10-21 chose merge now + follow-up card V5d (long-command speed, budget pin, 0640 install). merge/v5b 9b9de52 = trial tree + SPEC §5/§8, HOOKS.md edits − superpowers files (doc tests 109 passed). On green PR: `--ff-only`, handoff; then write V5d's brief.
+1. V5b: owner 2026-10-21 chose merge now + follow-up card V5d (long-command speed, budget pin, 0640 install). merge/v5b = trial tree + SPEC §5/§8, HOOKS.md edits − superpowers files (doc tests 109 passed). No main commits until it lands. On green PR: `--ff-only`, handoff; then write V5d's brief.
 2. After V5b merges: CR1 → F11 brief, A3 + D30 → V5c brief; re-check F9/F13/F11/V5c briefs; dispatch wave 1 (F9 ∥ F13 ∥ F11) + V5d on the owner's go.
 3. Add F10's AGENTS.md Testing lines; move AGENTS.md "Testing" to tests/README.md.
 
