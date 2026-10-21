@@ -38,6 +38,7 @@ hand; "approved" always means the owner's explicit yes):
 - D28 approved 2026-10-20 · `init -g` refreshes an unedited rules file
 - D29 approved 2026-10-20 · How long the recorder keeps a chat's session note
 - D30 approved 2026-10-20 · `agentfly uninstall` keeps a copy of an edited rules file
+- D31 proposed · Process docs move to a private repo
 <!-- index:end -->
 
 Context for all entries: `docs/SYNTHESIS.md`. Reports are in `docs/research/`.
@@ -761,3 +762,18 @@ shipped default (its hash is not in D28's set), uninstall first copies it into t
 folder that keeps the `hooks.json` backups (outside the system folder), with a time-stamped name,
 and prints where it went. An unedited default is not copied. A failed copy stops the uninstall
 before anything is removed. Restoring the copy is by hand (V7 may add more).
+
+## D31. Process docs move to a private repo
+Status: **proposed (2026-10-21)** · Cards: ops-repo move (lead with the owner, after wave 1), hackathon cleanup (worker card after it) · Tested by: those cards
+Two repos. The public `AgentFly` keeps the product: code, tests, `ui/`, README (with `docs/media`),
+SPEC.md, HOOKS.md, LICENSE, CI, and a short AGENTS.md/CLAUDE.md for contributors. A private repo
+next to it (`~/Projects/AgentFly-ops`, a private GitHub repo the owner creates) gets everything
+else in `docs/`, DECISIONS.md included (STATE, BOARD, learnings, briefs, reports, spikes, research,
+SYNTHESIS, superpowers plans, roles, product goals, the hackathon spec), and the lead's
+`.claude/commands`. Workers keep worktrees of the public repo and read briefs and write reports by
+absolute path in the private one; card PRs carry code only. The moved files are `git rm`-ed from the
+public tree; public history is not rewritten (old commits keep them). The lead tools (`state-check.sh`,
+`dispatch.sh`, git hooks, `lead.sh` and its SessionStart hook, `docs/reports/README.md`, CLAUDE.md's
+role lines) point at the private repo. Hackathon leftovers (`demo_flows/`, `DEMO_PROMPTS.txt`,
+`demo/NOTES.md`, `scripts/setup_credentials.sh`; `fake_agent.py` and `demo/scenario.json` moved
+under tests or examples) go in a later worker card.

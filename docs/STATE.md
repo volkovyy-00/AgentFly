@@ -1,7 +1,7 @@
 # STATE (lead handoff; overwrite, never append)
 Updated: 2026-10-21 12:17 CEST (Europe/Prague) · HEAD and commits since this file changed: `docs/roles/state-check.sh` (the lead hook prints it)
 Phase: V5b-merged. S1–S5, V1a, V1b, V2, V2b, V2c, V3a, V3b, V3c, V5a, V5b, V6, V6b, V8, V8b, F3, F5, F6, F7, F10 ✅ (BOARD Done; last merge V5b de0aee7 via PR #7 = trial 9169ed6 tree + lead SPEC/HOOKS edits, 3× 4480 passed, 5 skipped).
-Pending decisions: D16
+Pending decisions: D16 D31
 
 ## Spikes and cards
 - Done cards: one line each under BOARD `## Done`. V5a was not red-teamed: a conformance/test-strength review stays open.
@@ -17,7 +17,7 @@ Pending decisions: D16
 - F13 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f13-escape-names · ag-f13-escape-names · docs/reports/F13.md · docs/briefs/F13.md
 - F11 · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-f11-session-state · ag-f11-session-state · docs/reports/F11.md · docs/briefs/F11.md
 - V5d · worker (owner starts) · /Users/volkovyy/Projects/AgentFly/.claude/worktrees/ag-v5d-long-commands · ag-v5d-long-commands · docs/reports/V5d.md · docs/briefs/V5d.md
-(dispatched 2026-10-21 from main 61e2981; worktrees made, `uv sync` done)
+(dispatched 2026-10-21 from main 61e2981; owner started all four workers)
 
 ## Machine state (verified 2026-10-21 12:16 CEST unless marked)
 - /Library/Application Support/AgentFly, /Library/Application Support/Cursor/hooks.json, ~/.cursor/hooks.json: absent. Repo .cursor/hooks.json: present (dev wiring; doubles events if `init -g` is also installed).
@@ -31,7 +31,7 @@ Pending decisions: D16
 - No Xcode CLT (`make` opens a dialog).
 
 ## Waiting on owner
-1. Start the four wave-1 workers (commands from dispatch.sh; each `claude --permission-mode plan` in its worktree, paste its worker line).
+1. Say yes (or change) D31: process docs to a private repo, public tree only, no history rewrite.
 
 ## Decisions changed since last handoff (3316ee3; earlier: git show 3316ee3:docs/STATE.md)
 - Owner 2026-10-21: V5b merged (PR #7, CodeQL alerts dismissed); long-command speed and the other re-trial leftovers go to follow-up card V5d.
