@@ -6,6 +6,7 @@ Every test builds a small virtual environment of the shape `uv tool install` lea
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shutil
@@ -581,7 +582,8 @@ def test_a_changed_path_with_a_control_character_is_shown_escaped(
     hostile = "fakedep/\x1b[2Jgone.py"
     upgrade(env, "fakedep", "1.0", {DEP_FILE: b"X = 1\n", hostile: b""})
     [line] = packages.require(record, "agentfly init -g").changes
-    assert "\x1b" not in line and repr(hostile) in line
+    assert "\x1b" not in line and "fakedep/\\x1b[2Jgone.py" in line
+    assert "'fakedep/" not in line  # the same escape as every other name, not a quoted repr
 
 
 def test_a_rebuild_with_a_file_that_fails_its_own_record_still_stops(
@@ -616,3 +618,242 @@ def test_no_stop_message_advises_removing_the_record(env: packages.Environment, 
     text = stop_message(record)
     for word in ("hashes.json", "sudo", " rm ", "raise the version"):
         assert word not in text, (word, text)
+
+
+# ---------------------------------------------------------------- names the owner reads (F13)
+#
+# Every name below sits in a folder the agent's user can write and is printed to the owner's
+# terminal before a password is asked for. Expected texts are written out, never computed with
+# `packages.visible`, so a broken `visible` cannot pass its own test.
+
+HOSTILE = [  # (what the name holds, how the owner is shown it)
+    pytest.param("\x1b[2K", "\\x1b[2K", id="escape code"),
+    pytest.param("\n", "\\n", id="newline"),
+    pytest.param("‮", "\\u202e", id="bidi override"),
+]
+# A plain newline ends a METADATA header, so the newline row is a folded one (RFC 822 style).
+METADATA_VERSIONS = [  # (header value, how its tail is shown)
+    pytest.param("1.1\x1b[2Kz", "1.1\\x1b[2Kz", id="escape code"),
+    pytest.param("1.1‮z", "1.1\\u202ez", id="bidi override"),
+    pytest.param("1.1\n z", "1.1\\nz", id="folded newline"),
+]
+METADATA_NAMES = [  # `_normal` lowercases the name, so the `K` of `ESC [2K` comes back as `k`
+    pytest.param("new\x1b[2Kdep", "new\\x1b[2kdep", id="escape code"),
+    pytest.param("new‮dep", "new\\u202edep", id="bidi override"),
+    pytest.param("new\n dep", "new\\ndep", id="folded newline"),
+]
+
+
+def assert_plain(text: str) -> None:
+    """Every line of `text` holds only printable characters; its newlines are print's own."""
+    for line in text.split("\n"):
+        assert line.isprintable(), ascii(line)
+
+
+def append_rows(env: packages.Environment, rows: list[list[str]]) -> Path:
+    """Add rows to agentfly's RECORD, csv-quoted: a newline in a path must stay one field."""
+    info = next(env.site.glob("agentfly_recorder-*.dist-info"))
+    with (info / "RECORD").open(newline="", encoding="utf-8") as handle:
+        old = list(csv.reader(handle))
+    with (info / "RECORD").open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\n").writerows([*old, *rows])
+    return info
+
+
+def edit_metadata(env: packages.Environment, dist: str, headers: str) -> None:
+    info = next(env.site.glob(f"{dist}-*.dist-info"))
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\n{headers}", encoding="utf-8")
+    rewrite_record_hash(info, "METADATA")
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("a\x1b[2Kb", "a\\x1b[2Kb"),
+        ("a\nb", "a\\nb"),
+        ("a\rb", "a\\rb"),
+        ("a\tb", "a\\tb"),
+        ("a\0b", "a\\x00b"),
+        ("a\x7fb", "a\\x7fb"),
+        ("a\x85b", "a\\x85b"),
+        ("a\x9bb", "a\\x9bb"),
+        ("a\xa0b", "a\\xa0b"),
+        ("a‎b", "a\\u200eb"),
+        ("a؜b", "a\\u061cb"),
+        ("a b", "a\\u2028b"),
+        ("a‮b", "a\\u202eb"),
+        ("a⁦b⁩", "a\\u2066b\\u2069"),
+        ("a\udcffb", "a\\udcffb"),
+        ("a\U000e0001b", "a\\U000e0001b"),
+    ],
+)
+def test_visible_writes_each_non_printable_character_as_an_escape(name: str, shown: str) -> None:
+    assert packages.visible(name) == shown
+
+
+@pytest.mark.parametrize("name", ["café.py", "日本語/ファイル.py", "a\\b.py", "a b.py", ""])
+def test_visible_leaves_printable_text_alone(name: str) -> None:
+    assert packages.visible(name) == name
+
+
+def test_visible_prints_whatever_it_is_given_and_is_idempotent() -> None:
+    once = packages.visible("a\x1b[2K\n‮\udcff\\x1b")
+    assert once == "a\\x1b[2K\\n\\u202e\\udcff\\x1b"
+    assert once.isprintable() and packages.visible(once) == once
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_an_unlisted_file_with_a_control_character_in_its_name_is_shown_escaped(
+    env: packages.Environment, bad: str, shown: str
+) -> None:
+    (env.site / "agentfly" / f"x{bad}y.py").write_text("x = 1\n")
+    message = stop_message(None)
+    assert f"{env.site}/agentfly/x{shown}y.py is not listed in any RECORD" in message
+    assert_plain(message)
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_a_listed_file_that_fails_its_hash_is_shown_escaped(
+    env: packages.Environment, bad: str, shown: str
+) -> None:
+    rel = f"agentfly/m{bad}.py"
+    target = path_of(env, rel)
+    target.write_bytes(b"x = 1\n")
+    append_rows(env, [[rel, record_hash(b"x = 1\n"), "6"]])
+    target.write_bytes(b"x = 2\n")
+    message = stop_message(None)
+    assert f"{env.site}/agentfly/m{shown}.py does not match its RECORD" in message
+    assert_plain(message)
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_a_listed_file_that_cannot_be_read_is_shown_escaped(
+    env: packages.Environment, bad: str, shown: str
+) -> None:
+    append_rows(env, [[f"agentfly/gone{bad}.py", "sha256=AAAA", "1"]])  # no such file
+    found = problems(env, None)
+    assert f"{env.site}/agentfly/gone{shown}.py is listed in RECORD but cannot be read" in found[0]
+    assert_plain("\n".join(found))
+
+
+def test_a_nul_byte_in_a_record_path_is_shown_as_an_escape(env: packages.Environment) -> None:
+    rewrite_record(env, lambda lines: [*lines, "bad\0name.py,sha256=AAAA,1"])
+    shown = f"{env.site}/bad\\x00name.py is listed in RECORD but cannot be read ("
+    assert any(problem.startswith(shown) for problem in problems(env, None))  # not a quoted repr
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_a_record_row_outside_the_environment_is_shown_escaped(
+    env: packages.Environment, bad: str, shown: str
+) -> None:
+    info = append_rows(env, [[f"../../../../out{bad}.txt", "sha256=AAAA", "1"]])
+    message = stop_message(None)
+    row = f"{info.name}/RECORD names ../../../../out{shown}.txt"
+    assert f"{row}, outside the environment" in message
+    assert_plain(message)
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_a_dist_info_folder_name_is_shown_escaped(
+    env: packages.Environment, bad: str, shown: str
+) -> None:
+    (env.site / f"evil{bad}-1.0.dist-info").mkdir()
+    message = stop_message(None)
+    assert f"{env.site}/evil{shown}-1.0.dist-info has no readable METADATA" in message
+    assert_plain(message)
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_a_tool_environment_path_with_a_control_character_is_shown_escaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str, shown: str
+) -> None:
+    hostile = make_tool_env(tmp_path / f"env{bad}")
+    monkeypatch.setattr(packages, "tool_environment", lambda: hostile)
+    (hostile.site / "agentfly" / "x.py").write_text("x = 1\n")
+    message = stop_message(None)
+    where = str(hostile.site).replace(bad, shown)
+    assert f"{where}/agentfly/x.py is not listed in any RECORD" in message
+    assert_plain(message)
+
+
+@pytest.mark.parametrize(("bad", "shown"), HOSTILE)
+def test_the_environment_refusal_shows_a_path_with_a_control_character_escaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str, shown: str
+) -> None:
+    made = make_tool_env(tmp_path / f"other{bad}")
+    (made.prefix / "pyvenv.cfg").unlink()
+    fake_agentfly(monkeypatch, made.site / "agentfly" / "__init__.py")
+    with pytest.raises(InstallError) as caught:
+        REAL_TOOL_ENVIRONMENT()
+    text = str(caught.value)
+    assert f"virtual environment ({str(made.site).replace(bad, shown)})" in text
+    assert_plain(text)
+
+
+@pytest.mark.parametrize(("header", "tail"), METADATA_VERSIONS)
+def test_a_metadata_version_with_a_control_character_is_shown_escaped_in_the_question(
+    env: packages.Environment,
+    capsys: pytest.CaptureFixture[str],
+    header: str,
+    tail: str,
+) -> None:
+    record = hashes_of(env)
+    edit_metadata(env, "fakedep", f"Name: fakedep\nVersion: {header}\n")
+    [line] = packages.require(record, "agentfly init -g").changes
+    assert line.startswith("fakedep: changed from 1.0 to ") and line.endswith(tail), line
+    assert_plain(line)
+    assert not packages.confirm([line], ask=lambda prompt: "n")
+    assert_plain(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize(("header", "tail"), METADATA_NAMES)
+def test_a_metadata_name_with_a_control_character_is_shown_escaped(
+    env: packages.Environment, header: str, tail: str
+) -> None:
+    record = hashes_of(env)
+    edit_metadata(env, "fakedep", f"Name: {header}\nVersion: 1.0\n")
+    lines = packages.require(record, "agentfly init -g").changes
+    assert any(line.endswith(f"{tail}: changed from none to 1.0") for line in lines), lines
+    assert "fakedep: changed from 1.0 to none" in lines
+    assert_plain("\n".join(lines))
+
+
+def test_confirm_shows_a_control_character_in_a_change_line_escaped(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    changes = ["x\x1b[2K: changed from 1 to 2", "y‮: changed from none to 1"]
+    assert not packages.confirm(changes, ask=lambda prompt: "n")
+    out = capsys.readouterr().out
+    assert "  x\\x1b[2K: changed from 1 to 2\n  y\\u202e: changed from none to 1\n" in out
+    assert_plain(out)
+
+
+def test_confirm_does_not_stop_on_a_name_the_terminal_cannot_encode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert not packages.confirm(["z\udcff: changed from 1 to none"], ask=lambda prompt: "n")
+    assert "  z\\udcff: changed from 1 to none\n" in capsys.readouterr().out
+
+
+def test_a_name_without_a_control_character_prints_as_before(env: packages.Environment) -> None:
+    (env.site / "agentfly" / "café.py").write_text("x = 1\n")
+    (env.site / "agentfly" / "a\\b.py").write_text("x = 1\n")
+    assert problems(env, None) == [
+        f"{env.site}/agentfly/a\\b.py is not listed in any RECORD",
+        f"{env.site}/agentfly/café.py is not listed in any RECORD",
+    ]
+
+
+def test_no_message_of_the_check_holds_a_control_character_whatever_the_name(
+    tmp_path: Path,
+) -> None:
+    """A hostile name in every place at once; it guards later edits to `inspect`."""
+    hostile = make_tool_env(tmp_path / "env\x1b[2K")
+    record = hashes_of(hostile)
+    (hostile.site / "agentfly" / "x\ny.py").write_text("x = 1\n")  # listed in no RECORD
+    (hostile.site / "evil‮-1.0.dist-info").mkdir()  # no METADATA
+    append_rows(hostile, [["../../../../out\x1b[2K.txt", "sha256=AAAA", "1"]])  # outside
+    edit_metadata(hostile, "fakedep", "Name: fakedep\nVersion: 1.1\x1b[2Kz\n")  # a new version
+    check = packages.inspect(hostile, record)
+    assert (len(check.problems), len(check.changes)) == (3, 1)  # each place was reached
+    assert_plain("\n".join([*check.problems, *check.changes]))

@@ -67,9 +67,25 @@ class Distribution:
 @dataclass(frozen=True)
 class Check:
     distributions: dict[str, Distribution]  # what is on disk now: what the record should hold
+    # `problems` and `changes` are text for the owner's terminal and are already through `visible`.
     problems: list[str]  # a changed or extra file; empty when nothing is wrong
     changes: list[str]  # what differs from the record (every file matches its RECORD): to confirm
     extra: bool  # a problem is a file that should not be there: installing over it keeps it
+
+
+def visible(text: str) -> str:
+    """`text` with each character that is not printable written as an escape (`\\x1b`, `\\n`).
+
+    A name comes from a folder the agent's user can write and is printed to the owner's terminal
+    before a password is asked for, so it must not be able to move the cursor or erase a line.
+    Printable text is unchanged, non-ASCII letters and a backslash included.
+    """
+    if text.isprintable():
+        return text
+    return "".join(
+        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        for char in text
+    )
 
 
 def lead(items: list[str]) -> str:
@@ -81,9 +97,9 @@ def _first(paths: list[str]) -> str:
     """The first `SHOWN_PATHS` paths as the owner reads them, and how many more there are.
 
     A path comes from a RECORD the agent's user can write and is printed to the owner's terminal,
-    so one with a control character is shown as its `repr`.
+    so a control character in it is shown as an escape.
     """
-    shown = ", ".join(p if p.isprintable() else repr(p) for p in paths[:SHOWN_PATHS])
+    shown = ", ".join(visible(p) for p in paths[:SHOWN_PATHS])
     return f"{shown} and {len(paths) - SHOWN_PATHS} more" if len(paths) > SHOWN_PATHS else shown
 
 
@@ -104,8 +120,8 @@ def tool_environment() -> Environment:
     prefix = next((p for p in site.parents if (p / "pyvenv.cfg").is_file()), None)
     if prefix is None:
         raise InstallError(
-            f"AgentFly is not installed in a virtual environment ({site}); install it with "
-            "`uv tool install`, `pipx` or Homebrew"
+            f"AgentFly is not installed in a virtual environment ({visible(str(site))}); "
+            "install it with `uv tool install`, `pipx` or Homebrew"
         )
     return Environment(prefix, site)
 
@@ -217,10 +233,8 @@ def _read_dist(
             why = _not_plain(full, real_folders)
             digest = file_sha256(Path(full)) if why is None else ""
         except (OSError, ValueError) as exc:  # ValueError: a NUL byte in the path
-            reason, shown = (
-                (exc.strerror, full) if isinstance(exc, OSError) else (str(exc), repr(full))
-            )
-            problems.append(f"{shown} is listed in RECORD but cannot be read ({reason})")
+            reason = exc.strerror if isinstance(exc, OSError) else str(exc)
+            problems.append(f"{full} is listed in RECORD but cannot be read ({reason})")
             continue
         if why is not None:
             problems.append(why)
@@ -316,7 +330,14 @@ def inspect(env: Environment, record: dict[str, Any] | None) -> Check:
     problems += [f"{path} is not listed in any RECORD" for path in unlisted]
     problems += [f"{why}, so what it holds cannot be checked" for why in unlistable]
     changes = _changes(found, stored_from(record))
-    return Check(found, problems, changes, bool(unlisted or unlistable))
+    # Every sentence holds names from a folder the user can write: escaped here, once, for all
+    # readers (the refusal, the question, `doctor`), whichever site built the sentence.
+    return Check(
+        found,
+        [visible(text) for text in problems],
+        [visible(text) for text in changes],
+        bool(unlisted or unlistable),
+    )
 
 
 def _changes(
@@ -388,7 +409,7 @@ def confirm(changes: list[str], ask: Callable[[str], str] | None = None) -> bool
     """Show what changed since the record was made and ask the owner; only a terminal can answer."""
     print("AgentFly's package changed since the last `agentfly init -g`:")
     for line in changes:
-        print(f"  {line}")
+        print(f"  {visible(line)}")
     print("Every file matches its own RECORD; that is all this check can tell you about a change.")
     if ask is None:
         if sys.stdin is None or not sys.stdin.isatty():
