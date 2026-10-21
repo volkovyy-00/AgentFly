@@ -419,12 +419,19 @@ def check_path(ctx: Context) -> Finding:
     )
 
 
+_SHOWN_LOG_LINE = 300  # a real line is about 100; the agent's user can write a megabyte
+
+
 def _log_problem(status: hookslog.LogStatus, ours: set[str]) -> str | None:
     """Why one window's log says Cursor did not load our hooks, or None when it did."""
     if status.kind == "none":
         return "Cursor says: No enterprise hooks configuration found"
     if status.kind == "error":
-        return f"Cursor says: {status.detail}"
+        # Cut, and each unprintable character escaped: it is printed to the owner's terminal.
+        line = status.detail[:_SHOWN_LOG_LINE] + (
+            "\u2026" if len(status.detail) > _SHOWN_LOG_LINE else ""
+        )
+        return f"Cursor says: {packages.visible(line)}"
     absent = sorted(ours - set(status.steps))
     if absent:
         return f"Cursor loaded {len(status.steps)} hooks but not {', '.join(absent)}"

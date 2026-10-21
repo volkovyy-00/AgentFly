@@ -32,7 +32,7 @@ INVALID = (re.compile(r"\bInvalid "), re.compile(r"config\b"))
 UNPARSED = (re.compile(r"\bFailed to parse "), re.compile(r"hooks configuration\b"))
 _RELEVANT = re.compile(r"enterprise|Invalid|Failed to parse")
 _OTHER_SOURCES: tuple[str, ...] = ("user", "project", "workspace", "claude", "plugin")
-_START_FOLDER = re.compile(r"^\d{8}T\d{6}$")
+_START_FOLDER = re.compile(r"[0-9]{8}T[0-9]{6}")  # fullmatch: `$` would take a trailing newline
 _TAIL_BYTES = 4 << 20  # a long-running Cursor writes a lot; the last lines say how it stands
 MAX_LOGS = 64  # a real start folder holds at most 4, one per window
 _LOG_PATTERN = "window*/output_*/cursor.hooks.*.log"
@@ -118,7 +118,7 @@ def latest(home: Path) -> Logs:
     """The newest Cursor start folder and its Hooks logs: none of them when there are too many."""
     root = home / "Library" / "Application Support" / "Cursor" / "logs"
     try:
-        folders = [p for p in root.iterdir() if _START_FOLDER.match(p.name) and p.is_dir()]
+        folders = [p for p in root.iterdir() if _START_FOLDER.fullmatch(p.name) and p.is_dir()]
     except OSError:
         folders = []
     if not folders:

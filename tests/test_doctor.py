@@ -692,6 +692,18 @@ def test_the_newest_start_folder_is_the_one_that_counts(world: World) -> None:
     assert world.results()["hooks-log"].level == "fail"
 
 
+@pytest.mark.parametrize("name", ["20271231T000000\n", "٢٠٢٧١٢٣١T٠٠٠٠٠٠", "20271231T000000.bak"])
+def test_a_folder_that_only_looks_like_a_start_time_is_not_the_newest(
+    world: World, name: str
+) -> None:
+    impostor = world.log.parents[3] / name / "window1_wb0/output_y"
+    impostor.mkdir(parents=True)
+    (impostor / "cursor.hooks.workspaceId-a.log").write_text(
+        "[t] No enterprise hooks configuration found\n"
+    )
+    assert world.results()["hooks-log"].text == f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})"
+
+
 def test_one_window_that_failed_is_enough_to_fail(world: World) -> None:
     second = world.log.parents[2] / "window2_wb1/output_z"
     second.mkdir(parents=True)
@@ -781,6 +793,7 @@ UNVERIFIED = {
         lambda w: (w.layout.cursor_app / "Contents" / "Info.plist").unlink(),
         "AgentFly cannot read the Cursor version",
     ),
+    "empty": (lambda w: write_version(w.layout, ""), "is not on AgentFly's list"),
 }
 HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
 
@@ -880,6 +893,17 @@ def hooks_log_line(world: World, monkeypatch: pytest.MonkeyPatch, planted: Path)
     monkeypatch.setattr(service, "inspect", lambda: None)
     context = world.context()  # built outside the bound: only the log read can hang
     return call_unless_it_hangs(lambda: checks.check_hooks_log(context), planted)
+
+
+def test_a_line_of_the_log_is_shown_cut_and_with_its_escapes_written_out(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log line is read
+    world.write_log("[t] ERROR: Invalid config \x1b[2J\x1b[H" + "x" * 3_000_000)
+    check = checks.check_hooks_log(world.context())
+    assert check.level == "fail" and check.text.startswith("Cursor did not load AgentFly's hooks")
+    assert check.text.isprintable() and len(check.text) < 500
+    assert r"\x1b[2J" in check.text and "\u2026" in check.text  # escaped, and cut with a mark
 
 
 @pytest.mark.parametrize("kind", PLANTED)
