@@ -1,9 +1,12 @@
-"""V5b-fix2: the meter, which bounds what floating patterns may cost in one hook (spec §4.2).
+"""V5b-fix2: the meter, which bounds what floating patterns and command lists may cost in one hook
+(spec §4.2).
 
-Only a floating pattern (a run of parts with `**` on both sides) walks the path, so only its tests
-charge: each start tried for a middle block is a step, each compare made costs
-`compare_cost(len(segment), len(part))` and a bare `*` costs 1. A charge that takes the meter below
-0 raises `WorkLimit`. With no meter set, nothing is charged or raised.
+Of the path patterns only a floating one (a run of parts with `**` on both sides) walks the path, so
+only its tests charge: each start tried for a middle block is a step, each compare made costs
+`compare_cost(len(segment), len(part))` and a bare `*` costs 1. A command list charges a bucket of
+its index before it is walked (one step an entry and one a word left in it) and a run of key probes
+at one step for four (owner, 2026-10-21). A charge that takes the meter below 0 raises `WorkLimit`.
+With no meter set, nothing is charged or raised.
 """
 
 from __future__ import annotations
@@ -17,8 +20,13 @@ import agentfly.recorder.rules as rules_mod
 from agentfly.recorder import rulefile
 from agentfly.recorder.rulefile import Clause, Meter, WorkLimit, compile_pattern, metered
 from tests.glob_oracle import old_command_hit
-from tests.rules_helpers import default_with, ruleset_of
-from tests.test_rules_cost import command, command_list_on_one_program
+from tests.rules_helpers import default_with, list_line, ruleset_of
+from tests.test_rules_cost import (
+    command,
+    command_list_on_one_program,
+    match_rule,
+    realistic_lists,
+)
 
 HOME = "/h/me"
 
@@ -307,3 +315,114 @@ def test_198_rules_of_200_cat_entries_on_150_cat_commands_check_few_entries(
     verdict = rules_mod.decide(action, rules_mod.mark(action, session, ruleset), ruleset)
     assert verdict == ("allow", None)
     assert counts.entries == 0, counts.entries
+
+
+# ---------------------------------------------------------------- command lists count (Task 6b)
+
+
+def test_a_bucket_is_charged_its_weight_before_it_is_walked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bucket costs one step an entry and one a word left in it: ten one-word rests are 20,
+    charged before the first entry is read, so a meter short of 20 reads none of them."""
+    clause = command_clause(*[("cat", f"a{i}", f"b{j}") for i in range(20) for j in range(10)])
+    events: list[object] = []
+    real_charge, real_entry = rulefile._charge, rulefile._entry_follows
+
+    def charge(steps: int) -> None:
+        events.append(steps)
+        real_charge(steps)
+
+    def entry(last: dict[str, int], at: int, extras: tuple[str, ...]) -> bool:
+        events.append("entry")
+        return real_entry(last, at, extras)
+
+    monkeypatch.setattr(rulefile, "_charge", charge)
+    monkeypatch.setattr(rulefile, "_entry_follows", entry)
+    with metered(Meter(left=100)) as meter:
+        assert not clause.matches(shell("cat a0 z"), {})
+    assert events == [20, *["entry"] * 10]  # two probes cost nothing, then the bucket of `a0`
+    assert meter.left == 80 and meter.unfinished == []
+    events.clear()
+    with metered(Meter(left=19)), pytest.raises(WorkLimit):
+        clause.matches(shell("cat a0 z"), {})
+    assert events == [20]
+
+
+def test_a_run_of_probes_is_charged_one_step_for_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    charged: list[int] = []
+    real = rulefile._charge
+
+    def charge(steps: int) -> None:
+        charged.append(steps)
+        real(steps)
+
+    monkeypatch.setattr(rulefile, "_charge", charge)
+    long_line = shell("cat " + " ".join(f"w{i}" for i in range(100)))
+    with metered(Meter(left=100)) as meter:
+        assert not command_clause(*[("cat", f"k{i}") for i in range(8)]).matches(long_line, {})
+    assert charged == [2] and meter.left == 98  # eight keys looked up
+    charged.clear()
+    with metered(Meter(left=100)):  # eight words looked up among fifty keys
+        many = command_clause(*[("cat", f"k{i}") for i in range(50)])
+        assert not many.matches(shell("cat " + " ".join(f"w{i}" for i in range(8))), {})
+    assert charged == [2]
+    charged.clear()
+    with metered(Meter(left=0)):  # fewer than four probes charge nothing, even on a spent meter
+        assert not command_clause(*[("cat", f"k{i}") for i in range(3)]).matches(long_line, {})
+    assert charged == []
+
+
+def text_of_lists(shape: Any) -> str:
+    lists, rules = shape()
+    return default_with(lists, *rules)
+
+
+def realistic_line() -> str:
+    return " ; ".join(f"git push origin b{k}" for k in range(75))  # 300 words
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        (rulefile.default_text, lambda: command(60)),
+        (
+            lambda: text_of_lists(command_list_on_one_program),
+            lambda: " ; ".join(f"cat z{i} y" for i in range(150)),
+        ),
+        (
+            lambda: default_with(
+                list_line("l", *[f"cat w a{i}" for i in range(200)]),
+                *[match_rule(i, 'command = "l"') for i in range(rulefile.MAX_RULES - 2)],
+            ),
+            lambda: " ; ".join(["cat w x"] * 100),
+        ),
+        (lambda: text_of_lists(realistic_lists), realistic_line),
+    ],
+    ids=["the default on command(60)", "cat wN on cat zN y", "cat w aN on cat w x", "realistic"],
+)
+def test_command_lists_of_real_shapes_are_never_charged(text: Any, line: Any) -> None:
+    ruleset = ruleset_of(text())
+    action = shell(line())
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    with rules_mod.one_hook() as meter:
+        assert (
+            rules_mod.winning_rule(action, rules_mod.mark(action, session, ruleset), ruleset)
+            is None
+        )
+    assert meter.left == rulefile.FLOAT_STEPS and meter.unfinished == []
+
+
+def test_a_long_command_on_198_lists_of_cat_wn_pays_only_its_probes() -> None:
+    """`command(60)` has 300 words after `cat`, more than the 200 keys: each rule looks the keys
+    up (50 steps), finds none, reads no entry and finishes."""
+    ruleset = ruleset_of(text_of_lists(command_list_on_one_program))
+    action = shell(command(60))
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    with rules_mod.one_hook() as meter:
+        assert (
+            rules_mod.winning_rule(action, rules_mod.mark(action, session, ruleset), ruleset)
+            is None
+        )
+    assert meter.unfinished == []
+    assert meter.left == rulefile.FLOAT_STEPS - (rulefile.MAX_RULES - 2) * (200 // 4)

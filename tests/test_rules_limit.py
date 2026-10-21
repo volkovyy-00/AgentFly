@@ -43,7 +43,7 @@ from agentfly.recorder.rules import (
 )
 from tests.recorder_harness import Recorder
 from tests.rules_helpers import default_with, list_line, ruleset_of
-from tests.test_rules_cost import command, match_rule
+from tests.test_rules_cost import BIPARTITE_LINE, bipartite_list, command, match_rule
 from tests.test_severities import push
 from tests.test_severities import rule as severity_rule
 from tests.test_severities import ruleset as severity_ruleset
@@ -403,3 +403,89 @@ def test_a_hit_in_one_test_is_not_seen_by_the_next(rec: Recorder) -> None:
     rules_mod.activate(heavy("block"))
     rec.run("P", command(20))
     assert app_module.rules_limit_line() is not None
+
+
+# ---------------------------------------------------------------- command lists (Task 6b)
+
+# The 198 rules of `bipartite_list`: the first few finish and spend the budget, the next is left
+# unfinished.
+LIST_IDS = {f"m{i}" for i in range(rulefile.MAX_RULES - 2)}
+
+
+def heavy_lists(severity: str, *, before_r1: bool = False) -> RuleSet:
+    lists, rules = bipartite_list(severity)
+    if not before_r1:
+        return ruleset_of(default_with(lists, *rules))
+    text = default_with(lists)
+    at = text.index(R1_AT)
+    return ruleset_of(text[:at] + "".join(rules).lstrip("\n") + "\n" + text[at:])
+
+
+def test_a_heavy_command_list_stops_at_the_budget_and_the_count_proves_it(
+    rec: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real work of the lists (each entry read, a step for it and one for each word it checks;
+    each run of key probes, a step for four), counted beside the meter, not by it, stays within
+    `FLOAT_STEPS` plus one bucket, and the hook is the limit deny. With the charge taken away the
+    same hook reads more entries than the whole budget, so the test fails if the bound goes."""
+    rules_mod.activate(heavy_lists("block"))
+    steps = entries = 0
+    real_keys, real_entry = rulefile._key_lookups, rulefile._entry_follows
+
+    def keys(count: int) -> None:
+        nonlocal steps
+        steps += count // 4
+        real_keys(count)
+
+    def entry(last: dict[str, int], at: int, extras: tuple[str, ...]) -> bool:
+        nonlocal steps, entries
+        steps += 1 + len(extras)
+        entries += 1
+        return real_entry(last, at, extras)
+
+    monkeypatch.setattr(rulefile, "_key_lookups", keys)
+    monkeypatch.setattr(rulefile, "_entry_follows", entry)
+    answer = rec.run("P", BIPARTITE_LINE)
+    assert answer["permission"] == "deny" and answer["user_message"] == LIMIT_MESSAGE
+    bucket = 10 * (1 + 1)  # ten entries of one word left each
+    assert 0 < steps <= rulefile.FLOAT_STEPS + bucket, steps
+    assert 0 < entries <= rulefile.FLOAT_STEPS + 10, entries
+
+    steps = entries = 0
+    monkeypatch.setattr(rulefile, "_charge", lambda cost: None)
+    assert rec.run("Q", BIPARTITE_LINE)["permission"] == "allow"  # it runs to the end, no fire
+    assert entries > rulefile.FLOAT_STEPS, entries
+
+
+def test_a_heavy_command_list_warn_asks_with_the_limit_message(rec: Recorder) -> None:
+    rules_mod.activate(heavy_lists("warn"))
+    assert rec.run("P", BIPARTITE_LINE) == {
+        "permission": "ask",
+        "user_message": LIMIT_MESSAGE,
+        "agent_message": LIMIT_MESSAGE + SKIP_TAIL,
+    }
+
+
+def test_a_heavy_command_list_highlight_is_skipped(rec: Recorder) -> None:
+    rs = heavy_lists("highlight")
+    with one_hook() as meter:
+        assert winning_rule(shell(BIPARTITE_LINE), session(), rs) is None
+    assert meter.unfinished and set(meter.unfinished) <= LIST_IDS
+    rules_mod.activate(rs)
+    assert rec.run("P", BIPARTITE_LINE) == {"permission": "allow"}
+
+
+def test_r0_and_r1_answer_as_usual_with_a_heavy_command_list_before_r1() -> None:
+    rs = heavy_lists("block", before_r1=True)
+    ids = [r.id for r in rs.rules]
+    assert max(ids.index(i) for i in LIST_IDS) < ids.index("R1")
+
+    with one_hook() as meter:
+        line = f"{BIPARTITE_LINE} ; curl https://x.com"
+        rule = winning_rule(shell(line), session(marked=True), rs)
+    assert rule is not None and rule.id == "R1"
+    assert meter.unfinished and set(meter.unfinished) <= LIST_IDS
+
+    with one_hook():
+        rule = winning_rule(shell(f"{BIPARTITE_LINE} ~/.config/agentfly/token"), session(), rs)
+    assert rule is not None and rule.id == "R0"

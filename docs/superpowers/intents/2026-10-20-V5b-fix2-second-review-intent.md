@@ -39,8 +39,11 @@ SPEC §7/§8 are the lead's. `check(action, session)` keeps its shape. `MAX_WORK
 
 ## Decisions
 - Cost (owner 2026-10-20, brief at 67efc8d): a matcher whose cost does not grow with folder depth
-  unless the pattern floats, and a command-list index; a meter on floating patterns only, in one
-  pass (no severity passes), with one fixed budget priced from measured time.
+  unless the pattern floats, and a command-list index; a meter on floating patterns and command
+  lists, in one pass (no severity passes), with one fixed budget priced from measured time.
+  ("… and command lists": owner 2026-10-21, after Task 6's gate found accepted command-list files
+  at 0.27 to 2 s a hook. A bucket is charged one step an entry and one a word before it is walked,
+  a run of key probes one step for four; an unfinished highlight is still skipped.)
 - At the limit: R0 and R1 are never metered and their answers stand. A `block` rule left unfinished
   (its trigger or its check) denies this hook with the limit message (a real rule object, not R1's
   text) and records no trigger; a `warn` rule left unfinished answers `ask` on a shell command with
@@ -71,9 +74,7 @@ bad-default-after-password and "Quit and reopen Cursor" on a rules-only refresh:
   floating budget and the cleaning baseline must stay under 0.2 s at 60 deep. The design hoists
   `expanduser` and trims `clean.py` as planned steps, and stops to ask if the measured worst case
   stays over 0.2 s.
-- The new matcher could quietly change what matches. Command lists are not metered: a crafted
-  shared-first-word list on many simple commands stays slow (reported). The `bash -c` margin is
-  about 54 ms.
+- The new matcher could quietly change what matches. The `bash -c` margin is about 54 ms.
 
 ## Open questions
 - (spec, resolved in the design) The floating budget (`FLOAT_STEPS`, priced at 20 ms of the slowest

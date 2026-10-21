@@ -510,6 +510,41 @@ enqueues are unchanged.
   refused, rules check warns about floating patterns, and the count is tested`. Then run the full
   check command; expected green.
 
+### Task 6b: Command lists count against the rules limit (owner 2026-10-21)
+
+Inserted after Task 6's gate found accepted command-list files at 0.27 to 2 s a hook. The owner
+decided to meter command-list entry checks against the same per-hook budget as floating patterns,
+and to keep "an unfinished highlight is skipped". Spec §4.2, §4.4, §4.5, §4.7, §8, §9 (revision 4).
+
+**Files:**
+- Modify: `agentfly/recorder/rulefile.py` (each bucket of the command index carries its weight;
+  `_bucket_hit` and `_program_hit` charge; the list lint), `agentfly/recorder/rules.py`
+  (`LIMIT_MESSAGE`: "patterns or command lists").
+- Tests: `tests/test_rules_meter.py`, `tests/test_rules_limit.py`, `tests/test_rules_cost.py`
+  (the shapes), `tests/test_rules_cli.py`.
+
+**Interfaces:**
+- Before a bucket's entries are walked, charge its weight `Σ (1 + len(rest))` (worked out when the
+  index is built). Before a run of key probes, charge `len(probes) // 4` (fewer than 4: nothing).
+  Every charge goes through `rulefile._charge`. `FLOAT_STEPS`, `MAX_WORK`, every `WORK_*`, the
+  index's answers and the one pass do not change. R0 and R1 never charge.
+- An unfinished command-list rule is handled as an unfinished floating one (Task 4).
+- `rules check` prints one `warn:` line per list (per rule) whose heaviest bucket weighs more than
+  20; the packaged default carries no lint.
+
+- [ ] **Step 1: Write the failing tests.** The prices (a bucket of ten one-word rests is charged 20
+  before it is walked; 8 probes charge 2); counting is real (the bipartite shape as block rules gives
+  the limit deny, the counted list work is at most `FLOAT_STEPS` plus one bucket, and with `_charge`
+  a no-op the entries read exceed `FLOAT_STEPS`); warn gives `ask`, highlight is skipped; R0 and R1
+  unchanged with the heavy rules before R1; real shapes are never charged; the lint line.
+- [ ] **Step 2: Implement**, pass the focused tests
+  (`uv run pytest tests/test_rules_meter.py tests/test_rules_limit.py tests/test_rules_cost.py tests/test_rules_cli.py tests/test_npm_publish_entry.py tests/test_rulefile.py -q`).
+- [ ] **Step 3: Gate.** Whole hook through `Recorder.run`, best of three, with the load average: the
+  two Task 6 gate shapes, the advisor's three crafted shapes, each as block, and the must-allow
+  shapes. Each under 0.2 s.
+- [ ] **Step 4: Commit and run the full check.** Message: `V5b-fix2: command lists count against
+  the rules limit (owner 2026-10-21)`.
+
 ## Part 2: long words (§5)
 
 ### Task 7: Long words and paths never raise, and are not quadratic
@@ -580,8 +615,15 @@ enqueues are unchanged.
 - [ ] **Step 3: Pass the tests.** Run `uv run pytest tests/test_clean.py tests/test_leak*.py -q`.
   Expected: all pass.
 - [ ] **Step 4: Gate.** Re-run Task 6's measurement script and Task 7's `bash -c`. Each must be under
-  0.2 s at 60 deep. **If any stays over 0.2 s, stop and ask the lead with the numbers.** Do not
-  change `MAX_WORK`, `FLOAT_STEPS`'s 20 ms price, or `DIV`.
+  0.2 s at 60 deep. Also re-run Task 6b's gate: the crafted command-list shapes (pairs of 21 words
+  on 75 `cat u_i u_k n_m`; bipartite on 13 `cat a0..a19 zK`; four-word entries `cat aI bJ cK dL`
+  5×5×4×2 on 42 `cat a0..a4 zK`; nine-word entries with two key words on 75 `cat a0 a1 zK`; 30
+  present words in a different order each plus one shared absent word on 9 commands), each as
+  block, are expected under 0.2 s with the limit answer; the must-allow shapes (198 × `cat wN` on
+  150 `cat zN y` and on `command(60)`; 198 × `cat w a0..a199` on 100 `cat w x`; 198 × `pI x` on one
+  command naming all 200 programs; the default on `command(60)`; the realistic 20 × 15 file on
+  `git push origin bK`) keep their answers with no limit. **If any stays over 0.2 s, stop and ask
+  the lead with the numbers.** Do not change `MAX_WORK`, `FLOAT_STEPS`'s 20 ms price, or `DIV`.
 - [ ] **Step 5: Commit and run the full check.** Message: `V5b-fix2: the cleaner's baseline is
   trimmed (outputs byte-identical)`. Then run the full check command; expected green.
 
@@ -791,7 +833,10 @@ enqueues are unchanged.
   - lines for `tests/test_rules_matcher.py`, `tests/test_rules_meter.py`, `tests/test_rules_limit.py`
     and `tests/test_long_words.py`;
   - edits to the Cost, R1 minimum (structural rule, brute force, `tests/r1_grid.py`), Rules file
-    (floating exceptions refused) and Install lines, to match the new behaviour.
+    (floating exceptions refused) and Install lines, to match the new behaviour;
+  - a line for Task 6b: command lists count against the rules limit (a bucket charged its weight
+    before it is walked, probes a step for four; the bipartite shape gives the limit deny, `ask` as
+    warn, skipped as highlight; real shapes never charged; the heavy-list `rules check` line).
 - Create: `docs/reports/V5b-fix2.md` (format: `docs/reports/README.md`).
 
 - [ ] **Step 1: Update AGENTS.md "Testing".** One short paragraph per new file, in its current style.
@@ -810,7 +855,10 @@ enqueues are unchanged.
     0644) is stricter than the recorder's trust rule, so it may rewrite known bytes `doctor` calls
     fine;
   - gaps for the lead: HOOKS.md's `rules_limit` line, and SPEC §5's "What a file may cost" (the
-    rules limit, with its deny and ask, and `path_except` refusing floating patterns);
+    rules limit, with its deny and ask, and `path_except` refusing floating patterns), where
+    "command and host lists cost almost nothing …" gains "… and count against the hook's rules
+    limit"; and the brief's Cost sentence, "meter only floating patterns" → "meter floating
+    patterns and command-list entry checks" (owner 2026-10-21, Task 6b);
   - the margin at 60 deep against 0.2 s, from the measurements.
 - [ ] **Step 6: Run `/final-verification`** on `main...HEAD`, then commit its result. Then run
   `/code-review high` on `main...HEAD`. Fix a finding only inside the brief's Touches; list the

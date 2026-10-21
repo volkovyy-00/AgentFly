@@ -9,6 +9,11 @@ covers floating patterns only, in one pass, with a budget priced from measured t
 block rule denies and records no trigger; an unfinished warn on a shell command asks; D27 is a
 structural rule with no automaton; R1 and `path_except` refuse floating patterns. Awaiting the
 lead's check. Revision 2 (approved by the owner earlier the same day) is superseded on these points.
+Status: revision 4 (2026-10-21): command lists are metered (owner). After Task 6's gate found
+accepted command-list files at 0.27 to 2 s a hook, the owner decided that command-list entry checks
+count against the same per-hook budget as floating patterns (§4.2, §4.5, §4.7), with a `rules check`
+line for a heavy list (§4.4); an unfinished highlight is still skipped. The brief's "meter only
+floating patterns" is superseded on this point; the brief is the lead's to edit.
 
 The brief and the intent are the authority; this document says how. Where it would differ from the
 brief, the builder stops and asks. "My call" marks a choice the owner did not make.
@@ -27,7 +32,7 @@ shapes. The second review showed four holes:
 
 Goals, in the brief's order:
 1. **Cost.** A matcher whose cost does not grow with folder depth unless the pattern floats, a
-   command-list index, and a per-hook meter on floating patterns only.
+   command-list index, and a per-hook meter on floating patterns and command lists (revision 4).
 2. **Long words.** No word or path makes the hook raise, and `bash -c` with 300 deep paths is fast
    under the default rules.
 3. **D27.** R1's `after` is judged by the shape of its patterns: one covering pattern per SPEC §5
@@ -108,13 +113,17 @@ not `all_commands()` as it is. A command that parses only partly is then tested 
 The answers are the same (`any` over the same set). This keeps the unmetered work at most
 `MAX_WORK × C` tests (§4.5), where `C` is the number of distinct candidates.
 
-### 4.2 The meter: floating patterns only, one fixed budget
+### 4.2 The meter: floating patterns and command lists, one fixed budget
 
-- **What it covers.** Only a floating pattern's test charges the meter: its head, tail and middle
-  comparisons and its middle-block start positions. Name patterns, non-floating slash patterns,
-  command lists, hosts and command classes never charge. R0 uses no `rulefile` patterns, and R1
-  holds no floating pattern (§6.3), so neither ever touches the meter. No "unstoppable" mode is
-  needed.
+- **What it covers.** A floating pattern's test charges the meter: its head, tail and middle
+  comparisons and its middle-block start positions. Command lists charge too (owner, 2026-10-21):
+  a bucket of the index (§4.7) is charged `Σ (1 + len(rest))` over its entries before it is walked
+  (the weight is worked out when the index is built and kept beside the bucket), and a run of key
+  probes is charged `len(probes) // 4` before it is made (a run of fewer than 4 charges nothing,
+  so it still answers once the budget is spent). Name patterns, non-floating slash patterns, hosts
+  and command classes never charge. R0 uses no `rulefile` patterns, and R1 holds no floating
+  pattern (§6.3) and no `command` (D27's check refuses one), so neither ever touches the meter. No
+  "unstoppable" mode is needed.
 - **Where it lives.** `rulefile` holds a `ContextVar` with this hook's `Meter`, or `None`. With
   `None`, charging does nothing, so pure tests, `rules test`, `doctor` and the D27 check behave as
   today.
@@ -174,8 +183,8 @@ file order that fired or was left unfinished decides.
   the warn rule's too, and `app.hook_answer` picks deny or ask from the verdict, so both answers carry
   the limit message (plus `BLOCK_TAIL` or `SKIP_TAIL`).
 - `LIMIT_MESSAGE`: "AgentFly's rules took too long to check this action (the rules limit). Simplify
-  the rules file's patterns; `agentfly rules check` names the heavy ones." The wording may be
-  polished.
+  the rules file's patterns or command lists; `agentfly rules check` names the heavy ones." The
+  wording may be polished.
 
 ### 4.4 Lint and reporting
 
@@ -184,6 +193,13 @@ file order that fired or was left unfinished decides.
 path; on long, deep commands it may reach the rules limit, which then blocks the action if X is a
 block rule, asks if it is a warn, and skips it if it is a highlight; anchor it if you can". The file
 still loads. The packaged default has no floating pattern, so it carries no lint.
+
+For a command list (revision 4), `rules check` prints one `warn:` line per list a rule names whose
+heaviest bucket weighs more than 20 (`rulefile.HEAVY_BUCKET`; ten entries of one word left each
+weigh 20): "rule X: N entries of list 'l' share the word 'w' and are each checked when a command
+holds it; on long commands the rule may reach the rules limit", with N and w those of the heaviest
+bucket. So `LIMIT_MESSAGE`'s "`agentfly rules check` names the heavy ones" holds for lists too. The
+packaged default's one list (`publish_tools`) has buckets of one entry, so it carries no lint.
 
 **Reporting.** After the hook, `app.apply_rules` reads the meter:
 - if anything was unfinished, it logs one warning line with the chat id, the unfinished rule ids and
@@ -209,13 +225,17 @@ stopped, as the brief requires.
 
 **Floating patterns** add at most `FLOAT_STEPS` plus one block's walk, priced at 20 ms.
 
-**Command lists** are not metered (brief). With the index (§4.7), a clause costs, per distinct
-simple command, the sum over its listed programs of `min(keys of that program, distinct words after
-it)`, plus one check per entry under a key that holds. On the brief's command (one simple command of
-300 words) that is at most about `rules × (200 + 200)`, which is dictionary work. Entries that share
-a program and first word no longer share a key. What is left is lists built from a few common words
-(for example every pair of 21 words), measured by the gate; if one stays over 0.2 s, the builder
-stops and asks.
+**Command lists** are metered (revision 4, owner 2026-10-21). With the index (§4.7), a clause
+costs, per distinct simple command, the sum over its listed programs of `min(keys of that program,
+distinct words after it)` probes, plus one check per entry under a key that holds. The estimate
+"about `rules × (200 + 200)`" holds for one simple command of 300 words, not for many short ones: a
+crafted list whose entries share common words checks rules × entries × simple commands entries
+(up to about three million at 300 words), and no index avoids that when the command holds every key
+and no entry completes. So the entry checks and the probe runs are charged (§4.2), and a hook does at
+most `FLOAT_STEPS` steps of list work plus one bucket. What stays unmetered is the fixed look-up per
+(clause, simple command, program) and runs of fewer than four probes: at most a few dictionary
+operations per clause and simple command (about 15 ms at 198 rules × 150 simple commands), which
+grows with command size (out of scope, §2).
 
 **Time** (300 words, 60 deep, idle): cleaning and parsing (the baseline, about 0.1 s today), plus at
 most `MAX_WORK × C` short tests (180k at 900 candidates, about 70 ms; less once a file spends units
@@ -256,7 +276,10 @@ The fix:
 - **Why this is enough.** An entry is checked only when its rarest word is in the simple command. A
   key shared by many entries is a word that each of them holds and that is no rarer than any of
   their other words, so a big bucket needs many entries built from a few common words; the gate
-  (Task 6) times the worst such shapes the plan can build. Command lists stay unmetered (brief).
+  (Task 6) timed the worst such shapes, at 0.27 to 2 s, so the lists are now metered (§4.2).
+- **Each bucket carries its weight** (`rulefile._Bucket`: the weight `Σ (1 + len(rest))` and the
+  rests), worked out once when the index is built; `_bucket_hit` charges it before it reads an entry,
+  and `_program_hit` charges each run of probes. The index's answers do not change.
 
 ## 5. Part 2: long words
 
@@ -458,6 +481,25 @@ command whose simple command names 200 listed programs does at most `200 + 1` ke
 198 × 200 `cat wN` file on 150 joined commands answers allow with no entry checked, and so does the
 198 × 200 `cat w aN` file on 100 simple commands `cat w x`.
 
+**Command lists count** (revision 4).
+- The price: a bucket of ten one-word rests is charged 20 before its first entry is read (a meter of
+  19 reads none); 8 probes charge 2, either side of the smaller-side walk; 3 probes charge nothing,
+  even on a spent meter.
+- Counting is real: the bipartite shape (198 rules, each a 200-entry list `cat aI bJ`, I < 20, J <
+  10) as block rules on 13 `;`-joined `cat a0 … a19 zK` (286 words) gives the limit deny, and the
+  real list work counted through `_entry_follows` and `_key_lookups` (a step an entry and one a word
+  checked, a step for four probes) is at most `FLOAT_STEPS` plus one bucket; with `_charge` a no-op
+  the entries read exceed `FLOAT_STEPS`.
+- The same shape as warn gives `ask` with the limit message; as highlight, allow, with the rules in
+  `meter.unfinished`.
+- R0's and R1's answers are unchanged with the heavy list block rules before R1.
+- Never charged (meter untouched, nothing unfinished): the packaged default on `command(60)`; 198 ×
+  `cat wN` on 150 `cat zN y`; 198 × `cat w a0..a199` on 100 `cat w x`; a realistic file (20 block
+  rules × 15 entries like `git push --force`) on 75 `git push origin bK`. 198 × `cat wN` on
+  `command(60)` (300 words after `cat`, more than the 200 keys) pays only its probes, 198 × 50
+  steps, and finishes.
+- `rules check` prints one line for a heavy list, none at weight 20, and the default has no lint.
+
 **Limit behaviour.**
 - R0's and R1's answers are unchanged at the limit: a marked chat's heavy command with `curl
   https://x.com`, and an R0 path, each with a heavy file block rule placed **before** R1 in the file.
@@ -524,7 +566,9 @@ On this Mac, idle, best of three:
   - cost grows with command size; the floating budget does not, so a long floating-heavy command
     reaches the limit sooner;
   - R1 and name lists are never stopped, so very long names cost what they take;
-  - command lists are not metered: the worst list shapes the gate measured, with their times;
+  - the list charge is conservative by design: a step of a long rest takes about 0.09 µs against
+    0.35 µs for a one-word rest (the advisor's measurement), so a long rest is charged up to about
+    4× its time, and a crafted file with long entries reaches the limit sooner than its time needs;
   - `init -g`'s `untrusted` (not exactly the owner's and 0644) is stricter than the recorder's trust
     rule (which loads root:admin 0640), so `init -g` may rewrite known bytes `doctor` calls fine;
   - an unfinished warn trigger is not recorded, so it is lost if the user lets the command run;

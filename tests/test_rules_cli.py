@@ -14,7 +14,7 @@ import pytest
 
 from agentfly.cli import main
 from agentfly.recorder import rulefile
-from tests.rules_helpers import BROKEN_TOML, default_with
+from tests.rules_helpers import BROKEN_TOML, default_with, list_line
 
 DEFAULT = rulefile.default_text()
 
@@ -290,6 +290,44 @@ def test_rules_check_warns_about_floating_patterns(
         "deep commands it may reach the rules limit, which then blocks the action if gen is a "
         "block rule, asks if it is a warn, and skips it if it is a highlight; anchor it if you can"
     )
+
+
+HEAVY_LIST_RULE = """
+[[rule]]
+id = "pairs"
+kind = "after_then"
+severity = "block"
+message = "No pairs."
+after = { event = ["shell"], command = "pairs" }
+then = { event = ["shell"], command = "pairs" }
+  [[rule.test]]
+  steps = ["shell: cat a0 b0"]
+  expect = "allow"
+"""
+
+
+def test_rules_check_warns_about_a_heavy_command_list_once_per_list(
+    capsys: pytest.CaptureFixture[str],
+    rules_file: Callable[..., Path],
+) -> None:
+    """Task 6b: a list whose heaviest bucket weighs more than 20 loads, with one `warn:` line for
+    the list in the rule, however many of its clauses name it. Eleven one-word entries under `a0`
+    weigh 22; ten weigh 20 and pass without a line."""
+    heavy = [f"cat a{i} b{j}" for i in range(18) for j in range(11)]
+    text = default_with(list_line("pairs", *heavy), HEAVY_LIST_RULE)
+    code, out, err = run(capsys, "check", str(rules_file(text)))
+    assert code == 0, err
+    (line,) = [line for line in out.splitlines() if line.startswith("warn:")]
+    assert line == (
+        "warn: rule pairs: 11 entries of list 'pairs' share the word 'a0' and are each checked "
+        "when a command holds it; on long commands the rule may reach the rules limit"
+    )
+    light = [f"cat a{i} b{j}" for i in range(20) for j in range(10)]
+    text = default_with(list_line("pairs", *light), HEAVY_LIST_RULE)
+    code, out, err = run(capsys, "check", str(rules_file(text, "light.toml")))
+    assert code == 0, err
+    assert not [line for line in out.splitlines() if line.startswith("warn:")]
+    assert rulefile.load_default().lint == ()
 
 
 def without_tests(text: str) -> str:

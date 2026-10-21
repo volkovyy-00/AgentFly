@@ -386,17 +386,24 @@ def compile_pattern(raw: str) -> Pattern:
 # words 60 folders deep, best of three: short compares walking every folder (`d*/d*/d*/z0/**`) are
 # the slowest, about 0.44 us a step, and a whole budget of them took 19.7 ms; a long compare (255
 # characters against `*a*b*c`) costs about a third of its price, so DIV stays.
+# Command lists charge the same meter (owner, 2026-10-21): a bucket of the index costs one step an
+# entry and one a word left in it, charged before it is walked, and a run of key probes one step
+# for four (a run of fewer charges nothing). Measured by the advisor: 0.35 us a step for one-word
+# entries, 0.09 for long ones, at most 0.4 for probes, so a whole budget stays inside 20 ms.
 DIV: int = 256
 FLOAT_STEPS: int = 45_000
+PROBES_PER_STEP: int = 4
 
 
 class WorkLimit(Exception):
-    """This hook's floating patterns have used up their steps; the rule being run is unfinished."""
+    """This hook's floating patterns and command lists have used up their steps; the rule being
+    run is unfinished."""
 
 
 @dataclass
 class Meter:
-    """One hook's budget of floating steps, and the rules it left unfinished (in order, once)."""
+    """One hook's budget of steps (floating patterns and command lists), and the rules it left
+    unfinished (in order, once)."""
 
     left: int
     unfinished: list[str] = dataclasses.field(default_factory=list)
@@ -430,8 +437,9 @@ def compare_cost(n: int, m: int) -> int:
 
 
 def _charge(steps: int) -> None:
-    """Every charge of a floating test comes here (a test replaces it to lift the bound). A charge
-    that leaves the meter below 0 raises, so once it is spent every later charge raises too."""
+    """Every charge of a floating test or a command list comes here (a test replaces it to lift
+    the bound). A charge that leaves the meter below 0 raises, so once it is spent every later
+    charge raises too."""
     meter: Meter | None = _METER.get()
     if meter is None:
         return
@@ -484,11 +492,24 @@ def _action_path(action: Mapping[str, Any], event: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-# A clause's command list as the clause looks it up (spec §4.7): program -> key -> the entries'
-# other extra words. The key of an entry is its rarest extra word among that program's entries (the
+class _Bucket(NamedTuple):
+    """The entries under one key: their other extra words, and what reading them all costs (spec
+    §4.2): a step an entry and one a word, charged before the bucket is walked."""
+
+    weight: int
+    rests: tuple[tuple[str, ...], ...]
+
+
+# A clause's command list as the clause looks it up (spec §4.7): program -> key -> the bucket of
+# entries under it. The key of an entry is its rarest extra word among that program's entries (the
 # first of them on a tie), or None for an entry with no extra word.
-_Keys = dict[str | None, tuple[tuple[str, ...], ...]]
+_Keys = dict[str | None, _Bucket]
 _Index = dict[str, _Keys]
+
+
+def _bucket(rests: list[tuple[str, ...]]) -> _Bucket:
+    kept: tuple[tuple[str, ...], ...] = tuple(dict.fromkeys(rests))
+    return _Bucket(sum(1 + len(rest) for rest in kept), kept)
 
 
 def _command_index(command: tuple[tuple[str, ...], ...]) -> _Index:
@@ -506,13 +527,21 @@ def _command_index(command: tuple[tuple[str, ...], ...]) -> _Index:
         for extras in listed:
             key: str | None = min(extras, key=held.__getitem__) if extras else None
             keyed.setdefault(key, []).append(tuple(word for word in extras if word != key))
-        index[program] = {key: tuple(dict.fromkeys(rest)) for key, rest in keyed.items()}
+        index[program] = {key: _bucket(rests) for key, rests in keyed.items()}
     return index
 
 
 def _key_lookups(count: int) -> None:
     """A seam for tests, called with the number of keys about to be looked up for one program of
     one simple command (a test counts them). Does nothing."""
+
+
+def _probe(count: int) -> None:
+    """Charge a run of `count` key probes before it is made: a step for four, nothing for fewer
+    (so a short run still answers once the meter is spent)."""
+    if count >= PROBES_PER_STEP:
+        _charge(count // PROBES_PER_STEP)
+    _key_lookups(count)
 
 
 def _entry_follows(last: Mapping[str, int], at: int, extras: tuple[str, ...]) -> bool:
@@ -550,26 +579,28 @@ def _simple_commands(parsed: Parsed) -> tuple[_Simple, ...]:
     return tuple(_simple_view(argv) for argv in dict.fromkeys(parsed.all_commands()))
 
 
-def _bucket_hit(bucket: tuple[tuple[str, ...], ...], last: Mapping[str, int], at: int) -> bool:
-    return any(_entry_follows(last, at, rest) for rest in bucket)
+def _bucket_hit(bucket: _Bucket, last: Mapping[str, int], at: int) -> bool:
+    _charge(bucket.weight)
+    return any(_entry_follows(last, at, rest) for rest in bucket.rests)
 
 
 def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
     """One listed program, first standing at `at` in a simple command: some entry holds. Of the
-    program's keys and the distinct words after `at`, the smaller side is walked."""
+    program's keys and the distinct words after `at`, the smaller side is walked; the probes and
+    each bucket walked are charged (spec §4.2)."""
     if None in keys:  # an entry with no extra word fires on the program alone
         return True
     last: dict[str, int] = view.last
     if len(keys) > 1:  # one key is looked up at once; more are weighed against the words after
         start: int = bisect_right(view.positions, at)
         if len(view.words) - start < len(keys):
-            _key_lookups(len(view.words) - start)
+            _probe(len(view.words) - start)
             for word in view.words[start:]:
                 bucket = keys.get(word)
                 if bucket is not None and _bucket_hit(bucket, last, at):
                     return True
             return False
-    _key_lookups(len(keys))
+    _probe(len(keys))
     for key, bucket in keys.items():
         if last.get(key, -1) > at and _bucket_hit(bucket, last, at):
             return True
@@ -1040,6 +1071,34 @@ def _floating_lint(spec: RuleSpec) -> list[str]:
     ]
 
 
+# A bucket heavier than this gets a `rules check` line (spec §4.4): ten entries of one word left.
+HEAVY_BUCKET: int = 20
+
+
+def _list_lint(spec: RuleSpec, raw: Mapping[str, Any]) -> list[str]:
+    """Spec §4.4: a command list with a heavy bucket loads, and `rules check` says what it may
+    cost, once per list the rule names, at its heaviest bucket."""
+    tables: tuple[tuple[Clause | None, Any], ...] = (
+        (spec.clause, raw),
+        (spec.after, raw.get("after")),
+        (spec.then, raw.get("then")),
+    )
+    heaviest: dict[str, tuple[int, int, str]] = {}  # list -> weight, entries, key
+    for clause, table in tables:
+        if clause is None or not clause.command:
+            continue
+        name: str = table["command"]
+        for keys in clause._index.values():
+            for key, bucket in keys.items():
+                if key is not None and bucket.weight > heaviest.get(name, (HEAVY_BUCKET,))[0]:
+                    heaviest[name] = (bucket.weight, len(bucket.rests), key)
+    return [
+        f"rule {spec.id}: {entries} entries of list {name!r} share the word {key!r} and are each "
+        "checked when a command holds it; on long commands the rule may reach the rules limit"
+        for name, (_, entries, key) in heaviest.items()
+    ]
+
+
 def _parse(text: str) -> RuleFile:
     problems = _Problems()
     if len(text) > MAX_FILE_BYTES:  # `load_file` checks bytes; this is for callers of `parse`
@@ -1066,9 +1125,11 @@ def _parse(text: str) -> RuleFile:
         raw_rules = []
     seen: set[str] = set()
     specs: list[RuleSpec] = []
+    heavy_lists: list[str] = []
     for number, raw in enumerate(raw_rules, 1):
         if (spec := _rule(number, raw, lists, seen, problems)) is not None:
             specs.append(spec)
+            heavy_lists += _list_lint(spec, raw)
     total: int = file_work(specs)
     if total > MAX_WORK:
         heaviest: RuleSpec = max(specs, key=rule_work)
@@ -1082,6 +1143,7 @@ def _parse(text: str) -> RuleFile:
         f"rule {s.id}: no inline test; add a [[rule.test]]" for s in specs if not s.tests
     ]
     lint += [line for spec in specs for line in _floating_lint(spec)]
+    lint += heavy_lists
     return RuleFile(tuple(specs), tuple(problems.errors), tuple(lint))
 
 

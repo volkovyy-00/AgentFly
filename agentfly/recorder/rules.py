@@ -365,14 +365,14 @@ def _never(action: Action) -> bool:  # noqa: ARG001
 
 # ---------------------------------------------------------------- the rules limit (V5b-fix2)
 
-# A rule is unfinished when the hook's floating steps run out while its trigger or check runs
-# (`rulefile.WorkLimit`). An unfinished block rule denies with LIMIT_RULE, an unfinished warn asks
-# with LIMIT_WARN_RULE. The space keeps the id outside the file id grammar; neither rule is ever in
-# `RuleSet.rules`.
+# A rule is unfinished when the hook's steps (floating patterns, command lists) run out while its
+# trigger or check runs (`rulefile.WorkLimit`). An unfinished block rule denies with LIMIT_RULE, an
+# unfinished warn asks with LIMIT_WARN_RULE. The space keeps the id outside the file id grammar;
+# neither rule is ever in `RuleSet.rules`.
 LIMIT_ID: str = "rules limit"
 LIMIT_MESSAGE: str = (
     "AgentFly's rules took too long to check this action (the rules limit). Simplify the rules "
-    "file's patterns; `agentfly rules check` names the heavy ones."
+    "file's patterns or command lists; `agentfly rules check` names the heavy ones."
 )
 
 

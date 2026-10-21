@@ -8,7 +8,9 @@ memos), and the work has two bounds (V5b-fix2 §4.5):
   file within `MAX_WORK` units makes at most `MAX_WORK × C` pattern tests per hook, C the command's
   distinct candidates (`rulefile.distinct_candidates`), at any depth;
 - a floating pattern walks the path, and the hook's meter stops it after `FLOAT_STEPS` steps plus
-  one block's walk (an unfinished block rule then denies with the limit rule).
+  one block's walk (an unfinished block rule then denies with the limit rule);
+- a command list charges the same meter, a bucket before it is walked and a run of probes a step
+  for four (owner, 2026-10-21; counted in `tests/test_rules_limit.py`).
 
 The counting tests bound tests and steps, not seconds: they are the proof, and they fail if a bound
 is taken away. The one timed test is the real hook against the client's own 0.5 s; it catches a
@@ -105,6 +107,54 @@ def command_list_on_one_program() -> tuple[str, list[str]]:
     entries = [f"cat w{i}" for i in range(rulefile.MAX_LIST_ENTRIES)]
     rules = [match_rule(i, 'command = "l"') for i in range(rulefile.MAX_RULES - 2)]
     return list_line("l", *entries), rules
+
+
+def bipartite_list(severity: str = "highlight") -> tuple[str, list[str]]:
+    """Task 6b's crafted list, in each of 198 rules: `cat aI bJ` for I < 20 and J < 10. An entry
+    waits under its `aI` (10 entries hold it, 20 hold its `bJ`), so `BIPARTITE_LINE`, which holds
+    every `aI` and no `bJ`, checks all 200 entries of every rule in every simple command, and none
+    completes."""
+    entries = [f"cat a{i} b{j}" for i in range(20) for j in range(10)]
+    rules = [match_rule(i, 'command = "l"', severity) for i in range(rulefile.MAX_RULES - 2)]
+    return list_line("l", *entries), rules
+
+
+# 13 simple commands of 22 words (286 words; a 14th would pass 300).
+BIPARTITE_LINE = " ; ".join(
+    "cat " + " ".join(f"a{i}" for i in range(20)) + f" z{k}" for k in range(13)
+)
+
+
+def realistic_lists() -> tuple[str, list[str]]:
+    """20 block rules, each with its own list of 15 entries like a real file's: every entry sits
+    under a key of its own or of two."""
+    lists = "".join(
+        list_line(
+            f"l{r}",
+            *(
+                f"{entry} r{r}"
+                for entry in (
+                    "git push --force",
+                    "git push -f",
+                    "rm -rf",
+                    "npm publish",
+                    "docker push",
+                    "kubectl delete",
+                    "terraform destroy",
+                    "aws s3 rm",
+                    "gh release create",
+                    "pip install",
+                    "brew install",
+                    "chmod 777",
+                    "curl -d",
+                    "scp",
+                    "dd of",
+                )
+            ),
+        )
+        for r in range(20)
+    )
+    return lists, [match_rule(i, f'command = "l{i}"', "block") for i in range(20)]
 
 
 HEAVY_PATTERNS = [f"d*/d*/d*/z{n}/**" for n in range(5)]
