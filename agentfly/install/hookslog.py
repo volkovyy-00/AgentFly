@@ -12,6 +12,7 @@ about the system file in a file is its current state.
 The agent's user can write that folder, so what is read from it is bounded by counts: at most
 MAX_LOGS logs (none when there are more), each only if it is a plain file once opened without
 blocking, at most _TAIL_BYTES from its end, and every line is matched in time linear in its length.
+Listing the start folders is linear in their entries.
 """
 
 from __future__ import annotations
@@ -118,12 +119,15 @@ def latest(home: Path) -> Logs:
     """The newest Cursor start folder and its Hooks logs: none of them when there are too many."""
     root = home / "Library" / "Application Support" / "Cursor" / "logs"
     try:
-        folders = [p for p in root.iterdir() if _START_FOLDER.fullmatch(p.name) and p.is_dir()]
+        # One pass, no list of the folders: the names are start times, so the largest is the newest.
+        newest = max(
+            (p for p in root.iterdir() if _START_FOLDER.fullmatch(p.name) and p.is_dir()),
+            default=None,
+        )
     except OSError:
-        folders = []
-    if not folders:
+        newest = None
+    if newest is None:
         return Logs(None)
-    newest = max(folders)  # the names are start times
     found = list(itertools.islice(newest.glob(_LOG_PATTERN), MAX_LOGS + 1))
     if len(found) > MAX_LOGS:
         return Logs(newest, too_many=True)
