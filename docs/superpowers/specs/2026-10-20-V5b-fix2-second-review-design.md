@@ -161,9 +161,7 @@ The meter keeps the ids of unfinished rules.
   the user lets the command run, that trigger is lost (reported);
 - R1's mark is never affected (R1 is never metered);
 - a trigger the chat already holds is not evaluated again (today's short-circuit), so it cannot be
-  left unfinished. A trigger held only through a parent chat or the 30-minute workspace fallback is
-  evaluated again (re-firing keeps it in the child for good), and if that is left unfinished the
-  check still runs as for a held trigger (`_outcome`, final review CR2): the rule is not unfinished.
+  left unfinished.
 
 **Checks** (`winning_rule`), with one rule for every severity: within a severity, the first rule in
 file order that fired or was left unfinished decides.

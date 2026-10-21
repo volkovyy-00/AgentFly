@@ -552,14 +552,9 @@ def mark(action: Action, session: Session, rules: RuleSet | None = None) -> Sess
 
 
 def _outcome(rule: Rule, action: Action, session: Session) -> bool | None:
-    """Whether the rule fires, or None when the hook's meter left it (or its trigger) unfinished.
-
-    `session` is the one the rules see (`SessionStore.effective`). A trigger that `mark` left
-    unfinished but that this session holds all the same (through a parent chat or the workspace
-    fallback: `mark` looks only at the chat's own) is held, so the check runs as usual (CR2)."""
+    """Whether the rule fires, or None when the hook's meter left it (or its trigger) unfinished."""
     meter: rulefile.Meter | None = rulefile.current_meter()
-    held: bool = rule.after is not None and rule.id in session.triggers
-    if meter is not None and rule.id in meter.unfinished and not held:
+    if meter is not None and rule.id in meter.unfinished:
         return None
     try:
         return rule.check(action, session)

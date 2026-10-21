@@ -313,24 +313,6 @@ def test_a_limit_deny_records_no_trigger_and_a_restart_judges_as_before(rec: Rec
     assert rec.run("K", "cat notes.txt")["permission"] == "deny"  # a trigger that was set stays
 
 
-def test_an_inherited_trigger_left_unfinished_in_mark_is_judged_as_held(rec: Recorder) -> None:
-    """CR2 / final M1: `mark` re-evaluates a trigger the chat holds only through its parent (on
-    purpose: re-firing keeps an inherited trigger), and the meter can run out there. The trigger is
-    held all the same, so the rule's check runs as usual: a follow-up that does not match is
-    allowed, not denied with the limit."""
-    rules_mod.activate(heavy("block", "after_then"))
-    assert rec.run("P", "ls /w/d/d/d/z0/f.py")["permission"] == "allow"  # P holds the trigger
-    rec.task("P", "T1")
-    heavy_echo = "echo" + command(20).removeprefix("cat")
-    assert rec.run("C", heavy_echo, parent_tool_call_id="T1") == {"permission": "allow"}
-    stored = rec.store.get("C")
-    assert stored is not None and TRIGGER_ID not in stored.triggers  # what mark records: as before
-    assert rec.run("C", "cat notes.txt", parent_tool_call_id="T1")["permission"] == "deny"
-    # A chat that does not hold the trigger still fails closed on the same command.
-    answer = rec.run("F", heavy_echo)
-    assert (answer["permission"], answer["user_message"]) == ("deny", LIMIT_MESSAGE)
-
-
 def test_health_says_rules_limit_only_after_a_hit(app_client: TestClient) -> None:
     rules_mod.activate(heavy("block"))  # `lifespan` activated the rules it loaded: after it
     assert set(app_client.get("/health").json()) == HEALTHY_KEYS
