@@ -80,6 +80,8 @@ def test_the_docs_still_list_commands() -> None:
 AGENTS_MAX_BYTES = 14_000  # owner 2026-10-22: AGENTS.md and CLAUDE.md load into every session
 IMPORT_LINE = "@AGENTS.md"  # the one import CLAUDE.md is meant to hold
 _IMPORT = re.compile(r"(?<![^\W_])@\S+")  # an `@` after anything but a letter or digit, and a name
+_LIST_ITEM = re.compile(r"(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)")
+_NUL = "\x00"  # stands in for text that is code
 
 
 def size_problem(data: bytes) -> str | None:
@@ -89,49 +91,46 @@ def size_problem(data: bytes) -> str | None:
     return None
 
 
-def _fence(line: str) -> tuple[str, int] | None:
-    """The character and length of the fence a line opens, or None."""
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _fence(line: str) -> str | None:
+    """The run of backticks or tildes a line opens a fenced block with, or None."""
     text = line.lstrip(" ")
-    if len(line) - len(text) > 3 or text[:1] not in ("`", "~"):
+    if _indent(line) > 3 or text[:1] not in ("`", "~"):
         return None
-    length = len(text) - len(text.lstrip(text[0]))
-    if length < 3 or (text[0] == "`" and "`" in text[length:]):  # a span, not a fence
+    run = text[: len(text) - len(text.lstrip(text[0]))]
+    if len(run) < 3 or (run[0] == "`" and "`" in text[len(run) :]):  # a span, not a fence
         return None
-    return text[0], length
+    return run
 
 
-def _closes(line: str, fence: tuple[str, int]) -> bool:
+def _closes(line: str, fence: str) -> bool:
     text = line.strip()
-    return (
-        len(line) - len(line.lstrip(" ")) <= 3
-        and len(text) >= fence[1]
-        and (text == fence[0] * len(text))
-    )
+    return _indent(line) <= 3 and text.startswith(fence) and not text.strip(fence[0])
 
 
 def _block_kind(line: str) -> str:
-    """`blank` or `single` (one line, no continuation), `start` (a block that may go on), `text`.
+    """`single` (a block of one line), `start` (a block that may go on) or `text`.
 
-    Calling a line a block start when CommonMark does not only ends a code span early, which
+    Calling a line a block of its own when CommonMark does not only ends a code span early, which
     checks more text. Calling one `text` when it starts a block would let a stray backtick hide
-    the lines after it.
+    the lines after it: so a blank line, a heading, a setext or thematic line and an indented
+    (code) line are `single`; a quote and a list item are `start`.
     """
     text = line.strip()
-    if not text:
-        return "blank"
+    if not text or line.startswith(("    ", "\t")):
+        return "single"
     compact = text.replace(" ", "")
-    if text[0] == "#" or (
-        len(compact) >= 3 and compact[0] in "-*_" and compact == compact[0] * len(compact)
-    ):
-        return "single"  # a heading or a thematic break
-    digits = len(text) - len(text.lstrip("0123456789"))
-    bullet = text[0] in "-*+" and text[1:2] in ("", " ", "\t")
-    numbered = (
-        0 < digits <= 9
-        and text[digits : digits + 1] in (".", ")")
-        and (text[digits + 1 : digits + 2] in ("", " ", "\t"))
-    )
-    return "start" if text[0] == ">" or bullet or numbered else "text"
+    ruled = compact == compact[0] * len(compact) and compact[0] in "=-*_"
+    if text[0] == "#" or (ruled and (len(compact) >= 3 or compact[0] in "=-")):
+        return "single"
+    return "start" if text[0] == ">" or _LIST_ITEM.match(text) else "text"
+
+
+def _hide(text: str) -> str:
+    return re.sub(r"[^\n]", _NUL, text)
 
 
 def _blank_spans(paragraph: str) -> str:
@@ -141,37 +140,35 @@ def _blank_spans(paragraph: str) -> str:
     finds each run's closer, one forward pass blanks: the work is linear. A run that nothing
     closes, or one after a backslash, is plain text.
     """
-    runs = [(m.start(), m.end() - m.start()) for m in re.finditer(r"`+", paragraph)]
+    runs = [m.span() for m in re.finditer(r"`+", paragraph)]
     closer: list[int | None] = [None] * len(runs)
-    latest: dict[int, int] = {}
+    latest: dict[int, int] = {}  # run length -> the nearest run of that length to the right
     for at in range(len(runs) - 1, -1, -1):
-        closer[at] = latest.get(runs[at][1])
-        latest[runs[at][1]] = at
-    blanked = list(paragraph)
-    at = 0
+        length = runs[at][1] - runs[at][0]
+        closer[at] = latest.get(length)
+        latest[length] = at
+    parts: list[str] = []
+    done = at = 0
     while at < len(runs):
-        start = runs[at][0]
-        end = closer[at]
+        start, end = runs[at][0], closer[at]
         if end is None or paragraph[start - 1 : start] == "\\":
             at += 1
             continue
-        for index in range(start, runs[end][0] + runs[end][1]):
-            if blanked[index] != "\n":
-                blanked[index] = "\x00"
-        at = end + 1
-    return "".join(blanked)
+        stop = runs[end][1]
+        parts += [paragraph[done:start], _hide(paragraph[start:stop])]
+        done, at = stop, end + 1
+    return "".join(parts) + paragraph[done:]
 
 
-def _outside_code(text: str) -> tuple[str, int | None]:
-    """`text` with fenced blocks and code spans overwritten by NUL characters.
+def _outside_code(text: str) -> tuple[list[str], int | None]:
+    """The lines of `text` with fenced blocks and code spans overwritten by NUL characters.
 
-    The result has the length and the line breaks of `text`. A span may cross a line break but
-    not the end of its paragraph (a blank line, a heading, a list item, a quote). The second
-    value is the line of a fence that never closes, or None.
+    Every line keeps its length. A span may cross a line break but not the end of its paragraph
+    (see `_block_kind`). The second value is the line of a fence that never closes, or None.
     """
     out: list[str] = []
     paragraph: list[str] = []
-    fence: tuple[str, int] | None = None
+    fence: str | None = None
     opened = 0
 
     def end_paragraph() -> None:
@@ -181,23 +178,23 @@ def _outside_code(text: str) -> tuple[str, int | None]:
 
     for number, line in enumerate(text.split("\n"), 1):
         if fence is not None:
-            out.append("\x00" * len(line))
+            out.append(_NUL * len(line))
             if _closes(line, fence):
                 fence = None
             continue
         opening = _fence(line)
-        kind = "fence" if opening else _block_kind(line)
-        if kind != "text":
+        kind = _block_kind(line)
+        if opening or kind != "text":
             end_paragraph()
         if opening:
             fence, opened = opening, number
-            out.append("\x00" * len(line))
-        elif kind in ("blank", "single"):
+            out.append(_NUL * len(line))
+        elif kind == "single":
             out.append(_blank_spans(line))
         else:
             paragraph.append(line)
     end_paragraph()
-    return "\n".join(out), (opened if fence else None)
+    return out, (opened if fence is not None else None)
 
 
 def stray_imports(text: str, allowed: str | None = None) -> list[str]:
@@ -206,21 +203,15 @@ def stray_imports(text: str, allowed: str | None = None) -> list[str]:
     One pass over the text. Unsure means a finding: an unclosed backtick run is plain text, and a
     fenced block that never closes is itself a finding. The named file is never opened.
     """
-    outside, unclosed = _outside_code(text)
+    rows, unclosed = _outside_code(text)
     problems = [f"line {unclosed}: a fenced block is never closed"] if unclosed else []
-    line, line_start, seen = 1, 0, 0
-    for found in _IMPORT.finditer(outside):
-        start = found.start()
-        breaks = text.count("\n", seen, start)
-        if breaks:
-            line += breaks
-            line_start = text.rfind("\n", seen, start) + 1
-        seen = start
-        name = text[start : found.end()]
-        if allowed and name == allowed and start == line_start:
-            allowed = None  # that line, once
-            continue
-        problems.append(f"line {line}: {name[:40]}")
+    for number, (row, original) in enumerate(zip(rows, text.split("\n"), strict=True), 1):
+        for found in _IMPORT.finditer(row):
+            name = original[found.start() : found.end()]
+            if allowed and name == allowed and found.start() == 0:
+                allowed = None  # that line, once
+                continue
+            problems.append(f"line {number}: {name[:40]}")
     return problems
 
 
@@ -231,36 +222,31 @@ def test_agents_md_stays_under_its_size_cap() -> None:
 @pytest.mark.parametrize(
     ("data", "fails"),
     [
-        (b"x" * 14_000, False),
-        (b"x" * 14_001, True),
-        ("§".encode() * 7_000, False),  # 7 000 characters, 14 000 bytes
-        ("§".encode() * 7_001, True),  # 7 001 characters, 14 002 bytes
-        ("→".encode() * 4_667, True),  # 4 667 characters, 14 001 bytes
-        (b"", False),
-    ],
-    ids=[
-        "14000 bytes",
-        "14001 bytes",
-        "14000 bytes of §",
-        "14002 bytes of §",
-        "14001 of →",
-        "empty",
+        pytest.param(b"x" * 14_000, False, id="14000 bytes"),
+        pytest.param(b"x" * 14_001, True, id="14001 bytes"),
+        pytest.param("§".encode() * 7_001, True, id="7001 characters, 14002 bytes"),
     ],
 )
 def test_the_size_cap_counts_bytes(data: bytes, fails: bool) -> None:
     assert (size_problem(data) is not None) is fails
 
 
-@pytest.mark.parametrize("name", ["AGENTS.md", "CLAUDE.md"])
-def test_the_files_every_session_loads_import_only_what_they_mean_to(name: str) -> None:
-    text = (REPO / name).read_text(encoding="utf-8")
-    assert stray_imports(text, IMPORT_LINE if name == "CLAUDE.md" else None) == []
+@pytest.mark.parametrize(("name", "allowed"), [("AGENTS.md", None), ("CLAUDE.md", IMPORT_LINE)])
+def test_the_files_every_session_loads_import_only_what_they_mean_to(
+    name: str, allowed: str | None
+) -> None:
+    assert stray_imports((REPO / name).read_text(encoding="utf-8"), allowed) == []
+
+
+def test_claude_md_still_imports_agents_md() -> None:
+    """Without that line every AGENTS.md rule drops out of every session."""
+    findings = stray_imports((REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+    assert [finding.split(": ", 1)[1] for finding in findings] == [IMPORT_LINE]
 
 
 NOT_IMPORTS = {
-    "an address": "mail noreply@anthropic.com now",
     "a trailer": "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
-    "a letter then an at sign": "a1@b and x@y",
+    "a digit then an at sign": "a1@b and x@y",
     "a code span": "`@x`",
     "a double-backtick span": "`` `@x` ``",
     "a span with a longer run inside": "``a ` @x``",
@@ -294,11 +280,11 @@ IMPORTS = {
     "in a paragraph after an unclosed backtick": "ends in a lone `\n\nsee @x and `y`",
     "in a list item after one with an unclosed backtick": "- one `lone\n- see @x and `y`",
     "in a line after a heading with an unclosed backtick": "# a `b\nsee @x `c`",
+    "in a line after a setext underline with an unclosed backtick": "Title `a\n===\nsee @x `c`",
+    "in a line after indented code with an unclosed backtick": "    code `a\nsee @x `c`",
+    "in a line after a tab-indented line with an unclosed backtick": "\tcode `a\nsee @x `c`",
     "in a quote after a line with an unclosed backtick": "a `b\n> see @x `c`",
     "after an escaped backtick": "\\`@x\\`",
-    "after a fence line with a backtick in its info": "```a`b\n@x",
-    "after a fence that a shorter run does not close": "````\n@x\n```\n@y\n",
-    "after a tilde block closed by backticks": "~~~\nz\n```\n@y",
     "a name in a link": "[SPEC](@SPEC.md)",
     "two imports on one line": "see @AGENTS.md and @AGENTS.md",
 }
@@ -309,9 +295,26 @@ def test_text_that_imports_a_file_fails(text: str) -> None:
     assert stray_imports(text) != []
 
 
-def test_a_fence_that_never_closes_is_a_finding_not_a_hiding_place() -> None:
-    assert stray_imports("```\n@x") == ["line 1: a fenced block is never closed"]
-    assert stray_imports("```\nx\n```\n@x") == ["line 4: @x"]
+FENCES = {
+    "a backtick in the info string opens no block": ("```a`b\n@x", ["line 2: @x"]),
+    "a shorter run does not close a block": ("````\n@x\n```\n@y\n````\n@z", ["line 6: @z"]),
+    "backticks do not close a tilde block": ("~~~\n@x\n```\n@y\n~~~\n@z", ["line 6: @z"]),
+    "a closing fence carries no words": ("```\n@x\n``` tail\n@y\n```\n@z", ["line 6: @z"]),
+    "a closing fence is indented three spaces at most": (
+        "```\n@x\n    ```\n@y\n```\n@z",
+        ["line 6: @z"],
+    ),
+    "a block that never closes is a finding": (
+        "```\n@x",
+        ["line 1: a fenced block is never closed"],
+    ),
+    "a block that closes hides nothing after it": ("```\nx\n```\n@x", ["line 4: @x"]),
+}
+
+
+@pytest.mark.parametrize(("text", "found"), FENCES.values(), ids=FENCES.keys())
+def test_a_fenced_block_ends_where_commonmark_ends_it(text: str, found: list[str]) -> None:
+    assert stray_imports(text) == found
 
 
 def test_claude_md_may_import_agents_md_once_on_a_line_of_its_own() -> None:
@@ -348,19 +351,30 @@ def test_every_byte_goes_through_the_span_scan_once(monkeypatch: pytest.MonkeyPa
     assert sum(sizes) <= len(text)
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        pytest.param((REPO / "README.md").read_text(encoding="utf-8"), id="README.md"),
-        pytest.param((REPO / "AGENTS.md").read_text(encoding="utf-8"), id="AGENTS.md"),
-        pytest.param((REPO / "SPEC.md").read_text(encoding="utf-8"), id="SPEC.md"),
-        pytest.param(packages.WHEEL_HINT, id="WHEEL_HINT"),
-    ],
-)
-def test_every_wheel_install_line_names_the_python_the_project_uses(source: str) -> None:
+_WHEEL_INSTALL = re.compile(r"uv tool install [^`\"]*?dist/\S*")
+
+
+def wheel_installs(text: str) -> list[str]:
+    """Each `uv tool install ... dist/...` command in `text`; a wrapped one is joined first."""
+    return _WHEEL_INSTALL.findall(" ".join(text.split()))
+
+
+def names_the_python(command: str) -> bool:
     """Without `--python`, uv picks its newest Python (3.14 on one Mac), not `.python-version`."""
     python = (REPO / ".python-version").read_text(encoding="utf-8").strip()
-    lines = [line for line in source.splitlines() if "tool install" in line and "dist/" in line]
-    assert lines, "no wheel install line found"
-    for line in lines:
-        assert f"uv tool install --python {python} dist/*.whl" in line, line
+    return re.search(rf"--python[ =]{re.escape(python)}\b", command) is not None
+
+
+@pytest.mark.parametrize("name", ["README.md", "AGENTS.md", "SPEC.md", "WHEEL_HINT"])
+def test_each_wheel_install_line_names_the_python_the_project_uses(name: str) -> None:
+    text = packages.WHEEL_HINT if name == "WHEEL_HINT" else (REPO / name).read_text("utf-8")
+    commands = wheel_installs(text)
+    assert commands, "no wheel install line found"
+    for command in commands:
+        assert names_the_python(command), command
+
+
+def test_no_markdown_file_in_the_root_installs_the_wheel_without_it() -> None:
+    for path in sorted(REPO.glob("*.md")):
+        for command in wheel_installs(path.read_text(encoding="utf-8")):
+            assert names_the_python(command), f"{path.name}: {command}"

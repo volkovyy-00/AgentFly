@@ -41,17 +41,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
 - Docs commands (`tests/test_docs_commands.py`): each command in AGENTS.md "Commands" and in the
   README code blocks names files, `agentfly` subcommands and modules that exist. Two files load
   into every session (F17-fix1). **Size:** AGENTS.md is at most 14 000 bytes (bytes, not
-  characters: it holds `§` and `→`). **Imports:** AGENTS.md and CLAUDE.md hold no `@name` outside a
-  code span or a fenced block, except CLAUDE.md's one `@AGENTS.md` line, because Claude Code
-  imports it (imports nest). An `@` counts at the start of a line and after anything but a letter
-  or digit: `(@x)`, `**@x**`, `"@x"` and a wrapped line's start fail, `noreply@anthropic.com`
-  passes. Spans are read the CommonMark way: a run of n backticks closes at the next run of
-  exactly n, a span ends at a blank line, a heading, a list item or a quote, and a run nothing
-  closes is plain text. A fence closes with the same character and at least its length, and one
-  that never closes is a finding. The scan is one pass and never opens the named file; a test
-  counts that each byte goes through the span scan once. **Wheel:** README, AGENTS.md, SPEC.md
-  and `WHEEL_HINT` (the editable-install refusal) show `uv tool install --python 3.12 dist/*.whl`,
-  the version read from `.python-version`: without it uv picks its newest Python.
+  characters). **Imports:** AGENTS.md and CLAUDE.md hold no `@name` outside a code span or a
+  fenced block, because Claude Code imports it; CLAUDE.md keeps its one `@AGENTS.md` line. The
+  scan is one pass in the CommonMark way, and when unsure it fails (the case tables in the test
+  hold the rules). **Wheel:** every `uv tool install ... dist/` line in a root `*.md` and in
+  `WHEEL_HINT` names `.python-version`'s Python (`--python 3.12`): uv picks its newest otherwise.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
   under a temporary HOME and runs `agentfly serve` and `agentfly-hook`. From the wheel it also:
   checks and tests the default rules the wheel carries (`rules check` / `rules test` on that file);
