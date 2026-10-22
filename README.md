@@ -86,8 +86,9 @@ the newest of them, if its version is not a plain dotted number, if its `Info.pl
 read (it must be a plain file of at most 1 MiB, XML, with a version string and nothing before
 `<plist` but an XML declaration and Apple's `<!DOCTYPE plist PUBLIC …>`: a missing file, a pipe, a
 folder, a larger or binary file, any other header and a malformed file are each refused, with the
-cause named, and `agentfly doctor` names the same cause on its `events` line), if a hook event is
-not one that version accepts, or if the download fails its checksum. A
+cause named, and `agentfly doctor` shows the same cause on its `events` line once it finds
+AgentFly's entries in `hooks.json`), if a hook event is not one that version accepts, or if the
+download fails its checksum. A
 Cursor newer than the newest verified one gets that version's events and one warning: if Cursor
 dropped one of them it would ignore the whole hooks file, so after any Cursor update quit and
 reopen Cursor, then run `agentfly doctor`. Running it twice changes nothing and needs no password

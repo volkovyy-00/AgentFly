@@ -371,7 +371,9 @@ lines for them (R0 and normalisation: V5).
   file itself has not been seen), each line in time linear in its length (a 200 KB line of blanks
   is matched in a child process with a kill timeout, which imports the tree under test and fails
   if it got another `agentfly`, judged by path components so that a sibling folder named like the
-  tree's is another one, V3d-fix3; the old patterns took minutes), and read
+  tree's is another one, V3d-fix3, tested in `test_install_cursor.py` by
+  `test_the_child_fails_if_it_imports_an_agentfly_from_a_folder_next_to_the_tree`; the old
+  patterns took minutes), and read
   within bounds: at most 64 logs and none beyond (the reads are counted), only plain files (a pipe,
   a link to a pipe, a link to `/dev/zero` and a folder are skipped; the hang tests bound only the
   call that could hang), at most the last 4 MiB of each, each reduced to a verdict before the next
