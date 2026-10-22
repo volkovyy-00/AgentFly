@@ -55,7 +55,7 @@ def rewrite_record_hash(info: Path, part: str) -> None:
     (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
-def stop_message(record: dict[str, Any], then: str = "agentfly init -g") -> str:
+def stop_message(record: dict[str, Any] | None, then: str = "agentfly init -g") -> str:
     with pytest.raises(InstallError) as caught:
         packages.require(record, then)
     return str(caught.value)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -210,7 +211,7 @@ def test_non_shell_events_without_paths_are_allowed() -> None:
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client() -> Iterator[TestClient]:
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         from agentfly.recorder.store import graph_store
 

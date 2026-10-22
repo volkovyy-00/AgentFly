@@ -46,7 +46,9 @@ def commands() -> list[str]:
 
 
 def subcommands() -> set[str]:
-    return set(next(a.choices for a in build_parser()._actions if getattr(a, "choices", None)))
+    choices = next(a.choices for a in build_parser()._actions if getattr(a, "choices", None))
+    assert choices is not None
+    return set(choices)
 
 
 SUBCOMMANDS = subcommands()
@@ -148,9 +150,21 @@ def _block_kind(line: str) -> str:
     return "start" if text[0] == ">" or _LIST_ITEM.match(text) else "text"
 
 
+def _past_spaces(line: str, at: int) -> int:
+    match = _SPACES.match(line, at)
+    assert match is not None  # `[ \t]*` matches everywhere, if only the empty string
+    return match.end()
+
+
+def _name_at(text: str, at: int) -> str:
+    match = _NAME.match(text, at)
+    assert match is not None, at  # `_AT` found an `@` at `at`, and `@` is not a space
+    return match.group()
+
+
 def _container_start(line: str) -> bool:
     """A quote or list marker, then a heading, fence, code or link definition: in a container."""
-    at, marked = _SPACES.match(line).end(), False
+    at, marked = _past_spaces(line, 0), False
     while True:
         if line[at : at + 1] == ">":
             at += 2 if line[at + 1 : at + 2] == " " else 1
@@ -161,7 +175,7 @@ def _container_start(line: str) -> bool:
         marked = True
         if _indent(line[at : at + 4]) >= 4:
             return True
-        at = _SPACES.match(line, at).end()
+        at = _past_spaces(line, at)
     return marked and (
         line[at : at + 1] == "#"
         or line[at : at + 3] in ("```", "~~~")
@@ -224,7 +238,7 @@ def _hidden_imports(
         seen = at
         if masked[at] != _NUL or at in starts or (not emphasis and text[at - 1 : at] == "`"):
             continue
-        hits[line, at - line_start] = _NAME.match(text, at).group()
+        hits[line, at - line_start] = _name_at(text, at)
     return hits
 
 
@@ -317,7 +331,7 @@ def stray_imports(text: str, allowed: str | None = None) -> list[str]:
         if _ODD_SPACE.search(row):
             problems.append((number, "a tab or other odd space is not modelled"))
         for match in _AT.finditer(row):
-            found[number, match.start()] = _NAME.match(original, match.start()).group()
+            found[number, match.start()] = _name_at(original, match.start())
     reported = set()
     for (number, column), name in sorted(found.items()):
         if allowed and name == allowed and column == 0:

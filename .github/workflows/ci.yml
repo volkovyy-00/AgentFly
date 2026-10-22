@@ -32,7 +32,7 @@ jobs:
           package-manager-cache: false
       - run: uv sync --locked
       - name: Check
-        run: uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
+        run: uv run ruff check . && uv run ruff format --check . && env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
       - name: Web check
         run: npm --prefix ui ci && npm --prefix ui run check
       - name: Stale-build check

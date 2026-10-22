@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,7 @@ requires_ui_dist = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client() -> Iterator[TestClient]:
     with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
         # App tests must not race live Neo4j writes from the background worker.
         from agentfly.recorder.store import graph_store
@@ -476,6 +477,7 @@ def served_routes() -> tuple[set[tuple[str, str]], set[str]]:
             assert isinstance(route.app, StaticFiles), f"mount {route.path} is not static files"
             mounts.add(route.path)
         elif isinstance(route, APIRoute):
+            assert route.methods is not None, route.path
             served.update((method, route.path) for method in route.methods)
         else:
             raise AssertionError(f"unexpected route type {type(route).__name__}: {route}")

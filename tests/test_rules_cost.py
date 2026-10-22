@@ -400,8 +400,9 @@ def test_a_command_entry_finds_a_word_after_its_program_and_not_before_it() -> N
 
 
 def test_the_memos_hold_more_than_one_long_command_needs() -> None:
-    assert rulefile._candidates.cache_info().maxsize >= 3 * WORDS
-    assert rulefile._folded_segments.cache_info().maxsize >= 3 * WORDS
+    for memo in (rulefile._candidates, rulefile._folded_segments):
+        size = memo.cache_info().maxsize
+        assert size is not None and size >= 3 * WORDS, memo
 
 
 def test_the_memos_answer_as_the_code_they_replaced_did() -> None:
@@ -488,7 +489,10 @@ def test_a_hook_stops_at_the_budget_and_the_count_proves_it(
 def test_floating_shapes_float() -> None:
     """The shapes left out of the unmetered bound below: every one of their patterns floats."""
     for name in FLOATING:
-        patterns = [p for spec in rulefile.parse(text_of(name)).rules[2:] for p in spec.clause.path]
+        patterns: list[rulefile.Pattern] = []
+        for spec in rulefile.parse(text_of(name)).rules[2:]:
+            assert spec.clause is not None, name
+            patterns += spec.clause.path
         assert patterns and all(rulefile.floating(p) for p in patterns), name
 
 

@@ -128,7 +128,8 @@ def test_outside_a_hook_the_engine_answers_as_before() -> None:
     assert ran > 0 and failures == []
     for order in itertools.permutations(["block", "warn", "highlight"]):
         rs = severity_ruleset(*(severity_rule(f"r-{sev}", sev, f"{sev} text") for sev in order))
-        assert winning_rule(push(), session(), rs).id == "r-block"
+        rule = winning_rule(push(), session(), rs)
+        assert rule is not None and rule.id == "r-block"
     # The heavy rule itself, with no meter: it runs to the end and does not fire.
     assert winning_rule(HEAVY, session(), heavy("block")) is None
 
