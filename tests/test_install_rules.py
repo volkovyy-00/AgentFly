@@ -931,6 +931,10 @@ def test_only_a_file_of_the_system_user_that_no_one_else_can_write_is_the_case(
     layout.rules.chmod(0o640)  # through a group the user is in: read, no line
     assert installer.unreadable_notice(layout, another_user(os.getegid())) is None
     assert installer.unreadable_notice(layout, nobody) == cannot_read(layout)
+    root = installer.Reader(0, frozenset())  # root with no SUDO_UID: the user is not known
+    assert installer.unreadable_notice(layout, root) is None  # it may be in the group
+    layout.rules.chmod(0o600)
+    assert installer.unreadable_notice(layout, root) == cannot_read(layout)
     layout.rules.chmod(0o620)  # group-writable: the "kept ..., but" notice says so instead
     assert installer.unreadable_notice(layout, nobody) is None
     layout.rules.chmod(0o600)

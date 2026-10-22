@@ -920,6 +920,17 @@ def test_a_file_of_exactly_the_limit_is_copied(
     assert copy.stat().st_size == rulefile.MAX_FILE_BYTES
 
 
+def test_a_file_in_place_of_the_system_folder_is_left_to_the_folder_removal(
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    shutil.rmtree(layout.system_root)
+    layout.system_root.write_text("not a folder\n")
+    with pytest.raises(InstallError, match="cannot finish removing AgentFly"):  # as before V5e
+        installer.uninstall(layout)
+    assert copies(layout) == []
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
 def test_a_rules_file_that_cannot_be_read_stops_uninstall_with_the_way_out(
     layout: Layout, archive: tuple[Path, PythonBuild], quick: None

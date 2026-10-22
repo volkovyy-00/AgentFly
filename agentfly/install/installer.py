@@ -283,7 +283,9 @@ def unreadable_notice(layout: Layout, reader: Reader) -> str | None:
     the bytes, decides as root does: a regular file of the system user that no one else can write
     and that `reader` cannot read (a 0600 root file). The recorder then runs the packaged default.
     `init -g` never chmods it (D3: that puts unreviewed rules in force), so the line gives the fix.
-    Another owner's file or a group-writable one is not this case: its notice says why.
+    Another owner's file or a group-writable one is not this case: its notice says why. Nor is a
+    file its group can read when the user is not known (root with no `SUDO_UID`): that user may be
+    in the group, and `assert_locked` decides at the end, as before.
     """
     try:
         info = layout.rules.lstat()
@@ -294,6 +296,7 @@ def unreadable_notice(layout: Layout, reader: Reader) -> str | None:
         or info.st_uid != rules_owner_uid(layout)
         or info.st_mode & 0o022
         or _readable_by(info, reader)
+        or (reader.uid == 0 and info.st_mode & 0o040)
     ):
         return None
     return (
@@ -984,8 +987,8 @@ def _keep_rules_copy(layout: Layout) -> list[str]:
     hook entries, the folder and the file as they were. A link, a folder, a pipe or a file too big
     to load is named and skipped: the recorder could never have read it.
     """
-    if layout.system_root.is_symlink():
-        return []  # nothing is read through it; uninstall refuses it below
+    if layout.system_root.is_symlink() or not layout.system_root.is_dir():
+        return []  # nothing is read through a link, and a file holds no rules; handled below
     try:
         raw = _rules_bytes(layout)
     except OSError as exc:
