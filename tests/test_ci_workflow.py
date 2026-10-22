@@ -637,9 +637,12 @@ def stub_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def run_script(
-    stubs: Path, tmp_path: Path, *args: str, fail_at: int = 0
+    stubs: Path, tmp_path: Path, *args: str, fail_at: int = 0, cdpath: Path | None = None
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run check.sh with the stub first on PATH; return the result and the calls the stub saw."""
+    """Run check.sh with the stub first on PATH; return the result and the calls the stub saw.
+
+    With `cdpath` it runs as `scripts/check.sh` from the repo: the spelling `cd` follows CDPATH for.
+    """
     log = tmp_path / "uv.log"
     env = {
         "PATH": f"{stubs}:/usr/bin:/bin",
@@ -647,8 +650,13 @@ def run_script(
         "UV_FAIL_AT": str(fail_at),
         "HOME": str(tmp_path),
     }
+    command = [str(CHECK_SCRIPT), *args]
+    if cdpath is not None:
+        env["CDPATH"] = str(cdpath)
+        command = ["scripts/check.sh", *args]
     result = subprocess.run(
-        [str(CHECK_SCRIPT), *args],
+        command,
+        cwd=REPO if cdpath is not None else None,
         env=env,
         capture_output=True,
         text=True,
@@ -677,6 +685,16 @@ def test_a_failed_check_fails_the_script_and_nothing_runs_after_it(
     result, calls = run_script(stub_dir, tmp_path, mode, fail_at=fail_at)
     assert result.returncode == 1, result.stderr
     assert calls == EXPECTED_CALLS[mode][:fail_at]
+
+
+@pytest.mark.slow
+def test_a_cdpath_does_not_move_the_script_to_another_folder(
+    stub_dir: Path, tmp_path: Path
+) -> None:
+    (tmp_path / "other" / "scripts").mkdir(parents=True)  # `scripts/..` is there too
+    result, calls = run_script(stub_dir, tmp_path, "quick", cdpath=tmp_path / "other")
+    assert (result.returncode, result.stdout) == (0, "")  # `cd` prints a folder it took from CDPATH
+    assert calls == EXPECTED_CALLS["quick"]
 
 
 @pytest.mark.parametrize(

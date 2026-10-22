@@ -16,6 +16,7 @@ usage() {
 
 [[ $# -eq 1 ]] || usage
 
+unset CDPATH  # else `scripts/..` can name another folder of that name, and `cd` prints it
 cd "$(dirname "$0")/.."
 
 case "$1" in

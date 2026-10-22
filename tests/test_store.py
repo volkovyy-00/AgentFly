@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -207,8 +208,9 @@ def test_hooks_stay_fast_when_store_write_fails(
     """Wrong/failing Neo4j must not slow /hook answers.
 
     The write hangs and then fails; no answer may wait for it, so none comes back after a write
-    has returned. (An answer that waited would be late by the whole hang, and the hang is the
-    test's to choose: no number of seconds is compared.)
+    has returned (an answer that waited for the whole hang). An answer that waited a part of it
+    shows against the baseline: the same hooks, one after the other with the store off, and the
+    median of the two within 50 ms.
     """
     release = threading.Event()
     returned: list[None] = []
@@ -236,18 +238,26 @@ def test_hooks_stay_fast_when_store_write_fails(
     headers = {"Content-Type": "application/json", "X-Recorder-Token": token}
     try:
         with caplog.at_level(logging.WARNING, logger="agentfly"):
+            plain: list[float] = []  # store off
+            stored: list[float] = []  # store on, its write hung
             for i in range(20):
-                response = client.post(
-                    "/hook",
-                    json={
-                        "hook_event_name": "beforeShellExecution",
-                        "command": "echo ok",
-                        "conversation_id": f"latency-{i}",
-                    },
-                    headers=headers,
-                )
-                assert response.status_code == 200
-                assert returned == [], "an answer waited for the store write"
+                for enabled, times in ((False, plain), (True, stored)):
+                    graph_store.enabled = enabled
+                    started = time.perf_counter()
+                    response = client.post(
+                        "/hook",
+                        json={
+                            "hook_event_name": "beforeShellExecution",
+                            "command": "echo ok",
+                            "conversation_id": f"latency-{i}-{enabled}",
+                        },
+                        headers=headers,
+                    )
+                    times.append(time.perf_counter() - started)
+                    assert response.status_code == 200
+                    assert returned == [], "an answer waited for the store write"
+            assert statistics.median(stored) - statistics.median(plain) < 0.05
+            graph_store.enabled = True
             release.set()  # now the writes fail, one after the other
             graph_store._queue.put(store_mod._SENTINEL, timeout=HANG_GUARD_S)
             graph_store._thread.join(timeout=HANG_GUARD_S)

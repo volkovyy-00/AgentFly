@@ -836,10 +836,11 @@ def test_a_healthy_store_gives_the_reference_answers(client: TestClient) -> None
 def test_a_store_that_cannot_be_written_changes_and_delays_no_answer(
     breakage: str, isolated_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # An answer that waited for the store would wait out `WRITE_TIMEOUT_S` (a locked file); that is
-    # set long here. The baseline is the same script against a store that works, in a home of its
-    # own and in this test: the best of three runs.
-    monkeypatch.setattr(ls, "WRITE_TIMEOUT_S", 3.0)
+    # An answer that waited for the store would wait out `WRITE_TIMEOUT_S` (a locked file), or a
+    # part of it; that is set to 2 s here, and a quarter of it is the room over the baseline. The
+    # baseline is the same script against a store that works, in a home of its own and in this
+    # test: the best of three runs.
+    monkeypatch.setattr(ls, "WRITE_TIMEOUT_S", 2.0)
     healthy = tmp_path / "healthy-home"
     healthy.mkdir()
     monkeypatch.setenv("HOME", str(healthy))
@@ -869,7 +870,7 @@ def test_a_store_that_cannot_be_written_changes_and_delays_no_answer(
         with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
             got, slowest = answers(test_client)  # once: after a failed write the store skips them
             assert got == REFERENCE
-            assert slowest < baseline + ls.WRITE_TIMEOUT_S / 2, "an answer waited for the store"
+            assert slowest < baseline + ls.WRITE_TIMEOUT_S / 4, "an answer waited for the store"
             # Reading a store in this state is an honest 503 or an empty list, never a crash.
             assert test_client.get("/api/sessions").status_code in {200, 503}
             if holder is not None:
