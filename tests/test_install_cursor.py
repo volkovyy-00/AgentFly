@@ -8,7 +8,6 @@ import random
 import re
 import subprocess
 import sys
-import time
 import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
@@ -289,34 +288,32 @@ EMPTY_ELEMENTS = (
 ATTLIST = b'<!ATTLIST a x CDATA "' + "漢".encode() * 10_000 + b'">'
 SHORT_ATTLIST = b'<!ATTLIST a x CDATA "d">'
 
+
+def hostile_subset(before: bytes) -> bytes:
+    """An XML declaration, `before` (it ends where a DOCTYPE's internal subset would open) and an
+    internal subset holding the long ATTLIST."""
+    return XML_DECLARATION + before + b"[" + ATTLIST + b"]>"
+
+
 # Headers with more than Cursor's, each followed by the same plist: every one is refused before the
-# parser sees the file. The first four hide a real internal subset behind something that a check
+# parser sees the file. The first five hide a real internal subset behind something that a check
 # for `<!DOCTYPE plist [` (or one for the first `>`) would be fooled by.
 FOREIGN_HEADERS = {
-    "an internal subset with an ATTLIST": XML_DECLARATION + b"<!DOCTYPE plist [" + ATTLIST + b"]>",
-    "after a comment holding <!DOCTYPE plist>": XML_DECLARATION
-    + b"<!-- <!DOCTYPE plist> --><!DOCTYPE plist ["
-    + ATTLIST
-    + b"]>",
-    "after a comment holding <plist": XML_DECLARATION
-    + b"<!-- <plist --><!DOCTYPE plist ["
-    + ATTLIST
-    + b"]>",
-    "after a SYSTEM ID holding >": XML_DECLARATION
-    + b'<!DOCTYPE plist SYSTEM "a>b" ['
-    + ATTLIST
-    + b"]>",
-    "after a PUBLIC ID holding >": XML_DECLARATION
-    + b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://x/y>z" ['
-    + ATTLIST
-    + b"]>",
+    "an internal subset with an ATTLIST": hostile_subset(b"<!DOCTYPE plist "),
+    "after a comment holding <!DOCTYPE plist>": hostile_subset(
+        b"<!-- <!DOCTYPE plist> --><!DOCTYPE plist "
+    ),
+    "after a comment holding <plist": hostile_subset(b"<!-- <plist --><!DOCTYPE plist "),
+    "after a SYSTEM ID holding >": hostile_subset(b'<!DOCTYPE plist SYSTEM "a>b" '),
+    "after a PUBLIC ID holding >": hostile_subset(
+        b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://x/y>z" '
+    ),
+    "an internal subset after Apple's IDs": hostile_subset(
+        b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd" '
+    ),
     "with no XML declaration": b"<!DOCTYPE plist [" + ATTLIST + b"]>",
     "an entity declaration": XML_DECLARATION + b'<!DOCTYPE plist [<!ENTITY a "aaaa">]>',
-    "an internal subset after Apple's IDs": XML_DECLARATION
-    + b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-    + b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd" ['
-    + ATTLIST
-    + b"]>",
     "an ID holding > and no subset": XML_DECLARATION
     + b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/a>b.dtd">',
     "a comment before <plist>": XML_DECLARATION + b"<!-- hello -->",
@@ -328,14 +325,22 @@ FOREIGN_HEADER_PLISTS = {name: head + EMPTY_ELEMENTS for name, head in FOREIGN_H
 
 
 def test_the_header_plist_is_a_real_one() -> None:
-    """The input below must cost what the brief says, or the tests that refuse it pass by
-    construction: expat takes a second a time or two for it, and the version is still read."""
+    """The input below must be what the brief says, or the tests that refuse it pass by
+    construction: every one of its 10,000 empty elements is handed the 10,000-character default
+    (a hundred million characters decoded from 70 KB), and plistlib still reads the version."""
     data = FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"]
     assert len(data) < cursor.MAX_PLIST_BYTES
-    start = time.process_time()
-    info = plistlib.loads(data, fmt=plistlib.FMT_XML)
-    assert time.process_time() - start > 0.1
-    assert info["CFBundleShortVersionString"] == NEWER
+    handed = 0
+
+    def element(name: str, attributes: dict[str, str]) -> None:
+        nonlocal handed
+        handed += len(attributes.get("x", ""))
+
+    parser = expat.ParserCreate()
+    parser.StartElementHandler = element
+    parser.Parse(data, True)
+    assert handed == 10_000 * 10_000
+    assert plistlib.loads(data, fmt=plistlib.FMT_XML)["CFBundleShortVersionString"] == NEWER
 
 
 @pytest.mark.parametrize("data", FOREIGN_HEADER_PLISTS.values(), ids=FOREIGN_HEADER_PLISTS.keys())
@@ -479,7 +484,7 @@ def test_the_header_of_cursors_real_info_plist_gives_its_version(
     tmp_path: Path, bom: bytes, newline: bytes
 ) -> None:
     layout = make_layout(tmp_path)
-    header = (XML_DECLARATION + b"\n" + REAL_DOCTYPE + b"\n").replace(b"\n", newline)
+    header = REAL_HEADER.replace(b"\n", newline)
     write_plist(layout, bom + header + EMPTY_ELEMENTS)
     assert cursor.installed_version(layout.cursor_app) == NEWER
 

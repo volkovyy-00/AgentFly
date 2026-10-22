@@ -56,9 +56,9 @@ _BOM = b"\xef\xbb\xbf"
 # can declare attribute defaults that pyexpat decodes again for every element (70 KB took 0.6 s, a
 # megabyte minutes), and plistlib refuses only `<!ENTITY`. Matched from the start, once, in time
 # linear in the bytes: each part is a literal, a run of blanks, or a run with no `<` or `>` in it.
-_HEADER = re.compile(
-    rb"(?:<\?xml\s[^<>]*\?>\s*)?"
-    rb'(?:<!DOCTYPE\s+plist\s+PUBLIC\s+"[^"<>]*"\s+"[^"<>]*"\s*>\s*)?'
+_HEADER = re.compile(  # possessive blanks: no token begins with one, and they never give back
+    rb"(?:<\?xml\s[^<>]*\?>\s*+)?"
+    rb'(?:<!DOCTYPE\s++plist\s++PUBLIC\s++"[^"<>]*"\s++"[^"<>]*"\s*+>\s*+)?'
     rb"<plist\b"
 )
 

@@ -629,23 +629,19 @@ def test_a_named_pipe_for_the_plist_does_not_hang_doctor(world: World) -> None:
     assert results["events"].level == "warn" and failing(results) == set()
 
 
-def test_a_plist_that_is_not_xml_leaves_the_version_unread_and_doctor_answers(world: World) -> None:
-    for name, data in NOT_XML_PLISTS.items():  # one install serves all
-        write_plist(world.layout, data)
-        results = world.results()
-        events = results["events"]
-        assert events.level == "warn" and "cannot read the Cursor version" in events.text, name
-        assert failing(results) == set(), name  # the log says the hooks loaded
+UNREAD_PLISTS = {  # not XML, or XML whose header has more than Cursor's (two of the thirteen)
+    **NOT_XML_PLISTS,
+    "an internal subset": FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"],
+    "two DOCTYPEs": FOREIGN_HEADER_PLISTS["two DOCTYPEs"],
+}
 
 
-def test_a_plist_with_a_header_of_its_own_leaves_the_version_unread_and_doctor_answers(
+def test_a_plist_that_is_refused_unparsed_leaves_the_version_unread_and_doctor_answers(
     world: World,
 ) -> None:
-    for name, data in FOREIGN_HEADER_PLISTS.items():  # one install serves all
+    for name, data in UNREAD_PLISTS.items():  # one install serves all
         write_plist(world.layout, data)
-        context = world.context()
-        assert context.cursor_version is None, name
-        results = {check.id: check for check in checks.run_all(context)}
+        results = world.results()
         events = results["events"]
         assert events.level == "warn" and "cannot read the Cursor version" in events.text, name
         assert failing(results) == set(), name  # the log says the hooks loaded
@@ -848,24 +844,19 @@ E6E6894_REJECTIONS = {
 }
 
 
-def rejection_setups() -> dict[str, Callable[[World], None]]:
-    return {
-        **{name: FAULTS[name][1] for name in E6E6894_REJECTIONS if name in FAULTS},
-        "a rejection naming the 21 valid events": lambda w: w.write_log(LOADED, REJECTION),
-    }
-
-
 @pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
 def test_on_a_listed_version_a_rejecting_log_prints_the_text_of_e6e6894(
     world: World, version: str
 ) -> None:
     write_version(world.layout, version)
     context = world.context()
-    setups = rejection_setups()
-    assert setups.keys() == E6E6894_REJECTIONS.keys()
     assert len(REJECTION) > 400  # longer than the 300 characters of V3d-fix1, shorter than 1,000
     for case, text in E6E6894_REJECTIONS.items():
-        results = read_hooks_log(world, context, setups[case])
+        if case in FAULTS:
+            setup = FAULTS[case][1]
+        else:
+            setup = lambda w: w.write_log(LOADED, REJECTION)  # noqa: E731  (the 21 valid events)
+        results = read_hooks_log(world, context, setup)
         assert (results["hooks-log"].level, results["hooks-log"].text) == ("fail", text), case
         assert failing(results) == {"hooks-log"}, case
 
@@ -976,7 +967,6 @@ def test_a_link_to_a_window_folder_is_not_another_window(world: World) -> None:
 
 # ---- folders the agent's user swaps while the walk runs: each is opened once, never through a link
 
-START_TIME = re.compile(r"[0-9]{8}T[0-9]{6}")
 REJECTED = "[t] No enterprise hooks configuration found\n"  # what a log in a decoy folder says
 
 
@@ -986,7 +976,9 @@ class WatchedOs:
     before it is opened, as the agent's user could do it. Not left to timing."""
 
     def __init__(
-        self, trigger: Callable[[str], bool] = lambda name: False, swap: Callable[[], None] = bool
+        self,
+        trigger: Callable[[str], bool] = lambda name: False,
+        swap: Callable[[], None] = lambda: None,
     ) -> None:
         self.trigger, self.swap = trigger, swap
         self.swapped = False
@@ -1019,9 +1011,6 @@ class WatchedOs:
         if not isinstance(path, int):  # a name: it is opened again, and a link is followed
             self._before(os.fspath(path))
             self.listed_by_name.append(os.fspath(path))
-            info = os.stat(path)
-            self.opened.append((info.st_dev, info.st_ino))
-            self.links_followed += os.path.islink(path)
         return os.scandir(path)
 
 
@@ -1050,38 +1039,37 @@ SWAPPED_LEVELS = [
 
 def swap_set_up(
     world: World, level: str, tmp_path: Path
-) -> tuple[Callable[[str], bool], list[Path], Path]:
-    """The folders to swap for `level`, what they are swapped for, and the name that triggers it.
+) -> tuple[Callable[[str], bool], list[Path]]:
+    """The name that triggers the swap for `level`, and the folders to swap.
 
-    A shared folder, outside Cursor's logs, holds logs that reject the hooks: a walk that follows a
-    link to it reads them and says so. The world's own log is never among the folders swapped,
-    except at the start-folder level, which has only that one.
+    The shared folder (`tmp_path / "shared"`, outside Cursor's logs) holds a log that rejects the
+    hooks at each depth a link could stand for: a walk that follows a link to it reads one and says
+    so. The world's own log is never among the folders swapped, except at the levels that have only
+    that one.
     """
     start, window = world.log.parents[2], world.log.parents[1]
-    shared = tmp_path / "shared"
+    for folder in (
+        tmp_path / "shared",
+        tmp_path / "shared/output_x",
+        tmp_path / "shared/window1_wb0/output_x",
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "cursor.hooks.s.log").write_text(REJECTED)
+    in_window = lambda name: name.startswith("window")  # noqa: E731
+    in_output = lambda name: name.startswith("output_")  # noqa: E731
     if level == "start folder":
-        (shared / "window1_wb0" / "output_x").mkdir(parents=True)
-        (shared / "window1_wb0" / "output_x" / "cursor.hooks.s.log").write_text(REJECTED)
-        return START_TIME.fullmatch, [start], shared
+        return hookslog._START_FOLDER.fullmatch, [start]
     if level == "the only window folder":
-        (shared / "output_x").mkdir(parents=True)
-        (shared / "output_x" / "cursor.hooks.s.log").write_text(REJECTED)
-        return lambda name: name.startswith("window"), [window], shared
+        return in_window, [window]
     if level == "the only output folder":
-        shared.mkdir()
-        (shared / "cursor.hooks.s.log").write_text(REJECTED)
-        return lambda name: name.startswith("output_"), [world.log.parent], shared
+        return in_output, [world.log.parent]
     if level == "window folders":
         for number in range(6):
-            (shared / f"output_s{number}").mkdir(parents=True)
-            (shared / f"output_s{number}" / "cursor.hooks.s.log").write_text(REJECTED)
             (start / f"window{number}_extra").mkdir()
-        return lambda name: name.startswith("window"), sorted(start.glob("window*_extra")), shared
-    shared.mkdir()
+        return in_window, sorted(start.glob("window*_extra"))
     for number in range(6):
-        (shared / f"cursor.hooks.s{number}.log").write_text(REJECTED)
         (window / f"output_extra{number}").mkdir()
-    return lambda name: name.startswith("output_"), sorted(window.glob("output_extra*")), shared
+    return in_output, sorted(window.glob("output_extra*"))
 
 
 @pytest.mark.parametrize("version", ["listed", "newer"])
@@ -1098,13 +1086,13 @@ def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_throu
     if version == "newer":
         write_version(world.layout, NEWER)
     monkeypatch.setattr(service, "inspect", lambda: None)  # only the log walk is under test
-    trigger, victims, shared = swap_set_up(world, level, tmp_path)
+    trigger, victims = swap_set_up(world, level, tmp_path)
     root = world.log.parents[3]  # Cursor's `logs` folder
     existing = sum(1 for _ in os.walk(root))  # every folder under the Cursor logs, before the swap
 
     def swap() -> None:
         for victim in victims:
-            SWAPPED_FOR[swapped_for](victim, shared)
+            SWAPPED_FOR[swapped_for](victim, tmp_path / "shared")
 
     watched = WatchedOs(trigger, swap)
     with monkeypatch.context() as patched:
@@ -1128,18 +1116,18 @@ def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_throu
 def test_the_walk_stops_listing_at_the_65th_log(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ten windows of 70 logs each: whichever the listing gives first holds the 65th, so only the
-    Cursor logs folder, the start folder, one window and one output folder are ever opened."""
+    """Two windows of 65 logs: whichever the listing gives first holds the 65th, so only the Cursor
+    logs folder, the start folder, one window and one output folder are opened, not six."""
     start = world.log.parents[2]
-    for number in range(10):
+    shutil.rmtree(world.log.parents[1])  # the world's own window: these two are all there is
+    for number in range(2):
         output = start / f"window{number}_more/output_a"
         output.mkdir(parents=True)
-        for log in range(70):
+        for log in range(65):
             (output / f"cursor.hooks.{log}.log").write_text(LOADED + "\n")
     watched = WatchedOs()
-    with monkeypatch.context() as patched:
-        patched.setattr(hookslog, "os", watched)
-        logs = hookslog.latest(world.home)
+    monkeypatch.setattr(hookslog, "os", watched)
+    logs = hookslog.latest(world.home)
     assert logs.too_many and logs.files == ()
     assert len(watched.opened) == 4, len(watched.opened)
 

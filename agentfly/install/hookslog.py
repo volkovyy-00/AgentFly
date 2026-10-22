@@ -25,7 +25,7 @@ import fnmatch
 import os
 import re
 import stat
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,9 +38,8 @@ UNPARSED = (re.compile(r"\bFailed to parse "), re.compile(r"hooks configuration\
 _RELEVANT = re.compile(r"enterprise|Invalid|Failed to parse")
 _OTHER_SOURCES: tuple[str, ...] = ("user", "project", "workspace", "claude", "plugin")
 _START_FOLDER = re.compile(r"[0-9]{8}T[0-9]{6}")  # fullmatch: `$` would take a trailing newline
-_WINDOW = re.compile(r"window")  # these two are matched at the start of a name, with `match`
-_OUTPUT = re.compile(r"output_")
-_FOLDER = os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+_OPEN = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC  # never wait, never a terminal
+_FOLDER = _OPEN | os.O_DIRECTORY
 _TAIL_BYTES = 4 << 20  # a long-running Cursor writes a lot; the last lines say how it stands
 MAX_LOGS = 64  # a real start folder holds at most 4, one per window
 _LOG_NAME = "cursor.hooks.*.log"  # in `<start folder>/window*/output_*/`
@@ -111,7 +110,7 @@ def read_tail(path: Path) -> str:
     or read. One `pread` takes at most _TAIL_BYTES, however much the file grows meanwhile. The
     same care as `cursor._read_plist` and the rules file's `rulefile._trust_fd`.
     """
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
+    fd = os.open(path, _OPEN)
     try:
         size = os.fstat(fd)
         if not stat.S_ISREG(size.st_mode):
@@ -127,7 +126,8 @@ def _folder(name: str | Path, parent: int | None = None) -> Iterator[int | None]
     """The descriptor of the folder `name`, opened once; None when it is not one or cannot be.
 
     With `parent` (an open folder) `name` is looked up in it and a link is refused, not followed;
-    a pipe or a file fails `O_DIRECTORY` before anything is read or waited for.
+    without one a link is followed, as for any path. A pipe or a file fails `O_DIRECTORY` before
+    anything is read or waited for.
     """
     flags = _FOLDER if parent is None else _FOLDER | os.O_NOFOLLOW
     try:
@@ -150,30 +150,30 @@ def _entries(fd: int) -> Iterator[os.DirEntry[str]]:
         return
 
 
-def _subfolders(fd: int, wanted: Callable[[str], object]) -> Iterator[str]:
-    """The names in the open folder `fd` that `wanted` takes and that are folders (not links)."""
+def _subfolders(fd: int, prefix: str = "") -> Iterator[str]:
+    """The names in the open folder `fd` that start with `prefix` and are folders (not links)."""
     for entry in _entries(fd):
-        if wanted(entry.name) and entry.is_dir(follow_symlinks=False):
+        if entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False):
             yield entry.name
 
 
-def _hooks_logs(start_fd: int, start: Path, most: int) -> list[Path]:
-    """`<start>/window*/output_*/cursor.hooks.*.log`, at most `most` of them: names only, no log
-    is opened. Each folder is opened once, through the one above it, so the folders opened are
-    among those that were listed."""
+def _hooks_logs(start_fd: int, start: Path) -> list[Path]:
+    """`<start>/window*/output_*/cursor.hooks.*.log`, up to one more than MAX_LOGS: names only, no
+    log is opened. Each folder is opened once, through the one above it, so the folders opened
+    are among those that were listed."""
     found: list[Path] = []
-    for window in _subfolders(start_fd, _WINDOW.match):
+    for window in _subfolders(start_fd, "window"):
         with _folder(window, start_fd) as window_fd:
             if window_fd is None:
                 continue
-            for output in _subfolders(window_fd, _OUTPUT.match):
+            for output in _subfolders(window_fd, "output_"):
                 with _folder(output, window_fd) as output_fd:
                     if output_fd is None:
                         continue
                     for entry in _entries(output_fd):
                         if fnmatch.fnmatchcase(entry.name, _LOG_NAME):
                             found.append(start / window / output / entry.name)
-                            if len(found) == most:
+                            if len(found) > MAX_LOGS:
                                 return found
     return found
 
@@ -181,24 +181,22 @@ def _hooks_logs(start_fd: int, start: Path, most: int) -> list[Path]:
 def latest(home: Path) -> Logs:
     """The newest Cursor start folder and its Hooks logs: none of them when there are too many."""
     root = home / "Library" / "Application Support" / "Cursor" / "logs"
-    try:
-        # The path to Cursor's logs is the owner's (it may run through a link they made); nothing
-        # below it is followed.
-        root_fd = os.open(root, _FOLDER)
-    except OSError:
-        return Logs(None)
-    try:
+    # The path to Cursor's logs is the owner's (it may run through a link they made): `_folder`
+    # follows it. Nothing below it is followed.
+    with _folder(root) as root_fd:
+        if root_fd is None:
+            return Logs(None)
         # One pass, no list of the folders: the names are start times, so the largest is the newest.
-        newest = max(_subfolders(root_fd, _START_FOLDER.fullmatch), default=None)
+        newest = max(
+            (name for name in _subfolders(root_fd) if _START_FOLDER.fullmatch(name)), default=None
+        )
         if newest is None:
             return Logs(None)
         folder = root / newest
         with _folder(newest, root_fd) as start_fd:
             if start_fd is None:  # swapped for a link or a non-folder since it was listed
                 return Logs(folder)
-            found = _hooks_logs(start_fd, folder, MAX_LOGS + 1)
-    finally:
-        os.close(root_fd)
+            found = _hooks_logs(start_fd, folder)
     if len(found) > MAX_LOGS:
         return Logs(folder, too_many=True)
     return Logs(folder, tuple(sorted(found)))
