@@ -957,3 +957,40 @@ def test_a_stale_temp_file_or_a_link_in_its_place_gets_none_of_the_bytes(
     installer._write_atomic(target, b"secret\n", layout, 0o600)
     assert other.read_text() == "someone else's\n" and not temp.exists()
     assert target.read_bytes() == b"secret\n" and stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_a_folder_swapped_in_after_the_first_look_is_named_and_skipped_too(
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    quick: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    do_install(layout, archive)
+    layout.rules.unlink()
+    layout.rules.mkdir()
+    plain = tmp_path / "plain"
+    plain.write_text(EDITED, encoding="utf-8")
+    real = Path.lstat
+
+    def first_look(self: Path) -> os.stat_result:  # the `lstat` saw a plain file
+        return real(plain) if self == layout.rules else real(self)
+
+    monkeypatch.setattr(Path, "lstat", first_look)
+    assert installer._keep_rules_copy(layout) == [
+        f"{layout.rules} is not a regular file, which the recorder never loads; no copy was kept"
+    ]
+
+
+def test_a_later_refusal_still_says_where_the_copy_went(
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    edit(layout)
+    layout.hooks_file.write_text(layout.hooks_file.read_text() + " garbage")
+    with pytest.raises(InstallError) as caught:
+        installer.uninstall(layout)
+    (copy,) = copies(layout)
+    assert "not valid JSON" in str(caught.value)
+    assert str(caught.value).endswith(f"(kept a copy of your edited rules file in {copy})")
+    assert layout.system_root.is_dir() and "\n" not in str(caught.value)

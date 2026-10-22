@@ -168,7 +168,7 @@ def check_packaged_default(layout: Layout, current: packages.Check) -> None:
     if state == "blocked":
         raise _blocked(layout)
     if state == "unreadable":
-        raise InstallError(f"{unreadable_notice(layout, current_reader())}; nothing was changed")
+        raise InstallError(f"{_cannot_read(layout)}; nothing was changed")
     if state in RULES_WRITTEN:
         _packaged_default(current)
 
@@ -258,7 +258,7 @@ def rules_notice(layout: Layout, wanted: str | None) -> str | None:
 def _kept_notice(layout: Layout, state: str) -> str | None:
     """`rules_notice` for a `rules_state` the caller has already looked up."""
     if state == "unreadable":
-        return unreadable_notice(layout, current_reader())
+        return _cannot_read(layout)
     if state != "edited":
         return None
     problem = rulefile.trust_problem(layout.rules, rules_owner_uid(layout))
@@ -299,6 +299,11 @@ def unreadable_notice(layout: Layout, reader: Reader) -> str | None:
         or (reader.uid == 0 and info.st_mode & 0o040)
     ):
         return None
+    return _cannot_read(layout)
+
+
+def _cannot_read(layout: Layout) -> str:
+    """The `unreadable_notice` line, for a state that has already been decided."""
     return (
         f"the recorder cannot read the rules file {layout.rules}, so {rulefile.DEFAULT_IN_FORCE}; "
         f'to use it, run `sudo chmod 644 "{layout.rules}"`, then {RESTART_RECORDER}'
@@ -763,7 +768,8 @@ def install(
     if rules == "blocked":
         raise _blocked(layout)  # before anything is changed, not halfway through
     if unread and bad - {"rules"}:
-        # `assert_locked` would refuse it at the end; the unprivileged run stopped on it too.
+        # An edit would fail `assert_locked` at the end; and the unprivileged run, which cannot
+        # tell an edit from a default in such a file, stopped on it too (the brief asks both).
         raise InstallError(f"{unread}; nothing was changed")
     rules_data = _packaged_default(current) if rules in RULES_WRITTEN else None
     created_hooks = _read_hooks(layout) is None or bool(
@@ -967,10 +973,15 @@ def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
         if exc.errno == errno.ELOOP:  # it became a link after the lstat
             return "a symbolic link"
         raise
-    with open(fd, "rb") as handle:
+    try:
         mode = os.fstat(fd).st_mode
-        if not stat.S_ISREG(mode):
-            return "not a regular file"
+    except OSError:
+        os.close(fd)
+        raise
+    if not stat.S_ISREG(mode):  # before `open`, which refuses a folder with an error of its own
+        os.close(fd)
+        return "not a regular file"
+    with open(fd, "rb") as handle:
         data = handle.read(rulefile.MAX_FILE_BYTES + 1)
     if len(data) > rulefile.MAX_FILE_BYTES:
         return f"over {rulefile.MAX_FILE_BYTES} bytes"
@@ -1029,16 +1040,11 @@ def _write_rules_copy(layout: Layout, data: bytes, mode: int) -> Path:
     return target
 
 
-def uninstall(layout: Layout) -> Outcome:
-    """A copy of an edited rules file, then our hook entries, then the system folder. Needs
-    neither Cursor nor a version."""
-    _check_paths(layout)
-    record = records.read(layout)
-    info = record.get("hooks_file") if record else None
-    messages = _keep_rules_copy(layout)
+def _remove_the_rest(layout: Layout, info: dict[str, Any] | None) -> list[str]:
+    """Our hook entries, then the system folder; one InstallError when a step fails."""
     try:
         created = bool(info and info.get("created"))
-        messages += _strip_hooks(layout, created=created, hooks_info=info)
+        messages = _strip_hooks(layout, created=created, hooks_info=info)
         if layout.system_root.is_symlink():
             raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
         messages += _keep_old_backups(layout)
@@ -1048,4 +1054,20 @@ def uninstall(layout: Layout) -> Outcome:
         raise InstallError(
             f"cannot finish removing AgentFly ({reason}); run `agentfly uninstall` again"
         ) from exc
+    return messages
+
+
+def uninstall(layout: Layout) -> Outcome:
+    """A copy of an edited rules file, then our hook entries, then the system folder. Needs
+    neither Cursor nor a version."""
+    _check_paths(layout)
+    record = records.read(layout)
+    info = record.get("hooks_file") if record else None
+    kept = _keep_rules_copy(layout)
+    try:
+        messages = kept + _remove_the_rest(layout, info)
+    except InstallError as exc:
+        if kept:  # the copy is written: the line that says where must not be lost with the run
+            raise InstallError(f"{exc} ({kept[0]})") from exc
+        raise
     return Outcome(bool(messages), messages or ["nothing of AgentFly's was installed"])
