@@ -54,12 +54,14 @@ from tests.service_helpers import Brew, Launchd, homebrew_package
 from tests.test_install_cursor import (
     ADVICE,
     ESCAPE_VERSION,
+    FOREIGN_HEADER_PLISTS,
     MALFORMED_PLISTS,
     NEWER,
     NEWEST,
     NOT_XML_PLISTS,
     REFUSED,
     open_descriptors,
+    run_in_a_child,
     write_plist,
     write_version,
 )
@@ -636,6 +638,19 @@ def test_a_plist_that_is_not_xml_leaves_the_version_unread_and_doctor_answers(wo
         assert failing(results) == set(), name  # the log says the hooks loaded
 
 
+def test_a_plist_with_a_header_of_its_own_leaves_the_version_unread_and_doctor_answers(
+    world: World,
+) -> None:
+    for name, data in FOREIGN_HEADER_PLISTS.items():  # one install serves all
+        write_plist(world.layout, data)
+        context = world.context()
+        assert context.cursor_version is None, name
+        results = {check.id: check for check in checks.run_all(context)}
+        events = results["events"]
+        assert events.level == "warn" and "cannot read the Cursor version" in events.text, name
+        assert failing(results) == set(), name  # the log says the hooks loaded
+
+
 def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:
     write_plist(world.layout, MALFORMED_PLISTS["a mismatched tag"])  # `plistlib` raises ExpatError
     results = world.results()
@@ -786,6 +801,75 @@ def test_on_a_listed_version_the_hooks_log_and_events_lines_have_the_texts_of_e6
         assert failing(results) == set(), case
 
 
+# What e6e6894's `hooks-log` line printed on a verified Cursor for each way the log rejects the
+# hooks, copied from that commit's own output (the same worlds, run in its tree). The last is a
+# rejection of Cursor's own shape: its message lists all 21 valid events, about 450 characters.
+REJECTION = (
+    "[2026-10-19T10:00:00.200Z] ERROR: Invalid enterprise config: Unknown hook type: afBogusEvent. "
+    "Valid types: sessionStart, sessionEnd, preToolUse, postToolUse, postToolUseFailure, "
+    "subagentStart, subagentStop, beforeShellExecution, afterShellExecution, beforeMCPExecution, "
+    "afterMCPExecution, beforeReadFile, afterFileEdit, beforeSubmitPrompt, preCompact, stop, "
+    "afterAgentResponse, afterAgentThought, beforeTabFileRead, afterTabFileEdit, workspaceOpen"
+)
+E6E6894_REJECTIONS = {
+    "no enterprise hooks in the Hooks log": (
+        "Cursor did not load AgentFly's hooks (Cursor says: No enterprise "
+        "hooks configuration found); quit and reopen Cursor"
+    ),
+    "a parse error about the system file": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Failed to "
+        "parse enterprise hooks configuration); quit and reopen Cursor"
+    ),
+    "an invalid-config line about the system file": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "enterprise config: Unknown hook type); quit and reopen Cursor"
+    ),
+    "a Hooks-log line about an unnamed source": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "config: Unknown hook type); quit and reopen Cursor"
+    ),
+    "Cursor loaded only some of the hooks": (
+        "Cursor did not load AgentFly's hooks (Cursor loaded 2 hooks but not "
+        "afterFileEdit, beforeMCPExecution, beforeReadFile, "
+        "beforeShellExecution, sessionEnd, sessionStart, subagentStart); quit "
+        "and reopen Cursor"
+    ),
+    "a rejection naming the 21 valid events": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "enterprise config: Unknown hook type: afBogusEvent. Valid types: "
+        "sessionStart, sessionEnd, preToolUse, postToolUse, "
+        "postToolUseFailure, subagentStart, subagentStop, "
+        "beforeShellExecution, afterShellExecution, beforeMCPExecution, "
+        "afterMCPExecution, beforeReadFile, afterFileEdit, beforeSubmitPrompt, "
+        "preCompact, stop, afterAgentResponse, afterAgentThought, "
+        "beforeTabFileRead, afterTabFileEdit, workspaceOpen); quit and reopen "
+        "Cursor"
+    ),
+}
+
+
+def rejection_setups() -> dict[str, Callable[[World], None]]:
+    return {
+        **{name: FAULTS[name][1] for name in E6E6894_REJECTIONS if name in FAULTS},
+        "a rejection naming the 21 valid events": lambda w: w.write_log(LOADED, REJECTION),
+    }
+
+
+@pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
+def test_on_a_listed_version_a_rejecting_log_prints_the_text_of_e6e6894(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    context = world.context()
+    setups = rejection_setups()
+    assert setups.keys() == E6E6894_REJECTIONS.keys()
+    assert len(REJECTION) > 400  # longer than the 300 characters of V3d-fix1, shorter than 1,000
+    for case, text in E6E6894_REJECTIONS.items():
+        results = read_hooks_log(world, context, setups[case])
+        assert (results["hooks-log"].level, results["hooks-log"].text) == ("fail", text), case
+        assert failing(results) == {"hooks-log"}, case
+
+
 # A Cursor version that is not on the verified list, however it came to be one (D32). An unreadable
 # one is every file that is not a plain XML plist (`cursor.installed_version` has one answer).
 UNVERIFIED = {
@@ -890,6 +974,168 @@ def test_a_link_to_a_window_folder_is_not_another_window(world: World) -> None:
     assert logs.files == (world.log,) and not logs.too_many
 
 
+# ---- folders the agent's user swaps while the walk runs: each is opened once, never through a link
+
+START_TIME = re.compile(r"[0-9]{8}T[0-9]{6}")
+REJECTED = "[t] No enterprise hooks configuration found\n"  # what a log in a decoy folder says
+
+
+class WatchedOs:
+    """`hookslog`'s `os` that records every folder the walk opens, and runs `swap` once, just
+    before the first one whose name satisfies `trigger`: after the folder above it was listed, and
+    before it is opened, as the agent's user could do it. Not left to timing."""
+
+    def __init__(self, trigger: Callable[[str], bool], swap: Callable[[], None]) -> None:
+        self.trigger, self.swap = trigger, swap
+        self.swapped = False
+        self.opened: list[tuple[int, int]] = []  # (device, inode) of each folder opened
+        self.not_folders = 0  # descriptors opened for anything but a folder
+        self.links_followed = 0  # folders opened by a name below another that a link could replace
+        self.listed_by_name: list[str] = []  # listings that open a folder by name, behind our back
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(os, name)
+
+    def _before(self, target: str) -> None:
+        if not self.swapped and self.trigger(Path(target).name):
+            self.swapped = True
+            self.swap()
+
+    def open(self, path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        self._before(os.fspath(path))
+        if dir_fd is not None and not flags & os.O_NOFOLLOW:
+            self.links_followed += 1
+        fd = os.open(path, flags, mode, dir_fd=dir_fd)
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            self.opened.append((info.st_dev, info.st_ino))
+        else:
+            self.not_folders += 1
+        return fd
+
+    def scandir(self, path: Any = ".") -> Any:
+        if not isinstance(path, int):  # a name: it is opened again, and a link is followed
+            self._before(os.fspath(path))
+            self.listed_by_name.append(os.fspath(path))
+            info = os.stat(path)
+            self.opened.append((info.st_dev, info.st_ino))
+            self.links_followed += os.path.islink(path)
+        return os.scandir(path)
+
+
+def plant_a_pipe_in_place_of(path: Path, shared: Path) -> None:
+    shutil.rmtree(path)
+    os.mkfifo(path)
+
+
+def plant_a_link_in_place_of(path: Path, shared: Path) -> None:
+    shutil.rmtree(path)
+    path.symlink_to(shared)
+
+
+SWAPPED_FOR = {
+    "a link to one shared folder": plant_a_link_in_place_of,
+    "a named pipe": plant_a_pipe_in_place_of,
+}
+SWAPPED_LEVELS = ["start folder", "window folders", "output folders"]
+
+
+def swap_set_up(
+    world: World, level: str, tmp_path: Path
+) -> tuple[Callable[[str], bool], list[Path], Path]:
+    """The folders to swap for `level`, what they are swapped for, and the name that triggers it.
+
+    A shared folder, outside Cursor's logs, holds logs that reject the hooks: a walk that follows a
+    link to it reads them and says so. The world's own log is never among the folders swapped,
+    except at the start-folder level, which has only that one.
+    """
+    start, window = world.log.parents[2], world.log.parents[1]
+    shared = tmp_path / "shared"
+    if level == "start folder":
+        (shared / "window1_wb0" / "output_x").mkdir(parents=True)
+        (shared / "window1_wb0" / "output_x" / "cursor.hooks.s.log").write_text(REJECTED)
+        return START_TIME.fullmatch, [start], shared
+    if level == "window folders":
+        for number in range(6):
+            (shared / f"output_s{number}").mkdir(parents=True)
+            (shared / f"output_s{number}" / "cursor.hooks.s.log").write_text(REJECTED)
+            (start / f"window{number}_extra").mkdir()
+        return lambda name: name.startswith("window"), sorted(start.glob("window*_extra")), shared
+    shared.mkdir()
+    for number in range(6):
+        (shared / f"cursor.hooks.s{number}.log").write_text(REJECTED)
+        (window / f"output_extra{number}").mkdir()
+    return lambda name: name.startswith("output_"), sorted(window.glob("output_extra*")), shared
+
+
+@pytest.mark.parametrize("version", ["listed", "newer"])
+@pytest.mark.parametrize("swapped_for", SWAPPED_FOR)
+@pytest.mark.parametrize("level", SWAPPED_LEVELS)
+def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_through_a_link(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    level: str,
+    swapped_for: str,
+    version: str,
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log walk is under test
+    trigger, victims, shared = swap_set_up(world, level, tmp_path)
+    root = world.log.parents[3]  # Cursor's `logs` folder
+    existing = sum(1 for _ in os.walk(root))  # every folder under the Cursor logs, before the swap
+
+    def swap() -> None:
+        for victim in victims:
+            SWAPPED_FOR[swapped_for](victim, shared)
+
+    watched = WatchedOs(trigger, swap)
+    with monkeypatch.context() as patched:
+        patched.setattr(hookslog, "os", watched)
+        logs = hookslog.latest(world.home)
+    assert watched.swapped, "the swap never happened between listing and opening"
+    assert watched.listed_by_name == [], "a folder was listed by its name, not through the open one"
+    assert watched.links_followed == 0 and watched.not_folders == 0
+    assert len(watched.opened) == len(set(watched.opened)), "a folder was opened twice"
+    assert len(watched.opened) <= existing, (len(watched.opened), existing)
+    check = call_unless_it_hangs(lambda: checks.check_hooks_log(world.context()), world.log)
+    if level == "start folder":  # the only folder with a log is gone: as no log at all
+        assert logs.files == () and not logs.too_many
+        assert check.level == ("warn" if version == "listed" else "fail"), check
+    else:
+        assert logs.files == (world.log,) and logs.folder is not None
+        assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+def test_a_walk_over_many_logs_leaves_no_descriptor_open(world: World) -> None:
+    for count in (3, 65):  # the second stops the walk early, in the middle of three open folders
+        world.reset_log()
+        make_logs(world, count)
+        before = open_descriptors()
+        for _ in range(20):
+            hookslog.latest(world.home)
+        assert open_descriptors() == before, count
+
+
+def test_a_start_folder_that_is_a_link_or_a_pipe_is_not_the_newest(world: World) -> None:
+    root = world.log.parents[3]
+    elsewhere = world.home / "elsewhere"
+    elsewhere.mkdir()
+    (root / "20271231T000000").symlink_to(elsewhere)  # newer than the real one, and a link
+    os.mkfifo(root / "20271230T000000")  # newer, and a pipe
+    logs = hookslog.latest(world.home)
+    assert logs.folder == world.log.parents[2] and logs.files == (world.log,)
+
+
+def test_the_cursor_logs_folder_itself_may_be_a_link_but_nothing_below_it(world: World) -> None:
+    root = world.log.parents[3]
+    moved = world.home / "moved-logs"
+    root.rename(moved)
+    root.symlink_to(moved)
+    assert hookslog.latest(world.home).files == (world.log,)
+
+
 @pytest.mark.parametrize("version", ["3.26\n13", "3.26\u202e13", ESCAPE_VERSION, "9" * 5000])
 def test_the_version_in_the_hooks_log_line_is_shown_cut_and_escaped(
     world: World, monkeypatch: pytest.MonkeyPatch, version: str
@@ -953,9 +1199,28 @@ def test_a_line_of_the_log_is_shown_cut_and_with_its_escapes_written_out(
     monkeypatch.setattr(service, "inspect", lambda: None)  # only the log line is read
     world.write_log("[t] ERROR: Invalid config \x1b[2J\x1b[H" + "x" * 3_000_000)
     check = checks.check_hooks_log(world.context())
-    assert check.level == "fail" and check.text.startswith("Cursor did not load AgentFly's hooks")
-    assert check.text.isprintable() and len(check.text) < 500
-    assert r"\x1b[2J" in check.text and "\u2026" in check.text  # escaped, and cut with a mark
+    # The first 1,000 characters of the line (the ESCs among them), escaped, and a mark of the cut.
+    shown = "ERROR: Invalid config \\x1b[2J\\x1b[H" + "x" * 971 + "\u2026"
+    assert check.level == "fail"
+    assert check.text == (
+        f"Cursor did not load AgentFly's hooks (Cursor says: {shown}); quit and reopen Cursor"
+    )
+
+
+@pytest.mark.parametrize("length, cut", [(999, False), (1000, False), (1001, True)])
+def test_a_line_of_up_to_1000_characters_is_shown_whole(
+    world: World, monkeypatch: pytest.MonkeyPatch, length: int, cut: bool
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    prefix = "ERROR: Invalid enterprise config: "
+    line = prefix + "y" * (length - len(prefix))
+    assert len(line) == length
+    world.write_log("[t] " + line)
+    check = checks.check_hooks_log(world.context())
+    shown = line[:1000] + ("\u2026" if cut else "")
+    assert check.text == (
+        f"Cursor did not load AgentFly's hooks (Cursor says: {shown}); quit and reopen Cursor"
+    )
 
 
 @pytest.mark.parametrize("kind", PLANTED)
@@ -1080,12 +1345,13 @@ HOSTILE_LINES = {  # each is 200 KB; the patterns this replaced took minutes on 
 
 @pytest.mark.parametrize("line", HOSTILE_LINES.values(), ids=HOSTILE_LINES.keys())
 def test_one_hostile_line_does_not_hold_up_the_log_read(line: str) -> None:
-    # A child process, killed after 20 s: a regex holds the GIL, so a thread could not be given up
-    # on as `call_unless_it_hangs` does for a pipe. Linear takes milliseconds; the old took minutes.
-    code = "import sys; from agentfly.install import hookslog; hookslog.status_of(sys.stdin.read())"
-    subprocess.run(
-        [sys.executable, "-I", "-c", code], input=line, text=True, timeout=20, check=True
+    # Linear takes milliseconds; the patterns this replaced took minutes. The child imports this
+    # tree's `hookslog` (and fails if it cannot), whatever `agentfly` the interpreter has installed.
+    code = (
+        "from agentfly.install import hookslog\n"
+        "hookslog.status_of(sys.stdin.buffer.read().decode())\n"
     )
+    run_in_a_child(code, line.encode())
 
 
 # ---------------------------------------------------------------- ~/.claude/settings.json (D24)

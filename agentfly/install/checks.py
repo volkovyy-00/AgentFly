@@ -419,7 +419,9 @@ def check_path(ctx: Context) -> Finding:
     )
 
 
-_SHOWN_LOG_LINE = 300  # a real line is about 100; the agent's user can write a megabyte
+# Cursor's own rejection lists the 21 valid events: about 450 characters. The agent's user can write
+# a megabyte, so a line is cut here (and escaped, as it is printed to the owner's terminal).
+_SHOWN_LOG_LINE = 1000
 
 
 def _log_problem(status: hookslog.LogStatus, ours: set[str]) -> str | None:

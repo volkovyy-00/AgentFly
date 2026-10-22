@@ -719,11 +719,25 @@ version's events, `init -g` warns once, and the hash record keeps the real
 version as of the install or repair that wrote it. A version that is not newer
 and not listed is still refused, and so is anything that is not dotted numbers of
 at most 32 characters. The version is read from Cursor.app's `Info.plist`, which
-the agent can rewrite, and is only ever compared: only an XML plist that is a plain
-file of at most 1 MiB is parsed. A binary plist is refused unparsed (plistlib's
-binary reader copies an object once for each object number that points at it,
-hundreds of megabytes from under 1 MiB), a named pipe, a folder or a larger file
-is refused unread, and a malformed one is refused when it fails to parse. The
+the agent can rewrite, and is only ever compared. The file is opened without
+blocking and read only if it is a plain file (a named pipe or a folder is refused
+before anything is read); at most 1 MiB and one byte of it is read, and a larger
+file is refused unparsed. It is parsed only if it is UTF-8 XML whose header holds
+nothing before `<plist` but an XML declaration and, at most, Apple's `<!DOCTYPE
+plist PUBLIC "…" "…">` (Cursor's own): no internal subset, comment or other
+declaration, because a DTD of its own makes the parse cost minutes from under
+1 MiB (pyexpat decodes an attribute default again for every element; plistlib
+refuses only entity declarations). A binary plist is refused unparsed too
+(plistlib's binary reader copies an object once for each object number that
+points at it, hundreds of megabytes from under 1 MiB). Each refusal is one line
+that names the cause, and a malformed XML plist is refused when it fails to
+parse. A refused plist leaves the version unread, which falls as a version off the
+list does (below). The Hooks log lives in a folder the agent's user can also
+write while `doctor` walks it, so each folder is opened once, without following a
+link, and walked through what was opened (a folder swapped for a link or a
+non-folder is skipped, as a missing log is); a rejection line is shown whole up
+to 1,000 characters (Cursor's own, naming the 21 valid events, is about 450),
+cut with "…" beyond, and always with unprintable characters escaped. The
 risk is accepted: if that Cursor dropped one of the
 events, it would ignore the whole hooks file (S5), and protection would be off
 with no sign inside Cursor. So `doctor` fails when Cursor's Hooks log shows

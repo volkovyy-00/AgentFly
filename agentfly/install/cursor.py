@@ -4,7 +4,8 @@ One unknown event name makes Cursor reject the whole hooks.json (S5), so an unkn
 nothing is written. A listed version is matched exactly. A version newer than the newest listed one
 gets that one's events and a warning (D32); any other version is refused. The version comes from
 Cursor.app's Info.plist, which the agent can rewrite, so the file is read as XML only, at most
-MAX_PLIST_BYTES of it, and the version is compared only as dotted numbers.
+MAX_PLIST_BYTES of it, with no DTD of its own in the header, and the version is compared only as
+dotted numbers.
 """
 
 from __future__ import annotations
@@ -50,7 +51,16 @@ _DOTTED = re.compile(r"[0-9]+(?:\.[0-9]+)*")  # [0-9]: `\d` also takes other scr
 _MAX_LENGTH = 32  # a real version is "3.26.13"; a longer one is not compared, and printed cut
 MAX_PLIST_BYTES = 1 << 20  # Cursor's Info.plist is a few KB; the agent can write a huge one
 _BOM = b"\xef\xbb\xbf"
-_XML_START = (b"<?xml", b"<plist")  # UTF-8 XML, as Apple writes it; plistlib also takes UTF-16
+# All that may come before `<plist`, as Apple writes it: an XML declaration, then at most the plist
+# DOCTYPE with its two IDs. No `[`, no comment, no second DOCTYPE: a DOCTYPE with an internal subset
+# can declare attribute defaults that pyexpat decodes again for every element (70 KB took 0.6 s, a
+# megabyte minutes), and plistlib refuses only `<!ENTITY`. Matched from the start, once, in time
+# linear in the bytes: each part is a literal, a run of blanks, or a run with no `<` or `>` in it.
+_HEADER = re.compile(
+    rb"(?:<\?xml\s[^<>]*\?>\s*)?"
+    rb'(?:<!DOCTYPE\s+plist\s+PUBLIC\s+"[^"<>]*"\s+"[^"<>]*"\s*>\s*)?'
+    rb"<plist\b"
+)
 
 
 class _Refused(ValueError):
@@ -75,14 +85,22 @@ def _read_plist(plist: Path) -> bytes:
     return data
 
 
-def _require_xml(data: bytes) -> bytes:
-    """`data` if it starts as an XML property list, else _Refused.
+def _require_plist_header(data: bytes) -> bytes:
+    """`data` if it starts as an XML property list with Apple's header, else _Refused.
 
     A binary plist is refused unparsed: plistlib's binary reader copies an object once for each
-    object number that points at it, so under 1 MiB can cost hundreds. XML has no shared objects.
+    object number that points at it, so under 1 MiB can cost hundreds. XML has no shared objects,
+    but a DTD of its own in the header can make the parse cost minutes (see `_HEADER`): so the
+    parser sees only a file whose header is Cursor's.
     """
-    if not data.removeprefix(_BOM).startswith(_XML_START):
+    body = data.removeprefix(_BOM)
+    if not body.startswith(b"<"):
         raise _Refused("not XML: AgentFly reads only a UTF-8 XML property list")
+    if not _HEADER.match(body):
+        raise _Refused(
+            "XML header is not Apple's: AgentFly reads only an XML declaration and the plist "
+            "DOCTYPE before <plist>"
+        )
     return data
 
 
@@ -92,11 +110,12 @@ def installed_version(app: Path) -> str:
     The agent can write the file, and plistlib raises whatever a malformed one makes it raise
     (ExpatError, LookupError, IndexError, TypeError, AttributeError, ...): whatever it is, the
     answer is a version or this one error, so `init -g` and `doctor` never end in a traceback.
-    A named pipe, a file over MAX_PLIST_BYTES and a file that is not XML are refused unparsed.
+    A named pipe, a file over MAX_PLIST_BYTES, a file that is not XML and one whose header is not
+    Apple's are refused unparsed.
     """
     plist: Path = app / "Contents" / "Info.plist"
     try:
-        info = plistlib.loads(_require_xml(_read_plist(plist)), fmt=plistlib.FMT_XML)
+        info = plistlib.loads(_require_plist_header(_read_plist(plist)), fmt=plistlib.FMT_XML)
         version = info["CFBundleShortVersionString"]
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Refused) else type(exc).__name__
