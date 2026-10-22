@@ -320,11 +320,12 @@ command.
 once, at start. `init -g` writes it when it is missing, replaces it when it is byte for byte a
 default the package once carried (nobody edited it; the package keeps the hash of every default
 it has shipped, D28; a recorder restart applies the new one), and keeps an edited file with a
-one-line notice; it never writes, chowns or chmods an edit. An edit the recorder's user cannot read
-(root's mode 0600) gets one line instead: the recorder cannot read it, the default rules are in
-force, and the fix (`sudo chmod 644` the file, then restart the recorder). That needs no password
-when nothing else is to be done; with other work (an upgrade) `init -g` stops on that line before
-the password and before it changes anything, also over a default in such a file. `uninstall`
+one-line notice; it never writes, chowns or chmods an edit. A root file the recorder's user cannot
+read (mode 0600) gets one line instead: the recorder cannot read it, the default rules are in
+force, and the fix (`sudo chmod 644` the file, then restart the recorder). The unprivileged run
+cannot read the bytes either, so it says this by owner and mode alone, over a default too, and
+asks for no password when nothing else is to be done; with other work (an upgrade) `init -g`
+stops on that line before the password and before it changes anything, edit or default. `uninstall`
 removes the file with the folder, but first copies an edited one (any file that is not an unedited
 shipped default) to `/Library/Application Support/Cursor/agentfly-backups/rules.toml.<stamp>`,
 beside the `hooks.json` backups (D30). What `init -g` writes is the packaged default as read once,
@@ -683,8 +684,9 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   name each time, as root's file that nobody else can read unless everybody could
   read the original, and prints where (D30; restoring it is by hand). A link, a
   folder, a pipe or a file over the size limit there is named in one line and not
-  copied. A copy it cannot write (also a backups path that is a link or a file)
-  stops it with the hook entries, the folder and the file untouched. Then it
+  copied. A copy it cannot write (also a backups path that is a link or a file),
+  or a rules file root cannot read, stops it with the hook entries, the folder and
+  the file untouched. Then it
   removes AgentFly's hook entries and the system folder (under `sudo`, asked
   once), then, as your own user, stops and removes the service. Run it without `sudo`: the service
   belongs to your login session. If the system part fails the service is not

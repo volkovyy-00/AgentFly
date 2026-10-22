@@ -784,14 +784,19 @@ def test_a_copy_is_readable_by_others_only_if_the_original_was_by_group_and_othe
 
 
 def test_two_rounds_leave_two_copies(
-    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(installer.time, "strftime", lambda fmt: "20261022-120000")  # one second
     for round_ in ("first", "second"):
         do_install(layout, archive)
         edit(layout, data=f"# {round_}\n{rulefile.default_text()}".encode())
         installer.uninstall(layout)
     first, second = copies(layout)
-    assert {first.read_text()[:8], second.read_text()[:8]} == {"# first\n", "# second"}
+    assert (first.name, second.name) == (
+        "rules.toml.20261022-120000",
+        "rules.toml.20261022-120000-1",
+    )
+    assert (first.read_text()[:8], second.read_text()[:8]) == ("# first\n", "# second")
 
 
 NOT_EDITED = ["this version's default", "this version's default at 0600", "no file"] + [
