@@ -298,8 +298,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   write, stops it with the hook entries, the folder and the file unchanged (nothing written through
   the link), and the run after the fix leaves one copy. A link (also to a 0600 file), a folder, a
   named pipe (no hang) and a file over `MAX_FILE_BYTES` are named in one line and not copied (a
-  folder, link or pipe also when swapped in after the first look: the open alone stops it); a file
-  of exactly the limit is copied; one root cannot read stops it. `init -g`
+  folder, link or pipe also when swapped in after the first look: the open and its `fstat` stop
+  it); a file of exactly the limit is copied; one root cannot read stops it. `init -g`
   (`tests/test_install_rules.py`, `tests/test_install_cli.py`) over a file of the system user that
   nobody else can write and the recorder's user cannot read (`installer.unreadable_notice`, by owner
   and mode: 0600, or 0640 in a group the user is not in; `rules_state` `unreadable` for the

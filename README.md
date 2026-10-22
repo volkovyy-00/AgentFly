@@ -156,9 +156,9 @@ agentfly uninstall                  # asks for your password once; do not run it
 
 It first keeps a copy of an edited rules file (one that is not an unedited default) in
 `/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>` and prints where
-(how to put it back is below). If that copy cannot be written, it stops and removes
-nothing. Then it removes AgentFly's hook entries, moves its system folder out of the way and
-deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
+(how to put it back is below). If that copy cannot be written, or root cannot read the rules
+file, it stops and removes nothing. Then it removes AgentFly's hook entries, moves its system
+folder out of the way and deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
 user, it stops the recorder service and deletes its file (`launchctl list | grep agentfly` prints
 nothing afterwards). If the system part fails, the service is not touched; run `agentfly uninstall`
 again. Other tools' entries
@@ -170,8 +170,10 @@ keeps guarding Cursor. **Quit and
 reopen Cursor afterwards:** it keeps its old hook list until it restarts, and in the meantime
 its calls to the removed client fail (exit 127), which lets every action through.
 
-To put a kept copy back after a reinstall, copy it over the rules file `agentfly init -g` wrote,
-then restart the recorder:
+To put a kept copy back after a reinstall, read it first (`sudo cat` it): it holds whatever the
+file held at uninstall, also edits the recorder refused to load (another owner's file, or one
+others could write). If a refused uninstall left several, take the newest. Copy it over the rules
+file `agentfly init -g` wrote, then restart the recorder:
 
 ```bash
 sudo cp "/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>" \

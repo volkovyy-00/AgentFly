@@ -683,10 +683,10 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `/Library/Application Support/Cursor/agentfly-backups/rules.toml.<stamp>`, a new
   name each time, as root's file at mode 0600 (the agent's user reads no copy), and
   prints where (D30). To restore it after `init -g`, `sudo cp` it over the
-  `rules.toml` that wrote (the target keeps root's 0644; with no file there the
-  result is 0600, which the recorder cannot read), then `agentfly stop` and
-  `agentfly start`. A link, a folder, a pipe or a file over the size limit there is
-  named in one line and not copied. A copy it cannot write (also a backups path that is a link or a file),
+  `rules.toml` that `init -g` wrote (the target keeps root's 0644; with no file
+  there the result is 0600, which the recorder cannot read), then `agentfly stop`
+  and `agentfly start`. A link, a folder, a pipe or a file over the size limit
+  there is named in one line and not copied. A copy it cannot write (also a backups path that is a link or a file),
   or a rules file root cannot read, stops it with the hook entries, the folder and
   the file untouched. Then it
   removes AgentFly's hook entries and the system folder (under `sudo`, asked
