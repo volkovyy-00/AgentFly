@@ -587,7 +587,7 @@ def test_the_check_line_runs_pyright_after_ruff_and_before_the_tests() -> None:
     # The places below are compared with this line, so one that drops pyright fails there; this
     # test fails when all of them drop it at once.
     commands = agents_checks(read(AGENTS))["check"].split(" && ")
-    assert commands[2:3] == [PYRIGHT], commands
+    assert commands[2] == PYRIGHT, commands
     assert commands[3].startswith("env PYTHONDONTWRITEBYTECODE=1 uv run pytest "), commands
 
 
