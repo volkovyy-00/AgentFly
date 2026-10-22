@@ -6,9 +6,10 @@ module is the data layer: `parse` turns text into `RuleSpec`s (or says what is w
 rule), and a `Clause` answers "does this action fit?". It knows nothing about sessions or the
 decision; `rules.py` builds the checks from these specs.
 
-Nothing here raises on bad input and nothing reads the environment. A file can be hostile or
-broken (it is root's file, but it is also read by a recorder that must keep deciding), so every
-failure becomes a message. The program supplies the engine-only command classes (`outbound`).
+Nothing here raises on bad input and nothing reads an environment variable but `HOME` (through
+`expanduser`). A file can be hostile or broken (it is root's file, but it is also read by a
+recorder that must keep deciding), so every failure becomes a message. The program supplies the
+engine-only command classes (`outbound`).
 """
 
 from __future__ import annotations

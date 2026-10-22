@@ -9,9 +9,9 @@ explained in the glossary at the end (section 13).
 ## 0. Status
 
 This is the **v1 target**. It describes what AgentFly will be when the v1 cards
-are done, not what the code does today. The code is still the hackathon
-version and moves toward this document card by card. Where the two differ, this
-document wins for new work; the cards say which part of the code changes when.
+are done, not what the code does today. The code moves toward this document
+card by card. Where the two differ, this document wins for new work; the cards
+say which part of the code changes when.
 
 The hackathon version of this document is in git history:
 `git show 3871787:docs/archive/SPEC-hackathon.md`. HOOKS.md and README.md still describe the
@@ -541,9 +541,7 @@ first**:
   banner appears when the page cannot reach the recorder, so a dead recorder
   never fails silently.
 - **Tabs.** History (past sessions, from the local store, by workspace), Rules
-  (the active rules, read-only), and Graph (today's lane graph). The lane graph
-  moves to its tab only after the owner has seen the trail working on live
-  steps.
+  (the active rules, read-only), and Graph (today's lane graph).
 - **Half-screen first.** The page is mostly used on half of the screen (about
   700 pixels wide), so that is the main layout, not a fallback.
 - The live trail refreshes about once a second. No chat view: the page never
@@ -952,6 +950,10 @@ Other measures:
   write. How an allow from there combines with AgentFly's deny is untested
   (section 8).
 - "Always Run" on a warned shell command removes that warning (section 5).
+- When the agent issues the `.env` read and a `curl` in one turn, Cursor may run
+  the shell hook before the read hook (V3a saw it, with the same
+  `generation_id`). The session is not marked yet, so that `curl` is allowed; it
+  cannot carry the file's content.
 - The agent can read the token (above).
 - R0 matches names, so a deliberately obscured command can still reach
   `agentfly stop`, `brew services stop` or the session-notes file. Stopping the
@@ -976,7 +978,10 @@ Other measures:
   environment's Python as root unchecked and with `site` on (`.pth`,
   `sitecustomize`, byte-code). The check and the `-I -S -B` command line exist
   only on the path where `agentfly` asks for the password itself. The README says
-  to run both without `sudo`.
+  to run both without `sudo`. A hand-typed `sudo agentfly uninstall` removes the
+  system files, then prints that the recorder service was not touched (`sudo`
+  cannot reach your login session) and says to run `agentfly uninstall` as your
+  own user, without `sudo`, to stop and remove it.
 - A `.pth` file in the tool environment runs inside the checking process (the
   user's own `agentfly`, started with `site` on) before the check can report it,
   so the check stops naive tampering only. R0 (which denies touching the

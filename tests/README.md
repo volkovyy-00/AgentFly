@@ -1,7 +1,8 @@
 # Tests
 
 Only tests that exist are listed here. Each card adds its own tests and the
-lines for them (R0 and normalisation: V5).
+lines for them (R0 and normalisation: V5). Card ids (V5b, F11) and D-numbers name
+the maintainers' work items and decisions, which are kept outside this repo.
 - `cat .env` marks the session; `curl https://x.com` afterwards is blocked.
 - `curl` without a prior secret read is allowed.
 - `.env.local` is sensitive; `.env.example` and `id_rsa.pub` are not.
@@ -45,8 +46,8 @@ lines for them (R0 and normalisation: V5).
   wheel's RECORD lists `agentfly/rules/default.toml` with the hash `init -g` checks it against.
 - Package, offline (`tests/test_package.py`, `test_a_uv_failure_skips_only_offline_and_off_ci`): a
   `uv` that fails with a network error skips the package tests when `CI` is unset and fails them
-  when `CI` is set (any non-empty value, `CI=false` too); any other `uv` failure fails them either
-  way. The test puts a fake `uv` in place of the real one, so it needs no build and no network.
+  when `CI` is set (any non-empty value); any other `uv` failure fails them either way. The test
+  puts a fake `uv` in place of the real one, so it needs no build and no network.
 - Graph API: `GET /api/steps` without token → 200; wrong Host → 403; after
   README → `.env` → curl ntfy, payload has sensitive `.env` and blocked R1;
   `?all=1` returns more than the default last 10; `GET /` serves the React
