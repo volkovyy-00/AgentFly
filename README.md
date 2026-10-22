@@ -69,9 +69,9 @@ AgentFly watches every Cursor project on this Mac, and the agent cannot switch i
 your password. Three commands, macOS only:
 
 ```bash
-uv build && uv tool install dist/*.whl   # from a clone; the PyPI and Homebrew releases come later
-agentfly init -g                          # asks for your password once
-agentfly start                            # the recorder, as a background service
+uv build && uv tool install --python 3.12 dist/*.whl   # from a clone; PyPI and Homebrew come later
+agentfly init -g                                        # asks for your password once
+agentfly start                                          # the recorder, as a background service
 ```
 
 `agentfly init -g` downloads a pinned, checksum-verified Python and copies the hook client into
@@ -170,7 +170,8 @@ its calls to the removed client fail (exit 127), which lets every action through
 **From a clone (developers).** `uv sync` makes `.venv` with the server dependencies and the
 `agentfly` and `agentfly-hook` commands. `./install.sh` writes a project-level
 `.cursor/hooks.json` (gitignored, no sudo, user-writable) for development only; after
-`agentfly init -g`, delete that file or every event arrives twice. Open the folder in Cursor,
+`agentfly init -g`, delete that file or its five events (`beforeShellExecution`, `beforeReadFile`,
+`beforeMCPExecution`, `preToolUse` and `afterFileEdit`) arrive twice. Open the folder in Cursor,
 mark it as **trusted**, and restart Cursor if the hooks do not show under **Settings → Hooks**.
 
 ## Usage

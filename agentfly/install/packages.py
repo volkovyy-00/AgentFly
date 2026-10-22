@@ -42,7 +42,7 @@ import agentfly
 from agentfly.install import InstallError
 from agentfly.install.pythons import file_sha256
 
-WHEEL_HINT = "uv build && uv tool install dist/*.whl"
+WHEEL_HINT = "uv build && uv tool install --python 3.12 dist/*.whl"
 SHOWN_PATHS = 3  # changed files a same-version question names; the rest are counted
 # Files the tools that build environments leave in `site-packages` without listing them in a
 # RECORD. Root runs `-S`, so it never reads a `.pth`; the owner's user may.
