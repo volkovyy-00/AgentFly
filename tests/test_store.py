@@ -258,12 +258,13 @@ def test_hooks_stay_fast_when_store_write_fails(
     finally:
         release.set()
         graph_store.enabled = False
-        try:
-            graph_store._queue.put_nowait(store_mod._SENTINEL)
-        except Exception:  # noqa: BLE001
-            pass
-        if graph_store._thread is not None:
-            graph_store._thread.join(timeout=2.0)
+        worker = graph_store._thread
+        if worker is not None and worker.is_alive():  # else a sentinel would wait in the queue
+            try:
+                graph_store._queue.put_nowait(store_mod._SENTINEL)
+            except Exception:  # noqa: BLE001
+                pass
+            worker.join(timeout=2.0)
         graph_store._write = previous_write  # type: ignore[method-assign]
         graph_store._driver = previous_driver
         graph_store._thread = previous_thread

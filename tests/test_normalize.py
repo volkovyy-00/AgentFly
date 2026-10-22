@@ -365,7 +365,7 @@ def test_a_big_command_is_parsed_in_linear_time() -> None:
     # Four times the words cost about four times as much (a quadratic loop: sixteen). The shorter
     # command is the baseline, timed in this test, so no number of seconds is involved.
     short, long = fastest([big_command(8_000), big_command(32_000)], rounds=7)
-    assert long < 8 * short, f"4 times the words took {long / short:.1f} times as long"
+    assert long < 6 * short, f"4 times the words took {long / short:.1f} times as long"
     assert not normalize.__wrapped__(big_command(32_000)).unparsed
 
 
@@ -379,13 +379,13 @@ SCAN_LIMIT = 256  # nested scans in one command: pinned here, held by `normalize
 # quarter-length command is 4 times cheaper when the work is linear and 16 when it is quadratic;
 # the limit sits between, higher for the `eval` chains: dearer than linear while shorter than the
 # depth limit (7 times for x 40), and by the `names[:index]` copy `finish_command` makes for each
-# `eval` (9 times for x 3000). The short commands take under 2 ms: many rounds, or the best of
+# `eval` (7 times for x 3000). The short commands take under 2 ms: many rounds, or the best of
 # them is still noise.
 WRAPPERS = [
     pytest.param("eval ", 40, "curl x", MAX_DEPTH + 1, 14, 60, id="eval-40"),
     # about 0.3 s a parse and five parses a side: over the 2 s line of `slow` (tests/README.md)
     pytest.param(
-        "eval ", 3000, "curl x", MAX_DEPTH + 1, 20, 5, id="eval-3000", marks=pytest.mark.slow
+        "eval ", 3000, "curl x", MAX_DEPTH + 1, 12, 5, id="eval-3000", marks=pytest.mark.slow
     ),
     pytest.param("bash ", 300, "-c 'curl x'", 3, 8, 60, id="bash-300"),
     pytest.param("bash ", 200, "<<< 'bash bash <<< ls'", 4, 8, 60, id="bash-200"),
