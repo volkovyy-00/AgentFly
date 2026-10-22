@@ -499,11 +499,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   them dropping it at once. `[tool.pyright]` sets only the mode (basic), Python 3.12 and the
   excludes: `ui`, `.venv`, every hidden folder and each other `.gitignore` line that can hold a
   `.py` file (pyright does not read `.gitignore`; a new line there fails until it is mapped). It
-  also runs the script with a stub `uv` first on `PATH` (a `/bin/sh`
-  file that logs its words and fails on a chosen call): both modes make four calls, once each, in
-  order; a failure on call 1, 2, 3 or 4 fails the script and stops it; bad arguments run nothing
-  (these runs are `slow`: on a Mac the first run of a new executable file, the stub, takes
-  seconds). CI runs the AGENTS.md line itself.
+  also runs the script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and
+  fails on a chosen call): both modes make four calls, once each, in order; a failure on call 1,
+  2, 3 or 4 fails the script and stops it; bad arguments run nothing (these runs are `slow`: on a
+  Mac the first run of a new executable file, the stub, takes seconds). CI runs the AGENTS.md line
+  itself.
 - `slow` (registered in `pyproject.toml`): a test that takes 2 s or more in a parallel
   `--durations=0` run carries `pytest.mark.slow`. `quick` leaves it out; `full` and CI run it.
   The installer, service, doctor and root-command modules carry it whole (`pytestmark`): most of
