@@ -774,7 +774,7 @@ def test_uninstall_keeps_a_copy_of_an_edited_rules_file_and_says_where(
         assert stat.S_IMODE(copy.stat().st_mode) == 0o644
 
 
-@pytest.mark.parametrize("mode", [0o640, 0o604])
+@pytest.mark.parametrize("mode", [0o640, 0o604], ids=["0640", "0604"])
 def test_a_copy_is_readable_by_others_only_if_the_original_was_by_group_and_others(
     mode: int, layout: Layout, archive: tuple[Path, PythonBuild], quick: None
 ) -> None:
@@ -934,3 +934,19 @@ def test_a_rules_file_that_cannot_be_read_stops_uninstall_with_the_way_out(
         assert layout.system_root.is_dir() and copies(layout) == []
     finally:
         layout.rules.chmod(0o644)
+
+
+def test_a_stale_temp_file_or_a_link_in_its_place_gets_none_of_the_bytes(
+    layout: Layout, tmp_path: Path
+) -> None:
+    # A run killed between the chmod and the rename leaves its temp; a fresh one is made, at 0600,
+    # so neither that file's mode nor a hard link planted at its name sees what is written.
+    target = tmp_path / "copy"
+    temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    other = tmp_path / "other"
+    other.write_text("someone else's\n")
+    other.chmod(0o644)
+    os.link(other, temp)
+    installer._write_atomic(target, b"secret\n", layout, 0o600)
+    assert other.read_text() == "someone else's\n" and not temp.exists()
+    assert target.read_bytes() == b"secret\n" and stat.S_IMODE(target.stat().st_mode) == 0o600
