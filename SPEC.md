@@ -681,8 +681,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   Homebrew leaves the service file behind. Uninstall first copies an edited
   rules file (not an unedited shipped default) to
   `/Library/Application Support/Cursor/agentfly-backups/rules.toml.<stamp>`, a new
-  name each time, as root's file that nobody else can read unless everybody could
-  read the original, and prints where (D30; restoring it is by hand). A link, a
+  name each time, as root's file at mode 0600 (the agent's user reads no copy), and
+  prints where (D30; restoring it is by hand). A link, a
   folder, a pipe or a file over the size limit there is named in one line and not
   copied. A copy it cannot write (also a backups path that is a link or a file),
   or a rules file root cannot read, stops it with the hook entries, the folder and

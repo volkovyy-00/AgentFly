@@ -765,17 +765,16 @@ def test_uninstall_keeps_a_copy_of_an_edited_rules_file_and_says_where(
     assert copy.parent == layout.backups and copy.name.startswith("rules.toml.")
     assert outcome.messages[0] == f"kept a copy of your edited rules file in {copy}"
     assert not layout.system_root.exists()
-    assert (copy, layout, stat.S_IMODE(copy.stat().st_mode)) in written  # the system user's
-    if who == "root's 0600":
-        assert stat.S_IMODE(copy.stat().st_mode) & 0o077 == 0
-    else:
-        assert stat.S_IMODE(copy.stat().st_mode) == 0o644
+    assert (copy, layout, 0o600) in written  # the system user's
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("mode", [0o640, 0o604], ids=["0640", "0604"])
-def test_a_copy_is_readable_by_others_only_if_the_original_was_by_group_and_others(
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604], ids=["0644", "0640", "0604"])
+def test_every_copy_is_0600_so_the_agents_user_reads_none(
     mode: int, layout: Layout, archive: tuple[Path, PythonBuild], quick: None
 ) -> None:
+    # R0 denies the agent the active file's path, not the backups folder: a copy the user could
+    # read would hand it the owner's rule lists.
     do_install(layout, archive)
     edit(layout, mode)
     installer.uninstall(layout)

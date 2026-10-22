@@ -951,8 +951,8 @@ def describe_oserror(exc: OSError) -> str:
     return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
 
 
-def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
-    """The rules file's bytes and the copy's mode; why it is no rules file; None when it is missing.
+def _rules_bytes(layout: Layout) -> bytes | str | None:
+    """The rules file's bytes; why it is no rules file; None when it is missing.
 
     One descriptor that follows no link and does not block, after an `lstat` that already turns
     away a link, a folder and a pipe; at most `MAX_FILE_BYTES` + 1 bytes are read. Raises OSError
@@ -985,9 +985,7 @@ def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
         data = handle.read(rulefile.MAX_FILE_BYTES + 1)
     if len(data) > rulefile.MAX_FILE_BYTES:
         return f"over {rulefile.MAX_FILE_BYTES} bytes"
-    # The copy's group is the system user's, not the original's: it is readable by group and
-    # others only if the original was readable by both, so nobody reads it who could not before.
-    return data, 0o644 if mode & 0o044 == 0o044 else 0o600
+    return data
 
 
 def _keep_rules_copy(layout: Layout) -> list[str]:
@@ -1011,11 +1009,10 @@ def _keep_rules_copy(layout: Layout) -> list[str]:
         return []
     if isinstance(raw, str):
         return [f"{layout.rules} is {raw}, which the recorder never loads; no copy was kept"]
-    data, mode = raw
-    if rulefile.sha256_of(data) in rulefile.SHIPPED_DEFAULTS:
+    if rulefile.sha256_of(raw) in rulefile.SHIPPED_DEFAULTS:
         return []
     try:
-        target = _write_rules_copy(layout, data, mode)
+        target = _write_rules_copy(layout, raw)
     except OSError as exc:
         raise InstallError(
             f"cannot keep a copy of the edited rules file {layout.rules} in {layout.backups} "
@@ -1024,8 +1021,12 @@ def _keep_rules_copy(layout: Layout) -> list[str]:
     return [f"kept a copy of your edited rules file in {target}"]
 
 
-def _write_rules_copy(layout: Layout, data: bytes, mode: int) -> Path:
-    """`rules.toml.<stamp>` in the backups folder, which must be a folder: no link is followed."""
+def _write_rules_copy(layout: Layout, data: bytes) -> Path:
+    """`rules.toml.<stamp>` in the backups folder, which must be a folder: no link is followed.
+
+    Mode 0600, the system user's, whatever the original's: nobody reads it who could not read the
+    original, and the agent's user reads none (R0 guards the original's path, not this folder).
+    """
     backups = layout.backups
     if backups.is_symlink() or (backups.exists() and not backups.is_dir()):
         what = "a symbolic link" if backups.is_symlink() else "not a folder"
@@ -1036,7 +1037,7 @@ def _write_rules_copy(layout: Layout, data: bytes, mode: int) -> Path:
     while target.exists() or target.is_symlink():
         counter += 1
         target = backups / f"rules.toml.{stamp}-{counter}"
-    _write_atomic(target, data, layout, mode)
+    _write_atomic(target, data, layout, 0o600)
     return target
 
 

@@ -292,8 +292,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `uninstall` removes the file with the folder.
   V5e (D30, `tests/test_install_flow.py`): `uninstall` first copies an edited file (0644, 0600, any
   owner) to `rules.toml.<stamp>` in the backups folder with the same bytes, says where, and two
-  rounds leave two copies; a copy of a file not readable by both group and others is 0600 and is
-  written as the system user's. This version's default (any mode), each older shipped default and
+  rounds leave two copies (one stamp: `-1`); every copy is 0600, whatever the original's mode (the
+  agent's user reads none), and is written as the system user's. This version's default (any mode), each older shipped default and
   no file are not copied and say nothing. A backups path that is a link or a file, or a failed
   write, stops it with the hook entries, the folder and the file unchanged (nothing written through
   the link), and the run after the fix leaves one copy. A link (also to a 0600 file), a folder, a
