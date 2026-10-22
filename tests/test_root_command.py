@@ -32,6 +32,9 @@ from tests.install_helpers import (
     write_dist,
 )
 
+# Half of these run Python through the `sudo` command line and take 2 s or more in a parallel run.
+pytestmark = pytest.mark.slow
+
 OLD_COMMAND = ["-I", "-B", "-m", "agentfly.cli", "init", "--help"]
 PRINT_ENVIRONMENT = (
     "import sys; sys.path.append(sys.argv[1]); from agentfly.install import packages; "
