@@ -6,15 +6,17 @@ install line names the Python the project is built for.
 
 from __future__ import annotations
 
+import gc
 import importlib.util
 import re
 import shlex
+import time
 from pathlib import Path
 
 import pytest
 
 from agentfly.cli import build_parser
-from agentfly.install import packages
+from agentfly.install import cursor, packages
 
 REPO = Path(__file__).resolve().parents[1]
 _FILE_LIKE = re.compile(r"^\.?/?[\w./-]+\.(?:py|sh|toml|json)$|^(?:scripts|hooks|agentfly|ui)/")
@@ -81,8 +83,9 @@ AGENTS_MAX_BYTES = 14_000  # owner 2026-10-22: AGENTS.md and CLAUDE.md load into
 IMPORT_LINE = "@AGENTS.md"  # the one import CLAUDE.md is meant to hold
 _IMPORT = re.compile(r"(?<![^\W_])@\S+")  # an `@` after anything but a letter or digit, and a name
 _LIST_ITEM = re.compile(r"(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)")
-_LINK_DEFINITION = re.compile(r" {0,3}\[[^\]]*\]:")
-_HTML = re.compile(r"<(?![^\s<>`]+@[^\s<>`]+>)[A-Za-z/!?`]")  # a tag, a comment; not <a@b.c>
+_LINK_DEFINITION = re.compile(r" {0,3}\[[^\]]*+\]:")
+_SPACES = re.compile(r"[ \t]*")
+_HTML = re.compile(r"<(?![^\s<>`@]++@[^\s<>`]++>)[A-Za-z/!?`]")  # a tag, a comment; not <a@b.c>
 _ODD_SPACE = re.compile(r"[^\S ]")  # a tab, a no-break space, a form feed
 _NUL = "\x00"  # stands in for text that is code
 _NO_CLOSER = "a backtick run with no closer (or an escaped one) is not modelled"
@@ -98,8 +101,9 @@ def size_problem(data: bytes) -> str | None:
 
 
 def _indent(line: str) -> int:
-    expanded = line.expandtabs(4)
-    return len(expanded) - len(expanded.lstrip(" "))
+    """Columns of leading space, counted up to 4: all that any caller compares."""
+    head = line[:4].expandtabs(4)
+    return min(4, len(head) - len(head.lstrip(" ")))
 
 
 def _fence(line: str) -> str | None:
@@ -137,21 +141,22 @@ def _block_kind(line: str) -> str:
 
 def _container_start(line: str) -> bool:
     """A quote or list marker, then a heading, fence, code or link definition: in a container."""
-    rest, marked = line.lstrip(), False
+    at, marked = _SPACES.match(line).end(), False
     while True:
-        if rest[:1] == ">":
-            rest = rest[1:]
-            rest = rest[1:] if rest[:1] == " " else rest
-        elif item := _LIST_ITEM.match(rest):
-            rest = rest[item.end() :]
+        if line[at : at + 1] == ">":
+            at += 2 if line[at + 1 : at + 2] == " " else 1
+        elif item := _LIST_ITEM.match(line, at):
+            at = item.end()
         else:
             break
         marked = True
-        if _indent(rest) >= 4:
+        if _indent(line[at : at + 4]) >= 4:
             return True
-        rest = rest.lstrip()
+        at = _SPACES.match(line, at).end()
     return marked and (
-        rest[:1] == "#" or rest[:3] in ("```", "~~~") or _LINK_DEFINITION.match(rest) is not None
+        line[at : at + 1] == "#"
+        or line[at : at + 3] in ("```", "~~~")
+        or _LINK_DEFINITION.match(line, at) is not None
     )
 
 
@@ -345,11 +350,21 @@ IMPORTS = {
     "in a numbered item with paired backticks around the break": "`\n1. @x`",
     "in a line after indented code with paired backticks": "    code `\n@x`",
     "in a line after tab-indented code with paired backticks": "\tcode `\n@x`",
+    "after a span wrapped onto a no-break-space line": "word `\n\xa0\ncode` @x `y`",
+    "after an escaped backtick": "\\`@x\\`",
+    "after a tab that does not close a fence": "```\n\t```\nx\n```\nsee @x\n```",
+    "a name in a link": "[SPEC](@SPEC.md)",
+    "two imports on one line": "see @AGENTS.md and @AGENTS.md",
+}
+
+
+# The scan cannot tell here whether the `@x` is code (CommonMark could read the text another
+# way, or the text holds what the scan does not model), so it fails; it need not name the `@x`.
+AMBIGUOUS = {
     "after a span wrapped onto an indented line": "- the `uv run\n    agentfly serve` is @x `y`",
     "after a span wrapped onto a tab line": "word `\n\tcode` @x `y`",
     "after a span wrapped onto a numbered line": "word `\n2. c` @x `y`",
     "after a span wrapped onto a hash with no space": "word `\n#12 c` @x `y`",
-    "after a span wrapped onto a no-break-space line": "word `\n \ncode` @x `y`",
     "after a heading in a list item": "- # heading `a\nsee @x `b`",
     "after a heading in a quote": "> # heading `a\nsee @x `b`",
     "after a list item that ends a fence": "- one:\n  ```sh\n  cmd\n- two, see @x\n```",
@@ -357,10 +372,8 @@ IMPORTS = {
     "after a fence on a list marker": "- ```\n@x```",
     "after a link reference definition": "[a]: </x`y>\nsee @x `z`",
     "after a link reference definition in a quote": "> [a]: /u`\n@x`",
-    "after an escaped backtick": "\\`@x\\`",
     "after an even number of backslashes": "\\\\`a` @x `b`",
     "after an escaped first backtick of a longer run": "\\`` x ` @x `",
-    "after a tab that does not close a fence": "```\n\t```\nx\n```\nsee @x\n```",
     "after an HTML comment": "<!-- a ` -->\nsee @x `c`",
     "after an HTML tag": '<a title="`"> see @x `c`',
     "after an autolink with a backtick": "<http://a.b/`c> see @x `d`",
@@ -371,14 +384,24 @@ IMPORTS = {
     "after an autolink whose address is a backtick run": "<```@x>```",
     "after indented code in a quote": ">     `\n@x`",
     "after indented code in a list item": "-     `\n@x`",
-    "a name in a link": "[SPEC](@SPEC.md)",
-    "two imports on one line": "see @AGENTS.md and @AGENTS.md",
 }
 
 
 @pytest.mark.parametrize("text", IMPORTS.values(), ids=IMPORTS.keys())
-def test_text_that_imports_a_file_fails(text: str) -> None:
+def test_text_that_imports_a_file_names_the_import(text: str) -> None:
+    findings = stray_imports(text)
+    assert any(finding.split(": ", 1)[1].startswith("@") for finding in findings), findings
+
+
+@pytest.mark.parametrize("text", AMBIGUOUS.values(), ids=AMBIGUOUS.keys())
+def test_text_that_may_import_a_file_fails(text: str) -> None:
     assert stray_imports(text) != []
+
+
+def test_a_span_does_not_cross_a_blank_line() -> None:
+    """The two backticks pair only if the span crosses the break; then `@x` would be hidden."""
+    found = stray_imports("a lone `\n\nsee @x `y")
+    assert "line 3: @x" in found and f"line 1: {_NO_CLOSER}" in found
 
 
 NOT_MODELLED = {
@@ -450,10 +473,8 @@ def test_a_finding_names_its_line() -> None:
     ]  # line ends as read_text sees them
 
 
-def test_every_byte_goes_through_the_span_scan_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A scan that went back over earlier lines would not be one pass."""
+def test_every_byte_goes_through_the_span_scan_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scan that went back over earlier lines, or over a block twice, would not be one pass."""
     sizes: list[int] = []
     real = _blank_spans
 
@@ -462,11 +483,48 @@ def test_every_byte_goes_through_the_span_scan_once(
         return real(paragraph)
 
     monkeypatch.setitem(globals(), "_blank_spans", spy)  # this module, however pytest imported it
-    hostile = "\n".join(f"line {n} `{'`' * (n % 7)} @x{n} ``" for n in range(600))
-    text = hostile + "\n\n" + "`" * 3_000 + "\n" + "a `b\n" * 600
+    wrapped = "\n".join(f"line {n} `{'`' * (n % 7)} @x{n} ``" for n in range(300))
+    headings = "\n".join(f"# head {n} `x` @y" for n in range(300))
+    unclosed = "`" * 3_000 + " a `\n" + "a `b\n" * 300  # a long run that opens no fence
+    text = "\n\n".join([wrapped, headings, unclosed])
     stray_imports(text)
-    assert sizes, "the span scan never ran"
-    assert sum(sizes) <= len(text)
+    # Every line is scanned once, but the line breaks between blocks are not part of any block.
+    assert 0.9 * len(text) <= sum(sizes) <= len(text), (sum(sizes), len(text))
+
+
+@pytest.mark.parametrize(
+    ("prefix", "unit"),
+    [
+        ("", "> "),
+        ("", "- "),
+        ("", "1. "),
+        ("<", "a@"),
+        ("", "[a"),
+        ("", "`"),
+        ("", "@"),
+        ("", "```\n"),
+        ("", "a `\n"),
+        ("", "# `\n"),
+        ("", "\t"),
+    ],
+)
+def test_the_scan_takes_time_in_proportion_to_the_text(prefix: str, unit: str) -> None:
+    """Four times the text costs about four times as much (a quadratic scan: sixteen)."""
+    fastest = {5_000: float("inf"), 20_000: float("inf")}
+    was_on = gc.isenabled()
+    gc.disable()  # CPU time and no collector pauses: a busy machine leaves it alone
+    try:
+        for _ in range(5):
+            for count in fastest:  # in turns, so that nothing favours one size
+                text = prefix + unit * count
+                started = time.process_time()
+                stray_imports(text)
+                fastest[count] = min(fastest[count], time.process_time() - started)
+    finally:
+        if was_on:
+            gc.enable()
+    short, long = fastest.values()
+    assert long < 8 * short, f"4 times the text took {long / short:.1f} times as long"
 
 
 _WHEEL_INSTALL = re.compile(r"uv tool install (?:(?!uv tool install)[^`])*?dist/\S*")
@@ -516,3 +574,28 @@ def test_the_wheel_install_check_reads_commands_the_way_a_shell_would(
     text: str, pinned: list[bool]
 ) -> None:
     assert [names_the_python(command) for command in wheel_installs(text)] == pinned
+
+
+def wired_events() -> list[str]:
+    """The events `./install.sh` writes into `.cursor/hooks.json`."""
+    script = (REPO / "install.sh").read_text(encoding="utf-8")
+    return re.findall(r'^    "(\w+)": \[', script, flags=re.M)
+
+
+def test_install_sh_wires_five_of_the_events_init_g_registers() -> None:
+    wired = wired_events()
+    assert len(wired) == 5
+    assert set(wired) < set(cursor.EVENTS)  # `init -g` registers more: those arrive once
+
+
+@pytest.mark.parametrize("name", ["AGENTS.md", "README.md", "SPEC.md", "install.sh"])
+def test_the_twice_claim_names_the_events_install_sh_wires(name: str) -> None:
+    text = " ".join((REPO / name).read_text(encoding="utf-8").split())
+    claims = re.finditer(r"\b(?:arrive|arrives|reach|reaches)\b[^.]{0,30}\btwice\b", text)
+    starts = [claim.start() for claim in claims]
+    assert starts, "no claim that events arrive twice"
+    for start in starts:
+        around = text[max(0, start - 400) : start + 400]
+        assert "every event" not in around
+        for event in wired_events():
+            assert event in around, f"{name} does not name {event}"

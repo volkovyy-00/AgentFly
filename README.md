@@ -69,7 +69,7 @@ AgentFly watches every Cursor project on this Mac, and the agent cannot switch i
 your password. Three commands, macOS only:
 
 ```bash
-uv build && uv tool install --python 3.12 dist/*.whl   # from a clone; PyPI and Homebrew come later
+uv build && uv tool install --python 3.12 dist/*.whl   # from a clone; the PyPI and Homebrew releases come later
 agentfly init -g                                        # asks for your password once
 agentfly start                                          # the recorder, as a background service
 ```
