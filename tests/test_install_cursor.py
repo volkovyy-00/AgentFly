@@ -405,20 +405,60 @@ HEADER_PIECES = [
 ]  # fmt: skip
 
 
+def random_doctype(rng: random.Random) -> bytes:
+    """A DOCTYPE that is Apple's, or one with an ID, a name or a subset that is not."""
+    ids = rng.choice(
+        [
+            b'PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"',
+            b'PUBLIC "a" "b"',
+            b'PUBLIC "a>" "b"',
+            b'PUBLIC "a" "b>c"',
+            b'SYSTEM "a"',
+            b'SYSTEM "a>b"',
+            b"PUBLIC 'a' 'b'",
+            b"",
+        ]
+    )
+    subset = rng.choice(
+        [
+            b"",
+            b"",
+            b" [" + SHORT_ATTLIST + b"]",
+            b'[<!ENTITY e "v">]',
+            b"[]",
+            b" [ ]",
+            b"[<!-- ]> -->]",
+        ]
+    )
+    name = rng.choice([b"plist", b"plist", b"html"])
+    return b"<!DOCTYPE " + name + b" " + ids + subset + rng.choice([b"", b" "]) + b">"
+
+
+def random_header(rng: random.Random) -> bytes:
+    """Either pieces strung together at random, or a prolog with a few things in the wrong place."""
+    if rng.random() < 0.4:
+        return b"".join(rng.choice(HEADER_PIECES) for _ in range(rng.randint(1, 6)))
+    blanks = [b"", b"\n", b" ", b"\r\n\t"]
+    parts = [rng.choice([XML_DECLARATION, b"<?xml version='1.0'?>", b""]), rng.choice(blanks)]
+    for _ in range(rng.randint(0, 2)):
+        parts += [rng.choice([random_doctype(rng), b"<!-- a -->", b"<?pi x?>"]), rng.choice(blanks)]
+    return b"".join(parts)
+
+
 def test_nothing_the_header_check_lets_through_declares_anything() -> None:
     """Whatever the check accepts, expat sees no internal subset and no declaration in it."""
     rng = random.Random(11)
-    accepted = 0
-    for _ in range(30_000):
-        head = b"".join(rng.choice(HEADER_PIECES) for _ in range(rng.randint(1, 6)))
-        data = rng.choice([b"", XML_DECLARATION]) + head + b'<plist version="1.0"><dict/></plist>'
+    accepted = with_doctype = 0
+    for _ in range(40_000):
+        data = random_header(rng) + b'<plist version="1.0"><dict/></plist>'
         try:
             cursor._require_plist_header(data)
         except cursor._Refused:
             continue
         accepted += 1
+        with_doctype += b"<!DOCTYPE" in data
         assert declarations_expat_sees(data) == [], data[:200]
-    assert accepted > 200  # the loop must reach the check's far side
+    assert accepted > 500 and with_doctype > 100  # the loop must reach the check's far side
 
 
 def test_cursors_real_header_with_a_doctype_gives_its_version(tmp_path: Path) -> None:
