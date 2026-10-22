@@ -63,6 +63,10 @@ from tests.test_install_packages import (
     fake_agentfly,
 )
 
+# Most tests here run real processes and some take 2 s or more; the whole module is marked so
+# that `quick` stays short, although many of its tests are faster (tests/README.md).
+pytestmark = pytest.mark.slow
+
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
     assert str(SYSTEM.system_root) == "/Library/Application Support/AgentFly"

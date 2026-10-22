@@ -615,6 +615,7 @@ def _brute_names() -> list[str]:
     return sorted(name for name in names if rulefile.spec_secret(name))
 
 
+@pytest.mark.slow
 def test_brute_force_finds_no_accepted_r1_that_misses_a_secret_name() -> None:
     rng = random.Random(27)
     names = _brute_names()

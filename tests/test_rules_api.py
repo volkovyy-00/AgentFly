@@ -161,12 +161,14 @@ def run_recorder(home: Path, text: str | None) -> tuple[dict[str, Any], dict[str
         stop_recorder(process)
 
 
+@pytest.mark.slow
 def test_a_child_recorder_with_no_file_runs_the_default(isolated_home: Path) -> None:
     health, listing = run_recorder(isolated_home, None)
     assert "rules_problem" not in health
     assert listing["source"] == "default" and listing["problem"] is None
 
 
+@pytest.mark.slow
 def test_a_child_recorder_with_a_valid_file_runs_it(isolated_home: Path) -> None:
     health, listing = run_recorder(isolated_home, custom_rules())
     assert "rules_problem" not in health
@@ -175,6 +177,7 @@ def test_a_child_recorder_with_a_valid_file_runs_it(isolated_home: Path) -> None
     assert [r["id"] for r in listing["rules"]] == ["R0", *shipped, "warn-push"]
 
 
+@pytest.mark.slow
 def test_a_child_recorder_with_a_planted_invalid_file_runs_the_default_and_says_so(
     isolated_home: Path,
 ) -> None:

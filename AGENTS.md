@@ -30,13 +30,15 @@ issue or pull request as the card and puts the gap notes in the pull request.
 ## Commands
 - Install deps: `uv sync`
 - Install for every project (one `sudo`, SPEC §7): `agentfly init -g`. Remove it: `agentfly uninstall`
-  (our entries first, then the folder). Quit and reopen Cursor after either: it reads the system
-  file only at start-up. The installed client is a copy, so a hook client change needs `init -g` again.
+  (first keeps a copy of an edited rules file, D30; then our entries, then the folder). Quit and
+  reopen Cursor after either: it reads the system file only at start-up. The installed client is a
+  copy, so a hook client change needs `init -g` again.
 - Run the recorder as a service (no `sudo`, SPEC §7): `agentfly start`, `agentfly stop`,
   `agentfly status`. A dev checkout runs `uv run agentfly serve` instead; both on port 8787 do not work.
 - Check an install: `agentfly doctor` (one line per check, exit 1 on any fail, no password).
 - Dev-only wiring (writes gitignored `.cursor/hooks.json`, never commit it): `./install.sh`. With
-  `init -g` also installed, every event arrives twice.
+  `init -g` also installed, its five events reach the recorder twice: `beforeShellExecution`,
+  `beforeReadFile`, `beforeMCPExecution`, `preToolUse` and `afterFileEdit`.
 - Clear saved history (not marks, not Neo4j): `agentfly wipe`. R0 denies it to the agent.
 - Rules: `agentfly rules check [FILE]` and `agentfly rules test [FILE]` (no FILE: the file the
   recorder would load). SPEC §5 says which file is in force; a file must stay under
@@ -46,7 +48,11 @@ issue or pull request as the card and puts the gap notes in the pull request.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; `env` keeps byte-code out (a stray `.pyc` breaks
   `test_nothing_is_written_next_to_the_client`). Keep the flags on the command line, never in
-  `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line.
+  `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line, and so does
+  `./scripts/check.sh full` (a test fails if the script and this bullet differ by a word).
+- Quick check (while you work, in a fraction of the time): `./scripts/check.sh quick` runs ruff and
+  the parallel tests without those marked `slow` (2 s or more in a parallel run; `tests/README.md`).
+  It is not the Check line: run that one before you report a step done.
 - Serial test run (one core, for a failure you cannot explain in parallel): `uv run pytest -q`
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`
@@ -54,7 +60,7 @@ issue or pull request as the card and puts the gap notes in the pull request.
 - Run server: `uv run agentfly serve` (127.0.0.1 only; `--port N` or `AGENTFLY_PORT=N` for
   tests only: hooks always post to 8787, D25). A second `serve` on a busy port exits 1 and
   changes nothing.
-- Build the wheel (carries `ui/dist`): `uv build`; try it with `uv tool install dist/*.whl`
+- Build the wheel (carries `ui/dist`): `uv build`; try it with `uv tool install --python 3.12 dist/*.whl`
 - Replay a scripted session without Cursor: `uv run python examples/fake_agent.py`
 - UI dev server (proxies `/api` to the recorder): `npm --prefix ui run dev`
 

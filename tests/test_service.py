@@ -20,6 +20,10 @@ from agentfly.cli import main
 from agentfly.install import InstallError, service
 from tests.service_helpers import Brew, Launchd, homebrew_package
 
+# Most tests here run real processes and some take 2 s or more; the whole module is marked so
+# that `quick` stays short, although many of its tests are faster (tests/README.md).
+pytestmark = pytest.mark.slow
+
 LABEL = service.LABEL
 
 

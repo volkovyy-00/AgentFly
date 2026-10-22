@@ -354,6 +354,7 @@ def _orders(steps: list[dict[str, object]]) -> list[object]:
     return [s["order"] for s in steps]
 
 
+@pytest.mark.slow
 def test_600_steps_keep_500_and_the_landmarks(client: TestClient, token: str) -> None:
     for i in range(1, 601):
         command = {3: "cat .env", 7: "curl https://x.com"}.get(i, f"echo step{i}")

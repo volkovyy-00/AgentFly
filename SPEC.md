@@ -586,7 +586,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
-  every event arrives twice.
+  its five events (`beforeShellExecution`, `beforeReadFile`,
+  `beforeMCPExecution`, `preToolUse` and `afterFileEdit`) arrive twice.
 - **The package check (V3c).** `init -g` and `uninstall` run AgentFly's own
   Python package as root, and that package sits in a tool environment your user
   can write. So, before any password prompt, both hash every file of every
@@ -611,7 +612,7 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   The commands go on only after you confirm in a terminal. With no record yet (a
   first install, or one from before V3c) there is nothing to differ from. An
   editable install, or a run from a source checkout, is refused; install the
-  wheel (`uv build && uv tool install dist/*.whl`). After a yes the versions
+  wheel (`uv build && uv tool install --python 3.12 dist/*.whl`). After a yes the versions
   and hashes are stored in the root-owned record. Root then runs
   `python -I -S -B -X pycache_prefix=/var/empty -c <bootstrap>`: no `site`, so
   no `.pth` and no `sitecustomize`, and no `__pycache__` is read or written.

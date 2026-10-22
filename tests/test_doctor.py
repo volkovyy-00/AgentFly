@@ -75,6 +75,10 @@ from tests.test_install_packages import (
 )
 from tests.test_install_rules import another_user
 
+# Most tests here run real processes and some take 2 s or more; the whole module is marked so
+# that `quick` stays short, although many of its tests are faster (tests/README.md).
+pytestmark = pytest.mark.slow
+
 IDS = [
     "record",
     "python",

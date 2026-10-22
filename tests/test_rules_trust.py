@@ -306,6 +306,7 @@ def test_start_and_status_say_nothing_about_rules_when_there_is_no_problem(
     assert "rules" not in out.out.replace("recorder", "") + out.err
 
 
+@pytest.mark.slow
 def test_the_problem_is_one_line_even_if_it_holds_line_breaks(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -331,11 +332,13 @@ def run_child(home: Path, plant: Callable[[Path], None]) -> tuple[dict[str, Any]
         stop_recorder(process)
 
 
+@pytest.mark.slow
 def test_a_child_recorder_reads_a_file_its_owner_alone_can_write(isolated_home: Path) -> None:
     health, listing = run_child(isolated_home, lambda p: p.write_text(GOOD, encoding="utf-8"))
     assert "rules_problem" not in health and listing["source"] == "active"
 
 
+@pytest.mark.slow
 def test_a_child_recorder_refuses_a_file_everybody_can_write_and_says_so_over_http(
     isolated_home: Path,
 ) -> None:
@@ -345,6 +348,7 @@ def test_a_child_recorder_refuses_a_file_everybody_can_write_and_says_so_over_ht
     assert listing["source"] == "default" and listing["problem"] == health["rules_problem"]
 
 
+@pytest.mark.slow
 def test_a_child_recorder_refuses_a_link(isolated_home: Path) -> None:
     health, listing = run_child(isolated_home, plant_link)
     assert "symbolic link" in health["rules_problem"] and listing["source"] == "default"

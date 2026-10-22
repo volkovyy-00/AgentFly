@@ -39,6 +39,7 @@ def test_resolve_port_rejects_a_bad_value(bad: str) -> None:
         serve.resolve_port(None, {"AGENTFLY_PORT": bad})
 
 
+@pytest.mark.slow
 def test_serve_listens_on_agentfly_port(isolated_home: Path) -> None:
     port = free_port()
     process = start_recorder(isolated_home, 0, {"AGENTFLY_PORT": str(port)})
@@ -48,6 +49,7 @@ def test_serve_listens_on_agentfly_port(isolated_home: Path) -> None:
         stop_recorder(process)
 
 
+@pytest.mark.slow
 def test_the_port_option_wins_over_agentfly_port(isolated_home: Path) -> None:
     option, env = free_port(), free_port()
     process = start_recorder(isolated_home, option, {"AGENTFLY_PORT": str(env)})
@@ -76,6 +78,7 @@ def snapshot(home: Path) -> dict[str, tuple[int, int]]:
     return {str(p.relative_to(home)): (st.st_size, st.st_mtime_ns) for p, st in stats.items()}
 
 
+@pytest.mark.slow
 def test_a_second_serve_on_a_taken_port_fails_and_changes_nothing(
     client: Path, isolated_home: Path
 ) -> None:
@@ -142,6 +145,7 @@ def test_the_port_option_rejects_a_bad_number(bad: str) -> None:
     assert serve.port_option("0") == 0 and serve.port_option("65535") == 65535
 
 
+@pytest.mark.slow
 def test_serve_logs_the_address_it_listens_on(isolated_home: Path) -> None:
     port = free_port()
     process = subprocess.Popen(

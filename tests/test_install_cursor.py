@@ -591,6 +591,7 @@ def test_reading_a_binary_plist_built_to_blow_up_stays_under_64_mib(tmp_path: Pa
 
 
 @pytest.mark.parametrize("fill", XML_SHAPES.values(), ids=XML_SHAPES.keys())
+@pytest.mark.slow
 def test_reading_the_worst_xml_plist_stays_under_64_mib_and_gives_its_version(
     tmp_path: Path, fill: Callable[[int], bytes]
 ) -> None:

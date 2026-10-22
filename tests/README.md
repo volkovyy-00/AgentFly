@@ -38,6 +38,22 @@ the maintainers' work items and decisions, which are kept outside this repo.
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
   README and HOOKS.md name `/` as the trail.
+- Docs commands (`tests/test_docs_commands.py`): each command in AGENTS.md "Commands" and in the
+  README code blocks names files, `agentfly` subcommands and modules that exist. Two files load
+  into every session (F17-fix1). **Size:** AGENTS.md is at most 14 000 bytes (bytes, not
+  characters). **Imports:** AGENTS.md and CLAUDE.md hold no `@name` outside a code span or a
+  fenced block, because Claude Code imports it; CLAUDE.md keeps its one `@AGENTS.md` line. The
+  scan is one pass in the CommonMark way and errs toward failing. Claude Code's lexer (marked
+  without GFM) reads an `@name` that starts a text token or follows space, reads inside a code
+  span in a list item, and lets emphasis win over a span: so a span hides an `@name` only at its
+  start (`@x`) or, with no emphasis delimiter around, after a nested backtick. HTML, a tab, front
+  matter, a backtick run with no closer, and a heading, fence or definition inside a quote or
+  list item are findings too (the case tables in the test hold the rules). A differential fuzz
+  against Claude Code's own extractor and a CommonMark parser, run by hand and not kept in the
+  repo, found no text left unreported. **Wheel:** every `uv tool install ... dist/` line in a
+  root `*.md` and in `WHEEL_HINT` names `.python-version`'s Python (`--python 3.12`): uv picks its
+  newest otherwise. **Events:** each "arrive twice" claim (AGENTS.md, README, SPEC, `install.sh`)
+  names the five events `install.sh` writes into `.cursor/hooks.json`.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
   under a temporary HOME and runs `agentfly serve` and `agentfly-hook`. From the wheel it also:
   checks and tests the default rules the wheel carries (`rules check` / `rules test` on that file);
@@ -448,6 +464,36 @@ the maintainers' work items and decisions, which are kept outside this repo.
   that names either and never uses `@wallclock`. `time.time`, `sleep`, a `join` timeout and a
   helper that times for the test are not scanned. Each group runs on one worker, in file order.
   `strict_markers` makes an unknown marker an error, serial or parallel.
+- Quick check (`scripts/check.sh`, F17): `quick` runs `ruff check`, `ruff format --check` and the
+  parallel pytest line with `-m "not slow"`; `full` runs the AGENTS.md Check line. Each command is
+  its own line (no pipe, no `&&` list), so under `set -e` the first one that fails ends the script
+  with its exit code. Anything but one `quick` or `full` prints a usage line and exits 2 with
+  nothing run. `tests/test_ci_workflow.py` reads the script's two `case` arms: `full` must equal
+  the AGENTS.md Check bullet word for word, and `quick` must equal `full` plus ` -m "not slow"`
+  (pytest 9.1 does not refuse a mistyped `-m` expression, it runs everything). It also runs the
+  script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and fails on a
+  chosen call): both modes make three calls, once each, in order; a failure on call 1, 2 or 3
+  fails the script and stops it; bad arguments run nothing (these runs are `slow`: on a Mac the
+  first run of a new executable file, the stub, takes seconds). CI runs the AGENTS.md line itself.
+- `slow` (registered in `pyproject.toml`): a test that takes 2 s or more in a parallel
+  `--durations=0` run carries `pytest.mark.slow`. `quick` leaves it out; `full` and CI run it.
+  The installer, service, doctor and root-command modules carry it whole (`pytestmark`): most of
+  their tests run real processes and many are quicker, but `quick` is meant to be short, so the
+  mark errs on that side. `test_package.py` carries it for its `package` group; other tests carry
+  it one by one. A new test that takes 2 s or more gets the mark. See what is left: `uv run pytest
+  -q -n auto --dist loadgroup -m "not slow" --durations=10`.
+- Timing rule (F17): no test compares an elapsed time with a fixed number of seconds. What stays
+  is the client's 0.5 s wait (`CLIENT_WAIT`), the `hooks.json` 1 s timeout
+  (`test_offline_guard.py`), and waits that end at a deadline (poll loops, and a `join` with a
+  limit as a hang guard). A test counts work (`test_normalize.py` counts `_Scanner` starts
+  against the scan limit), or compares a time with a baseline measured in the same test (best of
+  several, taken in turns so that a busy machine slows both), or sets a wait the code enforces
+  (`WIPE_BUDGET_S`, `STOP_WAIT_S`, `WRITE_TIMEOUT_S`) and compares with that wait plus a baseline.
+  Scaling tests compare 4 times the input with the shorter one (linear: about 4, quadratic: about
+  16). `normalize` and the rulefile matcher cache their results: time `normalize.__wrapped__`, and
+  give the matcher a command no earlier round matched, or the repeat times a lookup. A regression
+  that would wait for ever is run on a thread the test gives up on (`join` with a limit), so it
+  fails the test instead of hanging it.
 - CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
   refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes
   and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA or not one

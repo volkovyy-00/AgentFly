@@ -6,8 +6,10 @@ import logging
 import os
 import re
 import socket
+import statistics
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -194,15 +196,28 @@ def test_queue_drops_when_full() -> None:
     assert store._queue.qsize() == 1
 
 
+HANG_GUARD_S = 10.0  # the fake write stops waiting after this; the 20 answers must beat it
+
+
 @wallclock
 def test_hooks_stay_fast_when_store_write_fails(
     client: TestClient,
     token: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Wrong/failing Neo4j must not slow /hook answers."""
+    """Wrong/failing Neo4j must not slow /hook answers.
+
+    The write hangs and then fails; no answer may wait for it, so none comes back after a write
+    has returned (an answer that waited for the whole hang). An answer that waited a part of it
+    shows against the baseline: the same hooks, one after the other with the store off, and the
+    median of the two within 50 ms.
+    """
+    release = threading.Event()
+    returned: list[None] = []
 
     def boom(_record: StepRecord) -> None:
+        release.wait(HANG_GUARD_S)
+        returned.append(None)
         raise RuntimeError("auth boom")
 
     previous_driver = graph_store._driver
@@ -213,7 +228,7 @@ def test_hooks_stay_fast_when_store_write_fails(
     graph_store.enabled = True
     graph_store._driver = None
     graph_store._write = boom  # type: ignore[method-assign]
-    graph_store._thread = __import__("threading").Thread(
+    graph_store._thread = threading.Thread(
         target=graph_store._worker,
         name="neo4j-test-worker",
         daemon=True,
@@ -223,31 +238,43 @@ def test_hooks_stay_fast_when_store_write_fails(
     headers = {"Content-Type": "application/json", "X-Recorder-Token": token}
     try:
         with caplog.at_level(logging.WARNING, logger="agentfly"):
+            plain: list[float] = []  # store off
+            stored: list[float] = []  # store on, its write hung
             for i in range(20):
-                t0: float = time.perf_counter()
-                response = client.post(
-                    "/hook",
-                    json={
-                        "hook_event_name": "beforeShellExecution",
-                        "command": "echo ok",
-                        "conversation_id": f"latency-{i}",
-                    },
-                    headers=headers,
-                )
-                elapsed_ms: float = (time.perf_counter() - t0) * 1000
-                assert response.status_code == 200
-                assert elapsed_ms < 200
-            time.sleep(0.3)
+                for enabled, times in ((False, plain), (True, stored)):
+                    graph_store.enabled = enabled
+                    started = time.perf_counter()
+                    response = client.post(
+                        "/hook",
+                        json={
+                            "hook_event_name": "beforeShellExecution",
+                            "command": "echo ok",
+                            "conversation_id": f"latency-{i}-{enabled}",
+                        },
+                        headers=headers,
+                    )
+                    times.append(time.perf_counter() - started)
+                    assert response.status_code == 200
+                    assert returned == [], "an answer waited for the store write"
+            assert statistics.median(stored) - statistics.median(plain) < 0.05
+            graph_store.enabled = True
+            release.set()  # now the writes fail, one after the other
+            graph_store._queue.put(store_mod._SENTINEL, timeout=HANG_GUARD_S)
+            graph_store._thread.join(timeout=HANG_GUARD_S)
+            assert not graph_store._thread.is_alive()
+        assert returned and "Neo4j write failed" in caplog.text
         assert "Authorization" not in caplog.text
         assert "Bearer" not in caplog.text
     finally:
+        release.set()
         graph_store.enabled = False
-        try:
-            graph_store._queue.put_nowait(store_mod._SENTINEL)
-        except Exception:  # noqa: BLE001
-            pass
-        if graph_store._thread is not None:
-            graph_store._thread.join(timeout=2.0)
+        worker = graph_store._thread
+        if worker is not None and worker.is_alive():  # else a sentinel would wait in the queue
+            try:
+                graph_store._queue.put_nowait(store_mod._SENTINEL)
+            except Exception:  # noqa: BLE001
+                pass
+            worker.join(timeout=2.0)
         graph_store._write = previous_write  # type: ignore[method-assign]
         graph_store._driver = previous_driver
         graph_store._thread = previous_thread
@@ -633,6 +660,7 @@ def test_only_a_separate_named_file_counts_as_test_credentials(tmp_path: Path) -
 @pytest.mark.parametrize(
     "named_test_file", [False, True], ids=["unset", "separate file, dead port"]
 )
+@pytest.mark.slow
 def test_database_tests_skip_and_never_touch_the_real_login(
     tmp_path: Path, named_test_file: bool
 ) -> None:

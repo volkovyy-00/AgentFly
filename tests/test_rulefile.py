@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import gc
 import itertools
 import json
 import re
@@ -15,7 +16,6 @@ import pytest
 from agentfly.cli import serve
 from agentfly.recorder import rulefile
 from agentfly.recorder.rulefile import Clause, RuleFile
-from tests.helpers import wallclock
 from tests.rules_helpers import list_line
 
 BASE_LISTS = (
@@ -116,6 +116,7 @@ def plain_glob(pattern: tuple[str, ...], segments: tuple[str, ...]) -> bool:
     return len(segments) in positions
 
 
+@pytest.mark.slow
 def test_the_walk_that_drops_hopeless_positions_answers_as_the_plain_walk_does() -> None:
     parts = ["**", "a", "?", "b*", "[ab]"]
     names = ["a", "b", "ab"]
@@ -216,6 +217,7 @@ def candidate_names() -> list[str]:
     return sorted(names)
 
 
+@pytest.mark.slow
 def test_the_files_name_lists_answer_exactly_as_is_sensitive_did() -> None:
     clause = r1_after()
     for name in candidate_names():
@@ -702,14 +704,32 @@ def test_serve_offers_the_port_and_nothing_that_moves_the_rules() -> None:
 # ---------------------------------------------------------------- found by the final audit
 
 
-@wallclock
 def test_a_command_that_repeats_the_program_thousands_of_times_is_matched_in_linear_time() -> None:
-    """The decision runs on the event loop with a 0.5 s client budget: no quadratic scan."""
+    """The decision runs on the event loop with a 0.5 s client budget: no quadratic scan.
+
+    Four times the words must cost about four times as much (a quadratic scan: sixteen), judged
+    against the shorter command timed in this test. Each round matches commands no earlier round
+    matched (one more `npm` each): the matcher keeps caches per command, and a repeat would time
+    a lookup, not the scan.
+    """
     clause = command_clause("npm publish")
-    started = time.perf_counter()
-    assert not clause.matches(shell("npm " * 30000 + "x"), {})
-    assert clause.matches(shell("npm " * 30000 + "publish"), {})
-    assert time.perf_counter() - started < 2.0, "quadratic: 30000 words took seconds"
+    fastest = {3_000: float("inf"), 12_000: float("inf")}
+    was_on = gc.isenabled()
+    gc.disable()  # CPU time and no collector pauses: a busy machine and a big heap leave it alone
+    try:
+        for extra in range(7):
+            for words in fastest:  # in turns, so that nothing favours one size
+                repeated = "npm " * (words + extra)
+                miss, hit = shell(repeated + "x"), shell(repeated + "publish")
+                started = time.process_time()
+                assert not clause.matches(miss, {})
+                assert clause.matches(hit, {})
+                fastest[words] = min(fastest[words], time.process_time() - started)
+    finally:
+        if was_on:
+            gc.enable()
+    short, long = fastest.values()
+    assert long < 8 * short, f"4 times the words took {long / short:.1f} times as long"
 
 
 def test_a_repeated_program_word_does_not_change_which_extra_words_are_needed() -> None:

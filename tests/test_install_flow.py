@@ -26,6 +26,10 @@ from tests.install_helpers import (
     write_archive,
 )
 
+# Most tests here run real processes and some take 2 s or more; the whole module is marked so
+# that `quick` stays short, although many of its tests are faster (tests/README.md).
+pytestmark = pytest.mark.slow
+
 OTHER_FILE = (
     '{\n  "version": 1,\n  "hooks": {\n    "stop": [\n      '
     + OTHER_TOOL_ENTRY

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import statistics
 import subprocess
 import sys
 import time
@@ -518,6 +517,7 @@ def test_an_unknown_agent_gets_allow_exit_0_and_a_warning(
 # ---------------------------------------------------------------- with the real recorder
 
 
+@pytest.mark.slow
 def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
     client: Path, isolated_home: Path
 ) -> None:
@@ -551,20 +551,27 @@ def test_with_the_real_recorder_up_a_secret_read_then_a_curl_is_denied(
 
 
 @wallclock
+@pytest.mark.slow
 def test_latency_with_the_recorder_up(client: Path, isolated_home: Path) -> None:
-    """Spot check only: the median of 40 hooks is under 150 ms. V2b measured p95 69 ms."""
+    """Spot check only: the real recorder costs a hook no more than 50 ms over one that answers
+    at once. Both are timed in turns, by the same client, in this test; the best of 20 each, so
+    a busy machine (which slows the client's start-up most) moves both. V2b measured p95 69 ms
+    for the whole hook."""
     port = free_port()
     process = start_recorder(isolated_home, port)
+    real: list[float] = []
+    instant: list[float] = []
     try:
         wait_for_health(port, process)
-        times: list[float] = []
-        for _ in range(40):
-            start = time.perf_counter()
-            answer_of(run_hook(client, isolated_home, shell_event(), port=port))
-            times.append((time.perf_counter() - start) * 1000)
+        with StubRecorder() as stub:
+            for _ in range(20):
+                for to_port, times in ((port, real), (stub.port, instant)):
+                    start = time.perf_counter()
+                    answer_of(run_hook(client, isolated_home, shell_event(), port=to_port))
+                    times.append(time.perf_counter() - start)
     finally:
         stop_recorder(process)
-    assert statistics.median(times) < 150, times
+    assert min(real) - min(instant) < 0.05, (min(real), min(instant))
 
 
 def test_wait_budget_is_half_a_second_and_the_hook_timeout_is_longer() -> None:

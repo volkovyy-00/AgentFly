@@ -51,3 +51,6 @@ pythonpath = ["."]
 # A mistyped marker is an error, not a warning. Parallel flags (-n, --dist) stay on the command
 # line: the live-Neo4j test starts its own `python -m pytest` and reads this file too.
 strict_markers = true
+# `scripts/check.sh quick` runs `-m "not slow"`. A test that takes 2 s or more in a parallel run
+# carries the mark (tests/README.md); CI and `check.sh full` run everything.
+markers = ["slow: takes 2 s or more in a parallel run; left out of ./scripts/check.sh quick"]
