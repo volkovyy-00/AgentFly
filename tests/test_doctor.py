@@ -1142,6 +1142,25 @@ def test_a_walk_over_many_logs_leaves_no_descriptor_open(world: World) -> None:
         assert open_descriptors() == before, count
 
 
+def test_a_folder_that_vanishes_between_the_listing_and_its_type_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Gone:
+        name = "window1"
+
+        def is_dir(self, *, follow_symlinks: bool) -> bool:
+            raise FileNotFoundError(self.name)  # looked up (no type was listed) and already gone
+
+    class Here(Gone):
+        name = "window2"
+
+        def is_dir(self, *, follow_symlinks: bool) -> bool:
+            return True
+
+    monkeypatch.setattr(hookslog, "_entries", lambda fd: iter([Gone(), Here()]))
+    assert list(hookslog._subfolders(-1, "window")) == ["window2"]
+
+
 def test_a_start_folder_that_is_a_link_or_a_pipe_is_not_the_newest(world: World) -> None:
     root = world.log.parents[3]
     elsewhere = world.home / "elsewhere"

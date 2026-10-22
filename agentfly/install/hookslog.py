@@ -153,7 +153,11 @@ def _entries(fd: int) -> Iterator[os.DirEntry[str]]:
 def _subfolders(fd: int, prefix: str = "") -> Iterator[str]:
     """The names in the open folder `fd` that start with `prefix` and are folders (not links)."""
     for entry in _entries(fd):
-        if entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False):
+        try:
+            wanted = entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False)
+        except OSError:  # gone since the listing (a type is looked up only where none was given)
+            continue
+        if wanted:
             yield entry.name
 
 
