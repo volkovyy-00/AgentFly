@@ -195,7 +195,7 @@ def test_queue_drops_when_full() -> None:
     assert store._queue.qsize() == 1
 
 
-HANG_GUARD_S = 10.0  # the fake write stops waiting after this; it is no bound on speed
+HANG_GUARD_S = 10.0  # the fake write stops waiting after this; the 20 answers must beat it
 
 
 @wallclock

@@ -728,7 +728,7 @@ def test_a_command_that_repeats_the_program_thousands_of_times_is_matched_in_lin
     finally:
         if was_on:
             gc.enable()
-    short, long = fastest[3_000], fastest[12_000]
+    short, long = fastest.values()
     assert long < 8 * short, f"4 times the words took {long / short:.1f} times as long"
 
 

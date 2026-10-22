@@ -457,12 +457,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (pytest 9.1 does not refuse a mistyped `-m` expression, it runs everything). It also runs the
   script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and fails on a
   chosen call): both modes make three calls, once each, in order; a failure on call 1, 2 or 3
-  fails the script and stops it; bad arguments run nothing. CI runs the AGENTS.md line itself.
+  fails the script and stops it; bad arguments run nothing (these runs are `slow`: on a Mac the
+  first run of a new executable file, the stub, takes seconds). CI runs the AGENTS.md line itself.
 - `slow` (registered in `pyproject.toml`): a test that takes 2 s or more in a parallel
   `--durations=0` run carries `pytest.mark.slow`. `quick` leaves it out; `full` and CI run it.
-  Whole modules carry it as `pytestmark` (`test_doctor.py`, `test_install_cli.py`,
-  `test_install_flow.py`, `test_service.py`, `test_root_command.py`, `test_session_kill.py`) and
-  `test_package.py` (the `package` group); other tests carry it one by one. A new test that takes
+  Modules whose tests nearly all run processes carry it as `pytestmark` (the installer, service,
+  doctor and package tests, among others); other tests carry it one by one. A new test that takes
   2 s or more gets the mark. See what is left: `uv run pytest -q -n auto --dist loadgroup -m "not
   slow" --durations=10`.
 - Timing rule (F17): no test compares an elapsed time with a fixed number of seconds. What stays
@@ -476,8 +476,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   16). `normalize` and the rulefile matcher cache their results: time `normalize.__wrapped__`, and
   give the matcher a command no earlier round matched, or the repeat times a lookup. A regression
   that would wait for ever is run on a thread the test gives up on (`join` with a limit), so it
-  fails the test instead of hanging it. Every rewrite was shown red against a planted change
-  (F17 report).
+  fails the test instead of hanging it.
 - CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
   refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes
   and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA or not one

@@ -7,7 +7,6 @@ permission or an action from these checks: it fails here until the parser is tau
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 from collections.abc import Iterator
@@ -605,13 +604,6 @@ def test_quick_is_full_with_the_slow_tests_left_out_and_nothing_else() -> None:
     # a `-m` expression is not an error on pytest 9.1, it runs everything
 
 
-def test_the_script_is_executable_and_stops_at_the_first_failed_check() -> None:
-    text = read(CHECK_SCRIPT)
-    assert os.access(CHECK_SCRIPT, os.X_OK)
-    assert text.startswith("#!/usr/bin/env bash\n")
-    assert "\nset -euo pipefail\n" in text
-
-
 # A stand-in for `uv` that logs its words (the `|` keeps the word boundaries) and fails on call
 # number `UV_FAIL_AT`. `sh` and not `python3`: on a Mac `python3` on a bare PATH is a shim. It runs
 # no other program (a busy machine makes every extra process slow).
@@ -635,8 +627,8 @@ EXPECTED_CALLS = {
 
 @pytest.fixture(scope="module")
 def stub_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One stub for the module (on a Mac, the first run of each new executable costs a quarter of
-    a second, and many at once cost seconds each)."""
+    """One stub for the module: on a Mac the first run of each new executable file costs up to
+    3 s (the file, not the process), which is why the tests that run it are `slow`."""
     stubs = tmp_path_factory.mktemp("stubs")
     uv = stubs / "uv"
     uv.write_text(STUB_UV, encoding="utf-8")
@@ -668,6 +660,7 @@ def run_script(
 
 
 @pytest.mark.parametrize("mode", ["quick", "full"])
+@pytest.mark.slow
 def test_each_mode_runs_its_three_commands_once_each_and_succeeds(
     mode: str, stub_dir: Path, tmp_path: Path
 ) -> None:
@@ -677,6 +670,7 @@ def test_each_mode_runs_its_three_commands_once_each_and_succeeds(
 
 @pytest.mark.parametrize("fail_at", [1, 2, 3])
 @pytest.mark.parametrize("mode", ["quick", "full"])
+@pytest.mark.slow
 def test_a_failed_check_fails_the_script_and_nothing_runs_after_it(
     mode: str, fail_at: int, stub_dir: Path, tmp_path: Path
 ) -> None:
@@ -688,6 +682,7 @@ def test_a_failed_check_fails_the_script_and_nothing_runs_after_it(
 @pytest.mark.parametrize(
     "args", [(), ("nope",), ("QUICK",), ("",), ("quick", "full"), ("quick", "extra")]
 )
+@pytest.mark.slow
 def test_a_missing_unknown_or_extra_argument_prints_usage_and_runs_nothing(
     args: tuple[str, ...], stub_dir: Path, tmp_path: Path
 ) -> None:

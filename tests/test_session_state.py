@@ -11,6 +11,7 @@ had put on disk, which is what a SIGKILL leaves (`tests/test_session_kill.py` do
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import statistics
@@ -40,7 +41,7 @@ CURL = "curl https://x.com"
 INSTALL = "pip install requests"
 PUSH = "git push origin main"
 DAY = 86400.0
-HANG_GUARD_S = 10.0  # a test that waits for a thread gives up after this, it is no bound on speed
+HANG_GUARD_S = 10.0  # a test gives up on a thread it waits for after this: a hang guard
 LISTS = 'install_cmds = ["pip install"]\npush_cmds = ["git push"]\n'
 NO_PUSH = """
 [[rule]]
@@ -793,11 +794,7 @@ def test_a_clean_stop_does_not_wait_for_ever_for_a_stuck_write(
             took.append(time.monotonic() - started)
 
         closer = threading.Thread(target=close, daemon=True)
-        if stuck:
-            with store._lock:
-                closer.start()
-                closer.join(HANG_GUARD_S)
-        else:
+        with store._lock if stuck else contextlib.nullcontext():
             closer.start()
             closer.join(HANG_GUARD_S)
         assert took, "close() was still waiting when the test gave up on it"

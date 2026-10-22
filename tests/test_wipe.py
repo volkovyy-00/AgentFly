@@ -21,7 +21,7 @@ from agentfly.recorder.paths import config_dir, data_dir
 from tests.helpers import wallclock
 
 SECRET_WORD = "WIPE_ME_MARKER"
-HANG_GUARD_S = 10.0  # a test that waits for a thread gives up after this; it is no bound on speed
+HANG_GUARD_S = 10.0  # a test gives up on a thread it waits for after this: a hang guard
 
 
 @pytest.fixture
@@ -117,16 +117,17 @@ def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
     assert ls.WIPE_BUDGET_S <= 10.0  # the promise in the card
     monkeypatch.setattr(ls, "WIPE_BUDGET_S", 1.0)  # same code path, a shorter wait for the test
 
-    def wipe_time() -> float:
+    def timed_wipe() -> tuple[int, float]:
         started = time.monotonic()
-        assert main(["wipe", "--yes"]) == 0
-        return time.monotonic() - started
+        return main(["wipe", "--yes"]), time.monotonic() - started
 
     times: list[float] = []
     for _ in range(3):  # what a wipe costs here with nothing in its way
         post(client, {"hook_event_name": "beforeShellExecution", "command": "ls"})
         assert local_store.flush()
-        times.append(wipe_time())
+        code, took = timed_wipe()
+        assert code == 0
+        times.append(took)
     baseline = min(times)
     capsys.readouterr()
 
@@ -136,14 +137,9 @@ def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
     reader.execute("BEGIN")
     reader.execute("SELECT COUNT(*) FROM steps").fetchall()  # a snapshot the log cannot pass
     outcome: list[tuple[int, float]] = []
-
-    def wipe_with_a_reader() -> None:
-        started = time.monotonic()
-        outcome.append((main(["wipe", "--yes"]), time.monotonic() - started))
-
     # On a thread the test can give up on: a wipe that ignores its budget waits for the reader,
     # who is let go only below, and would hang the test instead of failing it.
-    wiper = threading.Thread(target=wipe_with_a_reader, daemon=True)
+    wiper = threading.Thread(target=lambda: outcome.append(timed_wipe()), daemon=True)
     try:
         wiper.start()
         wiper.join(HANG_GUARD_S)

@@ -828,7 +828,7 @@ REFERENCE = ["allow", "allow", "deny", "allow"]
 
 def test_a_healthy_store_gives_the_reference_answers(client: TestClient) -> None:
     got, _ = answers(client)
-    assert got == ["allow", "allow", "deny", "allow"]
+    assert got == REFERENCE
 
 
 @pytest.mark.parametrize("breakage", ["directory", "read-only file", "locked"])

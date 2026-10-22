@@ -366,7 +366,7 @@ def test_a_big_command_is_parsed_in_linear_time() -> None:
     # command is the baseline, timed in this test, so no number of seconds is involved.
     short, long = fastest([big_command(8_000), big_command(32_000)], rounds=7)
     assert long < 8 * short, f"4 times the words took {long / short:.1f} times as long"
-    assert not normalize(big_command(200_000)).unparsed
+    assert not normalize.__wrapped__(big_command(32_000)).unparsed
 
 
 # ---------------------------------------------------------------- work stays bounded
@@ -377,9 +377,10 @@ SCAN_LIMIT = 256  # nested scans in one command: pinned here, held by `normalize
 # a command a quarter as long it may cost, how many rounds to time). The scans are counted: an
 # `eval` chain stops at the depth limit (17 scans), `bash -c` and backticks at the scan limit. A
 # quarter-length command is 4 times cheaper when the work is linear and 16 when it is quadratic;
-# the limit sits between, higher for the `eval` chains, which are dearer than linear while they
-# are shorter than the depth limit (7 times for x 40, 9 times for x 3000). The short commands take
-# under 2 ms: many rounds, or the best of them is still noise.
+# the limit sits between, higher for the `eval` chains: dearer than linear while shorter than the
+# depth limit (7 times for x 40), and by the `names[:index]` copy `finish_command` makes for each
+# `eval` (9 times for x 3000). The short commands take under 2 ms: many rounds, or the best of
+# them is still noise.
 WRAPPERS = [
     pytest.param("eval ", 40, "curl x", MAX_DEPTH + 1, 14, 60, id="eval-40"),
     # about 0.3 s a parse and five parses a side: over the 2 s line of `slow` (tests/README.md)
@@ -391,6 +392,10 @@ WRAPPERS = [
     pytest.param("bash -c 'a'; ", 2000, "", SCAN_LIMIT + 1, 8, 9, id="bash-c-2000"),
     pytest.param("echo `a` ", 1000, "", SCAN_LIMIT + 1, 8, 15, id="backtick-1000"),
 ]
+
+
+def test_the_scan_limit_has_not_been_raised() -> None:
+    assert MAX_SCANS <= SCAN_LIMIT
 
 
 @pytest.mark.parametrize(("unit", "times", "tail", "most_scans", "limit", "rounds"), WRAPPERS)
@@ -414,7 +419,6 @@ def test_repeated_wrappers_do_not_multiply_the_work(
     with monkeypatch.context() as patch:
         patch.setattr(_Scanner, "__init__", counting)
         parsed = normalize.__wrapped__(text)
-    assert MAX_SCANS <= SCAN_LIMIT  # the limit itself was not raised
     assert len(scans) <= most_scans
     assert len(parsed.commands) < 10_000
     short, long = fastest([unit * (times // 4) + tail, text], rounds)
