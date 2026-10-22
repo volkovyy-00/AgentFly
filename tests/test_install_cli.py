@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -62,6 +63,7 @@ from tests.test_install_packages import (
     assert_plain,
     fake_agentfly,
 )
+from tests.test_install_rules import EDITED, NOBODY, cannot_read, unreadable
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:
@@ -1153,30 +1155,34 @@ def test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password(
 
 # ---------------------------------------------------------------- an edited rules file (V5e)
 
-EDITED = "# edited by the owner\n" + rulefile.default_text()
-NOBODY = 2_000_000_000  # the recorder's user, who cannot read a 0600 file of the test user
+
+@pytest.fixture
+def quick(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ahead of `installed`: its smoke runs and byte-compile are other tests' business."""
+    monkeypatch.setattr(installer, "smoke", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pythons, "compile_stdlib", lambda *args, **kwargs: None)
 
 
-def cannot_read(system: Layout) -> str:
-    return (
-        f"the recorder cannot read the rules file {system.rules}, so the packaged default rules "
-        f'are in force; to use it, run `sudo chmod 644 "{system.rules}"`, then restart the '
-        "recorder (`agentfly stop`, `agentfly start`)"
-    )
-
-
-def as_root_typed_by_hand(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`sudo agentfly init -g` by the test user for `NOBODY`; the steps that need root are off."""
+def out_of_reach(
+    who: str, system: Layout, monkeypatch: pytest.MonkeyPatch
+) -> contextlib.AbstractContextManager[None]:
+    """The rules file the recorder cannot read: as the user, one it cannot open either (mode 0);
+    as root, the test user's 0600 file, with `sudo agentfly init -g` typed by hand for `NOBODY`
+    (the steps that need root are off)."""
+    if who == "the user":
+        return unreadable(system.rules)
     monkeypatch.setattr(init.os, "geteuid", lambda: 0)
     monkeypatch.setenv("SUDO_UID", str(NOBODY))
     monkeypatch.setenv("SUDO_GID", str(os.getegid()))
     monkeypatch.setattr(init, "_stdin_archive", lambda: None)
     monkeypatch.setattr(installer, "smoke", lambda *a, **k: pytest.fail("got past the stop"))
+    return unreadable(system.rules, 0o600)
 
 
 @pytest.mark.parametrize("who", ["the user", "root"])
 def test_init_over_a_rules_file_the_recorder_cannot_read_says_so_once_and_warns_once(
     who: str,
+    quick: None,
     system: Layout,
     installed: pythons.PythonBuild,
     sudo: Sudo,
@@ -1185,15 +1191,8 @@ def test_init_over_a_rules_file_the_recorder_cannot_read_says_so_once_and_warns_
 ) -> None:
     system.rules.write_text(EDITED, encoding="utf-8")
     write_version(system, NEWER)
-    if who == "root":
-        system.rules.chmod(0o600)
-        as_root_typed_by_hand(monkeypatch)
-    else:
-        system.rules.chmod(0)  # the unprivileged run cannot open it
-    try:
+    with out_of_reach(who, system, monkeypatch):
         assert main(["init", "-g"]) == 0
-    finally:
-        system.rules.chmod(0o644)
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
     assert lines[:2] == ["already installed and intact; nothing changed", cannot_read(system)]
@@ -1207,6 +1206,7 @@ def test_init_over_a_rules_file_the_recorder_cannot_read_says_so_once_and_warns_
 def test_init_with_an_upgrade_over_such_a_file_stops_in_one_line_with_no_warning(
     who: str,
     content: str,
+    quick: None,
     system: Layout,
     installed: pythons.PythonBuild,
     tool_env: packages.Environment,
@@ -1219,15 +1219,8 @@ def test_init_with_an_upgrade_over_such_a_file_stops_in_one_line_with_no_warning
     upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
     write_version(system, NEWER)
     monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
-    if who == "root":
-        system.rules.chmod(0o600)
-        as_root_typed_by_hand(monkeypatch)
-    else:
-        system.rules.chmod(0)
-    try:
+    with out_of_reach(who, system, monkeypatch):
         assert main(["init", "-g"]) == 1
-    finally:
-        system.rules.chmod(0o644)
     captured = capsys.readouterr()
     assert captured.err == f"agentfly init: {cannot_read(system)}; nothing was changed\n"
     assert warnings_in(captured.out) == [] and "password" not in captured.out
@@ -1235,6 +1228,7 @@ def test_init_with_an_upgrade_over_such_a_file_stops_in_one_line_with_no_warning
 
 
 def test_uninstall_prints_where_the_copy_went(
+    quick: None,
     system: Layout,
     installed: pythons.PythonBuild,
     monkeypatch: pytest.MonkeyPatch,
@@ -1250,6 +1244,7 @@ def test_uninstall_prints_where_the_copy_went(
 @pytest.mark.parametrize("how", ["a link", "a file"])
 def test_uninstall_whose_copy_cannot_be_written_fails_in_one_line_and_removes_nothing(
     how: str,
+    quick: None,
     system: Layout,
     installed: pythons.PythonBuild,
     tmp_path: Path,

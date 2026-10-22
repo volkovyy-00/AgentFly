@@ -15,9 +15,11 @@ do stops `init -g` before anything changes (V5e).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -676,16 +678,26 @@ def test_init_as_the_user_prints_nothing_more_without_an_edit(
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
 def test_an_unreadable_file_is_unknown_and_counts_as_work_for_root(
-    layout: Layout, archive: tuple[Path, PythonBuild]
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     do_install(layout, archive)
-    layout.rules.chmod(0)
-    try:
+    monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)  # another's
+    with unreadable(layout.rules):
         assert installer.rules_state(layout, wanted_hash()) == "unknown"
         assert "rules" in status_of(layout, archive[1])
         assert installer.rules_notice(layout, wanted_hash()) is None
-    finally:
-        layout.rules.chmod(0o644)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_one_the_recorder_cannot_read_either_is_no_work_and_has_the_cannot_read_line(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    # V5e: the system user's file that nobody else can write, decided by owner and mode
+    do_install(layout, archive)
+    with unreadable(layout.rules):
+        assert installer.rules_state(layout, wanted_hash()) == "unreadable"
+        assert status_of(layout, archive[1]) == set()
+        assert installer.rules_notice(layout, wanted_hash()) == cannot_read(layout)
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
@@ -817,6 +829,16 @@ def test_the_reader_of_a_sudo_user_is_their_group_list(monkeypatch: pytest.Monke
 SERVED = (NOBODY, os.getegid())
 
 
+@contextlib.contextmanager
+def unreadable(path: Path, mode: int = 0) -> Iterator[None]:
+    """`path` at `mode` (0: not even the test user opens it), back to 0644 afterwards."""
+    path.chmod(mode)
+    try:
+        yield
+    finally:
+        path.chmod(0o644)
+
+
 def cannot_read(layout: Layout) -> str:
     return (
         f"the recorder cannot read the rules file {layout.rules}, so the packaged default rules "
@@ -927,15 +949,12 @@ def test_init_as_the_user_over_a_file_nobody_can_read_says_so_without_a_password
     layout.rules.write_text(EDITED, encoding="utf-8")
     monkeypatch.setattr(init, "SYSTEM", layout)
     monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
-    layout.rules.chmod(0)  # the unprivileged run cannot open it: it decides by owner and mode
-    try:
+    with unreadable(layout.rules):  # the unprivileged run cannot open it: owner and mode decide
         assert init._as_user("3.24.12", archive[1]) == 0
         assert capsys.readouterr().out.splitlines() == [
             "already installed and intact; nothing changed",
             cannot_read(layout),
         ]
-    finally:
-        layout.rules.chmod(0o644)
     assert init._as_user("3.24.12", archive[1]) == 0  # readable again: "kept", as before V5e
     assert capsys.readouterr().out.splitlines() == [
         "already installed and intact; nothing changed",
@@ -959,12 +978,8 @@ def test_init_as_the_user_with_an_upgrade_stops_on_such_a_file_before_the_passwo
     monkeypatch.setattr(init, "SYSTEM", layout)
     monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
     monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
-    layout.rules.chmod(0)
-    try:
-        with pytest.raises(InstallError) as caught:
-            init._as_user("3.24.12", archive[1])
-    finally:
-        layout.rules.chmod(0o644)
+    with unreadable(layout.rules), pytest.raises(InstallError) as caught:
+        init._as_user("3.24.12", archive[1])
     assert str(caught.value) == f"{cannot_read(layout)}; nothing was changed"
 
 
@@ -978,9 +993,6 @@ def test_init_as_the_user_over_another_users_unreadable_file_still_asks_for_the_
     monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
     calls: list[list[str]] = []
     monkeypatch.setattr(elevate, "run_elevated", lambda tail, **k: calls.append(tail) or 0)
-    layout.rules.chmod(0)
-    try:
+    with unreadable(layout.rules):
         assert init._as_user("3.24.12", archive[1]) == 0
-    finally:
-        layout.rules.chmod(0o644)
     assert calls == [["init", "-g"]]  # root decides, as before V5e

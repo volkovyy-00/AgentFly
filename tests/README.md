@@ -301,7 +301,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   of exactly the limit is copied; one root cannot read stops it. `init -g`
   (`tests/test_install_rules.py`, `tests/test_install_cli.py`) over a file of the system user that
   nobody else can write and the recorder's user cannot read (`installer.unreadable_notice`, by owner
-  and mode: 0600, or 0640 in a group the user is not in) prints the pinned line and "the recorder
+  and mode: 0600, or 0640 in a group the user is not in; `rules_state` `unreadable` for the
+  unprivileged run, which `status` does not count) prints the pinned line and "the recorder
   cannot read the rules file ...; to use it, run `sudo chmod 644 ...`", never "kept", changes
   nothing, and as the user asks for no password; with a repair or an upgrade pending, over an edit,
   this version's default or an older one, both runs stop with that line before anything changes
@@ -317,7 +318,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   mode 0664, mode 0600) are rewritten, the message names the reason and asks for a recorder
   restart, and `status` counts it as work; this is stricter than the recorder, which loads a
   root:admin 0640 file, so `doctor` may call fine a file `init -g` rewrites. A file an
-  unprivileged run cannot read is `unknown`, not `edited`, and root decides after the password.
+  unprivileged run cannot read is `unknown`, not `edited`, and root decides after the password
+  (since V5e, one of the system user's that the recorder cannot read either is `unreadable`).
   An edited file is never written, chowned or chmodded: a trusted one gets the existing notice,
   an untrusted one "kept your edited rules file ..., but the recorder will not read it: <reason>;
   <what runs instead>", the reason being the recorder's own wording (`rulefile.trust_problem`).

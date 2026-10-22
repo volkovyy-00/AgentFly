@@ -159,13 +159,16 @@ def check_packaged_default(layout: Layout, current: packages.Check) -> None:
     """Raise the error root's install would raise about the rules file: a link or a folder in its
     place (CR7), or a damaged default it is about to write.
 
-    The unprivileged run calls this before the password, so either stops there. Where the file is
-    the owner's (`edited`) or cannot be opened (`unknown`; one the recorder cannot read either has
-    already stopped the run, `unreadable_notice`), nothing is written, so nothing here can fail.
+    The unprivileged run calls this before the password, so either stops there. It is called only
+    when there is work to do, so a file the recorder cannot read (`unreadable`) stops it too: root
+    would refuse it before changing anything. Where the file is the owner's (`edited`) or cannot be
+    opened (`unknown`), nothing is written, so nothing here can fail.
     """
     state = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
     if state == "blocked":
         raise _blocked(layout)
+    if state == "unreadable":
+        raise InstallError(f"{unreadable_notice(layout, current_reader())}; nothing was changed")
     if state in RULES_WRITTEN:
         _packaged_default(current)
 
@@ -211,8 +214,10 @@ def rules_state(layout: Layout, wanted: str | None) -> str:
       not mode 0644);
     - `older` (a default the package once carried, never edited);
     - `edited` (anything else, the owner's);
-    - `unknown` (an unprivileged run cannot open it, a 0600 root file for one; root decides,
-      unless `unreadable_notice` already says the recorder cannot read it either);
+    - `unknown` (an unprivileged run cannot open it, another user's 0600 file for one; root
+      decides);
+    - `unreadable` (an unprivileged run cannot open it, and by owner and mode the recorder cannot
+      either: the system user's 0600 file, `unreadable_notice`; root would only say so);
     - `blocked` (a link or a folder, which `init -g` will not write through).
 
     `wanted` is the sha256 of this version's default. A file too big to be a rules file, or one
@@ -227,7 +232,9 @@ def rules_state(layout: Layout, wanted: str | None) -> str:
         with path.open("rb") as handle:
             raw = handle.read(rulefile.MAX_FILE_BYTES + 1)
     except PermissionError:
-        return "edited" if os.geteuid() == 0 else "unknown"
+        if os.geteuid() == 0:
+            return "edited"
+        return "unreadable" if unreadable_notice(layout, current_reader()) else "unknown"
     except OSError:
         return "edited"
     if len(raw) > rulefile.MAX_FILE_BYTES:
@@ -250,6 +257,8 @@ def rules_notice(layout: Layout, wanted: str | None) -> str | None:
 
 def _kept_notice(layout: Layout, state: str) -> str | None:
     """`rules_notice` for a `rules_state` the caller has already looked up."""
+    if state == "unreadable":
+        return unreadable_notice(layout, current_reader())
     if state != "edited":
         return None
     problem = rulefile.trust_problem(layout.rules, rules_owner_uid(layout))
@@ -357,9 +366,10 @@ def status(layout: Layout, build: PythonBuild, source: Path, current: packages.C
     check of the tool environment: an upgrade is not "intact". "rules" is a missing rules file
     (an install from before V5b has none), a link or folder in its place, an unedited default
     from before this version's (D28), this version's default in a file that is not exactly the
-    one `init -g` writes, or a file an unprivileged run cannot open (root decides, after the
-    password, unless the recorder cannot read it either: `unreadable_notice`). A file the owner
-    edited is never "different": it is theirs, whatever it says, and no hash of it is kept.
+    one `init -g` writes, or a file an unprivileged run cannot open (`unknown`: root decides, after
+    the password). One the recorder cannot read either (`unreadable`) is not: root would only say
+    so. A file the owner edited is never "different": it is theirs, whatever it says, and no hash
+    of it is kept.
     """
     record = records.read(layout)
     everything = {"python", "client", "hooks", "packages", "rules"}
@@ -932,10 +942,6 @@ def describe_oserror(exc: OSError) -> str:
     return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
 
 
-def _not_copied(layout: Layout, what: str) -> list[str]:
-    return [f"{layout.rules} is {what}, which the recorder never loads; no copy was kept"]
-
-
 def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
     """The rules file's bytes and the copy's mode; why it is no rules file; None when it is missing.
 
@@ -958,25 +964,16 @@ def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
         if exc.errno == errno.ELOOP:  # it became a link after the lstat
             return "a symbolic link"
         raise
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return "not a regular file"
-        chunks: list[bytes] = []
-        total = 0
-        while total <= rulefile.MAX_FILE_BYTES:
-            chunk = os.read(fd, rulefile.MAX_FILE_BYTES + 1 - total)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
+    with open(fd, "rb") as handle:
         mode = os.fstat(fd).st_mode
-    finally:
-        os.close(fd)
-    if total > rulefile.MAX_FILE_BYTES:
+        if not stat.S_ISREG(mode):
+            return "not a regular file"
+        data = handle.read(rulefile.MAX_FILE_BYTES + 1)
+    if len(data) > rulefile.MAX_FILE_BYTES:
         return f"over {rulefile.MAX_FILE_BYTES} bytes"
     # The copy's group is the system user's, not the original's: it is readable by group and
     # others only if the original was readable by both, so nobody reads it who could not before.
-    return b"".join(chunks), 0o644 if mode & 0o044 == 0o044 else 0o600
+    return data, 0o644 if mode & 0o044 == 0o044 else 0o600
 
 
 def _keep_rules_copy(layout: Layout) -> list[str]:
@@ -999,7 +996,7 @@ def _keep_rules_copy(layout: Layout) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, str):
-        return _not_copied(layout, raw)
+        return [f"{layout.rules} is {raw}, which the recorder never loads; no copy was kept"]
     data, mode = raw
     if rulefile.sha256_of(data) in rulefile.SHIPPED_DEFAULTS:
         return []

@@ -27,6 +27,7 @@ from tests.install_helpers import (
     stop_at,
     write_archive,
 )
+from tests.test_install_rules import EDITED, SHIPPED, unreadable
 
 OTHER_FILE = (
     '{\n  "version": 1,\n  "hooks": {\n    "stop": [\n      '
@@ -721,9 +722,6 @@ def test_an_install_sweeps_what_an_interrupted_uninstall_moved_aside(
 
 # ---------------------------------------------------------------- an edited rules file (D30, V5e)
 
-EDITED = "# edited by the owner\n" + rulefile.default_text()
-SHIPPED = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))
-
 
 @pytest.fixture
 def quick(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -927,13 +925,11 @@ def test_a_rules_file_that_cannot_be_read_stops_uninstall_with_the_way_out(
     layout: Layout, archive: tuple[Path, PythonBuild], quick: None
 ) -> None:
     do_install(layout, archive)
-    edit(layout, 0)
-    try:
+    edit(layout)
+    with unreadable(layout.rules):
         with pytest.raises(InstallError, match="nothing was removed. Move it away by hand"):
             installer.uninstall(layout)
         assert layout.system_root.is_dir() and copies(layout) == []
-    finally:
-        layout.rules.chmod(0o644)
 
 
 def test_a_stale_temp_file_or_a_link_in_its_place_gets_none_of_the_bytes(
