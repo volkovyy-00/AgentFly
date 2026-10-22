@@ -15,7 +15,8 @@ from xml.parsers import expat
 
 import pytest
 
-from agentfly.install import InstallError, cursor
+from agentfly.cli import init, main
+from agentfly.install import InstallError, cursor, elevate
 from agentfly.install.layout import Layout
 from tests.install_helpers import call_unless_it_hangs, make_cursor_app, make_layout
 
@@ -320,6 +321,10 @@ FOREIGN_HEADERS = {
     "a processing instruction before <plist>": XML_DECLARATION + b"<?pi x?>",
     "another name in the DOCTYPE": XML_DECLARATION + b'<!DOCTYPE html PUBLIC "a" "b">',
     "two DOCTYPEs": XML_DECLARATION + REAL_DOCTYPE + REAL_DOCTYPE,
+    "a SYSTEM ID and no subset": XML_DECLARATION + b'<!DOCTYPE plist SYSTEM "x.dtd">',
+    "a bare DOCTYPE": XML_DECLARATION + b"<!DOCTYPE plist>",
+    "single-quoted IDs": XML_DECLARATION
+    + b"<!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'x.dtd'>",
 }
 FOREIGN_HEADER_PLISTS = {name: head + EMPTY_ELEMENTS for name, head in FOREIGN_HEADERS.items()}
 
@@ -379,6 +384,26 @@ def test_the_header_check_takes_no_longer_on_a_hostile_megabyte(data: bytes) -> 
         "except cursor._Refused: pass\n"
     )
     run_in_a_child(code, data)
+
+
+def test_init_refuses_every_foreign_header_in_one_line_before_the_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = make_layout(tmp_path)
+    make_cursor_app(layout)
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    parsed: list[object] = []
+    real = plistlib.loads
+    monkeypatch.setattr(plistlib, "loads", lambda *a, **k: parsed.append(a) or real(*a, **k))
+    for name, data in FOREIGN_HEADER_PLISTS.items():
+        write_plist(layout, data)
+        assert main(["init", "-g"]) == 1, name
+        captured = capsys.readouterr()
+        assert captured.out == "" and len(captured.err.strip().splitlines()) == 1, name
+        assert captured.err.startswith("agentfly init: cannot read the Cursor version"), name
+        assert "XML header is not Apple's" in captured.err, name
+    assert parsed == [] and not layout.system_root.exists() and not layout.hooks_file.exists()
 
 
 def declarations_expat_sees(data: bytes) -> list[str]:

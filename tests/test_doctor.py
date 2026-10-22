@@ -629,10 +629,10 @@ def test_a_named_pipe_for_the_plist_does_not_hang_doctor(world: World) -> None:
     assert results["events"].level == "warn" and failing(results) == set()
 
 
-UNREAD_PLISTS = {  # not XML, or XML whose header has more than Cursor's (two of the thirteen)
-    **NOT_XML_PLISTS,
+UNREAD_PLISTS = {  # not XML, or XML whose header has more than Cursor's: well-formed, and read
+    **NOT_XML_PLISTS,  # by plistlib but for the header check, so only that can refuse these two
     "an internal subset": FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"],
-    "two DOCTYPEs": FOREIGN_HEADER_PLISTS["two DOCTYPEs"],
+    "a comment before <plist>": FOREIGN_HEADER_PLISTS["a comment before <plist>"],
 }
 
 
@@ -979,10 +979,12 @@ class WatchedOs:
         self,
         trigger: Callable[[str], bool] = lambda name: False,
         swap: Callable[[], None] = lambda: None,
+        on_open: Callable[[str], None] = lambda name: None,
     ) -> None:
-        self.trigger, self.swap = trigger, swap
+        self.trigger, self.swap, self.on_open = trigger, swap, on_open
         self.swapped = False
         self.opened: list[tuple[int, int]] = []  # (device, inode) of each folder opened
+        self.listed: list[tuple[int, int]] = []  # (device, inode) of each open folder listed
         self.not_folders = 0  # descriptors opened for anything but a folder
         self.links_followed = 0  # folders opened by a name below another that a link could replace
         self.listed_by_name: list[str] = []  # listings that open a folder by name, behind our back
@@ -991,6 +993,7 @@ class WatchedOs:
         return getattr(os, name)
 
     def _before(self, target: str) -> None:
+        self.on_open(Path(target).name)
         if not self.swapped and self.trigger(Path(target).name):
             self.swapped = True
             self.swap()
@@ -1011,6 +1014,9 @@ class WatchedOs:
         if not isinstance(path, int):  # a name: it is opened again, and a link is followed
             self._before(os.fspath(path))
             self.listed_by_name.append(os.fspath(path))
+        else:
+            info = os.fstat(path)
+            self.listed.append((info.st_dev, info.st_ino))
         return os.scandir(path)
 
 
@@ -1102,6 +1108,7 @@ def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_throu
     assert watched.listed_by_name == [], "a folder was listed by its name, not through the open one"
     assert watched.links_followed == 0 and watched.not_folders == 0
     assert len(watched.opened) == len(set(watched.opened)), "a folder was opened twice"
+    assert len(watched.listed) == len(set(watched.listed)), "a folder was listed twice"
     assert len(watched.opened) <= existing, (len(watched.opened), existing)
     check = call_unless_it_hangs(lambda: checks.check_hooks_log(world.context()), world.log)
     if level in ("start folder", "the only window folder", "the only output folder"):
@@ -1111,6 +1118,33 @@ def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_throu
     else:
         assert logs.files == (world.log,) and logs.folder is not None
         assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+def test_one_real_folder_moved_onto_every_window_name_is_listed_once(
+    world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rename, not a link: nothing refuses it, and each open of a `window*` name finds the same
+    folder of 20 outputs there (moved just before, made to happen here). Opened under each of the
+    20 names, it is listed once: about 42 opens and 23 listings, not 20 x 20 and 20 x 21."""
+    start = world.log.parents[2]
+    shutil.rmtree(world.log.parents[1])  # the world's own window: these are all there is
+    for number in range(20):
+        (start / f"window{number}").mkdir()
+        (tmp_path / f"big/output_{number}").mkdir(parents=True)
+    where = [tmp_path / "big"]
+
+    def move_big_onto(name: str) -> None:
+        if name.startswith("window"):
+            target = start / name
+            target.rmdir()
+            where[0].rename(target)
+            where[0] = target
+
+    watched = WatchedOs(on_open=move_big_onto)
+    monkeypatch.setattr(hookslog, "os", watched)
+    hookslog.latest(world.home)
+    assert len(watched.listed) == len(set(watched.listed)), "a folder was listed twice"
+    assert len(watched.listed) <= 3 + 20 and len(watched.opened) <= 2 + 20 + 20
 
 
 def test_the_walk_stops_listing_at_the_65th_log(
@@ -1158,7 +1192,7 @@ def test_a_folder_that_vanishes_between_the_listing_and_its_type_is_skipped(
             return True
 
     monkeypatch.setattr(hookslog, "_entries", lambda fd: iter([Gone(), Here()]))
-    assert list(hookslog._subfolders(-1, "window")) == ["window2"]
+    assert list(hookslog._subfolders(-1, lambda name: name.startswith("window"))) == ["window2"]
 
 
 def test_a_start_folder_that_is_a_link_or_a_pipe_is_not_the_newest(world: World) -> None:
@@ -1247,6 +1281,18 @@ def test_a_line_of_the_log_is_shown_cut_and_with_its_escapes_written_out(
     assert check.level == "fail"
     assert check.text == (
         f"Cursor did not load AgentFly's hooks (Cursor says: {shown}); quit and reopen Cursor"
+    )
+
+
+def test_a_short_line_of_the_log_is_shown_escaped_too(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    world.write_log("[t] ERROR: Invalid config \x1b[2J: Unknown hook type")
+    check = checks.check_hooks_log(world.context())
+    assert check.text == (
+        "Cursor did not load AgentFly's hooks (Cursor says: "
+        "ERROR: Invalid config \\x1b[2J: Unknown hook type); quit and reopen Cursor"
     )
 
 

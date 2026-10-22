@@ -338,14 +338,16 @@ lines for them (R0 and normalisation: V5).
   64 MiB, as 1 MiB of empty or nested XML does), a pipe, a folder (no descriptor left open), a
   larger file and a malformed one (one row per exception plistlib can raise) are one refusal. So
   is a header with more than Cursor's (V3d-fix2): only an XML declaration and then at most
-  `<!DOCTYPE plist PUBLIC "..." "...">` may come before `<plist`. Twelve headers (an ATTLIST
-  subset whose 10,000-character default costs 0.6 s of CPU from 70 KB, the same behind a comment
-  holding `<!DOCTYPE plist>` or `<plist`, behind a SYSTEM or PUBLIC ID holding `>`, with no
-  declaration, an entity, a comment or a second DOCTYPE) are refused with the parser never called
-  (the calls are counted) and leave the version unread in `doctor`; a generated mix of header
-  pieces shows that nothing the check accepts declares anything to expat; Cursor's real header is
-  accepted with or without a BOM and with LF or CRLF; a megabyte of hostile header is checked in a
-  child process with a kill timeout.
+  `<!DOCTYPE plist PUBLIC "..." "...">` may come before `<plist>`. Headers that hold an ATTLIST
+  subset (a 10,000-character default for each of 10,000 empty elements: 70 KB, 0.6 s of CPU, the
+  input checked by what expat hands the handler), the same behind a comment holding
+  `<!DOCTYPE plist>` or `<plist`, or behind a SYSTEM or PUBLIC ID holding `>`, with no declaration,
+  an entity, a comment, a processing instruction, a second DOCTYPE, a SYSTEM ID, single quotes: each
+  is refused with the parser never called (the calls are counted), by `init -g` in one line before
+  the password, and leaves the version unread in `doctor`. A generated mix of header pieces shows
+  that nothing the check accepts declares anything to expat; Cursor's real header is accepted
+  with or without a BOM and with LF or CRLF; a megabyte of hostile header is checked in a child
+  process with a kill timeout.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
@@ -372,18 +374,20 @@ lines for them (R0 and normalisation: V5).
   within bounds: at most 64 logs and none beyond (the reads are counted), only plain files (a pipe,
   a link to a pipe, a link to `/dev/zero` and a folder are skipped; the hang tests bound only the
   call that could hang), at most the last 4 MiB of each, each reduced to a verdict before the next
-  is read (a `Loaded` line can hold a million steps), and the folders walked without following
-  links (70 links to one window are one window), each opened once through the one above it: the
-  start folder, the windows or the outputs are swapped, between listing and opening, for links to
-  one shared folder or for named pipes (made to happen in the test, for a listed and a newer
-  version), and the opens are counted: none twice, none through a link, none by name, no more than
-  folders existed, no descriptor left open. A line of the log is shown whole up to 1,000
-  characters, cut with "..." beyond and always escaped, and the Cursor version is shown cut and
-  escaped. On a Cursor version that is not on the list (newer, refused, an
-  unreadable one) a log that says nothing fails with the advice, a log that rejects the hooks
+  is read (a `Loaded` line can hold a million steps), and the folders walked through what was
+  opened, without following a link (70 links to one window are one window): the start folder, the
+  windows or the outputs (the only one of them as well) are swapped, between listing and opening,
+  for links to one shared folder or for named pipes (made to happen in the test, for a listed and
+  a newer version), and the opens are counted: none twice, none through a link, none by name, no
+  more than folders existed, none listed twice, no descriptor left open. One real folder renamed
+  onto each of 20 window names is listed once, and the walk stops at the 65th log. A line of the
+  log is shown whole up to 1,000 characters, cut with "..." beyond, and always escaped (a short
+  line with an ESC too); the Cursor version is shown cut and escaped. On a Cursor version that is
+  not on the list (newer, refused, an unreadable one) a log that says nothing fails with the advice, a log that rejects the hooks
   fails, and one that loaded them is ok; on a listed version (both of them) the texts are those of
-  e6e6894 and "nothing" is a warning, and so are the five rejecting texts and a rejection of
-  Cursor's own shape naming all 21 valid events, written out from e6e6894's own output. The `rules` line warns on a missing rules file and on an
+  e6e6894 and "nothing" is a warning. The five rejecting texts, and a rejection of Cursor's own
+  shape naming all 21 valid events, fail with e6e6894's text, written out from its own output.
+  The `rules` line warns on a missing rules file and on an
   unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
   link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
   rejected the file (the default is in force), asks for a restart after a fix, and never fails

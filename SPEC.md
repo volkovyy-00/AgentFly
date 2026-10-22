@@ -733,10 +733,12 @@ points at it, hundreds of megabytes from under 1 MiB). Each refusal is one line
 that names the cause, and a malformed XML plist is refused when it fails to
 parse. A refused plist leaves the version unread, which falls as a version off the
 list does (below). The Hooks log lives in a folder the agent's user can also
-write while `doctor` walks it, so each folder is opened once, without following a
-link, and walked through what was opened (a folder swapped for a link or a
-non-folder is skipped, as a missing log is); a rejection line is shown whole up
-to 1,000 characters (Cursor's own, naming the 21 valid events, is about 450),
+write while `doctor` walks it, so below Cursor's `logs` folder (the path to it is
+the owner's and may run through a link) each folder is opened without following a
+link, through the open descriptor of the one above it. A folder swapped for a
+link or a non-folder is skipped, as a missing log is, and one real folder moved
+onto many names is opened under each but listed once. A rejection line is shown
+whole up to 1,000 characters (Cursor's own, naming the 21 valid events, is about 450),
 cut with "…" beyond, and always with unprintable characters escaped. The
 risk is accepted: if that Cursor dropped one of the
 events, it would ignore the whole hooks file (S5), and protection would be off

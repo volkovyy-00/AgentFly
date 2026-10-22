@@ -12,9 +12,12 @@ about the system file in a file is its current state.
 The agent's user can write that folder, also while `doctor` walks it, so what is read from it is
 bounded by counts: at most MAX_LOGS logs (none when there are more), each only if it is a plain
 file once opened without blocking, at most _TAIL_BYTES from its end, and every line is matched in
-time linear in its length. Every folder is opened once, without following a link, and the ones
-below it are listed and opened through that open descriptor; a folder swapped for a link or a
-non-folder is skipped, as a missing log is, and none is opened that was not there.
+time linear in its length. Below Cursor's `logs` folder (the path to it is the owner's, and may run
+through a link) every folder is opened without following a link, through the open descriptor of
+the one above it. A folder swapped for a link or a non-folder is skipped, as a missing log is; one
+real folder moved onto many names is opened under each (that is how its identity is learnt) but
+listed once. So the work is bounded by the names listed, not by what a swap could make of them.
+The logs themselves are opened later by their path, each judged on its descriptor (`read_tail`).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import fnmatch
 import os
 import re
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,9 +124,24 @@ def read_tail(path: Path) -> str:
     return tail.decode("utf-8", errors="replace")
 
 
+def _is_new(fd: int, seen: set[tuple[int, int]]) -> bool:
+    """True the first time the folder `fd` is met: a folder moved onto many names is listed once."""
+    try:
+        info = os.fstat(fd)
+    except OSError:
+        return False
+    if (info.st_dev, info.st_ino) in seen:
+        return False
+    seen.add((info.st_dev, info.st_ino))
+    return True
+
+
 @contextlib.contextmanager
-def _folder(name: str | Path, parent: int | None = None) -> Iterator[int | None]:
-    """The descriptor of the folder `name`, opened once; None when it is not one or cannot be.
+def _folder(
+    name: str | Path, parent: int | None = None, seen: set[tuple[int, int]] | None = None
+) -> Iterator[int | None]:
+    """The descriptor of the folder `name`; None when it is not one, cannot be opened, or is one
+    of `seen` (the folders already walked).
 
     With `parent` (an open folder) `name` is looked up in it and a link is refused, not followed;
     without one a link is followed, as for any path. A pipe or a file fails `O_DIRECTORY` before
@@ -136,7 +154,7 @@ def _folder(name: str | Path, parent: int | None = None) -> Iterator[int | None]
         yield None
         return
     try:
-        yield fd
+        yield fd if seen is None or _is_new(fd, seen) else None
     finally:
         os.close(fd)
 
@@ -150,28 +168,30 @@ def _entries(fd: int) -> Iterator[os.DirEntry[str]]:
         return
 
 
-def _subfolders(fd: int, prefix: str = "") -> Iterator[str]:
-    """The names in the open folder `fd` that start with `prefix` and are folders (not links)."""
+def _subfolders(fd: int, wanted: Callable[[str], object]) -> Iterator[str]:
+    """The names in the open folder `fd` that `wanted` takes and that are folders (not links).
+    The name is judged first: a type is looked up (where the listing gives none) only for those."""
     for entry in _entries(fd):
         try:
-            wanted = entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False)
+            take = wanted(entry.name) and entry.is_dir(follow_symlinks=False)
         except OSError:  # gone since the listing (a type is looked up only where none was given)
             continue
-        if wanted:
+        if take:
             yield entry.name
 
 
 def _hooks_logs(start_fd: int, start: Path) -> list[Path]:
     """`<start>/window*/output_*/cursor.hooks.*.log`, up to one more than MAX_LOGS: names only, no
-    log is opened. Each folder is opened once, through the one above it, so the folders opened
-    are among those that were listed."""
+    log is opened. Each folder is opened through the one above it and, if it is one already met
+    (the same folder moved onto another name), not listed again."""
     found: list[Path] = []
-    for window in _subfolders(start_fd, "window"):
-        with _folder(window, start_fd) as window_fd:
+    seen: set[tuple[int, int]] = set()
+    for window in _subfolders(start_fd, lambda name: name.startswith("window")):
+        with _folder(window, start_fd, seen) as window_fd:
             if window_fd is None:
                 continue
-            for output in _subfolders(window_fd, "output_"):
-                with _folder(output, window_fd) as output_fd:
+            for output in _subfolders(window_fd, lambda name: name.startswith("output_")):
+                with _folder(output, window_fd, seen) as output_fd:
                     if output_fd is None:
                         continue
                     for entry in _entries(output_fd):
@@ -191,9 +211,7 @@ def latest(home: Path) -> Logs:
         if root_fd is None:
             return Logs(None)
         # One pass, no list of the folders: the names are start times, so the largest is the newest.
-        newest = max(
-            (name for name in _subfolders(root_fd) if _START_FOLDER.fullmatch(name)), default=None
-        )
+        newest = max(_subfolders(root_fd, _START_FOLDER.fullmatch), default=None)
         if newest is None:
             return Logs(None)
         folder = root / newest
