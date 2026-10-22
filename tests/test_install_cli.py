@@ -1149,3 +1149,125 @@ def test_a_link_or_folder_at_the_rules_path_stops_init_before_the_password(
         installer.install(
             system, installed, cursor_version="3.24.12", source=installer.client_source()
         )
+
+
+# ---------------------------------------------------------------- an edited rules file (V5e)
+
+EDITED = "# edited by the owner\n" + rulefile.default_text()
+NOBODY = 2_000_000_000  # the recorder's user, who cannot read a 0600 file of the test user
+
+
+def cannot_read(system: Layout) -> str:
+    return (
+        f"the recorder cannot read the rules file {system.rules}, so the packaged default rules "
+        f'are in force; to use it, run `sudo chmod 644 "{system.rules}"`, then restart the '
+        "recorder (`agentfly stop`, `agentfly start`)"
+    )
+
+
+def as_root_typed_by_hand(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`sudo agentfly init -g` by the test user for `NOBODY`; the steps that need root are off."""
+    monkeypatch.setattr(init.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", str(NOBODY))
+    monkeypatch.setenv("SUDO_GID", str(os.getegid()))
+    monkeypatch.setattr(init, "_stdin_archive", lambda: None)
+    monkeypatch.setattr(installer, "smoke", lambda *a, **k: pytest.fail("got past the stop"))
+
+
+@pytest.mark.parametrize("who", ["the user", "root"])
+def test_init_over_a_rules_file_the_recorder_cannot_read_says_so_once_and_warns_once(
+    who: str,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    system.rules.write_text(EDITED, encoding="utf-8")
+    write_version(system, NEWER)
+    if who == "root":
+        system.rules.chmod(0o600)
+        as_root_typed_by_hand(monkeypatch)
+    else:
+        system.rules.chmod(0)  # the unprivileged run cannot open it
+    try:
+        assert main(["init", "-g"]) == 0
+    finally:
+        system.rules.chmod(0o644)
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[:2] == ["already installed and intact; nothing changed", cannot_read(system)]
+    assert len(warnings_in(captured.out)) == 1 and len(lines) == 3
+    assert "kept" not in captured.out and captured.err == "" and sudo.calls == []
+    assert system.rules.read_text(encoding="utf-8") == EDITED
+
+
+@pytest.mark.parametrize("who", ["the user", "root"])
+@pytest.mark.parametrize("content", ["an edit", "this version's default"])
+def test_init_with_an_upgrade_over_such_a_file_stops_in_one_line_with_no_warning(
+    who: str,
+    content: str,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tool_env: packages.Environment,
+    sudo: Sudo,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    if content == "an edit":
+        system.rules.write_text(EDITED, encoding="utf-8")
+    upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
+    write_version(system, NEWER)
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    if who == "root":
+        system.rules.chmod(0o600)
+        as_root_typed_by_hand(monkeypatch)
+    else:
+        system.rules.chmod(0)
+    try:
+        assert main(["init", "-g"]) == 1
+    finally:
+        system.rules.chmod(0o644)
+    captured = capsys.readouterr()
+    assert captured.err == f"agentfly init: {cannot_read(system)}; nothing was changed\n"
+    assert warnings_in(captured.out) == [] and "password" not in captured.out
+    assert sudo.calls == []
+
+
+def test_uninstall_prints_where_the_copy_went(
+    system: Layout,
+    installed: pythons.PythonBuild,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    system.rules.write_text(EDITED, encoding="utf-8")
+    monkeypatch.setattr(uninstall.os, "geteuid", lambda: 0)  # take the root branch, no sudo
+    assert main(["uninstall"]) == 0
+    (copy,) = system.backups.glob("rules.toml.*")
+    assert f"kept a copy of your edited rules file in {copy}\n" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("how", ["a link", "a file"])
+def test_uninstall_whose_copy_cannot_be_written_fails_in_one_line_and_removes_nothing(
+    how: str,
+    system: Layout,
+    installed: pythons.PythonBuild,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    system.rules.write_text(EDITED, encoding="utf-8")
+    if how == "a link":
+        (tmp_path / "elsewhere").mkdir()
+        system.backups.symlink_to(tmp_path / "elsewhere")
+    else:
+        system.backups.write_text("not a folder\n")
+    hooks = system.hooks_file.read_bytes()
+    monkeypatch.setattr(uninstall.os, "geteuid", lambda: 0)  # take the root branch, no sudo
+    assert main(["uninstall"]) == 1
+    captured = capsys.readouterr()
+    err = captured.err.strip()
+    assert len(err.splitlines()) == 1 and err.startswith("agentfly uninstall: cannot keep a copy")
+    assert err.endswith("nothing was removed") and "Traceback" not in err
+    assert system.hooks_file.read_bytes() == hooks and system.client.is_file()
+    assert system.rules.read_text(encoding="utf-8") == EDITED

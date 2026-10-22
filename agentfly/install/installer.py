@@ -6,11 +6,13 @@ hook entries. Uninstall: take the hook entries out first, then move the folder o
 (one rename, so the registered interpreter path is gone at once) and delete it. A hooks entry
 that points at a missing client makes Python exit 2, and Cursor then denies every action
 (S2 F1); a missing interpreter exits 127 and Cursor lets the action through. So no step may
-leave the interpreter in place while the client is gone.
+leave the interpreter in place while the client is gone. Before any of that, uninstall copies an
+edited rules file next to the `hooks.json` backups (D30); a copy it cannot write stops it there.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import pwd
@@ -99,7 +101,10 @@ def _write_atomic(path: Path, data: bytes, layout: Layout, mode: int = 0o644) ->
     """Write beside the target, flush to disk, then rename over it."""
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        with temp.open("wb") as handle:
+        # A fresh 0600 file: a stale temp (its mode kept) or a link at this name gets no bytes.
+        temp.unlink(missing_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        with open(os.open(temp, flags, 0o600), "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
@@ -155,8 +160,8 @@ def check_packaged_default(layout: Layout, current: packages.Check) -> None:
     place (CR7), or a damaged default it is about to write.
 
     The unprivileged run calls this before the password, so either stops there. Where the file is
-    the owner's (`edited`) or cannot be opened (`unknown`), nothing is written, so nothing here
-    can fail.
+    the owner's (`edited`) or cannot be opened (`unknown`; one the recorder cannot read either has
+    already stopped the run, `unreadable_notice`), nothing is written, so nothing here can fail.
     """
     state = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
     if state == "blocked":
@@ -206,7 +211,8 @@ def rules_state(layout: Layout, wanted: str | None) -> str:
       not mode 0644);
     - `older` (a default the package once carried, never edited);
     - `edited` (anything else, the owner's);
-    - `unknown` (an unprivileged run cannot open it, a 0600 root file for one; root decides);
+    - `unknown` (an unprivileged run cannot open it, a 0600 root file for one; root decides,
+      unless `unreadable_notice` already says the recorder cannot read it either);
     - `blocked` (a link or a folder, which `init -g` will not write through).
 
     `wanted` is the sha256 of this version's default. A file too big to be a rules file, or one
@@ -258,6 +264,35 @@ def _kept_notice(layout: Layout, state: str) -> str | None:
     )
 
 
+RESTART_RECORDER = "restart the recorder (`agentfly stop`, `agentfly start`)"
+
+
+def unreadable_notice(layout: Layout, reader: Reader) -> str | None:
+    """The line for a rules file the recorder would believe but its user cannot read, or None.
+
+    Decided by owner and mode alone (`lstat`, no open), so the unprivileged run, which cannot read
+    the bytes, decides as root does: a regular file of the system user that no one else can write
+    and that `reader` cannot read (a 0600 root file). The recorder then runs the packaged default.
+    `init -g` never chmods it (D3: that puts unreviewed rules in force), so the line gives the fix.
+    Another owner's file or a group-writable one is not this case: its notice says why.
+    """
+    try:
+        info = layout.rules.lstat()
+    except OSError:
+        return None
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != rules_owner_uid(layout)
+        or info.st_mode & 0o022
+        or _readable_by(info, reader)
+    ):
+        return None
+    return (
+        f"the recorder cannot read the rules file {layout.rules}, so {rulefile.DEFAULT_IN_FORCE}; "
+        f'to use it, run `sudo chmod 644 "{layout.rules}"`, then {RESTART_RECORDER}'
+    )
+
+
 def _blocked(layout: Layout) -> InstallError:
     if layout.rules.is_symlink():
         return InstallError(f"{layout.rules} is a symbolic link; remove it first")
@@ -268,7 +303,7 @@ def _write_rules(layout: Layout, data: bytes, state: str) -> str:
     """Put the checked default in place (atomic, 0644, the system user's); say what was done."""
     reason = _not_exactly_ours(layout) if state == "untrusted" else None  # before it is replaced
     _write_atomic(layout.rules, data, layout)
-    restart = "restart the recorder (`agentfly stop`, `agentfly start`) to apply them"
+    restart = f"{RESTART_RECORDER} to apply them"
     if state == "older":
         return (
             f"replaced the unedited default rules in {layout.rules} with this version's; {restart}"
@@ -323,8 +358,8 @@ def status(layout: Layout, build: PythonBuild, source: Path, current: packages.C
     (an install from before V5b has none), a link or folder in its place, an unedited default
     from before this version's (D28), this version's default in a file that is not exactly the
     one `init -g` writes, or a file an unprivileged run cannot open (root decides, after the
-    password). A file the owner edited is never "different": it is theirs, whatever it says, and
-    no hash of it is kept.
+    password, unless the recorder cannot read it either: `unreadable_notice`). A file the owner
+    edited is never "different": it is theirs, whatever it says, and no hash of it is kept.
     """
     record = records.read(layout)
     everything = {"python", "client", "hooks", "packages", "rules"}
@@ -703,7 +738,9 @@ def install(
     bad = status(layout, build, source, current)
     # One look at the rules file: the notice and what is written below come from the same state.
     rules = rules_state(layout, packages.recorded_hash(current, DEFAULT_RECORD_PATH))
-    notice = _kept_notice(layout, rules)  # about an edited file only; it is never written below
+    unread = unreadable_notice(layout, reader_for(run_as))
+    # About an edited file only; it is never written below. One the user cannot read is not "kept".
+    notice = unread if rules == "edited" and unread else _kept_notice(layout, rules)
     if not bad:
         return Outcome(
             False, ["already installed and intact; nothing changed", *([notice] if notice else [])]
@@ -712,6 +749,9 @@ def install(
         raise InstallError(f"{layout.system_root} is a symbolic link; remove it first")
     if rules == "blocked":
         raise _blocked(layout)  # before anything is changed, not halfway through
+    if unread and bad - {"rules"}:
+        # `assert_locked` would refuse it at the end; the unprivileged run stopped on it too.
+        raise InstallError(f"{unread}; nothing was changed")
     rules_data = _packaged_default(current) if rules in RULES_WRITTEN else None
     created_hooks = _read_hooks(layout) is None or bool(
         previous and previous.get("hooks_file", {}).get("created")
@@ -892,13 +932,113 @@ def describe_oserror(exc: OSError) -> str:
     return (exc.strerror or str(exc)) + (f": {exc.filename}" if exc.filename else "")
 
 
+def _not_copied(layout: Layout, what: str) -> list[str]:
+    return [f"{layout.rules} is {what}, which the recorder never loads; no copy was kept"]
+
+
+def _rules_bytes(layout: Layout) -> tuple[bytes, int] | str | None:
+    """The rules file's bytes and the copy's mode; why it is no rules file; None when it is missing.
+
+    One descriptor that follows no link and does not block, after an `lstat` that already turns
+    away a link, a folder and a pipe; at most `MAX_FILE_BYTES` + 1 bytes are read. Raises OSError
+    when a plain file cannot be read.
+    """
+    try:
+        info = layout.rules.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        return "a symbolic link"
+    if not stat.S_ISREG(info.st_mode):
+        return "not a regular file"
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+    try:
+        fd = os.open(layout.rules, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:  # it became a link after the lstat
+            return "a symbolic link"
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return "not a regular file"
+        chunks: list[bytes] = []
+        total = 0
+        while total <= rulefile.MAX_FILE_BYTES:
+            chunk = os.read(fd, rulefile.MAX_FILE_BYTES + 1 - total)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        mode = os.fstat(fd).st_mode
+    finally:
+        os.close(fd)
+    if total > rulefile.MAX_FILE_BYTES:
+        return f"over {rulefile.MAX_FILE_BYTES} bytes"
+    # The copy's group is the system user's, not the original's: it is readable by group and
+    # others only if the original was readable by both, so nobody reads it who could not before.
+    return b"".join(chunks), 0o644 if mode & 0o044 == 0o044 else 0o600
+
+
+def _keep_rules_copy(layout: Layout) -> list[str]:
+    """D30: copy a rules file that is not an unedited shipped default next to the hooks.json
+    backups, under a time-stamped name that never replaces an earlier copy, and say where.
+
+    Runs before anything is removed, so a copy that cannot be written stops the uninstall with the
+    hook entries, the folder and the file as they were. A link, a folder, a pipe or a file too big
+    to load is named and skipped: the recorder could never have read it.
+    """
+    if layout.system_root.is_symlink():
+        return []  # nothing is read through it; uninstall refuses it below
+    try:
+        raw = _rules_bytes(layout)
+    except OSError as exc:
+        raise InstallError(
+            f"cannot read the rules file {layout.rules} to keep a copy ({describe_oserror(exc)}); "
+            "nothing was removed. Move it away by hand, then run `agentfly uninstall` again"
+        ) from exc
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return _not_copied(layout, raw)
+    data, mode = raw
+    if rulefile.sha256_of(data) in rulefile.SHIPPED_DEFAULTS:
+        return []
+    try:
+        target = _write_rules_copy(layout, data, mode)
+    except OSError as exc:
+        raise InstallError(
+            f"cannot keep a copy of the edited rules file {layout.rules} in {layout.backups} "
+            f"({describe_oserror(exc)}); nothing was removed"
+        ) from exc
+    return [f"kept a copy of your edited rules file in {target}"]
+
+
+def _write_rules_copy(layout: Layout, data: bytes, mode: int) -> Path:
+    """`rules.toml.<stamp>` in the backups folder, which must be a folder: no link is followed."""
+    backups = layout.backups
+    if backups.is_symlink() or (backups.exists() and not backups.is_dir()):
+        what = "a symbolic link" if backups.is_symlink() else "not a folder"
+        raise NotADirectoryError(errno.ENOTDIR, f"it is {what}")
+    _make_dir(backups, layout)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target, counter = backups / f"rules.toml.{stamp}", 0
+    while target.exists() or target.is_symlink():
+        counter += 1
+        target = backups / f"rules.toml.{stamp}-{counter}"
+    _write_atomic(target, data, layout, mode)
+    return target
+
+
 def uninstall(layout: Layout) -> Outcome:
-    """Our hook entries first, then the system folder. Needs neither Cursor nor a version."""
+    """A copy of an edited rules file, then our hook entries, then the system folder. Needs
+    neither Cursor nor a version."""
     _check_paths(layout)
     record = records.read(layout)
     info = record.get("hooks_file") if record else None
+    messages = _keep_rules_copy(layout)
     try:
-        messages = _strip_hooks(layout, created=bool(info and info.get("created")), hooks_info=info)
+        created = bool(info and info.get("created"))
+        messages += _strip_hooks(layout, created=created, hooks_info=info)
         if layout.system_root.is_symlink():
             raise InstallError(f"{layout.system_root} is a symbolic link; remove it by hand")
         messages += _keep_old_backups(layout)

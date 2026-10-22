@@ -16,8 +16,9 @@ def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "uninstall",
         help="remove AgentFly's system hooks and files (needs sudo once)",
         description=(
-            "Removes AgentFly's entries from Cursor's system hooks file, then its folder, and "
-            "stops and removes the recorder service. Run it without sudo: it asks for the password."
+            "Keeps a copy of an edited rules file next to the hooks.json backups, removes "
+            "AgentFly's entries from Cursor's system hooks file, then its folder, and stops and "
+            "removes the recorder service. Run it without sudo: it asks for the password."
         ),
     )
     parser.set_defaults(run=run)

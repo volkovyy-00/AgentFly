@@ -15,9 +15,11 @@ import pytest
 from agentfly.install import InstallError, cursor, hooks_file, installer, pythons, records
 from agentfly.install.layout import Layout
 from agentfly.install.pythons import PythonBuild
+from agentfly.recorder import rulefile
 from tests.install_helpers import (
     OTHER_TOOL_ENTRY,
     FsOps,
+    call_unless_it_hangs,
     fake_python_tar,
     make_layout,
     run_hook_command,
@@ -715,3 +717,220 @@ def test_an_install_sweeps_what_an_interrupted_uninstall_moved_aside(
     (stray / "python").mkdir(parents=True)
     do_install(layout, archive)
     assert not stray.exists()
+
+
+# ---------------------------------------------------------------- an edited rules file (D30, V5e)
+
+EDITED = "# edited by the owner\n" + rulefile.default_text()
+SHIPPED = sorted((Path(__file__).parent / "fixtures" / "shipped_defaults").glob("*.toml"))
+
+
+@pytest.fixture
+def quick(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The smoke runs and the byte-compile are the tests above; these look only at the rules file.
+    monkeypatch.setattr(installer, "smoke", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pythons, "compile_stdlib", lambda *args, **kwargs: None)
+
+
+def copies(layout: Layout) -> list[Path]:
+    return sorted(layout.backups.glob("rules.toml.*"))
+
+
+def edit(layout: Layout, mode: int = 0o644, data: bytes = EDITED.encode()) -> None:
+    layout.rules.write_bytes(data)
+    layout.rules.chmod(mode)
+
+
+@pytest.mark.parametrize("who", ["root's 0644", "root's 0600", "another user's"])
+def test_uninstall_keeps_a_copy_of_an_edited_rules_file_and_says_where(
+    who: str,
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    quick: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    do_install(layout, archive)
+    edit(layout, 0o600 if who == "root's 0600" else 0o644)
+    if who == "another user's":  # uninstall never asks who owns it; this only shows that
+        monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+    written: list[tuple[Path, Layout, int]] = []
+    real = installer._write_atomic
+
+    def spy(path: Path, data: bytes, lay: Layout, mode: int = 0o644) -> None:
+        written.append((path, lay, mode))
+        real(path, data, lay, mode)
+
+    monkeypatch.setattr(installer, "_write_atomic", spy)
+    outcome = installer.uninstall(layout)
+    (copy,) = copies(layout)
+    assert copy.read_bytes() == EDITED.encode()
+    assert copy.parent == layout.backups and copy.name.startswith("rules.toml.")
+    assert outcome.messages[0] == f"kept a copy of your edited rules file in {copy}"
+    assert not layout.system_root.exists()
+    assert (copy, layout, stat.S_IMODE(copy.stat().st_mode)) in written  # the system user's
+    if who == "root's 0600":
+        assert stat.S_IMODE(copy.stat().st_mode) & 0o077 == 0
+    else:
+        assert stat.S_IMODE(copy.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604])
+def test_a_copy_is_readable_by_others_only_if_the_original_was_by_group_and_others(
+    mode: int, layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    edit(layout, mode)
+    installer.uninstall(layout)
+    (copy,) = copies(layout)
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600
+
+
+def test_two_rounds_leave_two_copies(
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    for round_ in ("first", "second"):
+        do_install(layout, archive)
+        edit(layout, data=f"# {round_}\n{rulefile.default_text()}".encode())
+        installer.uninstall(layout)
+    first, second = copies(layout)
+    assert {first.read_text()[:8], second.read_text()[:8]} == {"# first\n", "# second"}
+
+
+NOT_EDITED = ["this version's default", "this version's default at 0600", "no file"] + [
+    f"older default {f.stem}" for f in SHIPPED
+]
+
+
+@pytest.mark.parametrize("what", NOT_EDITED)
+def test_an_unedited_default_or_no_file_is_not_copied(
+    what: str, layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    if what == "this version's default at 0600":
+        layout.rules.chmod(0o600)
+    elif what == "no file":
+        layout.rules.unlink()
+    elif what.startswith("older default"):
+        (fixture,) = [f for f in SHIPPED if what.endswith(f.stem)]
+        layout.rules.write_bytes(fixture.read_bytes())
+    outcome = installer.uninstall(layout)
+    assert copies(layout) == [] and not any("rules" in line for line in outcome.messages)
+    assert not layout.system_root.exists()
+
+
+def spoil_backups(
+    how: str, layout: Layout, elsewhere: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if how == "a link":
+        elsewhere.mkdir()
+        layout.backups.symlink_to(elsewhere)
+    elif how == "a file":
+        layout.backups.write_text("not a folder\n")
+    else:
+        real = installer._write_atomic
+
+        def failing(path: Path, data: bytes, lay: Layout, mode: int = 0o644) -> None:
+            if path.name.startswith("rules.toml."):
+                raise OSError(28, "No space left on device", str(path))
+            real(path, data, lay, mode)
+
+        monkeypatch.setattr(installer, "_write_atomic", failing)
+
+
+def outside_backups(layout: Layout) -> dict[str, tuple[int, int, int]]:
+    """`snapshot` without the backups folder (a failed write may leave it, empty, behind)."""
+    return {k: v for k, v in snapshot(layout).items() if not k.startswith(str(layout.backups))}
+
+
+@pytest.mark.parametrize("how", ["a link", "a file", "a failed write"])
+def test_a_copy_that_cannot_be_written_stops_uninstall_before_anything_is_removed(
+    how: str,
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    quick: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    do_install(layout, archive)
+    edit(layout)
+    elsewhere = tmp_path / "elsewhere"
+    with monkeypatch.context() as patch:
+        spoil_backups(how, layout, elsewhere, patch)
+        hooks, rules = layout.hooks_file.read_bytes(), layout.rules.read_bytes()
+        before = outside_backups(layout)
+        with pytest.raises(InstallError) as caught:
+            installer.uninstall(layout)
+    message = str(caught.value)
+    assert message.startswith(f"cannot keep a copy of the edited rules file {layout.rules} in ")
+    assert message.endswith("; nothing was removed") and "\n" not in message
+    assert layout.hooks_file.read_bytes() == hooks and layout.rules.read_bytes() == rules
+    assert layout.system_root.is_dir() and outside_backups(layout) == before
+    if how == "a link":
+        assert list(elsewhere.iterdir()) == []  # nothing followed the link
+    # the cause fixed, the next run finishes and leaves one copy
+    if layout.backups.is_symlink() or layout.backups.is_file():
+        layout.backups.unlink()
+    installer.uninstall(layout)
+    assert not layout.system_root.exists() and len(copies(layout)) == 1
+
+
+SKIPPED = {
+    "a link": "a symbolic link",
+    "a link to a 0600 file": "a symbolic link",
+    "a folder": "not a regular file",
+    "a named pipe": "not a regular file",
+    "a file over the limit": f"over {rulefile.MAX_FILE_BYTES} bytes",
+}
+
+
+@pytest.mark.parametrize("kind", SKIPPED)
+def test_what_the_recorder_could_never_load_is_named_and_not_copied(
+    kind: str, layout: Layout, archive: tuple[Path, PythonBuild], quick: None, tmp_path: Path
+) -> None:
+    do_install(layout, archive)
+    layout.rules.unlink()
+    target, fifo = tmp_path / "target.toml", None
+    if kind.startswith("a link"):
+        target.write_text(EDITED, encoding="utf-8")
+        target.chmod(0o600 if kind.endswith("0600 file") else 0o644)
+        layout.rules.symlink_to(target)
+    elif kind == "a folder":
+        layout.rules.mkdir()
+        (layout.rules / "inside.toml").write_text(EDITED, encoding="utf-8")
+    elif kind == "a named pipe":
+        os.mkfifo(layout.rules)
+        fifo = layout.rules
+    else:
+        layout.rules.write_bytes(b"#" * (rulefile.MAX_FILE_BYTES + 1))
+    outcome = call_unless_it_hangs(lambda: installer.uninstall(layout), fifo)
+    said = [line for line in outcome.messages if str(layout.rules) in line]
+    assert said == [
+        f"{layout.rules} is {SKIPPED[kind]}, which the recorder never loads; no copy was kept"
+    ]
+    assert copies(layout) == [] and not layout.system_root.exists()
+    if kind.startswith("a link"):
+        assert target.read_text(encoding="utf-8") == EDITED
+
+
+def test_a_file_of_exactly_the_limit_is_copied(
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    edit(layout, data=b"#" * rulefile.MAX_FILE_BYTES)
+    installer.uninstall(layout)
+    (copy,) = copies(layout)
+    assert copy.stat().st_size == rulefile.MAX_FILE_BYTES
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_a_rules_file_that_cannot_be_read_stops_uninstall_with_the_way_out(
+    layout: Layout, archive: tuple[Path, PythonBuild], quick: None
+) -> None:
+    do_install(layout, archive)
+    edit(layout, 0)
+    try:
+        with pytest.raises(InstallError, match="nothing was removed. Move it away by hand"):
+            installer.uninstall(layout)
+        assert layout.system_root.is_dir() and copies(layout) == []
+    finally:
+        layout.rules.chmod(0o644)

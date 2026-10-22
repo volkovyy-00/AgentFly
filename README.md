@@ -154,7 +154,10 @@ To remove everything, run this **before** `uv tool uninstall`:
 agentfly uninstall                  # asks for your password once; do not run it with sudo
 ```
 
-It removes AgentFly's hook entries first, then moves its system folder out of the way and
+It first keeps a copy of an edited rules file (one that is not an unedited default) in
+`/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>` and prints where;
+put it back by hand after a reinstall. If that copy cannot be written, it stops and removes
+nothing. Then it removes AgentFly's hook entries, moves its system folder out of the way and
 deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
 user, it stops the recorder service and deletes its file (`launchctl list | grep agentfly` prints
 nothing afterwards). If the system part fails, the service is not touched; run `agentfly uninstall`

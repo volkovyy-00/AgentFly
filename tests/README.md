@@ -290,6 +290,26 @@ the maintainers' work items and decisions, which are kept outside this repo.
   list stops the install before anything is written; a link or folder in its place is refused
   before any repair, and in the unprivileged run before the password (`tests/test_install_cli.py`);
   `uninstall` removes the file with the folder.
+  V5e (D30, `tests/test_install_flow.py`): `uninstall` first copies an edited file (0644, 0600, any
+  owner) to `rules.toml.<stamp>` in the backups folder with the same bytes, says where, and two
+  rounds leave two copies; a copy of a file not readable by both group and others is 0600 and is
+  written as the system user's. This version's default (any mode), each older shipped default and
+  no file are not copied and say nothing. A backups path that is a link or a file, or a failed
+  write, stops it with the hook entries, the folder and the file unchanged (nothing written through
+  the link), and the run after the fix leaves one copy. A link (also to a 0600 file), a folder, a
+  named pipe (no hang) and a file over `MAX_FILE_BYTES` are named in one line and not copied; a file
+  of exactly the limit is copied; one root cannot read stops it. `init -g`
+  (`tests/test_install_rules.py`, `tests/test_install_cli.py`) over a file of the system user that
+  nobody else can write and the recorder's user cannot read (`installer.unreadable_notice`, by owner
+  and mode: 0600, or 0640 in a group the user is not in) prints the pinned line and "the recorder
+  cannot read the rules file ...; to use it, run `sudo chmod 644 ...`", never "kept", changes
+  nothing, and as the user asks for no password; with a repair or an upgrade pending, over an edit,
+  this version's default or an older one, both runs stop with that line before anything changes
+  (no file-system call) and before the password or the confirm question, while the default at 0600
+  with nothing else to do is still rewritten. Another user's or a group-writable file is not this
+  case (its notice stays; another user's unreadable file still asks for the password), and at 0644
+  the edit is "kept" with no password. Each such run that exits 0 prints the newer-Cursor warning
+  once, one that exits 1 prints none. `uninstall` that cannot write the copy exits 1 in one line.
   V5b-fix2 (`tests/test_install_rules.py`, `tests/test_install_cli.py`,
   `tests/test_rules_trust.py`): the principle is that `init -g` writes only bytes it has checked
   and never changes the trust of bytes it has not. Current bytes in a file that is not exactly

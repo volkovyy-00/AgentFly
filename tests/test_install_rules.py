@@ -3,11 +3,14 @@
 Against a temporary root, like test_install_flow.py: the file is written when missing, as the
 system user's, readable by everybody and writable by nobody else; a file that is byte for byte a
 default the package once carried (the owner never edited it) is replaced by this version's; a
-repair, a second `init -g` and an upgrade leave an edited copy alone; `uninstall` takes it away with
-the folder. What is written is the packaged default as read once, checked against the wheel's
+repair, a second `init -g` and an upgrade leave an edited copy alone; `uninstall` keeps a copy of
+an edit next to the hooks.json backups (D30, tests/test_install_flow.py) and takes the file away
+with the folder. What is written is the packaged default as read once, checked against the wheel's
 RECORD hash and parsed cleanly. Known bytes in a file that is not exactly what `init -g` writes
 (the owner's, mode 0644) are rewritten; an edited file is never written, chowned or chmodded, and
-an edited one the recorder would not read gets a notice that says so (V5b-fix2).
+an edited one the recorder would not read gets a notice that says so (V5b-fix2). A file of the
+system user that its user cannot read gets one line with the fix instead, and with other work to
+do stops `init -g` before anything changes (V5e).
 """
 
 from __future__ import annotations
@@ -27,11 +30,14 @@ from agentfly.install.layout import SYSTEM, Layout
 from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
 from tests.install_helpers import (
+    NEW_AGENTFLY,
     TOOL_DISTS,
+    FsOps,
     fake_python_tar,
     make_layout,
     make_tool_env,
     status_of,
+    upgrade,
     write_archive,
 )
 from tests.rules_helpers import BROKEN_TOML, default_as
@@ -241,7 +247,7 @@ def test_a_packaged_default_that_cannot_be_read_stops_the_install_with_a_message
 # ---------------------------------------------------------------- uninstall
 
 
-def test_uninstall_takes_the_rules_file_away_with_the_folder(
+def test_uninstall_keeps_a_copy_and_takes_the_rules_file_away_with_the_folder(
     layout: Layout, archive: tuple[Path, PythonBuild]
 ) -> None:
     do_install(layout, archive)
@@ -249,6 +255,8 @@ def test_uninstall_takes_the_rules_file_away_with_the_folder(
     installer.uninstall(layout)
     assert not layout.system_root.exists()
     assert not layout.rules.exists()
+    (copy,) = layout.backups.glob("rules.toml.*")  # D30; the cases are in test_install_flow.py
+    assert copy.read_text(encoding="utf-8") == EDITED
 
 
 def test_the_status_lists_only_the_known_parts(
@@ -778,9 +786,11 @@ def test_a_repair_stops_when_the_user_the_installer_serves_is_not_in_the_group(
     edited_rules(layout, archive, 0o640)
     before = fingerprint(layout.rules)
     tamper_with_the_client(layout)
-    with pytest.raises(InstallError, match="could not load it"):
+    # V5e: it stops before the repair, not at its end in `assert_locked`
+    with pytest.raises(InstallError, match="the recorder cannot read the rules file"):
         do_install(layout, archive, (NOBODY, os.getegid() + 1))
     assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+    assert layout.client.read_text() == "tampered\n"
 
 
 def test_the_reader_of_a_sudo_user_is_their_group_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -798,3 +808,179 @@ def test_the_reader_of_a_sudo_user_is_their_group_list(monkeypatch: pytest.Monke
     assert installer.reader_for((501, 20)) == installer.Reader(501, frozenset({20}))
     assert installer.reader_for(None) == installer.current_reader()
     assert installer.current_reader().uid == os.geteuid()
+
+
+# ------------------------------------------------- a rules file the recorder cannot read (V5e)
+
+# The test user owns the file, so it stands for root; `NOBODY` is the recorder's user, who reads a
+# 0600 file neither as its owner nor through its group.
+SERVED = (NOBODY, os.getegid())
+
+
+def cannot_read(layout: Layout) -> str:
+    return (
+        f"the recorder cannot read the rules file {layout.rules}, so the packaged default rules "
+        f'are in force; to use it, run `sudo chmod 644 "{layout.rules}"`, then restart the '
+        "recorder (`agentfly stop`, `agentfly start`)"
+    )
+
+
+def tree(layout: Layout) -> dict[str, tuple[int, int, int, int]]:
+    """Every path under the system folder and Cursor's: inode, mtime, size and mode."""
+    found: dict[str, tuple[int, int, int, int]] = {}
+    for root in (layout.system_root, layout.cursor_dir):
+        for path in [root, *root.rglob("*")]:
+            info = path.lstat()
+            found[str(path)] = (info.st_ino, info.st_mtime_ns, info.st_size, info.st_mode)
+    return found
+
+
+def test_root_over_an_edit_the_recorder_cannot_read_says_so_and_changes_nothing(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    edited_rules(layout, archive, 0o600)
+    before, owner = fingerprint(layout.rules), layout.rules.stat().st_uid
+    outcome = do_install(layout, archive, SERVED)
+    assert not outcome.changed
+    assert outcome.messages == [
+        "already installed and intact; nothing changed",
+        cannot_read(layout),
+    ]
+    assert fingerprint(layout.rules) == before and layout.rules.read_text() == EDITED
+    assert stat.S_IMODE(layout.rules.stat().st_mode) == 0o600
+    assert layout.rules.stat().st_uid == owner
+
+
+def make_work(work: str, layout: Layout, tool_env: packages.Environment) -> None:
+    if work == "a repair":
+        tamper_with_the_client(layout)
+    else:
+        upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
+
+
+UNREAD_WITH_WORK = [
+    ("an edit", "a repair"),
+    ("an edit", "an upgrade"),
+    ("this version's default", "an upgrade"),
+    ("an older default", "a repair"),
+]
+
+
+@pytest.mark.parametrize(("content", "work"), UNREAD_WITH_WORK)
+def test_root_over_a_file_the_recorder_cannot_read_with_other_work_stops_before_changing_anything(
+    content: str,
+    work: str,
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    tool_env: packages.Environment,
+) -> None:
+    do_install(layout, archive)
+    if content == "an edit":
+        layout.rules.write_text(EDITED, encoding="utf-8")
+    elif content == "an older default":
+        layout.rules.write_bytes(SHIPPED[0].read_bytes())
+    layout.rules.chmod(0o600)
+    make_work(work, layout, tool_env)
+    before = tree(layout)
+    with FsOps() as ops, pytest.raises(InstallError) as caught:
+        do_install(layout, archive, SERVED)
+    assert str(caught.value) == f"{cannot_read(layout)}; nothing was changed"
+    assert ops.calls == [] and tree(layout) == before
+
+
+def test_root_over_the_default_at_0600_with_nothing_else_to_do_still_rewrites_it(
+    layout: Layout, archive: tuple[Path, PythonBuild]
+) -> None:
+    # V5b-fix2: known bytes are rewritten whatever their mode; only other work makes it a stop.
+    do_install(layout, archive)
+    layout.rules.chmod(0o600)
+    outcome = do_install(layout, archive, SERVED)
+    assert outcome.changed and stat.S_IMODE(layout.rules.stat().st_mode) == 0o644
+    assert not any("cannot read" in m for m in outcome.messages)
+
+
+def test_only_a_file_of_the_system_user_that_no_one_else_can_write_is_the_case(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    edited_rules(layout, archive, 0o600)
+    nobody = another_user(os.getegid() + 1)
+    assert installer.unreadable_notice(layout, nobody) == cannot_read(layout)
+    assert installer.unreadable_notice(layout, installer.Reader(os.getuid(), frozenset())) is None
+    layout.rules.chmod(0o640)  # through a group the user is in: read, no line
+    assert installer.unreadable_notice(layout, another_user(os.getegid())) is None
+    assert installer.unreadable_notice(layout, nobody) == cannot_read(layout)
+    layout.rules.chmod(0o620)  # group-writable: the "kept ..., but" notice says so instead
+    assert installer.unreadable_notice(layout, nobody) is None
+    layout.rules.chmod(0o600)
+    monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+    assert installer.unreadable_notice(layout, nobody) is None  # another user's: its own notice
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_init_as_the_user_over_a_file_nobody_can_read_says_so_without_a_password(
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    layout.rules.chmod(0)  # the unprivileged run cannot open it: it decides by owner and mode
+    try:
+        assert init._as_user("3.24.12", archive[1]) == 0
+        assert capsys.readouterr().out.splitlines() == [
+            "already installed and intact; nothing changed",
+            cannot_read(layout),
+        ]
+    finally:
+        layout.rules.chmod(0o644)
+    assert init._as_user("3.24.12", archive[1]) == 0  # readable again: "kept", as before V5e
+    assert capsys.readouterr().out.splitlines() == [
+        "already installed and intact; nothing changed",
+        kept(layout),
+    ]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+@pytest.mark.parametrize("content", ["an edit", "this version's default"])
+def test_init_as_the_user_with_an_upgrade_stops_on_such_a_file_before_the_password(
+    content: str,
+    layout: Layout,
+    archive: tuple[Path, PythonBuild],
+    tool_env: packages.Environment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    do_install(layout, archive)
+    if content == "an edit":
+        layout.rules.write_text(EDITED, encoding="utf-8")
+    upgrade(tool_env, "agentfly-recorder", "0.2.0", NEW_AGENTFLY)
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    monkeypatch.setattr(packages, "confirm", lambda *a, **k: pytest.fail("asked the owner"))
+    layout.rules.chmod(0)
+    try:
+        with pytest.raises(InstallError) as caught:
+            init._as_user("3.24.12", archive[1])
+    finally:
+        layout.rules.chmod(0o644)
+    assert str(caught.value) == f"{cannot_read(layout)}; nothing was changed"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_init_as_the_user_over_another_users_unreadable_file_still_asks_for_the_password(
+    layout: Layout, archive: tuple[Path, PythonBuild], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    do_install(layout, archive)
+    layout.rules.write_text(EDITED, encoding="utf-8")
+    monkeypatch.setattr(init, "SYSTEM", layout)
+    monkeypatch.setattr(installer, "rules_owner_uid", lambda lay: os.getuid() + 1)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(elevate, "run_elevated", lambda tail, **k: calls.append(tail) or 0)
+    layout.rules.chmod(0)
+    try:
+        assert init._as_user("3.24.12", archive[1]) == 0
+    finally:
+        layout.rules.chmod(0o644)
+    assert calls == [["init", "-g"]]  # root decides, as before V5e

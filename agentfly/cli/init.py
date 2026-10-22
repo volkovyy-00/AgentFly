@@ -88,14 +88,23 @@ def _as_user(version: str, build: pythons.PythonBuild) -> int:
     # The package is checked here, before anything asks for a password (V3c, SPEC section 10).
     current = packages.require(records.read(SYSTEM), "agentfly init -g")
     bad = installer.status(SYSTEM, build, installer.client_source(), current)
+    wanted = packages.recorded_hash(current, installer.DEFAULT_RECORD_PATH)
     if not bad:
         print("already installed and intact; nothing changed")
         # An edited rules file is the owner's, and a readable one needs no password to be said.
-        notice = installer.rules_notice(
-            SYSTEM, packages.recorded_hash(current, installer.DEFAULT_RECORD_PATH)
-        )
+        notice = installer.rules_notice(SYSTEM, wanted)
         if notice:
             print(notice)
+        _warn_if_unchecked(version)
+        return 0
+    # A rules file this user cannot open, by its owner and mode one the recorder cannot read
+    # either (the system user's 0600): root would only say so, or refuse it with other work to do.
+    unread = installer.unreadable_notice(SYSTEM, installer.current_reader())
+    if unread is not None and installer.rules_state(SYSTEM, wanted) == "unknown":
+        if bad - {"rules"}:
+            raise InstallError(f"{unread}; nothing was changed")
+        print("already installed and intact; nothing changed")
+        print(unread)
         _warn_if_unchecked(version)
         return 0
     # A damaged default, or a link or folder at the rules path, stops before the password.
