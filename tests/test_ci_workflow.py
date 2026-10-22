@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -567,6 +568,17 @@ def test_the_checks_notice_commands_run_out_of_order() -> None:
 
 QUICK_FILTER = '-m "not slow"'
 PYRIGHT = "env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright"
+# Each `.gitignore` line that is not hidden (`**/.*` covers those) and can hold a `.py` file, as the
+# pyright exclude that leaves it out: pyright does not read `.gitignore`.
+IGNORED_FOLDERS = {
+    "__pycache__/": "**/__pycache__",
+    "logs/": "**/logs",
+    "*.egg-info/": "**/*.egg-info",
+    "/dist/": "dist",
+    "build/": "**/build",
+    "/result": "result",
+}
+NOT_PYTHON = {"*.py[cod]"}
 
 
 def script_arms(text: str) -> dict[str, list[str]]:
@@ -581,6 +593,18 @@ def script_arms(text: str) -> dict[str, list[str]]:
 def test_the_script_holds_a_quick_and_a_full_arm_of_four_commands_each() -> None:
     arms = script_arms(read(CHECK_SCRIPT))
     assert {name: len(lines) for name, lines in arms.items()} == {"quick": 4, "full": 4}
+
+
+def test_pyright_reads_only_the_tracked_files() -> None:
+    config = tomllib.loads(read(REPO / "pyproject.toml"))["tool"]["pyright"]
+    assert set(config) == {"typeCheckingMode", "pythonVersion", "exclude"}
+    assert (config["typeCheckingMode"], config["pythonVersion"]) == ("basic", "3.12")
+    lines = {line.strip() for line in read(REPO / ".gitignore").splitlines()}
+    lines = {line for line in lines if line and not line.startswith("#")}
+    shown = {line for line in lines if not line.lstrip("/").startswith(".")} - NOT_PYTHON
+    assert shown == set(IGNORED_FOLDERS), "map a new .gitignore line to a pyright exclude"
+    wanted = {"ui", ".venv", "**/.*", *IGNORED_FOLDERS.values()}
+    assert set(config["exclude"]) == wanted
 
 
 def test_the_check_line_runs_pyright_after_ruff_and_before_the_tests() -> None:

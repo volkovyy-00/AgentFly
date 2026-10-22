@@ -49,8 +49,20 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pyright]
 typeCheckingMode = "basic"
 pythonVersion = "3.12"
-# `**/.*` leaves out every hidden folder, `.claude/worktrees` with its copies of the tree among them.
-exclude = ["ui", ".venv", "**/.*"]
+# Only the tracked files: `**/.*` leaves out every hidden folder (`.claude/worktrees` with its copies
+# of the tree among them), the rest are the other folders `.gitignore` lists (pyright does not read
+# it; tests/test_ci_workflow.py keeps the two in step).
+exclude = [
+    "ui",
+    ".venv",
+    "**/.*",
+    "**/__pycache__",
+    "**/logs",
+    "**/*.egg-info",
+    "dist",
+    "**/build",
+    "result",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
