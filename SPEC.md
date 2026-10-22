@@ -722,9 +722,13 @@ at most 32 characters. The version is read from Cursor.app's `Info.plist`, which
 the agent can rewrite, and is only ever compared. The file is opened without
 blocking and read only if it is a plain file (a named pipe or a folder is refused
 before anything is read); at most 1 MiB and one byte of it is read, and a larger
-file is refused unparsed. It is parsed only if it is UTF-8 XML whose header holds
-nothing before `<plist` but an XML declaration and, at most, Apple's `<!DOCTYPE
-plist PUBLIC "…" "…">` (Cursor's own): no internal subset, comment or other
+file is refused unparsed. It is parsed only if it starts with `<` (after an optional
+UTF-8 byte-order mark) and its header holds nothing before `<plist` but an XML
+declaration and, at most, Apple's `<!DOCTYPE plist PUBLIC "…" "…">` (Cursor's
+own). The declaration is not judged: the encoding it names is the parser's, so
+ISO-8859-1 and cp1252 are read and one Python does not know fails the parse,
+while UTF-16 is refused unparsed (its byte-order mark, or the NUL bytes between
+its characters, are not that header). No internal subset, comment or other
 declaration, because a DTD of its own makes the parse cost minutes from under
 1 MiB (pyexpat decodes an attribute default again for every element; plistlib
 refuses only entity declarations). A binary plist is refused unparsed too

@@ -370,7 +370,8 @@ lines for them (R0 and normalisation: V5).
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
   file itself has not been seen), each line in time linear in its length (a 200 KB line of blanks
   is matched in a child process with a kill timeout, which imports the tree under test and fails
-  if it got another `agentfly`; the old patterns took minutes), and read
+  if it got another `agentfly`, judged by path components so that a sibling folder named like the
+  tree's is another one, V3d-fix3; the old patterns took minutes), and read
   within bounds: at most 64 logs and none beyond (the reads are counted), only plain files (a pipe,
   a link to a pipe, a link to `/dev/zero` and a folder are skipped; the hang tests bound only the
   call that could hang), at most the last 4 MiB of each, each reduced to a verdict before the next
@@ -385,7 +386,16 @@ lines for them (R0 and normalisation: V5).
   line with an ESC too); the Cursor version is shown cut and escaped. On a Cursor version that is
   not on the list (newer, refused, an unreadable one) a log that says nothing fails with the advice, a log that rejects the hooks
   fails, and one that loaded them is ok; on a listed version (both of them) the texts are those of
-  e6e6894 and "nothing" is a warning. The five rejecting texts, and a rejection of Cursor's own
+  e6e6894 and "nothing" is a warning. When the version cannot be read (V3d-fix3: a missing file, a
+  pipe, a folder, over 1 MiB, a binary plist, UTF-16 with and without a byte-order mark, another
+  header, a malformed file, an encoding Python does not know, no version in it, a version that is
+  not a string) the `events` line, and the `hooks-log` line when the log cannot confirm the hooks,
+  hold the cause `init -g` prints after `agentfly init: `: written out for each case with the
+  plist's path, and compared with `init -g`'s own stderr; levels and exit code are as before; a
+  path holding an ESC and a newline is shown escaped on one line and a 200-character path whole.
+  Plists that declare ISO-8859-1 or cp1252 (with a letter that is not valid UTF-8) are read in it.
+  For a readable version off the list the `events` and `hooks-log` texts are pinned to those of
+  d49c9d1. The five rejecting texts, and a rejection of Cursor's own
   shape naming all 21 valid events, fail with e6e6894's text, written out from its own output.
   The `rules` line warns on a missing rules file and on an
   unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a

@@ -668,6 +668,21 @@ def set_plist(plist: Path, make: Callable[[Path], None]) -> None:
     make(plist)
 
 
+# Cursor's own header and a version, with a non-ASCII letter (ü is one byte in ISO-8859-1 and
+# cp1252, two in UTF-8) so that a file read in the wrong encoding does not parse.
+ENCODED_PLIST = (
+    '<?xml version="1.0" encoding="{declared}"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0"><dict><key>CFBundleName</key><string>C\u00fcrsor</string>'
+    "<key>CFBundleShortVersionString</key><string>3.24.12</string></dict></plist>\n"
+)
+
+
+def encoded(declared: str, codec: str) -> bytes:
+    return ENCODED_PLIST.format(declared=declared).encode(codec)
+
+
 READ = "cannot read the Cursor version from {plist}"
 FULL_ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly doctor`."
 NOT_INSTALLED = "; is Cursor installed in /Applications?"
@@ -681,6 +696,19 @@ UNREADABLE_VERSIONS: dict[str, tuple[Callable[[Path], None], str]] = {
     "not XML": (
         holding(NOT_XML_PLISTS["a binary plist"]),
         f"{READ} (not XML: AgentFly reads only a UTF-8 XML property list)",
+    ),
+    "UTF-16 with a byte-order mark": (
+        holding(encoded("UTF-16", "utf-16")),
+        f"{READ} (not XML: AgentFly reads only a UTF-8 XML property list)",
+    ),
+    "UTF-16 without one": (
+        holding(encoded("UTF-16", "utf-16-le")),
+        f"{READ} (XML header is not Apple's: AgentFly reads only an XML declaration and the "
+        "plist DOCTYPE before <plist>)",
+    ),
+    "an encoding Python does not know": (
+        holding(encoded("UTFa8", "utf-8")),
+        f"{READ} (LookupError){NOT_INSTALLED}",
     ),
     "a header that is not Apple's": (
         holding(FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"]),
@@ -792,6 +820,19 @@ def test_a_plist_path_with_an_escape_and_a_newline_is_shown_on_one_line(
         for line in (events, hooks_log):
             assert_plain(line.text)  # no ESC, no newline, no bidi mark: one printable line
             assert "\n" not in line.text, case
+
+
+@pytest.mark.parametrize(
+    ("declared", "codec"), [("UTF-8", "utf-8"), ("ISO-8859-1", "latin-1"), ("cp1252", "cp1252")]
+)
+def test_a_plist_is_read_in_the_encoding_its_declaration_names(
+    world: World, declared: str, codec: str
+) -> None:
+    """SPEC §8: the declaration is not judged, so these 8-bit encodings are read, not refused."""
+    write_plist(world.layout, encoded(declared, codec))
+    context = world.context()
+    assert (context.cursor_version, context.version_error) == ("3.24.12", "")
+    assert world.results()["events"].level == "ok"
 
 
 def test_a_long_plist_path_is_shown_whole(world: World, tmp_path: Path) -> None:

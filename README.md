@@ -82,8 +82,12 @@ they are, and a timestamped backup of the old file is kept beside it, in
 `/Library/Application Support/Cursor/agentfly-backups/` (every rewrite of that file takes one
 first, and `uninstall` leaves them). It writes nothing and exits with an error if the
 installed Cursor is not one of the verified versions (3.24.12 and 3.25.9) and is not newer than
-the newest of them, if its version is not a plain dotted number or its `Info.plist` is not an XML
-file, if a hook event is not one that version accepts, or if the download fails its checksum. A
+the newest of them, if its version is not a plain dotted number, if its `Info.plist` cannot be
+read (it must be a plain file of at most 1 MiB, XML, with a version string and nothing before
+`<plist` but an XML declaration and Apple's `<!DOCTYPE plist PUBLIC …>`: a missing file, a pipe, a
+folder, a larger or binary file, any other header and a malformed file are each refused, with the
+cause named, and `agentfly doctor` names the same cause on its `events` line), if a hook event is
+not one that version accepts, or if the download fails its checksum. A
 Cursor newer than the newest verified one gets that version's events and one warning: if Cursor
 dropped one of them it would ignore the whole hooks file, so after any Cursor update quit and
 reopen Cursor, then run `agentfly doctor`. Running it twice changes nothing and needs no password
