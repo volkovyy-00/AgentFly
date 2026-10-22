@@ -43,11 +43,17 @@ the maintainers' work items and decisions, which are kept outside this repo.
   into every session (F17-fix1). **Size:** AGENTS.md is at most 14 000 bytes (bytes, not
   characters). **Imports:** AGENTS.md and CLAUDE.md hold no `@name` outside a code span or a
   fenced block, because Claude Code imports it; CLAUDE.md keeps its one `@AGENTS.md` line. The
-  scan is one pass in the CommonMark way, and when unsure it fails: HTML, a tab, a backtick run
-  with no closer, a heading, fence or definition inside a quote or list item are findings too
-  (the case tables in the test hold the rules; a differential fuzz against a CommonMark parser,
-  not kept in the repo, found no miss). **Wheel:** every `uv tool install ... dist/` line in a root `*.md` and in
-  `WHEEL_HINT` names `.python-version`'s Python (`--python 3.12`): uv picks its newest otherwise.
+  scan is one pass in the CommonMark way and errs toward failing. Claude Code's lexer (marked
+  without GFM) reads an `@name` that starts a text token or follows space, reads inside a code
+  span in a list item, and lets emphasis win over a span: so a span hides an `@name` only at its
+  start (`@x`) or, with no emphasis delimiter around, after a nested backtick. HTML, a tab, front
+  matter, a backtick run with no closer, and a heading, fence or definition inside a quote or
+  list item are findings too (the case tables in the test hold the rules). A differential fuzz
+  against Claude Code's own extractor and a CommonMark parser, run by hand and not kept in the
+  repo, found no text left unreported. **Wheel:** every `uv tool install ... dist/` line in a
+  root `*.md` and in `WHEEL_HINT` names `.python-version`'s Python (`--python 3.12`): uv picks its
+  newest otherwise. **Events:** each "arrive twice" claim (AGENTS.md, README, SPEC, `install.sh`)
+  names the five events `install.sh` writes into `.cursor/hooks.json`.
 - Package: `tests/test_package.py` builds the wheel, installs it with `uv tool`
   under a temporary HOME and runs `agentfly serve` and `agentfly-hook`. From the wheel it also:
   checks and tests the default rules the wheel carries (`rules check` / `rules test` on that file);

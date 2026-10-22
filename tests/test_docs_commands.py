@@ -81,16 +81,19 @@ def test_the_docs_still_list_commands() -> None:
 
 AGENTS_MAX_BYTES = 14_000  # owner 2026-10-22: AGENTS.md and CLAUDE.md load into every session
 IMPORT_LINE = "@AGENTS.md"  # the one import CLAUDE.md is meant to hold
-_IMPORT = re.compile(r"(?<![^\W_])@\S+")  # an `@` after anything but a letter or digit, and a name
+_AT = re.compile(r"(?<![^\W_])@(?=\S)")  # an `@` after anything but a letter or digit, and a name
+_NAME = re.compile(r"\S{1,40}")
+_FRONT_MATTER = re.compile(r"---\s*\n")
 _LIST_ITEM = re.compile(r"(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)")
 _LINK_DEFINITION = re.compile(r" {0,3}\[[^\]]*+\]:")
 _SPACES = re.compile(r"[ \t]*")
-_HTML = re.compile(r"<(?![^\s<>`@]++@[^\s<>`]++>)[A-Za-z/!?`]")  # a tag, a comment; not <a@b.c>
+_HTML = re.compile(r"<(?![^\s<>`@]++@[^\s<>`]++>)[^\s<]")  # a tag, comment, autolink; not <a@b.c>
 _ODD_SPACE = re.compile(r"[^\S ]")  # a tab, a no-break space, a form feed
 _NUL = "\x00"  # stands in for text that is code
 _NO_CLOSER = "a backtick run with no closer (or an escaped one) is not modelled"
 _UNCLOSED = "a fenced block is never closed"
 _HTML_NOTE = "HTML is not modelled"
+_MIXED_TAIL = "a closing fence with a mixed tail is read differently by Claude Code"
 
 
 def size_problem(data: bytes) -> str | None:
@@ -120,6 +123,12 @@ def _fence(line: str) -> str | None:
 def _closes(line: str, fence: str) -> bool:
     text = line.strip(" \t")
     return _indent(line) <= 3 and text.startswith(fence) and not text.strip(fence[0])
+
+
+def _is_mixed_tail(text: str, fence: str) -> bool:
+    """The fence run, then only tildes, backticks and spaces: marked closes a block here, CommonMark
+    does not."""
+    return text.startswith(fence) and not text[len(fence) :].strip(" \t~`")
 
 
 def _block_kind(line: str) -> str:
@@ -164,8 +173,9 @@ def _hide(text: str) -> str:
     return re.sub(r"[^\n]", _NUL, text)
 
 
-def _blank_spans(paragraph: str) -> str:
-    """`paragraph` with every code span overwritten by NUL characters (line breaks stay).
+def _blank_spans(paragraph: str) -> tuple[str, set[int]]:
+    """`paragraph` with every code span overwritten by NUL characters (line breaks stay), and
+    the offsets where a span's content starts, straight after its opening run.
 
     A run of n backticks opens a span that the next run of exactly n closes. One backward pass
     finds each run's closer, one forward pass blanks: the work is linear. A run that nothing
@@ -179,6 +189,7 @@ def _blank_spans(paragraph: str) -> str:
         closer[at] = latest.get(length)
         latest[length] = at
     parts: list[str] = []
+    starts: set[int] = set()
     done = at = 0
     while at < len(runs):
         start, end = runs[at][0], closer[at]
@@ -187,28 +198,64 @@ def _blank_spans(paragraph: str) -> str:
             continue
         stop = runs[end][1]
         parts += [paragraph[done:start], _hide(paragraph[start:stop])]
+        starts.add(runs[at][1])
         done, at = stop, end + 1
-    return "".join(parts) + paragraph[done:]
+    return "".join(parts) + paragraph[done:], starts
 
 
-def _outside_code(text: str) -> tuple[list[str], list[tuple[int, str]]]:
+def _hidden_imports(
+    text: str, masked: str, starts: set[int], first: int
+) -> dict[tuple[int, int], str]:
+    """The `@name`s that a code span hides from the plain reading but Claude Code may still read.
+
+    Its lexer reads inside a code span in a list item and lets emphasis win over a span, so a
+    span hides an `@name` only at its very start (`@x`), after a letter or digit, or, when the
+    text holds no emphasis delimiter, after a nested backtick (`` `@x` ``). Keyed by (line, column).
+    """
+    emphasis = "*" in text or "_" in text
+    hits: dict[tuple[int, int], str] = {}
+    line, line_start, seen = first, 0, 0
+    for match in _AT.finditer(text):
+        at = match.start()
+        breaks = text.count("\n", seen, at)
+        if breaks:
+            line += breaks
+            line_start = text.rfind("\n", seen, at) + 1
+        seen = at
+        if masked[at] != _NUL or at in starts or (not emphasis and text[at - 1 : at] == "`"):
+            continue
+        hits[line, at - line_start] = _NAME.match(text, at).group()
+    return hits
+
+
+def _outside_code(
+    text: str,
+) -> tuple[list[str], dict[tuple[int, int], str], list[tuple[int, str]]]:
     """The lines of `text` with fenced blocks and code spans overwritten by NUL characters.
 
     Every line keeps its length. A span may cross a line break but not the end of its paragraph
-    (see `_block_kind`). The second value lists (line, what) for constructs this scan does not
-    model, where it cannot tell what CommonMark would call code: a fence that never closes, a
-    heading, fence or code block in a quote or list item, a link reference definition, a line
-    that starts with an HTML tag, a fence in a list item that a less indented line may end.
+    (see `_block_kind`). The second value holds what `_hidden_imports` finds. The third lists
+    (line, what) for constructs this scan does not model, where it cannot tell what CommonMark
+    would call code: a fence that never closes, a heading, fence or code block in a quote or list
+    item, a link reference definition, a line that starts with an HTML tag, a fence in a list
+    item that a less indented line may end, a fence closed by a mixed tail.
     """
     out: list[str] = []
+    hits: dict[tuple[int, int], str] = {}
     paragraph: list[str] = []
+    first = 0
     notes: list[tuple[int, str]] = []
     fence: str | None = None
     opened = fence_indent = 0
 
+    def scan(block: str, number: int) -> list[str]:
+        masked, starts = _blank_spans(block)
+        hits.update(_hidden_imports(block, masked, starts, number))
+        return masked.split("\n")
+
     def end_paragraph() -> None:
         if paragraph:
-            out.extend(_blank_spans("\n".join(paragraph)).split("\n"))
+            out.extend(scan("\n".join(paragraph), first))
             paragraph.clear()
 
     for number, line in enumerate(text.split("\n"), 1):
@@ -218,6 +265,8 @@ def _outside_code(text: str) -> tuple[list[str], list[tuple[int, str]]]:
                 fence = None
             elif line.strip(" \t") and _indent(line) < fence_indent:
                 notes.append((number, "a fence in a list item may end early"))
+            elif _indent(line) <= 3 and _is_mixed_tail(line.strip(" \t"), fence):
+                notes.append((number, _MIXED_TAIL))
             continue
         opening = _fence(line)
         kind = _block_kind(line)
@@ -228,8 +277,10 @@ def _outside_code(text: str) -> tuple[list[str], list[tuple[int, str]]]:
             out.append(_NUL * len(line))
             continue
         if kind == "single":
-            out.append(_blank_spans(line))
+            out.extend(scan(line, number))
         else:
+            if not paragraph:
+                first = number
             paragraph.append(line)
         if _LINK_DEFINITION.match(line):
             notes.append((number, "a link reference definition is not modelled"))
@@ -240,19 +291,24 @@ def _outside_code(text: str) -> tuple[list[str], list[tuple[int, str]]]:
     end_paragraph()
     if fence is not None:
         notes.append((opened, _UNCLOSED))
-    return out, notes
+    return out, hits, notes
 
 
 def stray_imports(text: str, allowed: str | None = None) -> list[str]:
     """Each `@name` Claude Code would import from `text`; `allowed` may open one line, once.
 
-    Unsure means a finding: so is anything the scan does not model (HTML, a tab or other odd
-    space, a backtick run with no closer, and what `_outside_code` lists). One pass over the
-    text; the named file is never opened.
+    Unsure means a finding. Claude Code reads an `@name` that starts a text token or follows
+    space; its lexer also reads inside a code span in a list item, and lets emphasis win over a
+    span. So a code span hides an `@name` only straight after a backtick (the start of the span
+    in `@x`), a letter or a digit. Outside a span an `@` after anything but a letter or digit
+    counts. Fenced blocks hide everything. Anything the scan does not model is a finding too:
+    HTML, front matter, a tab or other odd space, a backtick run with no closer, and what
+    `_outside_code` lists. One pass over the text; the named file is never opened.
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    rows, problems = _outside_code(text)
-    found: list[tuple[int, str]] = []
+    rows, found, problems = _outside_code(text)
+    if _FRONT_MATTER.match(text.removeprefix("\ufeff")) and "---" in text[3:]:
+        problems.append((1, "front matter is not modelled"))
     for number, (row, original) in enumerate(zip(rows, text.split("\n"), strict=True), 1):
         if "`" in row:
             problems.append((number, _NO_CLOSER))
@@ -260,13 +316,15 @@ def stray_imports(text: str, allowed: str | None = None) -> list[str]:
             problems.append((number, _HTML_NOTE))
         if _ODD_SPACE.search(row):
             problems.append((number, "a tab or other odd space is not modelled"))
-        for match in _IMPORT.finditer(row):
-            name = original[match.start() : match.end()]
-            if allowed and name == allowed and match.start() == 0:
-                allowed = None  # that line, once
-                continue
-            found.append((number, name[:40]))
-    return [f"line {number}: {what}" for number, what in sorted({*problems, *found})]
+        for match in _AT.finditer(row):
+            found[number, match.start()] = _NAME.match(original, match.start()).group()
+    reported = set()
+    for (number, column), name in sorted(found.items()):
+        if allowed and name == allowed and column == 0:
+            allowed = None  # that line, once
+            continue
+        reported.add((number, name))
+    return [f"line {number}: {what}" for number, what in sorted({*problems, *reported})]
 
 
 def test_agents_md_stays_under_its_size_cap() -> None:
@@ -303,9 +361,8 @@ NOT_IMPORTS = {
     "a digit then an at sign": "a1@b and x@y",
     "a code span": "`@x`",
     "a double-backtick span": "`` `@x` ``",
-    "a span with a longer run inside": "``a ` @x``",
-    "a span over a line break": "see `uv run\n@x` here",
-    "a span over a wrapped list item line": "- the `uv run\n  @x` command",
+    "a span with a longer run inside": "``a `@x``",
+    "a span over a line break": "see `uv run\nuser@host` here",
     "a fenced block": "```\n@x\n```",
     "a tilde block": "~~~sh\n@x\n~~~",
     "a block that a shorter run does not close": "````\n```\n@x\n```\n````",
@@ -313,7 +370,7 @@ NOT_IMPORTS = {
     "a block inside a list item": "- item\n  ```\n  @x\n  ```\n- next",
     "an at sign with no name": "an @ sign, a trailing @",
     "a span after a closed one": "`a` and `@x`",
-    "a less-than sign in prose": "if a < b and c <= d",
+    "a less-than sign in prose": "if a < b and c < d",
 }
 
 
@@ -354,6 +411,22 @@ IMPORTS = {
     "after an escaped backtick": "\\`@x\\`",
     "after a tab that does not close a fence": "```\n\t```\nx\n```\nsee @x\n```",
     "a name in a link": "[SPEC](@SPEC.md)",
+    "in a code span in a list item": "- run `cat @x | head`",
+    "in a code span in a numbered item": "1. run `cat @x | head`",
+    "in a code span that starts with a space": "- use ` @x ` here",
+    "in a code span wrapped inside a list item": "- the `uv run\n  @x` command",
+    "in a code span in a plain paragraph (stricter than Claude Code)": "run `cat @x | head`",
+    "in a double-backtick span after an emphasis opener": "Use *globs like ``*.md @x `` here",
+    "in a span after emphasis delimiters": "_``_@x``",
+    "in a span after a nested backtick beside emphasis": "*``**``` ```@x*``",
+    "a second @ in a span whose first @ opens it": "_``@x_@y``",
+    "in a span after a bracket": "run `foo(@x)`",
+    "in a span after an equals sign": "run `--file=@x`",
+    "in a span after an underscore": "_` @x ```_`",
+    "after a backtick in a link destination": "[](`) @x `",
+    "after a backtick in a link destination and text": "[a](x`y) see @x `z",
+    "after a link definition whose label has an escaped bracket": "[a\\]b]: /x`y\nsee @x `z",
+    "after a link definition whose label spans two lines": "[foo\nbar]: /x`y\nsee @x `z",
     "two imports on one line": "see @AGENTS.md and @AGENTS.md",
 }
 
@@ -361,6 +434,9 @@ IMPORTS = {
 # The scan cannot tell here whether the `@x` is code (CommonMark could read the text another
 # way, or the text holds what the scan does not model), so it fails; it need not name the `@x`.
 AMBIGUOUS = {
+    "after a fence closed by a mixed tail": "```\nx\n```~\nsee @x\n```",
+    "after a tilde fence closed by a mixed tail": "~~~\nx\n~~~`\nsee @x\n~~~",
+    "after a front matter block that looks like a fence": "---\n```\n---\nsee @x\n```",
     "after a span wrapped onto an indented line": "- the `uv run\n    agentfly serve` is @x `y`",
     "after a span wrapped onto a tab line": "word `\n\tcode` @x `y`",
     "after a span wrapped onto a numbered line": "word `\n2. c` @x `y`",
@@ -382,6 +458,7 @@ AMBIGUOUS = {
     "after a comment that opens inside a span": "`@x``\n<!-- `",
     "after a tag in a quote": ">```@x\n<div>```",
     "after an autolink whose address is a backtick run": "<```@x>```",
+    "after an autolink whose address holds a bar and backticks": "<|``@x> ``",
     "after indented code in a quote": ">     `\n@x`",
     "after indented code in a list item": "-     `\n@x`",
 }
@@ -463,6 +540,8 @@ def test_claude_md_may_import_agents_md_once_on_a_line_of_its_own() -> None:
     assert stray_imports(f"{title}see @AGENTS.md\n", IMPORT_LINE) == ["line 3: @AGENTS.md"]
     assert stray_imports(f"{title}@AGENTS.md.bak\n", IMPORT_LINE) == ["line 3: @AGENTS.md.bak"]
     assert stray_imports(f"{title}@SPEC.md\n", IMPORT_LINE) == ["line 3: @SPEC.md"]
+    # Claude Code deletes a leading `---` block before it reads anything: that import is dead.
+    assert stray_imports("---\n@AGENTS.md\n---\n# CLAUDE.md\n", IMPORT_LINE) != []
 
 
 def test_a_finding_names_its_line() -> None:
@@ -478,7 +557,7 @@ def test_every_byte_goes_through_the_span_scan_once(monkeypatch: pytest.MonkeyPa
     sizes: list[int] = []
     real = _blank_spans
 
-    def spy(paragraph: str) -> str:
+    def spy(paragraph: str) -> tuple[str, set[int]]:
         sizes.append(len(paragraph))
         return real(paragraph)
 
