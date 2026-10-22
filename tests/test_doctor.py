@@ -985,7 +985,9 @@ class WatchedOs:
     before the first one whose name satisfies `trigger`: after the folder above it was listed, and
     before it is opened, as the agent's user could do it. Not left to timing."""
 
-    def __init__(self, trigger: Callable[[str], bool], swap: Callable[[], None]) -> None:
+    def __init__(
+        self, trigger: Callable[[str], bool] = lambda name: False, swap: Callable[[], None] = bool
+    ) -> None:
         self.trigger, self.swap = trigger, swap
         self.swapped = False
         self.opened: list[tuple[int, int]] = []  # (device, inode) of each folder opened
@@ -1037,7 +1039,13 @@ SWAPPED_FOR = {
     "a link to one shared folder": plant_a_link_in_place_of,
     "a named pipe": plant_a_pipe_in_place_of,
 }
-SWAPPED_LEVELS = ["start folder", "window folders", "output folders"]
+SWAPPED_LEVELS = [
+    "start folder",
+    "the only window folder",
+    "the only output folder",
+    "window folders",
+    "output folders",
+]
 
 
 def swap_set_up(
@@ -1055,6 +1063,14 @@ def swap_set_up(
         (shared / "window1_wb0" / "output_x").mkdir(parents=True)
         (shared / "window1_wb0" / "output_x" / "cursor.hooks.s.log").write_text(REJECTED)
         return START_TIME.fullmatch, [start], shared
+    if level == "the only window folder":
+        (shared / "output_x").mkdir(parents=True)
+        (shared / "output_x" / "cursor.hooks.s.log").write_text(REJECTED)
+        return lambda name: name.startswith("window"), [window], shared
+    if level == "the only output folder":
+        shared.mkdir()
+        (shared / "cursor.hooks.s.log").write_text(REJECTED)
+        return lambda name: name.startswith("output_"), [world.log.parent], shared
     if level == "window folders":
         for number in range(6):
             (shared / f"output_s{number}").mkdir(parents=True)
@@ -1100,12 +1116,32 @@ def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_throu
     assert len(watched.opened) == len(set(watched.opened)), "a folder was opened twice"
     assert len(watched.opened) <= existing, (len(watched.opened), existing)
     check = call_unless_it_hangs(lambda: checks.check_hooks_log(world.context()), world.log)
-    if level == "start folder":  # the only folder with a log is gone: as no log at all
+    if level in ("start folder", "the only window folder", "the only output folder"):
+        # the only folder with a log is gone: as no log at all
         assert logs.files == () and not logs.too_many
         assert check.level == ("warn" if version == "listed" else "fail"), check
     else:
         assert logs.files == (world.log,) and logs.folder is not None
         assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+def test_the_walk_stops_listing_at_the_65th_log(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ten windows of 70 logs each: whichever the listing gives first holds the 65th, so only the
+    Cursor logs folder, the start folder, one window and one output folder are ever opened."""
+    start = world.log.parents[2]
+    for number in range(10):
+        output = start / f"window{number}_more/output_a"
+        output.mkdir(parents=True)
+        for log in range(70):
+            (output / f"cursor.hooks.{log}.log").write_text(LOADED + "\n")
+    watched = WatchedOs()
+    with monkeypatch.context() as patched:
+        patched.setattr(hookslog, "os", watched)
+        logs = hookslog.latest(world.home)
+    assert logs.too_many and logs.files == ()
+    assert len(watched.opened) == 4, len(watched.opened)
 
 
 def test_a_walk_over_many_logs_leaves_no_descriptor_open(world: World) -> None:

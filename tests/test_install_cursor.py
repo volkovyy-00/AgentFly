@@ -317,6 +317,8 @@ FOREIGN_HEADERS = {
     + b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd" ['
     + ATTLIST
     + b"]>",
+    "an ID holding > and no subset": XML_DECLARATION
+    + b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/a>b.dtd">',
     "a comment before <plist>": XML_DECLARATION + b"<!-- hello -->",
     "a processing instruction before <plist>": XML_DECLARATION + b"<?pi x?>",
     "another name in the DOCTYPE": XML_DECLARATION + b'<!DOCTYPE html PUBLIC "a" "b">',
