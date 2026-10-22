@@ -155,8 +155,8 @@ agentfly uninstall                  # asks for your password once; do not run it
 ```
 
 It first keeps a copy of an edited rules file (one that is not an unedited default) in
-`/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>` and prints where;
-put it back by hand after a reinstall. If that copy cannot be written, it stops and removes
+`/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>` and prints where
+(how to put it back is below). If that copy cannot be written, it stops and removes
 nothing. Then it removes AgentFly's hook entries, moves its system folder out of the way and
 deletes it, so an interrupted run never leaves Cursor denying every action. Then, as your own
 user, it stops the recorder service and deletes its file (`launchctl list | grep agentfly` prints
@@ -169,6 +169,18 @@ one-line message; run `agentfly uninstall` again. Until you run it, the installe
 keeps guarding Cursor. **Quit and
 reopen Cursor afterwards:** it keeps its old hook list until it restarts, and in the meantime
 its calls to the removed client fail (exit 127), which lets every action through.
+
+To put a kept copy back after a reinstall, copy it over the rules file `agentfly init -g` wrote,
+then restart the recorder:
+
+```bash
+sudo cp "/Library/Application Support/Cursor/agentfly-backups/rules.toml.<date-time>" \
+  "/Library/Application Support/AgentFly/rules.toml"
+agentfly stop && agentfly start
+```
+
+Copying over the existing file keeps its owner and mode (root's, 0644). With no file there, the
+result is 0600, which the recorder cannot read.
 
 **From a clone (developers).** `uv sync` makes `.venv` with the server dependencies and the
 `agentfly` and `agentfly-hook` commands. `./install.sh` writes a project-level

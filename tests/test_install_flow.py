@@ -963,27 +963,37 @@ def test_a_stale_temp_file_or_a_link_in_its_place_gets_none_of_the_bytes(
     assert target.read_bytes() == b"secret\n" and stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
-def test_a_folder_swapped_in_after_the_first_look_is_named_and_skipped_too(
+@pytest.mark.parametrize("kind", ["a folder", "a link", "a named pipe"])
+def test_what_is_swapped_in_after_the_first_look_is_named_and_skipped_too(
+    kind: str,
     layout: Layout,
     archive: tuple[Path, PythonBuild],
     quick: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Only the open's own guards stand: a link gets ELOOP (O_NOFOLLOW), a pipe no wait (O_NONBLOCK).
     do_install(layout, archive)
     layout.rules.unlink()
-    layout.rules.mkdir()
-    plain = tmp_path / "plain"
+    plain, fifo = tmp_path / "plain", None
     plain.write_text(EDITED, encoding="utf-8")
+    if kind == "a folder":
+        layout.rules.mkdir()
+    elif kind == "a link":
+        layout.rules.symlink_to(plain)
+    else:
+        os.mkfifo(layout.rules)
+        fifo = layout.rules
     real = Path.lstat
 
     def first_look(self: Path) -> os.stat_result:  # the `lstat` saw a plain file
         return real(plain) if self == layout.rules else real(self)
 
     monkeypatch.setattr(Path, "lstat", first_look)
-    assert installer._keep_rules_copy(layout) == [
-        f"{layout.rules} is not a regular file, which the recorder never loads; no copy was kept"
+    assert call_unless_it_hangs(lambda: installer._keep_rules_copy(layout), fifo) == [
+        f"{layout.rules} is {SKIPPED[kind]}, which the recorder never loads; no copy was kept"
     ]
+    assert copies(layout) == [] and plain.read_text(encoding="utf-8") == EDITED
 
 
 def test_a_later_refusal_still_says_where_the_copy_went(
