@@ -77,12 +77,12 @@ class Context:
     search_path: list[str]
     own_script: Path | None  # the `agentfly` command of this install
     cursor_version: str | None
+    version_error: str  # why `cursor_version` is None: what `init -g` prints; "" if it was read
     state: service.State | None
     state_error: str
     environment: packages.Environment | None  # the tool environment this AgentFly runs from
     environment_error: str
     health: dict[str, Any] | None = None  # what the recorder's /health answers; None: nothing
-    version_error: str = ""  # why `cursor_version` is None: what `init -g` prints; "" if read
 
     @property
     def why_version_unread(self) -> str:
@@ -143,12 +143,12 @@ def build_context(
         search_path=os.get_exec_path() if search_path is None else search_path,
         own_script=default_own_script() if own_script is None else own_script,
         cursor_version=version,
+        version_error=version_error,
         state=state,
         state_error=error,
         environment=environment,
         environment_error=environment_error,
         health=service.health(),
-        version_error=version_error,
     )
 
 
@@ -463,17 +463,14 @@ def _unconfirmed(ctx: Context, what: str) -> Finding:
     if ctx.version_is_listed:
         return warn(what)
     if ctx.cursor_version is None:
-        cause = ctx.why_version_unread
-        end = "" if cause.endswith("?") else "."
-        return fail(
-            f"{what}; AgentFly cannot confirm that Cursor loaded its hooks: {cause}{end} "
-            f"{cursor.ADVICE}"
+        why = f"AgentFly cannot confirm that Cursor loaded its hooks ({ctx.why_version_unread})."
+    else:
+        version = cursor.shown(ctx.cursor_version)
+        why = (
+            f"Cursor {version} is not on AgentFly's list of verified versions, so it cannot "
+            "confirm that Cursor loaded its hooks."
         )
-    version = cursor.shown(ctx.cursor_version)
-    return fail(
-        f"{what}; Cursor {version} is not on AgentFly's list of verified versions, so it cannot "
-        f"confirm that Cursor loaded its hooks. {cursor.ADVICE}"
-    )
+    return fail(f"{what}; {why} {cursor.ADVICE}")
 
 
 def check_hooks_log(ctx: Context) -> Finding:
