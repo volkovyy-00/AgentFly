@@ -110,8 +110,13 @@ owned by the system user (root). Every project you open in Cursor uses it, so
 there is no per-project setup, and the agent cannot edit it without your
 password (D2). The hook client and its Python live in
 `/Library/Application Support/AgentFly/`, also system-owned. It lists only
-events that the installed Cursor version is known to accept; when the version
-or an event is unknown, `init -g` writes nothing and says so (D23, section 8).
+events that the installed Cursor version is known to accept. A Cursor newer than
+the newest version AgentFly has checked gets that newest version's events and a
+warning (D32); any other unknown version, or an unknown event, makes `init -g`
+write nothing and say so (D23, section 8). Nothing inside Cursor shows that an
+unchecked version dropped an event, so `agentfly doctor` fails on a version that
+is not on the list unless Cursor's Hooks log shows the hooks loaded (D32,
+section 7).
 
 **Recorder service.** A small program on your machine, `agentfly serve`, that
 listens on `127.0.0.1:8787` only. It receives each action, checks the rules and
@@ -572,8 +577,14 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   bundled Python, and sets up the system-owned rules file, with one `sudo`
   (D1, D2, D5). Before it asks for the password it checks the package it is
   about to run as root (see "The package check" below). It writes only events from a known list for the installed
-  Cursor version, and writes nothing when the version or an event is unknown
-  (D23). The move from `~/.config/flightrecorder` (D7) has already happened at the
+  Cursor version. A Cursor version newer than the newest listed one (compared part
+  by part, as numbers) gets that newest version's events, and `init -g` prints one
+  warning line naming both versions; it says to quit and reopen Cursor after any
+  Cursor update and then run `agentfly doctor` (D32). The hash record keeps the
+  real version as of the install or repair that wrote it. Any other version that
+  is not listed (older, between two listed ones, or not dotted numbers) is
+  refused with nothing written, as is an unknown event (D23).
+  The move from `~/.config/flightrecorder` (D7) has already happened at the
   recorder's first start; `init -g` relies on it. Running
   it twice changes nothing; entries of other tools in the hooks file are left
   as they are. In v1, remove AgentFly's own repo-level `.cursor/hooks.json`, or
@@ -639,10 +650,23 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   `start` writes, and `KeepAlive` is set (D4), and in a Homebrew install no
   LaunchAgent of ours is loaded next to Homebrew's job; `agentfly` on `PATH` is
   ours (the same environment, not another venv on the same Python).
-  It also compares the registered events with the known list, and reads
+  It also compares the registered events with the known list (for a Cursor newer
+  than the newest listed one, with that newest version's list: the line warns
+  "unchecked Cursor version" and says to quit and reopen Cursor, then run
+  `agentfly doctor`, D32), and reads
   Cursor's Hooks log for "Invalid … config" or "Failed to parse" lines about
   AgentFly's file, or "No enterprise hooks configuration found" (Cursor has not
-  been restarted since `init -g`); each is a failure, not a warning (D23). A
+  been restarted since `init -g`); each is a failure, not a warning (D23). It reads
+  the newest start folder only, at most 64 logs (none when there are more), each
+  only if it is a plain file and at most its last 4 MiB: the agent's user can write
+  that folder. When Cursor's version is on the verified list, a log that says
+  nothing (no logs, no Hooks log, no line about the system file, more than 64 logs)
+  is a warning. When it is not on the list (a newer version, any other, or one
+  `doctor` cannot read, which the agent can bring about), that log is the only sign that the hooks
+  run, so each of those cases fails, and the line says to quit and reopen Cursor,
+  then run `agentfly doctor` (D32; decided by the owner, 2026-10-21). A "Loaded"
+  line is believed: the same people can write a forged one, and no check here can
+  tell it from Cursor's. A
   missing hook client file turns it red (D5). It warns when
   `~/.claude/settings.json` holds hooks on a gate event (D24, section 8). Each
   fault turns its own line to fail: a check that depends on something another
@@ -658,8 +682,8 @@ per-project setup. (A per-project `agentfly init` is deferred; section 12.)
   entries by hand or reinstall and uninstall properly.
 - **Publishing.** Pushing to PyPI or a Homebrew tap is outward-facing; the owner
   approves each release, and the PyPI name is re-checked first.
-- **Developers** can still run the recorder from a clone; AGENTS.md has the
-  commands. Until the packaging card lands, that is the only way.
+- **Developers** can still run the recorder from a clone with
+  `uv run agentfly serve`; AGENTS.md has the commands.
 
 ---
 
@@ -682,10 +706,52 @@ ahead, and then only its exit code is kept.
 **Only events Cursor accepts (D23).** Spike S5 (Cursor 3.24.12) confirmed that
 one unknown event name makes Cursor reject the whole hooks file, with an error
 only in its Hooks log, and then no AgentFly hook runs. So `init -g` writes only
-events on a known list for the installed Cursor version, and `doctor` checks
-the registered events against that list and reads the Hooks log (section 7). A
-Cursor update that drops an event is caught by `doctor`, not prevented. MCP
-events are untested.
+events that the installed Cursor version is known to accept (a version newer
+than the verified list gets the newest listed version's, D32 below), and
+`doctor` checks the registered events against that list and reads the Hooks log
+(section 7). A Cursor update that drops an event is caught by `doctor`, not
+prevented. MCP events are untested.
+
+**A Cursor newer than the verified list (D32, amends D23).** AgentFly cannot keep
+up with every Cursor release, so a version newer than the newest listed one,
+compared part by part and as numbers, is accepted: it gets the newest listed
+version's events, `init -g` warns once, and the hash record keeps the real
+version as of the install or repair that wrote it. A version that is not newer
+and not listed is still refused, and so is anything that is not dotted numbers of
+at most 32 characters. The version is read from Cursor.app's `Info.plist`, which
+the agent can rewrite, and is only ever compared. The file is opened without
+blocking and read only if it is a plain file (a named pipe or a folder is refused
+before anything is read); at most 1 MiB and one byte of it is read, and a larger
+file is refused unparsed. It is parsed only if it starts with `<` (after an optional
+UTF-8 byte-order mark) and its header holds nothing before `<plist` but an XML
+declaration and, at most, Apple's `<!DOCTYPE plist PUBLIC "…" "…">` (Cursor's
+own). The declaration is not judged: the encoding it names is the parser's, so
+ISO-8859-1 and cp1252 are read and one Python does not know fails the parse,
+while UTF-16 is refused unparsed (its byte-order mark, or the NUL bytes between
+its characters, are not that header). No internal subset, comment or other
+declaration, because a DTD of its own makes the parse cost minutes from under
+1 MiB (pyexpat decodes an attribute default again for every element; plistlib
+refuses only entity declarations). A binary plist is refused unparsed too
+(plistlib's binary reader copies an object once for each object number that
+points at it, hundreds of megabytes from under 1 MiB). Each refusal is one line
+that names the cause, and a malformed XML plist is refused when it fails to
+parse. A refused plist leaves the version unread, which falls as a version off the
+list does (below). The Hooks log lives in a folder the agent's user can also
+write while `doctor` walks it, so below Cursor's `logs` folder (the path to it is
+the owner's and may run through a link) each folder is opened without following a
+link, through the open descriptor of the one above it. A folder swapped for a
+link or a non-folder is skipped, as a missing log is, and one real folder moved
+onto many names is opened under each but listed once. A rejection line is shown
+whole up to 1,000 characters (Cursor's own, naming the 21 valid events, is about 450),
+cut with "…" beyond, and always with unprintable characters escaped. The
+risk is accepted: if that Cursor dropped one of the
+events, it would ignore the whole hooks file (S5), and protection would be off
+with no sign inside Cursor. So `doctor` fails when Cursor's Hooks log shows
+AgentFly's hooks rejected or not loaded and, for any version that is not on the
+list (newer, any other, or unreadable), also when the log cannot confirm that they
+loaded (section 7; the owner, 2026-10-21). `init -g` and `doctor` both say: after
+any Cursor update, quit and reopen Cursor, then run `agentfly doctor`. A release
+adds a version to the list once it is checked.
 
 **Where hooks come from (D24).** Cursor runs hooks from several places side by
 side: the system file, the user and project `hooks.json`, and also

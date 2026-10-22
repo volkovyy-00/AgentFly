@@ -77,6 +77,7 @@ class Context:
     search_path: list[str]
     own_script: Path | None  # the `agentfly` command of this install
     cursor_version: str | None
+    version_error: str  # why `cursor_version` is None: what `init -g` prints; "" if it was read
     state: service.State | None
     state_error: str
     environment: packages.Environment | None  # the tool environment this AgentFly runs from
@@ -84,9 +85,23 @@ class Context:
     health: dict[str, Any] | None = None  # what the recorder's /health answers; None: nothing
 
     @property
+    def why_version_unread(self) -> str:
+        """Why the Cursor version is unknown, escaped like any shown value so it stays one line.
+
+        `version_error` holds the plist's path, AgentFly's own words and an exception's class name,
+        never a byte of the file, so it is short and is shown whole.
+        """
+        return packages.visible(self.version_error)
+
+    @property
+    def version_is_listed(self) -> bool:
+        """Whether Cursor's version is one AgentFly has verified; an unreadable one is not (D32)."""
+        return self.cursor_version is not None and self.cursor_version in cursor.KNOWN_VERSIONS
+
+    @property
     def valid_events(self) -> frozenset[str] | None:
-        """What this Cursor version accepts; None when AgentFly has not verified it."""
-        return cursor.KNOWN_VERSIONS.get(self.cursor_version) if self.cursor_version else None
+        """What this Cursor version is checked against; None when AgentFly refuses it (D32)."""
+        return cursor.accepted_events(self.cursor_version) if self.cursor_version else None
 
 
 def default_own_script() -> Path | None:
@@ -103,10 +118,12 @@ def build_context(
     search_path: list[str] | None = None,
     own_script: Path | None = None,
 ) -> Context:
+    version: str | None = None
+    version_error = ""
     try:
-        version: str | None = cursor.installed_version(layout.cursor_app)
-    except InstallError:
-        version = None
+        version = cursor.installed_version(layout.cursor_app)
+    except InstallError as exc:
+        version_error = str(exc)
     state: service.State | None = None
     error = ""
     try:
@@ -126,6 +143,7 @@ def build_context(
         search_path=os.get_exec_path() if search_path is None else search_path,
         own_script=default_own_script() if own_script is None else own_script,
         cursor_version=version,
+        version_error=version_error,
         state=state,
         state_error=error,
         environment=environment,
@@ -274,20 +292,28 @@ def check_events(ctx: Context) -> Finding:
     if not found:
         return warn("no AgentFly entries are registered")
     if ctx.cursor_version is None:
-        return _not_checked("cannot read the Cursor version")
-    if ctx.valid_events is None:
-        known = ", ".join(sorted(cursor.KNOWN_VERSIONS))
+        return _not_checked(ctx.why_version_unread)
+    version = cursor.shown(ctx.cursor_version)
+    verified = cursor.verified_as(ctx.cursor_version)
+    if verified is None:
         return warn(
-            f"Cursor {ctx.cursor_version} is not on AgentFly's verified list ({known}); "
+            f"Cursor {version} {cursor.refusal(ctx.cursor_version)}; "
             "its registered events could not be checked"
         )
-    unknown = sorted({entry.event for entry in found} - ctx.valid_events)
+    unknown = sorted({entry.event for entry in found} - cursor.KNOWN_VERSIONS[verified])
     if unknown:
         return fail(
-            f"Cursor {ctx.cursor_version} does not accept {', '.join(unknown)}: it rejects the "
-            "whole hooks file (D23)"
+            f"Cursor {version} does not accept {', '.join(unknown)}"
+            f"{cursor.checked_against(ctx.cursor_version)}: it rejects the whole hooks file (D23)"
         )
-    return ok(f"every registered event is accepted by Cursor {ctx.cursor_version}")
+    stand = cursor.stand_in(ctx.cursor_version)
+    if stand:
+        return warn(
+            f"unchecked Cursor version: Cursor {version} is newer than the newest AgentFly has "
+            f"checked ({stand}); its registered events are compared with {stand}'s. "
+            f"{cursor.ADVICE}"
+        )
+    return ok(f"every registered event is accepted by Cursor {version}")
 
 
 # ---------------------------------------------------------------- the service (D4, D8)
@@ -406,39 +432,76 @@ def check_path(ctx: Context) -> Finding:
     )
 
 
+# Cursor's own rejection lists the 21 valid events: about 450 characters. The agent's user can write
+# a megabyte, so a line is cut here (and escaped, as it is printed to the owner's terminal).
+_SHOWN_LOG_LINE = 1000
+
+
 def _log_problem(status: hookslog.LogStatus, ours: set[str]) -> str | None:
     """Why one window's log says Cursor did not load our hooks, or None when it did."""
     if status.kind == "none":
         return "Cursor says: No enterprise hooks configuration found"
     if status.kind == "error":
-        return f"Cursor says: {status.detail}"
+        # Cut, and each unprintable character escaped: it is printed to the owner's terminal.
+        line = status.detail[:_SHOWN_LOG_LINE] + (
+            "\u2026" if len(status.detail) > _SHOWN_LOG_LINE else ""
+        )
+        return f"Cursor says: {packages.visible(line)}"
     absent = sorted(ours - set(status.steps))
     if absent:
         return f"Cursor loaded {len(status.steps)} hooks but not {', '.join(absent)}"
     return None
 
 
+def _unconfirmed(ctx: Context, what: str) -> Finding:
+    """A Hooks-log result that shows neither that Cursor loaded our hooks nor that it refused them.
+
+    On a verified Cursor version it is a warning. On any other (newer, refused or unreadable: the
+    agent can make the version unreadable) the log is the only sign that the hooks run (D32), so
+    not being able to confirm it from the log fails.
+    """
+    if ctx.version_is_listed:
+        return warn(what)
+    if ctx.cursor_version is None:
+        why = f"AgentFly cannot confirm that Cursor loaded its hooks ({ctx.why_version_unread})."
+    else:
+        version = cursor.shown(ctx.cursor_version)
+        why = (
+            f"Cursor {version} is not on AgentFly's list of verified versions, so it cannot "
+            "confirm that Cursor loaded its hooks."
+        )
+    return fail(f"{what}; {why} {cursor.ADVICE}")
+
+
 def check_hooks_log(ctx: Context) -> Finding:
-    folder, files = hookslog.latest(ctx.home)
-    if folder is None:
-        return warn("Cursor has no logs yet (has it been started?)")
-    if not files:
-        return warn(f"Cursor's newest log folder {folder.name} has no Hooks log yet")
+    logs = hookslog.latest(ctx.home)
+    if logs.folder is None:
+        return _unconfirmed(ctx, "Cursor has no logs yet (has it been started?)")
+    name = logs.folder.name
+    if logs.too_many:
+        return _unconfirmed(
+            ctx,
+            f"Cursor's newest log folder {name} holds more than {hookslog.MAX_LOGS} Hooks logs, "
+            "and AgentFly reads none of them",
+        )
+    if not logs.files:
+        return _unconfirmed(ctx, f"Cursor's newest log folder {name} has no Hooks log yet")
     ours = {entry.event for entry in installer.desired_entries(ctx.layout)}
-    statuses: list[hookslog.LogStatus] = []
-    for path in files:
+    answered = False  # some log has a line about the system hooks
+    problem: str | None = None  # why the first log that refused them did
+    for path in logs.files:
         try:
             status = hookslog.status_of(hookslog.read_tail(path))
-        except OSError:
+        except OSError:  # a pipe, a device or a folder among them is skipped, never waited on
             continue
-        if status is not None:
-            statuses.append(status)
-    problems = [problem for status in statuses if (problem := _log_problem(status, ours))]
-    if problems:
-        return fail(f"Cursor did not load AgentFly's hooks ({problems[0]}); quit and reopen Cursor")
-    if statuses:
-        return ok(f"Cursor loaded AgentFly's {len(ours)} hooks ({folder.name})")
-    return warn(f"no line about the system hooks in Cursor's Hooks log ({folder.name})")
+        if status is not None:  # kept as a short verdict: a status can hold a whole 4 MiB line
+            answered = True
+            problem = problem or _log_problem(status, ours)
+    if problem:
+        return fail(f"Cursor did not load AgentFly's hooks ({problem}); quit and reopen Cursor")
+    if answered:
+        return ok(f"Cursor loaded AgentFly's {len(ours)} hooks ({name})")
+    return _unconfirmed(ctx, f"no line about the system hooks in Cursor's Hooks log ({name})")
 
 
 def check_claude_settings(ctx: Context) -> Finding:

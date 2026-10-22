@@ -58,7 +58,8 @@ These files count as sensitive (decided by file name only):
 
 - macOS or Linux (the install script is Bash)
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- [Cursor](https://cursor.com) with hooks support (verified on Cursor 3.5.17)
+- [Cursor](https://cursor.com) with hooks support (verified on Cursor 3.24.12 and 3.25.9; a newer
+  one is accepted with a warning, see [Installation](#installation))
 - Optional: a [Neo4j AuraDB](https://neo4j.com/cloud/aura/) Free instance for
   the graph copy (also needs `neo4j = true`, see [Configuration](#configuration))
 
@@ -80,8 +81,18 @@ record there, and adds AgentFly's hooks to Cursor's system-wide
 they are, and a timestamped backup of the old file is kept beside it, in
 `/Library/Application Support/Cursor/agentfly-backups/` (every rewrite of that file takes one
 first, and `uninstall` leaves them). It writes nothing and exits with an error if the
-installed Cursor version, or any hook event, is not one AgentFly has verified, or if the download
-fails its checksum. Running it twice changes nothing and needs no password the second time.
+installed Cursor is not one of the verified versions (3.24.12 and 3.25.9) and is not newer than
+the newest of them, if its version is not a plain dotted number, if its `Info.plist` cannot be
+read (it must be a plain file of at most 1 MiB, XML, with a version string and nothing before
+`<plist` but an XML declaration and Apple's `<!DOCTYPE plist PUBLIC …>`: a missing file, a pipe, a
+folder, a larger or binary file, any other header and a malformed file are each refused, with the
+cause named, and `agentfly doctor` shows the same cause on its `events` line once it finds
+AgentFly's entries in `hooks.json`), if a hook event is not one that version accepts, or if the
+download fails its checksum. A
+Cursor newer than the newest verified one gets that version's events and one warning: if Cursor
+dropped one of them it would ignore the whole hooks file, so after any Cursor update quit and
+reopen Cursor, then run `agentfly doctor`. Running it twice changes nothing and needs no password
+the second time.
 Quit and reopen Cursor afterwards so it loads the hooks. Its Settings → Hooks panel does not list
 system-level hooks; the "Hooks" output channel shows `Loaded 8 enterprise hook(s)`.
 
@@ -129,9 +140,13 @@ hashes recorded at install, checks that nothing in AgentFly's system folder can 
 AgentFly's entries in Cursor's hooks file are the ones `init -g` wrote, that the service is running
 with `KeepAlive` (and, for Homebrew, that no LaunchAgent of AgentFly's is loaded next to it), that
 `agentfly` on your `PATH` is this install's (not another venv's), and that Cursor's Hooks log says it
-loaded the hooks (so it fails until you restart Cursor after `init -g`). It warns when
-`~/.claude/settings.json` has hooks on an event that can allow or deny an action. It needs no
-password.
+loaded the hooks (so it fails until you restart Cursor after `init -g`). For a Cursor newer than
+the newest verified version, the `events` line warns "unchecked Cursor version". For any Cursor
+version that is not on the verified list (a newer one, any other, or one it cannot read) that
+log is the only sign that the hooks run, so `doctor` also fails when the log cannot confirm it: no
+log yet, no Hooks log, no line about the system hooks, or more than 64 Hooks logs. On a verified
+version those cases are warnings. It warns when `~/.claude/settings.json` has hooks on an event
+that can allow or deny an action. It needs no password.
 
 To remove everything, run this **before** `uv tool uninstall`:
 

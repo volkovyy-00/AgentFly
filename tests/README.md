@@ -278,7 +278,8 @@ lines for them (R0 and normalisation: V5).
   before the check on the same command; `npm publish` after `cat .env` is denied, in a fresh chat
   it is not.
 - Install (`tests/test_install_*.py`): hooks.json splice keeps other tools' entries
-  byte-identical (fuzzed), pinned Python checksum, exact Cursor version list, install,
+  byte-identical (fuzzed), pinned Python checksum, the Cursor version list and how the
+  version is read (D23, D32), install,
   repair and uninstall on a temporary root, the sudo command line. The rules file
   (`tests/test_install_rules.py`) is written when missing, mode 644, from the packaged default as
   read once, compared with the wheel's RECORD hash (the fake tool environment lists it) and parsed
@@ -324,6 +325,29 @@ lines for them (R0 and normalisation: V5).
   or Version (a newline there is a folded header: a plain one ends it); `init -g` and `uninstall`
   stop with one printable line and no password, nothing raw reaches stdout before "Go on? [y/N]",
   `doctor` prints one plain line. Expected texts are written out, never computed with `visible`.
+- Cursor versions (`tests/test_install_cursor.py`, `tests/test_install_cli.py`, `tests/test_doctor.py`,
+  V3d, V3d-fix1, V3d-fix2, D32): a version newer than the newest listed one, part by part as numbers, gets
+  the newest's events and one `warning:` line naming both versions with the restart-and-`doctor`
+  advice, once however `init -g` ends (the user's run elevates, finds the install intact, or the
+  sudo is typed by hand); the record keeps the real version, and `doctor` after `init -g` shows it.
+  A listed version prints exactly the lines e6e6894 printed, written out in the test. Older,
+  in-between, non-dotted, 10,000-character and control-character versions are refused in one
+  escaped line with nothing written (a newline, `&#13;`, U+009B and U+202E print escaped). The
+  `Info.plist` is read as XML only, at most 1 MiB, from a plain file: a binary plist (one built from
+  300 object numbers that point at one blob takes 299 MiB in plistlib; reading it peaks under
+  64 MiB, as 1 MiB of empty or nested XML does), a pipe, a folder (no descriptor left open), a
+  larger file and a malformed one (one row per exception plistlib can raise) are one refusal. So
+  is a header with more than Cursor's (V3d-fix2): only an XML declaration and then at most
+  `<!DOCTYPE plist PUBLIC "..." "...">` may come before `<plist>`. Headers that hold an ATTLIST
+  subset (a 10,000-character default for each of 10,000 empty elements: 70 KB, 0.6 s of CPU, the
+  input checked by what expat hands the handler), the same behind a comment holding
+  `<!DOCTYPE plist>` or `<plist`, or behind a SYSTEM or PUBLIC ID holding `>`, with no declaration,
+  an entity, a comment, a processing instruction, a second DOCTYPE, a SYSTEM ID, single quotes: each
+  is refused with the parser never called (the calls are counted), by `init -g` in one line before
+  the password, and leaves the version unread in `doctor`. A generated mix of header pieces shows
+  that nothing the check accepts declares anything to expat; Cursor's real header is accepted
+  with or without a BOM and with LF or CRLF; a megabyte of hostile header is checked in a child
+  process with a kill timeout.
 - Service (`tests/test_service.py`, stubs in `tests/launchctl_stub.py`, `tests/brew_stub.py`,
   `tests/service_helpers.py`): `start` writes the KeepAlive plist and loads it, does nothing when
   it runs, reloads a changed file, waits for launchd's teardown; `stop` leaves no job and no file;
@@ -344,7 +368,38 @@ lines for them (R0 and normalisation: V5).
   own line to fail; a warning alone exits 0; `path` compares environments (two venvs on one base
   Python are two programs), and a loaded LaunchAgent next to Homebrew's job fails `service`; the
   Hooks log is matched on the lines Cursor 3.25.9 wrote (the wording of an error about the system
-  file itself has not been seen). The `rules` line warns on a missing rules file and on an
+  file itself has not been seen), each line in time linear in its length (a 200 KB line of blanks
+  is matched in a child process with a kill timeout, which imports the tree under test and fails
+  if it got another `agentfly`, judged by path components so that a sibling folder named like the
+  tree's is another one, V3d-fix3, tested in `test_install_cursor.py` by
+  `test_the_child_fails_if_it_imports_an_agentfly_from_a_folder_next_to_the_tree`; the old
+  patterns took minutes), and read
+  within bounds: at most 64 logs and none beyond (the reads are counted), only plain files (a pipe,
+  a link to a pipe, a link to `/dev/zero` and a folder are skipped; the hang tests bound only the
+  call that could hang), at most the last 4 MiB of each, each reduced to a verdict before the next
+  is read (a `Loaded` line can hold a million steps), and the folders walked through what was
+  opened, without following a link (70 links to one window are one window): the start folder, the
+  windows or the outputs (the only one of them as well) are swapped, between listing and opening,
+  for links to one shared folder or for named pipes (made to happen in the test, for a listed and
+  a newer version), and the opens are counted: none twice, none through a link, none by name, no
+  more than folders existed, none listed twice, no descriptor left open. One real folder renamed
+  onto each of 20 window names is listed once, and the walk stops at the 65th log. A line of the
+  log is shown whole up to 1,000 characters, cut with "..." beyond, and always escaped (a short
+  line with an ESC too); the Cursor version is shown cut and escaped. On a Cursor version that is
+  not on the list (newer, refused, an unreadable one) a log that says nothing fails with the advice, a log that rejects the hooks
+  fails, and one that loaded them is ok; on a listed version (both of them) the texts are those of
+  e6e6894 and "nothing" is a warning. When the version cannot be read (V3d-fix3: a missing file, a
+  pipe, a folder, over 1 MiB, a binary plist, UTF-16 with and without a byte-order mark, another
+  header, a malformed file, an encoding Python does not know, no version in it, a version that is
+  not a string) the `events` line, and the `hooks-log` line when the log cannot confirm the hooks,
+  hold the cause `init -g` prints after `agentfly init: `: written out for each case with the
+  plist's path, and compared with `init -g`'s own stderr; levels and exit code are as before; a
+  path holding an ESC and a newline is shown escaped on one line and a 200-character path whole.
+  Plists that declare ISO-8859-1 or cp1252 (with a letter that is not valid UTF-8) are read in it.
+  For a readable version off the list the `events` and `hooks-log` texts are pinned to those of
+  d49c9d1. The five rejecting texts, and a rejection of Cursor's own
+  shape naming all 21 valid events, fail with e6e6894's text, written out from its own output.
+  The `rules` line warns on a missing rules file and on an
   unedited older default (`init -g` refreshes it), fails on a file the recorder would refuse (a
   link, not the owner's, writable by others, invalid, an R1 below the minimum) or a recorder that
   rejected the file (the default is in force), asks for a restart after a fix, and never fails

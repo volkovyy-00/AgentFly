@@ -9,22 +9,28 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import random
+import re
 import shutil
 import stat
 import subprocess
 import sys
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agentfly.cli import doctor, main
+from agentfly.cli import doctor, init, main
 from agentfly.install import (
     InstallError,
     checks,
     cursor,
+    elevate,
+    hookslog,
     installer,
     packages,
     pythons,
@@ -36,6 +42,7 @@ from agentfly.install.pythons import PythonBuild
 from agentfly.recorder import rulefile
 from tests.install_helpers import (
     TOOL_DISTS,
+    call_unless_it_hangs,
     fake_python_tar,
     make_cursor_app,
     make_layout,
@@ -45,6 +52,20 @@ from tests.install_helpers import (
 )
 from tests.rules_helpers import BROKEN_TOML, R0_ENTRY
 from tests.service_helpers import Brew, Launchd, homebrew_package
+from tests.test_install_cursor import (
+    ADVICE,
+    ESCAPE_VERSION,
+    FOREIGN_HEADER_PLISTS,
+    MALFORMED_PLISTS,
+    NEWER,
+    NEWEST,
+    NOT_XML_PLISTS,
+    REFUSED,
+    open_descriptors,
+    run_in_a_child,
+    write_plist,
+    write_version,
+)
 from tests.test_install_packages import (
     BAD,
     REAL_TOOL_ENVIRONMENT,
@@ -125,6 +146,16 @@ class World:
     def write_log(self, *lines: str) -> None:
         self.log.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def reset_log(self) -> None:
+        """Cursor's newest start folder with the one log that says it loaded the hooks."""
+        shutil.rmtree(self.log.parents[2], ignore_errors=True)
+        self.log.parent.mkdir(parents=True)
+        self.write_log(LOADED, *OTHER_FILES)
+
+
+def failing(results: dict[str, checks.Check]) -> set[str]:
+    return {id_ for id_, check in results.items() if check.level == "fail"}
+
 
 def fake_command(folder: Path, text: str = "#!/bin/sh\nexit 0\n") -> Path:
     """An executable `agentfly` in `folder`."""
@@ -189,9 +220,8 @@ def make_world(
         / "Library/Application Support/Cursor/logs/20261019T100000"
         / "window1_wb0/output_20261019T100001/cursor.hooks.workspaceId-a.log"
     )
-    log.parent.mkdir(parents=True)
     world = World(layout, build, home, launchd, bin_dir, log, [str(bin_dir)])
-    world.write_log(LOADED, *OTHER_FILES)
+    world.reset_log()
     return world
 
 
@@ -535,17 +565,325 @@ def test_a_client_that_matches_the_record_but_is_older_than_this_agentfly_warns(
     assert "agentfly init -g" in stale.results()["client"].text
 
 
-def test_an_unknown_cursor_version_only_warns_about_the_events(world: World) -> None:
-    plist = world.layout.cursor_app / "Contents" / "Info.plist"
-    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "9.9.9"}))
+def test_a_version_older_than_the_newest_listed_only_warns_about_the_events(world: World) -> None:
+    write_version(world.layout, "1.0.0")
     results = world.results()
-    assert results["events"].level == "warn" and "9.9.9" in results["events"].text
-    assert world.levels("fail") == set()
+    assert results["events"].level == "warn" and "1.0.0" in results["events"].text
+    assert "could not be checked" in results["events"].text
+    assert failing(results) == set()
+
+
+def test_every_refused_version_is_one_plain_unchecked_events_line(world: World) -> None:
+    context = world.context()  # one install, the version swapped in the context (it is frozen)
+    for name, version in {**REFUSED, "an escape sequence": ESCAPE_VERSION}.items():
+        line = checks.check_events(replace(context, cursor_version=version))
+        assert line.level == "warn" and "could not be checked" in line.text, name
+        assert "\n" not in line.text and "\x1b" not in line.text and len(line.text) < 400, name
+        # a version that cannot be compared is not "not newer"
+        said = "plain dotted version number" if not cursor.parts(version) else "is not newer than"
+        assert said in line.text, name
+
+
+def test_a_newer_cursor_warns_unchecked_on_the_events_line_and_nothing_fails(world: World) -> None:
+    write_version(world.layout, NEWER)
+    set_record_versions(world, agentfly=installer.agentfly_version(), cursor=NEWER)
+    results = world.results()
+    events = results["events"]
+    assert events.level == "warn" and "unchecked Cursor version" in events.text
+    assert NEWER in events.text and NEWEST in events.text
+    assert ADVICE in events.text
+    assert "could not be checked" not in events.text
+    assert results["record"].level == "ok" and f"Cursor {NEWER}" in results["record"].text
+    assert results["hooks"].level == "ok"
+    assert failing(results) == set()
+
+
+def test_a_newer_cursor_with_an_event_the_newest_does_not_accept_fails_the_events_line(
+    world: World,
+) -> None:
+    write_version(world.layout, NEWER)
+    add_unknown_event(world)
+    results = world.results()
+    events = results["events"]
+    assert events.level == "fail" and "afBogusEvent" in events.text and NEWEST in events.text
+    assert failing(results) == {"events"}  # `hooks` filters by the same list, as for a listed one
+
+
+HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
 
 
 def test_an_unreadable_cursor_version_only_warns(world: World) -> None:
     (world.layout.cursor_app / "Contents" / "Info.plist").unlink()
-    assert world.results()["events"].level == "warn" and world.levels("fail") == set()
+    results = world.results()
+    assert results["events"].level == "warn" and failing(results) == set()
+
+
+def test_a_named_pipe_for_the_plist_does_not_hang_doctor(world: World) -> None:
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    plist.unlink()
+    os.mkfifo(plist)
+    # Only the read that could wait is bounded: the rest of doctor (a stub launchctl run, hashing
+    # the Python) is slow on a busy machine and has nothing to hang on.
+    with pytest.raises(InstallError, match="cannot read the Cursor version"):
+        call_unless_it_hangs(lambda: cursor.installed_version(world.layout.cursor_app), plist)
+    results = world.results()
+    assert results["events"].level == "warn" and failing(results) == set()
+
+
+UNREAD_PLISTS = {  # not XML, or XML whose header has more than Cursor's: well-formed, and read
+    **NOT_XML_PLISTS,  # by plistlib but for the header check, so only that can refuse these two
+    "an internal subset": FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"],
+    "a comment before <plist>": FOREIGN_HEADER_PLISTS["a comment before <plist>"],
+}
+
+
+def test_a_plist_that_is_refused_unparsed_leaves_the_version_unread_and_doctor_answers(
+    world: World,
+) -> None:
+    for name, data in UNREAD_PLISTS.items():  # one install serves all
+        write_plist(world.layout, data)
+        results = world.results()
+        events = results["events"]
+        assert events.level == "warn" and "cannot read the Cursor version" in events.text, name
+        assert failing(results) == set(), name  # the log says the hooks loaded
+
+
+# ---- why the version is unread (V3d-fix3): the `events` line, and the `hooks-log` line when the
+# log cannot confirm the hooks, hold the cause `init -g` prints after "agentfly init: "
+
+
+def holding(data: bytes) -> Callable[[Path], None]:
+    def write(plist: Path) -> None:
+        plist.write_bytes(data)
+
+    return write
+
+
+def set_plist(plist: Path, make: Callable[[Path], None]) -> None:
+    """Replace whatever `plist` is (a file, a pipe, a folder, nothing) by what `make` puts there."""
+    if plist.is_dir():
+        plist.rmdir()
+    else:
+        plist.unlink(missing_ok=True)
+    make(plist)
+
+
+# Cursor's own header and a version, with a non-ASCII letter (ü is one byte in ISO-8859-1 and
+# cp1252, two in UTF-8) so that a file read in the wrong encoding does not parse.
+ENCODED_PLIST = (
+    '<?xml version="1.0" encoding="{declared}"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0"><dict><key>CFBundleName</key><string>C\u00fcrsor</string>'
+    "<key>CFBundleShortVersionString</key><string>3.24.12</string></dict></plist>\n"
+)
+
+
+def encoded(declared: str, codec: str) -> bytes:
+    return ENCODED_PLIST.format(declared=declared).encode(codec)
+
+
+READ = "cannot read the Cursor version from {plist}"
+FULL_ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly doctor`."
+NOT_INSTALLED = "; is Cursor installed in /Applications?"
+# The ways the version can be unreadable: how the plist is made so, and the cause written out, with
+# the plist's path as `{plist}`, never computed from the code under test.
+UNREADABLE_VERSIONS: dict[str, tuple[Callable[[Path], None], str]] = {
+    "a missing file": (lambda plist: None, f"{READ} (FileNotFoundError){NOT_INSTALLED}"),
+    "a named pipe": (lambda plist: os.mkfifo(plist), f"{READ} (not a regular file)"),
+    "a folder": (lambda plist: plist.mkdir(), f"{READ} (not a regular file)"),
+    "over 1 MiB": (holding(b"<" * (cursor.MAX_PLIST_BYTES + 1)), f"{READ} (too large)"),
+    "not XML": (
+        holding(NOT_XML_PLISTS["a binary plist"]),
+        f"{READ} (not XML: AgentFly reads only a UTF-8 XML property list)",
+    ),
+    "UTF-16 with a byte-order mark": (
+        holding(encoded("UTF-16", "utf-16")),
+        f"{READ} (not XML: AgentFly reads only a UTF-8 XML property list)",
+    ),
+    "UTF-16 without one": (
+        holding(encoded("UTF-16", "utf-16-le")),
+        f"{READ} (XML header is not Apple's: AgentFly reads only an XML declaration and the "
+        "plist DOCTYPE before <plist>)",
+    ),
+    "an encoding Python does not know": (
+        holding(MALFORMED_PLISTS["an encoding Python does not know"]),
+        f"{READ} (LookupError){NOT_INSTALLED}",
+    ),
+    "a header that is not Apple's": (
+        holding(FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"]),
+        f"{READ} (XML header is not Apple's: AgentFly reads only an XML declaration and the "
+        "plist DOCTYPE before <plist>)",
+    ),
+    "a malformed plist": (
+        holding(MALFORMED_PLISTS["a mismatched tag"]),
+        f"{READ} (ExpatError){NOT_INSTALLED}",
+    ),
+    "no version in it": (
+        holding(plistlib.dumps({"CFBundleName": "Cursor"})),
+        f"{READ} (KeyError){NOT_INSTALLED}",
+    ),
+    "a version that is not a string": (
+        holding(plistlib.dumps({"CFBundleShortVersionString": 3})),
+        "{plist} has no Cursor version string",
+    ),
+}
+
+
+def unread(plist: Path, kind: str, *, shown: Path | str | None = None) -> str:
+    """Turn `plist` into a version that cannot be read, the way `kind` says; the cause as shown."""
+    make, template = UNREADABLE_VERSIONS[kind]
+    set_plist(plist, make)
+    return template.format(plist=shown or plist)
+
+
+def cannot_confirm(what: str, cause: str) -> str:
+    """The `hooks-log` text when the version is unread and the log says nothing."""
+    return f"{what}; AgentFly cannot confirm that Cursor loaded its hooks ({cause}). {FULL_ADVICE}"
+
+
+def assert_cause_shown(results: dict[str, checks.Check], what: str, cause: str) -> None:
+    assert (results["events"].level, results["events"].text) == ("warn", f"not checked: {cause}")
+    assert (results["hooks-log"].level, results["hooks-log"].text) == (
+        "fail",
+        cannot_confirm(what, cause),
+    )
+
+
+def test_the_events_and_hooks_log_lines_say_why_the_version_is_unread(world: World) -> None:
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    for name in UNREADABLE_VERSIONS:  # one install serves all
+        cause = unread(plist, name)
+        context = world.context()
+        assert context.cursor_version is None, name
+        for case, (setup, what) in SAYS_NOTHING.items():
+            results = read_hooks_log(world, context, setup)
+            assert_cause_shown(results, what, cause)
+            assert failing(results) == {"hooks-log"}, (name, case)  # as at d49c9d1
+        results = read_hooks_log(world, context)  # a log that says the hooks loaded
+        assert results["hooks-log"].level == "ok", name
+        assert results["events"].text == f"not checked: {cause}", name
+        assert failing(results) == set(), name
+
+
+def test_init_prints_the_cause_the_doctor_lines_hold(
+    world: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(init, "SYSTEM", world.layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    for name in UNREADABLE_VERSIONS:
+        cause = unread(plist, name)
+        assert main(["init", "-g"]) == 1, name
+        printed = capsys.readouterr()
+        # the same `cause` the `events` and `hooks-log` lines are compared with above
+        assert (printed.out, printed.err) == ("", f"agentfly init: {cause}\n"), name
+
+
+def printed_line(level: str, id_: str, text: str) -> str:
+    """A line as `agentfly doctor` prints it, with its columns written out."""
+    return f"{level:<5} {id_:<16} {text}"
+
+
+def test_the_command_says_why_the_version_is_unread_and_exits_as_before(
+    command: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plist = command.layout.cursor_app / "Contents" / "Info.plist"
+    for name in ("a missing file", "a header that is not Apple's"):  # the lines are per shape above
+        cause = unread(plist, name)
+        command.reset_log()  # the log says the hooks loaded: warn on events, exit 0
+        assert main(["doctor"]) == 0, name
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.split()[1] for line in lines] == IDS, name
+        assert printed_line("warn", "events", f"not checked: {cause}") in lines, name
+        command.log.unlink()  # nothing to confirm from: hooks-log fails
+        assert main(["doctor"]) == 1, name
+        lines = capsys.readouterr().out.splitlines()
+        what = f"Cursor's newest log folder {LOG_NAME} has no Hooks log yet"
+        assert printed_line("fail", "hooks-log", cannot_confirm(what, cause)) in lines, name
+        assert [line.split()[0] for line in lines].count("fail") == 1, name
+
+
+# A folder name that is shown as it is written, and as the owner reads it.
+CURSOR_APP_NAMES = {
+    "an escape and a newline": (f"Cursor{BAD}.app", f"Cursor{SHOWN}.app"),
+    "200 characters, shown whole": ("x" * 200 + ".app", "x" * 200 + ".app"),
+}
+
+
+@pytest.mark.parametrize("kind", ["a missing file", "a version that is not a string"])
+@pytest.mark.parametrize("app", CURSOR_APP_NAMES)
+def test_a_plist_path_is_shown_whole_and_on_one_line(
+    world: World, tmp_path: Path, app: str, kind: str
+) -> None:
+    written, shown = CURSOR_APP_NAMES[app]
+    world.layout = replace(world.layout, cursor_app=tmp_path / written)
+    make_cursor_app(world.layout)
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    cause = unread(plist, kind, shown=f"{tmp_path}/{shown}/Contents/Info.plist")
+    context = world.context()
+    for case, (setup, what) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        assert_cause_shown(results, what, cause)
+        for line in (results["events"], results["hooks-log"]):
+            assert_plain(line.text)  # no ESC, no newline, no bidi mark: one printable line
+            assert "\n" not in line.text, case
+
+
+@pytest.mark.parametrize(
+    ("declared", "codec"), [("UTF-8", "utf-8"), ("ISO-8859-1", "latin-1"), ("cp1252", "cp1252")]
+)
+def test_a_plist_is_read_in_the_encoding_its_declaration_names(
+    world: World, declared: str, codec: str
+) -> None:
+    """SPEC §8: the declaration is not judged, so these 8-bit encodings are read, not refused."""
+    write_plist(world.layout, encoded(declared, codec))
+    context = world.context()
+    assert (context.cursor_version, context.version_error) == ("3.24.12", "")
+    assert checks.check_events(context).level == "ok"
+
+
+VERSIONS_READ = {  # a readable version that is not on the list: its lines are as at d49c9d1
+    NEWER: (
+        "warn",
+        f"unchecked Cursor version: Cursor {NEWER} is newer than the newest AgentFly has checked "
+        f"({NEWEST}); its registered events are compared with {NEWEST}'s. {FULL_ADVICE}",
+    ),
+    "1.0.0": (
+        "warn",
+        "Cursor 1.0.0 is not on AgentFly's list of verified versions (3.24.12, 3.25.9) and is "
+        f"not newer than {NEWEST}; its registered events could not be checked",
+    ),
+    "": (
+        "warn",
+        "Cursor  is not a plain dotted version number (like 3.25.9), so AgentFly cannot tell "
+        f"whether it is newer than {NEWEST}; its registered events could not be checked",
+    ),
+}
+
+
+@pytest.mark.parametrize("version", VERSIONS_READ)
+def test_a_readable_version_off_the_list_has_the_texts_it_had_before_the_cause_was_shown(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    context = world.context()
+    assert context.cursor_version == version
+    events = checks.check_events(context)
+    assert (events.level, events.text) == VERSIONS_READ[version]
+    for case, (setup, what) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        why = f"Cursor {version} is not on AgentFly's list of verified versions"
+        assert (results["hooks-log"].level, results["hooks-log"].text) == (
+            "fail",
+            f"{what}; {why}, so it cannot confirm that Cursor loaded its hooks. {FULL_ADVICE}",
+        ), case
+
+
+def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:
+    write_plist(world.layout, MALFORMED_PLISTS["a mismatched tag"])  # `plistlib` raises ExpatError
+    results = world.results()
+    assert results["events"].level == "warn" and failing(results) == set()
 
 
 def test_an_entry_on_an_unknown_event_does_not_fail_the_hooks_line_too(world: World) -> None:
@@ -599,6 +937,23 @@ def test_the_newest_start_folder_is_the_one_that_counts(world: World) -> None:
     assert world.results()["hooks-log"].level == "fail"
 
 
+@pytest.mark.parametrize("name", ["20271231T000000\n", "٢٠٢٧١٢٣١T٠٠٠٠٠٠", "20271231T000000.bak"])
+def test_a_folder_that_only_looks_like_a_start_time_is_not_the_newest(
+    world: World, name: str
+) -> None:
+    impostor = world.log.parents[3] / name / "window1_wb0/output_y"
+    impostor.mkdir(parents=True)
+    (impostor / "cursor.hooks.workspaceId-a.log").write_text(
+        "[t] No enterprise hooks configuration found\n"
+    )
+    assert world.results()["hooks-log"].text == f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})"
+
+
+def test_a_plain_file_named_like_a_start_time_is_not_a_start_folder(world: World) -> None:
+    (world.log.parents[3] / "20271231T000000").write_text("not a folder\n")
+    assert world.results()["hooks-log"].text == f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})"
+
+
 def test_one_window_that_failed_is_enough_to_fail(world: World) -> None:
     second = world.log.parents[2] / "window2_wb1/output_z"
     second.mkdir(parents=True)
@@ -608,15 +963,717 @@ def test_one_window_that_failed_is_enough_to_fail(world: World) -> None:
     assert world.results()["hooks-log"].level == "fail"
 
 
-@pytest.mark.parametrize("setup", ["no logs", "no hooks log", "no status line"])
-def test_a_hooks_log_that_says_nothing_only_warns(world: World, setup: str) -> None:
-    if setup == "no logs":
-        shutil.rmtree(world.log.parents[3])
-    elif setup == "no hooks log":
-        world.log.unlink()
+# What `hooks-log` prints on a verified Cursor (3.24.12 here) for each way the log can say nothing:
+# the texts of e6e6894, unchanged, plus the one new case. Each is (how to make it, the text).
+LOG_NAME = "20261019T100000"
+
+
+def make_logs(w: World, count: int) -> None:
+    """Replace the world's one log by `count` that all say Cursor loaded the hooks."""
+    w.log.unlink()
+    for number in range(count):
+        (w.log.parent / f"cursor.hooks.workspaceId-{number:03}.log").write_text(LOADED + "\n")
+
+
+SAYS_NOTHING = {
+    "no logs": (
+        lambda w: shutil.rmtree(w.log.parents[3]),
+        "Cursor has no logs yet (has it been started?)",
+    ),
+    "no Hooks log": (
+        lambda w: w.log.unlink(),
+        f"Cursor's newest log folder {LOG_NAME} has no Hooks log yet",
+    ),
+    "no recognised line": (
+        lambda w: w.write_log("[t] Reloading hooks configuration..."),
+        f"no line about the system hooks in Cursor's Hooks log ({LOG_NAME})",
+    ),
+    "65 logs": (
+        partial(make_logs, count=65),
+        f"Cursor's newest log folder {LOG_NAME} holds more than 64 Hooks logs, "
+        "and AgentFly reads none of them",
+    ),
+}
+
+
+def read_hooks_log(
+    w: World, context: checks.Context, setup: Callable[[World], None] | None = None
+) -> dict[str, checks.Check]:
+    """Put the log back, apply `setup`, run every check on `context`.
+
+    A test loops over cases on one install: only files under `home` change, so one context serves.
+    """
+    w.reset_log()
+    if setup:
+        setup(w)
+    return {check.id: check for check in checks.run_all(context)}
+
+
+@pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
+def test_on_a_listed_version_the_hooks_log_and_events_lines_have_the_texts_of_e6e6894(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    context = world.context()
+    results = read_hooks_log(world, context)
+    assert (results["hooks-log"].level, results["hooks-log"].text) == (
+        "ok",
+        f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})",
+    )
+    assert (results["events"].level, results["events"].text) == (
+        "ok",
+        f"every registered event is accepted by Cursor {version}",
+    )
+    for case, (setup, text) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        assert (results["hooks-log"].level, results["hooks-log"].text) == ("warn", text), case
+        assert failing(results) == set(), case
+
+
+# What e6e6894's `hooks-log` line printed on a verified Cursor for each way the log rejects the
+# hooks, copied from that commit's own output (the same worlds, run in its tree). The last is a
+# rejection of Cursor's own shape: its message lists all 21 valid events, about 450 characters.
+REJECTION = (
+    "[2026-10-19T10:00:00.200Z] ERROR: Invalid enterprise config: Unknown hook type: afBogusEvent. "
+    "Valid types: sessionStart, sessionEnd, preToolUse, postToolUse, postToolUseFailure, "
+    "subagentStart, subagentStop, beforeShellExecution, afterShellExecution, beforeMCPExecution, "
+    "afterMCPExecution, beforeReadFile, afterFileEdit, beforeSubmitPrompt, preCompact, stop, "
+    "afterAgentResponse, afterAgentThought, beforeTabFileRead, afterTabFileEdit, workspaceOpen"
+)
+E6E6894_REJECTIONS = {
+    "no enterprise hooks in the Hooks log": (
+        "Cursor did not load AgentFly's hooks (Cursor says: No enterprise "
+        "hooks configuration found); quit and reopen Cursor"
+    ),
+    "a parse error about the system file": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Failed to "
+        "parse enterprise hooks configuration); quit and reopen Cursor"
+    ),
+    "an invalid-config line about the system file": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "enterprise config: Unknown hook type); quit and reopen Cursor"
+    ),
+    "a Hooks-log line about an unnamed source": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "config: Unknown hook type); quit and reopen Cursor"
+    ),
+    "Cursor loaded only some of the hooks": (
+        "Cursor did not load AgentFly's hooks (Cursor loaded 2 hooks but not "
+        "afterFileEdit, beforeMCPExecution, beforeReadFile, "
+        "beforeShellExecution, sessionEnd, sessionStart, subagentStart); quit "
+        "and reopen Cursor"
+    ),
+    "a rejection naming the 21 valid events": (
+        "Cursor did not load AgentFly's hooks (Cursor says: ERROR: Invalid "
+        "enterprise config: Unknown hook type: afBogusEvent. Valid types: "
+        "sessionStart, sessionEnd, preToolUse, postToolUse, "
+        "postToolUseFailure, subagentStart, subagentStop, "
+        "beforeShellExecution, afterShellExecution, beforeMCPExecution, "
+        "afterMCPExecution, beforeReadFile, afterFileEdit, beforeSubmitPrompt, "
+        "preCompact, stop, afterAgentResponse, afterAgentThought, "
+        "beforeTabFileRead, afterTabFileEdit, workspaceOpen); quit and reopen "
+        "Cursor"
+    ),
+}
+
+
+@pytest.mark.parametrize("version", ["3.24.12", "3.25.9"])
+def test_on_a_listed_version_a_rejecting_log_prints_the_text_of_e6e6894(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    context = world.context()
+    assert len(REJECTION) > 400  # longer than the 300 characters of V3d-fix1, shorter than 1,000
+    for case, text in E6E6894_REJECTIONS.items():
+        if case in FAULTS:
+            setup = FAULTS[case][1]
+        else:
+            setup = lambda w: w.write_log(LOADED, REJECTION)  # noqa: E731  (the 21 valid events)
+        results = read_hooks_log(world, context, setup)
+        assert (results["hooks-log"].level, results["hooks-log"].text) == ("fail", text), case
+        assert failing(results) == {"hooks-log"}, case
+
+
+# A Cursor version that is not on the verified list, however it came to be one (D32). An unreadable
+# one is every file that is not a plain XML plist (`cursor.installed_version` has one answer).
+UNVERIFIED = {
+    "newer": (
+        lambda w: write_version(w.layout, NEWER),
+        f"Cursor {NEWER} is not on AgentFly's list",
+    ),
+    "refused": (
+        lambda w: write_version(w.layout, "1.0.0"),
+        "Cursor 1.0.0 is not on AgentFly's list",
+    ),
+    "unreadable": (
+        lambda w: (w.layout.cursor_app / "Contents" / "Info.plist").unlink(),
+        "AgentFly cannot confirm that Cursor loaded its hooks (cannot read the Cursor version from",
+    ),
+    "empty": (lambda w: write_version(w.layout, ""), "is not on AgentFly's list"),
+}
+HOOKS_LOG_FAULTS = [name for name, (line, _) in FAULTS.items() if line == "hooks-log"]
+
+
+@pytest.mark.parametrize("version", UNVERIFIED)
+def test_on_any_version_not_on_the_list_a_log_that_says_nothing_fails_with_the_advice(
+    world: World, version: str
+) -> None:
+    make_unverified, why = UNVERIFIED[version]
+    make_unverified(world)
+    context = world.context()
+    for case, (setup, text) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        check = results["hooks-log"]
+        assert check.level == "fail", (case, check)
+        assert check.text.startswith(text + "; ") and why in check.text, case
+        assert check.text.endswith(cursor.ADVICE) and "\n" not in check.text, case
+        assert failing(results) == {"hooks-log"}, case
+
+
+@pytest.mark.parametrize("version", UNVERIFIED)
+def test_on_any_version_not_on_the_list_a_loaded_log_is_ok_and_a_rejecting_one_fails(
+    world: World, version: str
+) -> None:
+    UNVERIFIED[version][0](world)
+    context = world.context()
+    results = read_hooks_log(world, context)
+    assert results["hooks-log"].level == "ok"  # a forged line is taken, as it always was
+    assert failing(results) == set()
+    for name in HOOKS_LOG_FAULTS:
+        results = read_hooks_log(world, context, FAULTS[name][1])
+        check = results["hooks-log"]
+        assert check.level == "fail" and check.text.startswith("Cursor did not load"), name
+        assert failing(results) == {"hooks-log"}, name
+
+
+@pytest.mark.parametrize("version", ["listed", "newer"])
+def test_at_most_64_logs_are_read_and_none_beyond(
+    world: World, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    context = world.context()
+    read: list[Path] = []
+    real = hookslog.read_tail
+    monkeypatch.setattr(hookslog, "read_tail", lambda path: read.append(path) or real(path))
+    for count in (64, 65, 300):
+        read.clear()
+        results = read_hooks_log(world, context, partial(make_logs, count=count))
+        assert len(read) == (count if count <= 64 else 0), count  # counted reads, not seconds
+        expected = "ok" if count <= 64 else ("warn" if version == "listed" else "fail")
+        assert results["hooks-log"].level == expected, count
+
+
+def test_each_log_is_reduced_to_a_verdict_before_the_next_is_read(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status can hold a whole 4 MiB line (a `Loaded` line with a million steps): 64 of them
+    kept at once were gigabytes. At most the one being read, and the one before it, may be alive."""
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log is read
+    make_logs(world, 12)
+    seen: list[weakref.ref[hookslog.LogStatus]] = []
+    most_alive = 0
+    real = hookslog.status_of
+
+    def watching(text: str) -> hookslog.LogStatus | None:
+        nonlocal most_alive
+        status = real(text)
+        assert status is not None
+        seen.append(weakref.ref(status))
+        most_alive = max(most_alive, sum(ref() is not None for ref in seen))
+        return status
+
+    monkeypatch.setattr(hookslog, "status_of", watching)
+    assert checks.check_hooks_log(world.context()).level == "ok"
+    assert len(seen) == 12 and most_alive <= 2
+
+
+def test_a_link_to_a_window_folder_is_not_another_window(world: World) -> None:
+    """N links to one folder of M entries must not cost N times M, nor count as N sets of logs."""
+    window = world.log.parents[1]
+    for number in range(70):  # more than MAX_LOGS: followed, they would be 71 logs
+        (window.parent / f"window_link{number}").symlink_to(window)
+    (window / "output_link").symlink_to(world.log.parent)
+    logs = hookslog.latest(world.home)
+    assert logs.files == (world.log,) and not logs.too_many
+
+
+# ---- folders the agent's user swaps while the walk runs: each is opened once, never through a link
+
+REJECTED = "[t] No enterprise hooks configuration found\n"  # what a log in a decoy folder says
+
+
+class WatchedOs:
+    """`hookslog`'s `os` that records every folder the walk opens, and runs `swap` once, just
+    before the first one whose name satisfies `trigger`: after the folder above it was listed, and
+    before it is opened, as the agent's user could do it. Not left to timing."""
+
+    def __init__(
+        self,
+        trigger: Callable[[str], bool] = lambda name: False,
+        swap: Callable[[], None] = lambda: None,
+        on_open: Callable[[str], None] = lambda name: None,
+    ) -> None:
+        self.trigger, self.swap, self.on_open = trigger, swap, on_open
+        self.swapped = False
+        self.opened: list[tuple[int, int]] = []  # (device, inode) of each folder opened
+        self.listed: list[tuple[int, int]] = []  # (device, inode) of each open folder listed
+        self.not_folders = 0  # descriptors opened for anything but a folder
+        self.links_followed = 0  # folders opened by a name below another that a link could replace
+        self.listed_by_name: list[str] = []  # listings that open a folder by name, behind our back
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(os, name)
+
+    def _before(self, target: str) -> None:
+        self.on_open(Path(target).name)
+        if not self.swapped and self.trigger(Path(target).name):
+            self.swapped = True
+            self.swap()
+
+    def open(self, path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        self._before(os.fspath(path))
+        if dir_fd is not None and not flags & os.O_NOFOLLOW:
+            self.links_followed += 1
+        fd = os.open(path, flags, mode, dir_fd=dir_fd)
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            self.opened.append((info.st_dev, info.st_ino))
+        else:
+            self.not_folders += 1
+        return fd
+
+    def scandir(self, path: Any = ".") -> Any:
+        if not isinstance(path, int):  # a name: it is opened again, and a link is followed
+            self._before(os.fspath(path))
+            self.listed_by_name.append(os.fspath(path))
+        else:
+            info = os.fstat(path)
+            self.listed.append((info.st_dev, info.st_ino))
+        return os.scandir(path)
+
+
+def plant_a_pipe_in_place_of(path: Path, shared: Path) -> None:
+    shutil.rmtree(path)
+    os.mkfifo(path)
+
+
+def plant_a_link_in_place_of(path: Path, shared: Path) -> None:
+    shutil.rmtree(path)
+    path.symlink_to(shared)
+
+
+SWAPPED_FOR = {
+    "a link to one shared folder": plant_a_link_in_place_of,
+    "a named pipe": plant_a_pipe_in_place_of,
+}
+SWAPPED_LEVELS = [
+    "start folder",
+    "the only window folder",
+    "the only output folder",
+    "window folders",
+    "output folders",
+]
+
+
+def swap_set_up(
+    world: World, level: str, tmp_path: Path
+) -> tuple[Callable[[str], bool], list[Path]]:
+    """The name that triggers the swap for `level`, and the folders to swap.
+
+    The shared folder (`tmp_path / "shared"`, outside Cursor's logs) holds a log that rejects the
+    hooks at each depth a link could stand for: a walk that follows a link to it reads one and says
+    so. The world's own log is never among the folders swapped, except at the levels that have only
+    that one.
+    """
+    start, window = world.log.parents[2], world.log.parents[1]
+    for folder in (
+        tmp_path / "shared",
+        tmp_path / "shared/output_x",
+        tmp_path / "shared/window1_wb0/output_x",
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "cursor.hooks.s.log").write_text(REJECTED)
+    in_window = lambda name: name.startswith("window")  # noqa: E731
+    in_output = lambda name: name.startswith("output_")  # noqa: E731
+    if level == "start folder":
+        return hookslog._START_FOLDER.fullmatch, [start]
+    if level == "the only window folder":
+        return in_window, [window]
+    if level == "the only output folder":
+        return in_output, [world.log.parent]
+    if level == "window folders":
+        for number in range(6):
+            (start / f"window{number}_extra").mkdir()
+        return in_window, sorted(start.glob("window*_extra"))
+    for number in range(6):
+        (window / f"output_extra{number}").mkdir()
+    return in_output, sorted(window.glob("output_extra*"))
+
+
+@pytest.mark.parametrize("version", ["listed", "newer"])
+@pytest.mark.parametrize("swapped_for", SWAPPED_FOR)
+@pytest.mark.parametrize("level", SWAPPED_LEVELS)
+def test_folders_swapped_during_the_walk_are_skipped_never_opened_twice_or_through_a_link(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    level: str,
+    swapped_for: str,
+    version: str,
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log walk is under test
+    trigger, victims = swap_set_up(world, level, tmp_path)
+    root = world.log.parents[3]  # Cursor's `logs` folder
+    existing = sum(1 for _ in os.walk(root))  # every folder under the Cursor logs, before the swap
+
+    def swap() -> None:
+        for victim in victims:
+            SWAPPED_FOR[swapped_for](victim, tmp_path / "shared")
+
+    watched = WatchedOs(trigger, swap)
+    with monkeypatch.context() as patched:
+        patched.setattr(hookslog, "os", watched)
+        logs = hookslog.latest(world.home)
+    assert watched.swapped, "the swap never happened between listing and opening"
+    assert watched.listed_by_name == [], "a folder was listed by its name, not through the open one"
+    assert watched.links_followed == 0 and watched.not_folders == 0
+    assert len(watched.opened) == len(set(watched.opened)), "a folder was opened twice"
+    assert len(watched.listed) == len(set(watched.listed)), "a folder was listed twice"
+    assert len(watched.opened) <= existing, (len(watched.opened), existing)
+    check = call_unless_it_hangs(lambda: checks.check_hooks_log(world.context()), world.log)
+    if level in ("start folder", "the only window folder", "the only output folder"):
+        # the only folder with a log is gone: as no log at all
+        assert logs.files == () and not logs.too_many
+        assert check.level == ("warn" if version == "listed" else "fail"), check
     else:
-        world.write_log("[t] Reloading hooks configuration...")
-    assert world.results()["hooks-log"].level == "warn" and world.levels("fail") == set()
+        assert logs.files == (world.log,) and logs.folder is not None
+        assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+def test_one_real_folder_moved_onto_every_window_name_is_listed_once(
+    world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rename, not a link: nothing refuses it, and each open of a `window*` name finds the same
+    folder of 20 outputs there (moved just before, made to happen here). Opened under each of the
+    20 names, it is listed once: about 42 opens and 23 listings, not 20 x 20 and 20 x 21."""
+    start = world.log.parents[2]
+    shutil.rmtree(world.log.parents[1])  # the world's own window: these are all there is
+    for number in range(20):
+        (start / f"window{number}").mkdir()
+        (tmp_path / f"big/output_{number}").mkdir(parents=True)
+    where = [tmp_path / "big"]
+
+    def move_big_onto(name: str) -> None:
+        if name.startswith("window"):
+            target = start / name
+            target.rmdir()
+            where[0].rename(target)
+            where[0] = target
+
+    watched = WatchedOs(on_open=move_big_onto)
+    monkeypatch.setattr(hookslog, "os", watched)
+    hookslog.latest(world.home)
+    assert len(watched.listed) == len(set(watched.listed)), "a folder was listed twice"
+    assert len(watched.listed) <= 3 + 20 and len(watched.opened) <= 2 + 20 + 20
+
+
+def test_the_walk_stops_listing_at_the_65th_log(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two windows of 65 logs: whichever the listing gives first holds the 65th, so only the Cursor
+    logs folder, the start folder, one window and one output folder are opened, not six."""
+    start = world.log.parents[2]
+    shutil.rmtree(world.log.parents[1])  # the world's own window: these two are all there is
+    for number in range(2):
+        output = start / f"window{number}_more/output_a"
+        output.mkdir(parents=True)
+        for log in range(65):
+            (output / f"cursor.hooks.{log}.log").write_text(LOADED + "\n")
+    watched = WatchedOs()
+    monkeypatch.setattr(hookslog, "os", watched)
+    logs = hookslog.latest(world.home)
+    assert logs.too_many and logs.files == ()
+    assert len(watched.opened) == 4, len(watched.opened)
+
+
+def test_a_walk_over_many_logs_leaves_no_descriptor_open(world: World) -> None:
+    for count in (3, 65):  # the second stops the walk early, in the middle of three open folders
+        world.reset_log()
+        make_logs(world, count)
+        before = open_descriptors()
+        for _ in range(20):
+            hookslog.latest(world.home)
+        assert open_descriptors() == before, count
+
+
+def test_a_folder_that_vanishes_between_the_listing_and_its_type_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Gone:
+        name = "window1"
+
+        def is_dir(self, *, follow_symlinks: bool) -> bool:
+            raise FileNotFoundError(self.name)  # looked up (no type was listed) and already gone
+
+    class Here(Gone):
+        name = "window2"
+
+        def is_dir(self, *, follow_symlinks: bool) -> bool:
+            return True
+
+    monkeypatch.setattr(hookslog, "_entries", lambda fd: iter([Gone(), Here()]))
+    assert list(hookslog._subfolders(-1, lambda name: name.startswith("window"))) == ["window2"]
+
+
+def test_a_start_folder_that_is_a_link_or_a_pipe_is_not_the_newest(world: World) -> None:
+    root = world.log.parents[3]
+    elsewhere = world.home / "elsewhere"
+    elsewhere.mkdir()
+    (root / "20271231T000000").symlink_to(elsewhere)  # newer than the real one, and a link
+    os.mkfifo(root / "20271230T000000")  # newer, and a pipe
+    logs = hookslog.latest(world.home)
+    assert logs.folder == world.log.parents[2] and logs.files == (world.log,)
+
+
+def test_the_cursor_logs_folder_itself_may_be_a_link_but_nothing_below_it(world: World) -> None:
+    root = world.log.parents[3]
+    moved = world.home / "moved-logs"
+    root.rename(moved)
+    root.symlink_to(moved)
+    assert hookslog.latest(world.home).files == (world.log,)
+
+
+@pytest.mark.parametrize("version", ["3.26\n13", "3.26\u202e13", ESCAPE_VERSION, "9" * 5000])
+def test_the_version_in_the_hooks_log_line_is_shown_cut_and_escaped(
+    world: World, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    shutil.rmtree(world.log.parents[3])  # no logs: the line that names the version
+    check = checks.check_hooks_log(replace(world.context(), cursor_version=version))
+    assert check.level == "fail" and check.text.isprintable() and len(check.text) < 400
+
+
+# ---- files the agent's user can plant among Cursor's logs: skipped, never waited on or read
+
+
+def plant_pipe(folder: Path) -> Path:
+    path = folder / "cursor.hooks.pipe.log"
+    os.mkfifo(path)
+    return path
+
+
+def plant_link_to_a_pipe(folder: Path) -> Path:
+    pipe = folder / "a_pipe"  # not named like a Hooks log: only the link is
+    os.mkfifo(pipe)
+    link = folder / "cursor.hooks.linkpipe.log"
+    link.symlink_to(pipe)
+    return link
+
+
+def plant_link_to_dev_zero(folder: Path) -> Path:
+    link = folder / "cursor.hooks.zero.log"
+    link.symlink_to("/dev/zero")  # a read of it never ends
+    return link
+
+
+def plant_a_folder(folder: Path) -> Path:
+    path = folder / "cursor.hooks.1.log"
+    path.mkdir()
+    return path
+
+
+PLANTED = {
+    "a named pipe": plant_pipe,
+    "a link to a named pipe": plant_link_to_a_pipe,
+    "a link to /dev/zero": plant_link_to_dev_zero,
+    "a folder": plant_a_folder,
+}
+
+
+def hooks_log_line(world: World, monkeypatch: pytest.MonkeyPatch, planted: Path) -> checks.Finding:
+    """`check_hooks_log` alone, as the one call that could hang; `planted` frees a stuck reader.
+
+    Nothing else reads the service, so its (slow) stub launchctl run is skipped.
+    """
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    context = world.context()  # built outside the bound: only the log read can hang
+    return call_unless_it_hangs(lambda: checks.check_hooks_log(context), planted)
+
+
+def test_a_line_of_the_log_is_shown_cut_and_with_its_escapes_written_out(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)  # only the log line is read
+    world.write_log("[t] ERROR: Invalid config \x1b[2J\x1b[H" + "x" * 3_000_000)
+    check = checks.check_hooks_log(world.context())
+    # The first 1,000 characters of the line (the ESCs among them), escaped, and a mark of the cut.
+    shown = "ERROR: Invalid config \\x1b[2J\\x1b[H" + "x" * 971 + "\u2026"
+    assert check.level == "fail"
+    assert check.text == (
+        f"Cursor did not load AgentFly's hooks (Cursor says: {shown}); quit and reopen Cursor"
+    )
+
+
+def test_a_short_line_of_the_log_is_shown_escaped_too(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    world.write_log("[t] ERROR: Invalid config \x1b[2J: Unknown hook type")
+    check = checks.check_hooks_log(world.context())
+    assert check.text == (
+        "Cursor did not load AgentFly's hooks (Cursor says: "
+        "ERROR: Invalid config \\x1b[2J: Unknown hook type); quit and reopen Cursor"
+    )
+
+
+@pytest.mark.parametrize("length, cut", [(999, False), (1000, False), (1001, True)])
+def test_a_line_of_up_to_1000_characters_is_shown_whole(
+    world: World, monkeypatch: pytest.MonkeyPatch, length: int, cut: bool
+) -> None:
+    monkeypatch.setattr(service, "inspect", lambda: None)
+    prefix = "ERROR: Invalid enterprise config: "
+    line = prefix + "y" * (length - len(prefix))
+    assert len(line) == length
+    world.write_log("[t] " + line)
+    check = checks.check_hooks_log(world.context())
+    shown = line[:1000] + ("\u2026" if cut else "")
+    assert check.text == (
+        f"Cursor did not load AgentFly's hooks (Cursor says: {shown}); quit and reopen Cursor"
+    )
+
+
+@pytest.mark.parametrize("kind", PLANTED)
+def test_a_planted_special_file_among_the_logs_is_skipped_and_doctor_answers(
+    world: World, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    planted = PLANTED[kind](world.log.parent)
+    check = hooks_log_line(world, monkeypatch, planted)
+    assert (check.level, check.text) == ("ok", f"Cursor loaded AgentFly's 8 hooks ({LOG_NAME})")
+
+
+@pytest.mark.parametrize("version", ["listed", "newer"])
+@pytest.mark.parametrize("kind", PLANTED)
+def test_a_special_file_alone_is_no_line_about_the_hooks(
+    world: World, monkeypatch: pytest.MonkeyPatch, kind: str, version: str
+) -> None:
+    if version == "newer":
+        write_version(world.layout, NEWER)
+    world.log.unlink()
+    check = hooks_log_line(world, monkeypatch, PLANTED[kind](world.log.parent))
+    assert check.level == ("warn" if version == "listed" else "fail")
+    assert check.text.startswith(SAYS_NOTHING["no recognised line"][1])
+
+
+@pytest.mark.parametrize("kind", PLANTED)
+def test_read_tail_refuses_anything_but_a_plain_file(tmp_path: Path, kind: str) -> None:
+    planted = PLANTED[kind](tmp_path)
+    with pytest.raises(OSError):
+        call_unless_it_hangs(lambda: hookslog.read_tail(planted), planted)
+
+
+def test_read_tail_reads_a_plain_file_and_a_link_to_one(tmp_path: Path) -> None:
+    log = tmp_path / "cursor.hooks.a.log"
+    log.write_text("one\ntwo\n")
+    link = tmp_path / "cursor.hooks.link.log"
+    link.symlink_to(log)
+    assert hookslog.read_tail(log) == hookslog.read_tail(link) == "one\ntwo\n"
+
+
+def test_read_tail_returns_the_last_tail_bytes_of_a_bigger_file(tmp_path: Path) -> None:
+    big = tmp_path / "cursor.hooks.big.log"
+    big.write_bytes(b"x" * (hookslog._TAIL_BYTES + (1 << 20)) + b"END\n")
+    tail = hookslog.read_tail(big)
+    assert len(tail) == hookslog._TAIL_BYTES and tail.endswith("END\n")
+
+
+def test_a_folder_among_the_logs_leaks_no_descriptor(tmp_path: Path) -> None:
+    planted = plant_a_folder(tmp_path)
+    before = open_descriptors()
+    for _ in range(20):
+        with pytest.raises(OSError):
+            hookslog.read_tail(planted)
+    assert open_descriptors() == before
+
+
+# ---- a line of a log is matched in time linear in its length (the agent's user can write it)
+
+STATUS_LINES = {
+    "loaded": (LOADED, ("loaded", tuple(cursor.EVENTS))),
+    "loaded, trailing blanks": (LOADED + "   ", ("loaded", tuple(cursor.EVENTS))),
+    "none": ("[t] No enterprise hooks configuration found", ("none", ())),
+    "invalid, system": (
+        "[t] ERROR: Invalid enterprise config: Unknown hook type",
+        ("error", ()),
+    ),
+    "invalid, unnamed": ("[t] ERROR: Invalid config: Unknown hook type", ("error", ())),
+    "invalid, two blanks": ("[t] ERROR: Invalid  config: x", ("error", ())),
+    "failed to parse, system": (
+        "[t] ERROR: Failed to parse enterprise hooks configuration",
+        ("error", ()),
+    ),
+    "invalid, user": ("[t] ERROR: Invalid user config: x", None),
+    "invalid, claude user": ("[t] ERROR: Invalid claude user config: x", None),
+    "failed to parse, project": ("[t] ERROR: Failed to parse project hooks configuration", None),
+    "configuration is not config": ("[t] ERROR: Invalid enterprise configuration: x", None),
+    "the word starts inside another": ("[t] xInvalid enterprise config: x", None),
+    "a first Invalid that names a user": ("[t] Invalid user Invalid enterprise config", None),
+    "nothing about the file": ("[t] Reloading hooks configuration...", None),
+}
+
+
+@pytest.mark.parametrize("line, expected", STATUS_LINES.values(), ids=STATUS_LINES.keys())
+def test_status_of_reads_the_lines_cursor_writes(
+    line: str, expected: tuple[str, tuple[str, ...]] | None
+) -> None:
+    status = hookslog.status_of(line + "\n")
+    if expected is None:
+        assert status is None
+    else:
+        assert status is not None and (status.kind, status.steps) == expected
+
+
+# The patterns the rewrite replaced, kept here as the oracle.
+OLD_INVALID = re.compile(r"\bInvalid (?P<source>.*?)\s*config\b")
+OLD_UNPARSED = re.compile(r"\bFailed to parse (?P<source>.*?)\s*hooks configuration\b")
+PIECES = [
+    "Invalid ", "Invalid", "Failed to parse ", "hooks configuration", "config", "configuration",
+    "enterprise ", "user ", " ", "  ", "\t", "x", "_", ":", "é", "1",
+]  # fmt: skip
+
+
+def test_error_sources_equal_the_old_regexes_on_generated_lines() -> None:
+    rng = random.Random(7)
+    for _ in range(20_000):
+        line = "".join(rng.choice(PIECES) for _ in range(rng.randint(1, 10)))
+        match = OLD_INVALID.search(line) or OLD_UNPARSED.search(line)
+        old = match["source"].strip() if match else None
+        assert hookslog._error_source(line) == old, repr(line)
+
+
+HOSTILE_LINES = {  # each is 200 KB; the patterns this replaced took minutes on six of them
+    "Loaded, then blanks": "Loaded 1 enterprise hook(s) for steps: " + " " * 200_000 + "x",
+    "Invalid, then blanks": "Invalid" + " " * 200_000 + "x",
+    "Failed to parse, then blanks": "Failed to parse " + " " * 200_000 + "x",
+    "Invalid, then blanks, then a miss": "Invalid " + " " * 200_000 + "configuration",
+    "a run of Invalid": "Invalid " * 25_000,
+    "a run of xInvalid": "xInvalid " * 22_000,
+    "Invalid, then a run of configx": "Invalid " + "configx" * 28_000,
+    "a run of Failed to parse": "Failed to parse " * 12_000,
+}
+
+
+@pytest.mark.parametrize("line", HOSTILE_LINES.values(), ids=HOSTILE_LINES.keys())
+def test_one_hostile_line_does_not_hold_up_the_log_read(line: str) -> None:
+    # Linear takes milliseconds; the patterns this replaced took minutes. The child imports this
+    # tree's `hookslog` (and fails if it cannot), whatever `agentfly` the interpreter has installed.
+    code = (
+        "from agentfly.install import hookslog\n"
+        "hookslog.status_of(sys.stdin.buffer.read().decode())\n"
+    )
+    run_in_a_child(code, line.encode())
 
 
 # ---------------------------------------------------------------- ~/.claude/settings.json (D24)
