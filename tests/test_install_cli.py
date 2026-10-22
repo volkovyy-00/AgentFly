@@ -63,7 +63,9 @@ from tests.test_install_packages import (
     fake_agentfly,
 )
 
-pytestmark = pytest.mark.slow  # most tests here take 2 s or more (they run processes)
+# Most tests here run real processes and some take 2 s or more; the whole module is marked so
+# that `quick` stays short, although many of its tests are faster (tests/README.md).
+pytestmark = pytest.mark.slow
 
 
 def test_the_system_paths_are_the_ones_in_the_spec() -> None:

@@ -461,10 +461,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   first run of a new executable file, the stub, takes seconds). CI runs the AGENTS.md line itself.
 - `slow` (registered in `pyproject.toml`): a test that takes 2 s or more in a parallel
   `--durations=0` run carries `pytest.mark.slow`. `quick` leaves it out; `full` and CI run it.
-  Modules whose tests nearly all run processes carry it as `pytestmark` (the installer, service,
-  doctor and package tests, among others); other tests carry it one by one. A new test that takes
-  2 s or more gets the mark. See what is left: `uv run pytest -q -n auto --dist loadgroup -m "not
-  slow" --durations=10`.
+  The installer, service and doctor modules carry it whole (`pytestmark`): most of their tests run
+  real processes and many are quicker, but `quick` is meant to be short, so the mark errs on that
+  side. `test_package.py` carries it for its `package` group; other tests carry it one by one. A new
+  test that takes 2 s or more gets the mark. See what is left: `uv run pytest -q -n auto --dist
+  loadgroup -m "not slow" --durations=10`.
 - Timing rule (F17): no test compares an elapsed time with a fixed number of seconds. What stays
   is the client's 0.5 s wait (`CLIENT_WAIT`), the `hooks.json` 1 s timeout
   (`test_offline_guard.py`), and waits that end at a deadline (poll loops, and a `join` with a
