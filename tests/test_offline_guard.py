@@ -282,6 +282,7 @@ def hundred_calls(client: Path, home: Path, name: str, **kwargs: Any) -> list[di
 
 
 @pytest.mark.parametrize("name", list(EVENTS))
+@pytest.mark.slow
 def test_100_calls_with_no_recorder_give_valid_json_and_exit_0(
     client: Path, isolated_home: Path, name: str
 ) -> None:
@@ -336,6 +337,7 @@ def test_a_slow_recorder_does_not_hide_a_deny_for_an_outbound_command(
         {"mode": "status", "status": 200, "raw": b'{"permission": "maybe"}'},
     ],
 )
+@pytest.mark.slow
 def test_a_recorder_error_or_bad_answer_is_treated_as_down(
     client: Path, isolated_home: Path, stub_args: dict[str, Any]
 ) -> None:
@@ -382,6 +384,7 @@ def test_each_offline_allow_is_in_the_hook_log_without_the_command(
     assert "script.py" not in hook_log(isolated_home) and "192.168" not in hook_log(isolated_home)
 
 
+@pytest.mark.slow
 def test_health_shows_the_calls_the_guard_answered_while_the_recorder_was_down(
     client: Path, isolated_home: Path
 ) -> None:

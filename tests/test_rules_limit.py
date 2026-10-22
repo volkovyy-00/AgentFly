@@ -464,6 +464,7 @@ def heavy_lists(severity: str, *, before_r1: bool = False, shape: Any = bipartit
     return ruleset_of(text[:at] + "".join(rules).lstrip("\n") + "\n" + text[at:])
 
 
+@pytest.mark.slow
 def test_a_heavy_command_list_stops_at_the_budget_and_the_count_proves_it(
     rec: Recorder, monkeypatch: pytest.MonkeyPatch
 ) -> None:

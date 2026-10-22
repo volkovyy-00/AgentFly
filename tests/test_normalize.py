@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import gc
 import random
 import time
+from typing import Any
 
 import pytest
 
-from agentfly.recorder.normalize import MAX_DEPTH, normalize, shell_script
+from agentfly.recorder.normalize import MAX_DEPTH, MAX_SCANS, _Scanner, normalize, shell_script
 from agentfly.recorder.rules import parsed_is_outbound
 from tests.cases import HEREDOC_COMMIT, MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
-from tests.helpers import wallclock
 
 
 def words_of(command: str) -> list[str]:
@@ -336,35 +337,88 @@ def test_odd_text_never_raises(text: str) -> None:
     normalize(text)
 
 
-@wallclock
+def fastest(texts: list[str], rounds: int) -> list[float]:
+    """The least CPU time of `rounds` parses of each text, taken in turns. CPU time and no
+    collector pauses, so that a busy machine and a big heap leave the numbers alone.
+    `__wrapped__` skips the cache `normalize` keeps: a second parse of the same text would time a
+    lookup (0.2 microseconds), not the parser."""
+    best = [float("inf")] * len(texts)
+    was_on = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(rounds):
+            for index, text in enumerate(texts):
+                start = time.process_time()
+                normalize.__wrapped__(text)
+                best[index] = min(best[index], time.process_time() - start)
+    finally:
+        if was_on:
+            gc.enable()
+    return best
+
+
+def big_command(words: int) -> str:
+    return "echo " + "word " * words + "$(ls) 'a b' \"c d\"\n" * 5
+
+
 def test_a_big_command_is_parsed_in_linear_time() -> None:
-    big = "echo " + "word " * 200_000 + "$(ls) 'a b' \"c d\"\n" * 5
-    start = time.perf_counter()
-    parsed = normalize(big)
-    assert time.perf_counter() - start < 3.0
-    assert not parsed.unparsed
+    # Four times the words cost about four times as much (a quadratic loop: sixteen). The shorter
+    # command is the baseline, timed in this test, so no number of seconds is involved.
+    short, long = fastest([big_command(8_000), big_command(32_000)], rounds=7)
+    assert long < 8 * short, f"4 times the words took {long / short:.1f} times as long"
+    assert not normalize(big_command(200_000)).unparsed
 
 
 # ---------------------------------------------------------------- work stays bounded
 
+SCAN_LIMIT = 256  # nested scans in one command: pinned here, held by `normalize.MAX_SCANS`
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "eval " * 40 + "curl x",
-        "eval " * 3000 + "curl x",
-        "bash " * 300 + "-c 'curl x'",
-        "bash " * 200 + "<<< 'bash bash <<< ls'",
-        "bash -c 'a'; " * 2000,
-        "echo `a` " * 1000,
-    ],
-)
-@wallclock
-def test_repeated_wrappers_do_not_multiply_the_work(text: str) -> None:
-    start = time.perf_counter()
-    parsed = normalize(text)
-    assert time.perf_counter() - start < 2.0
+# (what repeats, how often, the end of the command, the most scans it may start, how many times
+# a command a quarter as long it may cost, how many rounds to time). The scans are counted: an
+# `eval` chain stops at the depth limit (17 scans), `bash -c` and backticks at the scan limit. A
+# quarter-length command is 4 times cheaper when the work is linear and 16 when it is quadratic;
+# the limit sits between, higher for the `eval` chains, which are dearer than linear while they
+# are shorter than the depth limit (7 times for x 40, 9 times for x 3000). The short commands take
+# under 2 ms: many rounds, or the best of them is still noise.
+WRAPPERS = [
+    pytest.param("eval ", 40, "curl x", MAX_DEPTH + 1, 14, 60, id="eval-40"),
+    # about 0.3 s a parse and five parses a side: over the 2 s line of `slow` (tests/README.md)
+    pytest.param(
+        "eval ", 3000, "curl x", MAX_DEPTH + 1, 20, 5, id="eval-3000", marks=pytest.mark.slow
+    ),
+    pytest.param("bash ", 300, "-c 'curl x'", 3, 8, 60, id="bash-300"),
+    pytest.param("bash ", 200, "<<< 'bash bash <<< ls'", 4, 8, 60, id="bash-200"),
+    pytest.param("bash -c 'a'; ", 2000, "", SCAN_LIMIT + 1, 8, 9, id="bash-c-2000"),
+    pytest.param("echo `a` ", 1000, "", SCAN_LIMIT + 1, 8, 15, id="backtick-1000"),
+]
+
+
+@pytest.mark.parametrize(("unit", "times", "tail", "most_scans", "limit", "rounds"), WRAPPERS)
+def test_repeated_wrappers_do_not_multiply_the_work(
+    unit: str,
+    times: int,
+    tail: str,
+    most_scans: int,
+    limit: int,
+    rounds: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = unit * times + tail
+    scans: list[None] = []
+    start = _Scanner.__init__
+
+    def counting(self: _Scanner, *args: Any) -> None:
+        scans.append(None)
+        start(self, *args)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_Scanner, "__init__", counting)
+        parsed = normalize.__wrapped__(text)
+    assert MAX_SCANS <= SCAN_LIMIT  # the limit itself was not raised
+    assert len(scans) <= most_scans
     assert len(parsed.commands) < 10_000
+    short, long = fastest([unit * (times // 4) + tail, text], rounds)
+    assert long < limit * short, f"4 times the text took {long / short:.1f} times as long"
 
 
 def test_the_first_eval_covers_the_later_ones() -> None:

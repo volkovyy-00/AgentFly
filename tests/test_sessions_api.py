@@ -218,6 +218,7 @@ def call(port: int, method: str, path: str, token: str = "", body: Any = None) -
         return err.code, json.loads(err.read())
 
 
+@pytest.mark.slow
 def test_a_replayed_session_is_listed_after_a_recorder_restart(isolated_home: Path) -> None:
     session = f"replay-{uuid.uuid4()}"
     events = SCENARIO["demo"]["events"]

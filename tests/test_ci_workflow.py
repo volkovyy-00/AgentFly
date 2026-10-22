@@ -7,7 +7,9 @@ permission or an action from these checks: it fails here until the parser is tau
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from tests.helpers import REPO
 
 WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 AGENTS = REPO / "AGENTS.md"
+CHECK_SCRIPT = REPO / "scripts" / "check.sh"
 
 GROUP = "ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
 CANCEL = "${{ github.event_name == 'pull_request' }}"
@@ -558,6 +561,139 @@ def test_the_checks_notice_commands_run_out_of_order() -> None:
     swapped = read(WORKFLOW).replace(web, "@@").replace(stale, web).replace("@@", stale)
     found = problems(swapped, read(AGENTS))
     assert any("in order" in problem for problem in found), found
+
+
+# ---------------------------------------------------------------- scripts/check.sh (F17)
+# `full` is the AGENTS.md Check line (CI runs that line itself); `quick` leaves out `slow` tests.
+
+QUICK_FILTER = '-m "not slow"'
+
+
+def script_arms(text: str) -> dict[str, list[str]]:
+    """The command lines of each `case` arm of check.sh (blank lines gone, spaces squeezed)."""
+    arms = re.findall(r"^  (\w+)\)\n(.*?)^    ;;\n", text, re.MULTILINE | re.DOTALL)
+    return {
+        name: [" ".join(line.split()) for line in body.splitlines() if line.strip()]
+        for name, body in arms
+    }
+
+
+def test_the_script_holds_a_quick_and_a_full_arm_of_three_commands_each() -> None:
+    arms = script_arms(read(CHECK_SCRIPT))
+    assert {name: len(lines) for name, lines in arms.items()} == {"quick": 3, "full": 3}
+
+
+def test_full_runs_the_agents_md_check_line_word_for_word() -> None:
+    full = " && ".join(script_arms(read(CHECK_SCRIPT))["full"])
+    assert full == agents_checks(read(AGENTS))["check"]
+
+
+def test_one_changed_word_in_either_place_breaks_that_match() -> None:
+    text, agents = read(CHECK_SCRIPT), read(AGENTS)
+    line = agents_checks(agents)["check"]
+    assert "-n auto --dist loadgroup" in text and "-n auto --dist loadgroup" in line
+    in_script = text.replace("-n auto --dist loadgroup\n", "-n auto --dist load\n", 1)
+    assert " && ".join(script_arms(in_script)["full"]) != line
+    in_agents = agents.replace("-n auto --dist loadgroup`", "-n auto --dist load`", 1)
+    assert " && ".join(script_arms(text)["full"]) != agents_checks(in_agents)["check"]
+
+
+def test_quick_is_full_with_the_slow_tests_left_out_and_nothing_else() -> None:
+    arms = script_arms(read(CHECK_SCRIPT))
+    *ruff, pytest_line = arms["full"]
+    assert arms["quick"] == [*ruff, f"{pytest_line} {QUICK_FILTER}"]  # the exact filter: a typo in
+    # a `-m` expression is not an error on pytest 9.1, it runs everything
+
+
+def test_the_script_is_executable_and_stops_at_the_first_failed_check() -> None:
+    text = read(CHECK_SCRIPT)
+    assert os.access(CHECK_SCRIPT, os.X_OK)
+    assert text.startswith("#!/usr/bin/env bash\n")
+    assert "\nset -euo pipefail\n" in text
+
+
+# A stand-in for `uv` that logs its words (the `|` keeps the word boundaries) and fails on call
+# number `UV_FAIL_AT`. `sh` and not `python3`: on a Mac `python3` on a bare PATH is a shim. It runs
+# no other program (a busy machine makes every extra process slow).
+STUB_UV = """#!/bin/sh
+calls=1
+if [ -f "$UV_LOG" ]; then
+  while IFS= read -r _line; do calls=$((calls + 1)); done < "$UV_LOG"
+fi
+printf '%s|' "$@" >> "$UV_LOG"
+echo >> "$UV_LOG"
+[ "$calls" -eq "${UV_FAIL_AT:-0}" ] && exit 1
+exit 0
+"""
+RUFF_CALLS = ["run|ruff|check|.|", "run|ruff|format|--check|.|"]
+PYTEST_CALL = "run|pytest|-q|-n|auto|--dist|loadgroup|"
+EXPECTED_CALLS = {
+    "quick": [*RUFF_CALLS, PYTEST_CALL + "-m|not slow|"],
+    "full": [*RUFF_CALLS, PYTEST_CALL],
+}
+
+
+@pytest.fixture(scope="module")
+def stub_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One stub for the module (on a Mac, the first run of each new executable costs a quarter of
+    a second, and many at once cost seconds each)."""
+    stubs = tmp_path_factory.mktemp("stubs")
+    uv = stubs / "uv"
+    uv.write_text(STUB_UV, encoding="utf-8")
+    uv.chmod(0o755)
+    return stubs
+
+
+def run_script(
+    stubs: Path, tmp_path: Path, *args: str, fail_at: int = 0
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run check.sh with the stub first on PATH; return the result and the calls the stub saw."""
+    log = tmp_path / "uv.log"
+    env = {
+        "PATH": f"{stubs}:/usr/bin:/bin",
+        "UV_LOG": str(log),
+        "UV_FAIL_AT": str(fail_at),
+        "HOME": str(tmp_path),
+    }
+    result = subprocess.run(
+        [str(CHECK_SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return result, calls
+
+
+@pytest.mark.parametrize("mode", ["quick", "full"])
+def test_each_mode_runs_its_three_commands_once_each_and_succeeds(
+    mode: str, stub_dir: Path, tmp_path: Path
+) -> None:
+    result, calls = run_script(stub_dir, tmp_path, mode)
+    assert (result.returncode, calls) == (0, EXPECTED_CALLS[mode]), result.stderr
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+@pytest.mark.parametrize("mode", ["quick", "full"])
+def test_a_failed_check_fails_the_script_and_nothing_runs_after_it(
+    mode: str, fail_at: int, stub_dir: Path, tmp_path: Path
+) -> None:
+    result, calls = run_script(stub_dir, tmp_path, mode, fail_at=fail_at)
+    assert result.returncode == 1, result.stderr
+    assert calls == EXPECTED_CALLS[mode][:fail_at]
+
+
+@pytest.mark.parametrize(
+    "args", [(), ("nope",), ("QUICK",), ("",), ("quick", "full"), ("quick", "extra")]
+)
+def test_a_missing_unknown_or_extra_argument_prints_usage_and_runs_nothing(
+    args: tuple[str, ...], stub_dir: Path, tmp_path: Path
+) -> None:
+    result, calls = run_script(stub_dir, tmp_path, *args)
+    assert (result.returncode, calls, result.stdout) == (2, [], "")
+    assert "usage: scripts/check.sh quick|full" in result.stderr
 
 
 # ---------------------------------------------------------------- the parser itself

@@ -147,6 +147,7 @@ def test_the_config_holds_no_parallel_flags() -> None:
 @pytest.mark.parametrize(
     "extra", [[], ["-n", "2", "--dist", "loadgroup"]], ids=["serial", "parallel"]
 )
+@pytest.mark.slow
 def test_an_unknown_marker_fails_the_run(
     tmp_path: Path, isolated_home: Path, extra: list[str]
 ) -> None:

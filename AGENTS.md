@@ -46,7 +46,11 @@ issue or pull request as the card and puts the gap notes in the pull request.
 - Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
   The tests run in parallel; `env` keeps byte-code out (a stray `.pyc` breaks
   `test_nothing_is_written_next_to_the_client`). Keep the flags on the command line, never in
-  `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line.
+  `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line, and so does
+  `./scripts/check.sh full` (a test fails if the script and this bullet differ by a word).
+- Quick check (while you work, in about a third of the time): `./scripts/check.sh quick` runs ruff and
+  the parallel tests without those marked `slow` (2 s or more in a parallel run; `tests/README.md`).
+  It is not the Check line: run that one before you report a step done.
 - Serial test run (one core, for a failure you cannot explain in parallel): `uv run pytest -q`
 - Web check: `npm --prefix ui ci && npm --prefix ui run check`
 - Stale-build check: `npm --prefix ui run build && test -z "$(git status --porcelain ui/dist)"`

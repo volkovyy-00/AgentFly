@@ -35,6 +35,7 @@ UV = shutil.which("uv")
 pytestmark = [
     pytest.mark.skipif(UV is None, reason="uv is not installed"),
     pytest.mark.xdist_group(name="package"),
+    pytest.mark.slow,  # a wheel build and installs into a throwaway environment
 ]
 _OFFLINE_HINTS = ("error sending request", "dns error", "Failed to fetch", "Connection refused")
 

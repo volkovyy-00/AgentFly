@@ -75,6 +75,8 @@ from tests.test_install_packages import (
 )
 from tests.test_install_rules import another_user
 
+pytestmark = pytest.mark.slow  # most tests here take 2 s or more (they run processes)
+
 IDS = [
     "record",
     "python",

@@ -26,6 +26,8 @@ from tests.install_helpers import (
     write_archive,
 )
 
+pytestmark = pytest.mark.slow  # most tests here take 2 s or more (they run processes)
+
 OTHER_FILE = (
     '{\n  "version": 1,\n  "hooks": {\n    "stop": [\n      '
     + OTHER_TOOL_ENTRY

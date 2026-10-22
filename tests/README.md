@@ -448,6 +448,36 @@ the maintainers' work items and decisions, which are kept outside this repo.
   that names either and never uses `@wallclock`. `time.time`, `sleep`, a `join` timeout and a
   helper that times for the test are not scanned. Each group runs on one worker, in file order.
   `strict_markers` makes an unknown marker an error, serial or parallel.
+- Quick check (`scripts/check.sh`, F17): `quick` runs `ruff check`, `ruff format --check` and the
+  parallel pytest line with `-m "not slow"`; `full` runs the AGENTS.md Check line. Each command is
+  its own line (no pipe, no `&&` list), so under `set -e` the first one that fails ends the script
+  with its exit code. Anything but one `quick` or `full` prints a usage line and exits 2 with
+  nothing run. `tests/test_ci_workflow.py` reads the script's two `case` arms: `full` must equal
+  the AGENTS.md Check bullet word for word, and `quick` must equal `full` plus ` -m "not slow"`
+  (pytest 9.1 does not refuse a mistyped `-m` expression, it runs everything). It also runs the
+  script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and fails on a
+  chosen call): both modes make three calls, once each, in order; a failure on call 1, 2 or 3
+  fails the script and stops it; bad arguments run nothing. CI runs the AGENTS.md line itself.
+- `slow` (registered in `pyproject.toml`): a test that takes 2 s or more in a parallel
+  `--durations=0` run carries `pytest.mark.slow`. `quick` leaves it out; `full` and CI run it.
+  Whole modules carry it as `pytestmark` (`test_doctor.py`, `test_install_cli.py`,
+  `test_install_flow.py`, `test_service.py`, `test_root_command.py`, `test_session_kill.py`) and
+  `test_package.py` (the `package` group); other tests carry it one by one. A new test that takes
+  2 s or more gets the mark. See what is left: `uv run pytest -q -n auto --dist loadgroup -m "not
+  slow" --durations=10`.
+- Timing rule (F17): no test compares an elapsed time with a fixed number of seconds. What stays
+  is the client's 0.5 s wait (`CLIENT_WAIT`), the `hooks.json` 1 s timeout
+  (`test_offline_guard.py`), and waits that end at a deadline (poll loops, and a `join` with a
+  limit as a hang guard). A test counts work (`test_normalize.py` counts `_Scanner` starts
+  against the scan limit), or compares a time with a baseline measured in the same test (best of
+  several, taken in turns so that a busy machine slows both), or sets a wait the code enforces
+  (`WIPE_BUDGET_S`, `STOP_WAIT_S`, `WRITE_TIMEOUT_S`) and compares with that wait plus a baseline.
+  Scaling tests compare 4 times the input with the shorter one (linear: about 4, quadratic: about
+  16). `normalize` and the rulefile matcher cache their results: time `normalize.__wrapped__`, and
+  give the matcher a command no earlier round matched, or the repeat times a lookup. A regression
+  that would wait for ever is run on a thread the test gives up on (`join` with a limit), so it
+  fails the test instead of hanging it. Every rewrite was shown red against a planted change
+  (F17 report).
 - CI (`tests/test_ci_workflow.py`, F7): `ci.yml` is read with a small YAML-subset parser that
   refuses syntax it does not know. The suite fails if the file gains a trigger beyond main pushes
   and pull requests, a write permission, a `uses:` not pinned to a 40-character SHA or not one

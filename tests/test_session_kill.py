@@ -14,10 +14,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.helpers import free_port, start_recorder, stop_recorder, wait_for_health, wallclock
 from tests.rules_helpers import default_with
 from tests.test_session_state import CURL, INSTALL, LISTS, NO_PUSH, PUSH, wait_for
 from tests.test_sessions_api import call
+
+pytestmark = pytest.mark.slow  # both tests start the real recorder in a child process
 
 
 def shell(chat: str, command: str, root: str, **extra: Any) -> dict[str, Any]:

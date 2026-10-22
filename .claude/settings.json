@@ -7,6 +7,8 @@
       "Bash(npm --prefix ui ci)",
       "Bash(npm --prefix ui run check)",
       "Bash(npm --prefix ui run build)",
+      "Bash(./scripts/check.sh quick)",
+      "Bash(./scripts/check.sh full)",
       "Bash(gh run list*)",
       "Bash(gh run view*)",
       "Bash(gh pr view*)",
@@ -14,7 +16,8 @@
     ],
     "ask": [
       "Bash(*core.hooksPath*)",
-      "Bash(*core.hookspath*)"
+      "Bash(*core.hookspath*)",
+      "Bash(*roles/push.sh*)"
     ],
     "deny": [
       "Bash(git push:*)",

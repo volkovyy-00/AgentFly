@@ -21,6 +21,7 @@ from agentfly.recorder.paths import config_dir, data_dir
 from tests.helpers import wallclock
 
 SECRET_WORD = "WIPE_ME_MARKER"
+HANG_GUARD_S = 10.0  # a test that waits for a thread gives up after this; it is no bound on speed
 
 
 @pytest.fixture
@@ -113,22 +114,49 @@ def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    post(client, {"hook_event_name": "beforeShellExecution", "command": f"echo {SECRET_WORD}"})
-    assert local_store.flush()
     assert ls.WIPE_BUDGET_S <= 10.0  # the promise in the card
     monkeypatch.setattr(ls, "WIPE_BUDGET_S", 1.0)  # same code path, a shorter wait for the test
+
+    def wipe_time() -> float:
+        started = time.monotonic()
+        assert main(["wipe", "--yes"]) == 0
+        return time.monotonic() - started
+
+    times: list[float] = []
+    for _ in range(3):  # what a wipe costs here with nothing in its way
+        post(client, {"hook_event_name": "beforeShellExecution", "command": "ls"})
+        assert local_store.flush()
+        times.append(wipe_time())
+    baseline = min(times)
+    capsys.readouterr()
+
+    post(client, {"hook_event_name": "beforeShellExecution", "command": f"echo {SECRET_WORD}"})
+    assert local_store.flush()
     reader = sqlite3.connect(data_dir() / ls.DB_NAME, isolation_level=None)
     reader.execute("BEGIN")
     reader.execute("SELECT COUNT(*) FROM steps").fetchall()  # a snapshot the log cannot pass
-    try:
+    outcome: list[tuple[int, float]] = []
+
+    def wipe_with_a_reader() -> None:
         started = time.monotonic()
-        assert main(["wipe", "--yes"]) == 1
-        elapsed = time.monotonic() - started
+        outcome.append((main(["wipe", "--yes"]), time.monotonic() - started))
+
+    # On a thread the test can give up on: a wipe that ignores its budget waits for the reader,
+    # who is let go only below, and would hang the test instead of failing it.
+    wiper = threading.Thread(target=wipe_with_a_reader, daemon=True)
+    try:
+        wiper.start()
+        wiper.join(HANG_GUARD_S)
+        assert outcome, "the wipe was still waiting when the test gave up on it"
     finally:
         reader.execute("ROLLBACK")
         reader.close()
+        wiper.join(HANG_GUARD_S)
+    (code, elapsed), budget = outcome[0], ls.WIPE_BUDGET_S
     err = capsys.readouterr().err
-    assert elapsed < 3.0
+    assert code == 1
+    assert elapsed >= 0.9 * budget  # it did wait for the reader, up to its budget
+    assert elapsed < 2 * budget + 5 * baseline, "the wipe took longer than its budget"
     assert "in use" in err and "run it again" in err
     assert "nothing else was changed" not in err  # the rows are gone; do not claim otherwise
 
@@ -137,6 +165,7 @@ def test_wipe_gives_up_within_its_budget_when_a_reader_holds_the_file(
 
 
 @wallclock
+@pytest.mark.slow
 def test_wipe_does_not_hold_the_write_lock_while_it_waits_for_a_reader(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

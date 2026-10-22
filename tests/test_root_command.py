@@ -32,6 +32,8 @@ from tests.install_helpers import (
     write_dist,
 )
 
+pytestmark = pytest.mark.slow  # most tests here take 2 s or more (they run processes)
+
 OLD_COMMAND = ["-I", "-B", "-m", "agentfly.cli", "init", "--help"]
 PRINT_ENVIRONMENT = (
     "import sys; sys.path.append(sys.argv[1]); from agentfly.install import packages; "

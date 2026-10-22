@@ -40,6 +40,7 @@ CURL = "curl https://x.com"
 INSTALL = "pip install requests"
 PUSH = "git push origin main"
 DAY = 86400.0
+HANG_GUARD_S = 10.0  # a test that waits for a thread gives up after this, it is no bound on speed
 LISTS = 'install_cmds = ["pip install"]\npush_cmds = ["git push"]\n'
 NO_PUSH = """
 [[rule]]
@@ -775,11 +776,35 @@ def test_housekeeping_that_fails_at_start_does_not_stop_the_recorder(
 def test_a_clean_stop_does_not_wait_for_ever_for_a_stuck_write(
     tmp_path: Path, clock: Clock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(sessions_module, "STOP_WAIT_S", 0.1)
-    store = SessionStore(tmp_path / "s.json", clock=clock)
-    store.observe(event("A"))
-    started = time.monotonic()
-    with store._lock:  # a writer stuck in a write that never ends
-        store.close()
-    assert time.monotonic() - started < 5
+    wait = 0.25
+    monkeypatch.setattr(sessions_module, "STOP_WAIT_S", wait)
+
+    def closing_time(name: str, stuck: bool) -> float:
+        """How long `close()` takes on a store that has a change to save; with `stuck`, a writer
+        sits in a write that never ends (the lock is held). It runs on a thread the test can
+        give up on, so a stop that waits for ever fails the test instead of hanging it."""
+        store = SessionStore(tmp_path / f"{name}.json", clock=clock)
+        store.observe(event("A"))
+        took: list[float] = []
+
+        def close() -> None:
+            started = time.monotonic()
+            store.close()
+            took.append(time.monotonic() - started)
+
+        closer = threading.Thread(target=close, daemon=True)
+        if stuck:
+            with store._lock:
+                closer.start()
+                closer.join(HANG_GUARD_S)
+        else:
+            closer.start()
+            closer.join(HANG_GUARD_S)
+        assert took, "close() was still waiting when the test gave up on it"
+        return took[0]
+
+    baseline = min(closing_time(f"free-{n}", stuck=False) for n in range(3))
+    stuck = closing_time("stuck", stuck=True)
+    assert stuck >= 0.9 * wait, "close() did not wait for the write at all"
+    assert stuck < 2 * wait + 5 * baseline, "close() waited longer than its limit"
     assert "write is stuck" in caplog.text

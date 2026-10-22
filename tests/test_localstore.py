@@ -489,21 +489,35 @@ def test_a_purged_row_is_gone_from_the_file_and_its_log_after_one_more_write(db:
 
 
 @wallclock
-def test_a_reader_only_delays_the_purge_and_the_next_item_finishes_it(db: Path) -> None:
+def test_a_reader_only_delays_the_purge_and_the_next_item_finishes_it(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A writer that waited for the reader would wait the whole `WRITE_TIMEOUT_S`; that is set long
+    # here, and the bound is a part of it over what an ordinary write costs in this test.
+    monkeypatch.setattr(ls, "WRITE_TIMEOUT_S", 2.0)
     marker = "DELAYED_MARKER_5e21"
     clock = Clock(DAY0)
     s = LocalStore(clock=clock)
     s.start(db)
+
+    def write_and_flush(order: int) -> float:
+        started = time.monotonic()
+        s.enqueue(record(order, session="baseline", at=DAY0))
+        assert s.flush()
+        return time.monotonic() - started
+
     try:
         s.enqueue(record(1, session=marker, at=DAY0, command=f"echo {marker}"))
         assert s.flush()
+        baseline = min(write_and_flush(order) for order in (2, 3, 4))
         reader = sqlite3.connect(db, isolation_level=None)
         reader.execute("BEGIN")
         reader.execute("SELECT COUNT(*) FROM steps").fetchall()  # holds a snapshot of the log
         clock.now = DAY0 + timedelta(days=30)
         started = time.monotonic()
         assert s.flush()
-        assert time.monotonic() - started < 2.0  # the writer did not wait for the reader
+        elapsed = time.monotonic() - started
+        assert elapsed < baseline + ls.WRITE_TIMEOUT_S / 2, "the writer waited for the reader"
         assert marker.encode() in store_bytes(db)  # could not cut the log yet
         reader.execute("ROLLBACK")
         reader.close()
@@ -809,6 +823,9 @@ def answers(client: TestClient) -> tuple[list[str], float]:
     return got, slowest
 
 
+REFERENCE = ["allow", "allow", "deny", "allow"]
+
+
 def test_a_healthy_store_gives_the_reference_answers(client: TestClient) -> None:
     got, _ = answers(client)
     assert got == ["allow", "allow", "deny", "allow"]
@@ -817,8 +834,21 @@ def test_a_healthy_store_gives_the_reference_answers(client: TestClient) -> None
 @pytest.mark.parametrize("breakage", ["directory", "read-only file", "locked"])
 @wallclock
 def test_a_store_that_cannot_be_written_changes_and_delays_no_answer(
-    breakage: str, isolated_home: Path
+    breakage: str, isolated_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # An answer that waited for the store would wait out `WRITE_TIMEOUT_S` (a locked file); that is
+    # set long here. The baseline is the same script against a store that works, in a home of its
+    # own and in this test: the best of three runs.
+    monkeypatch.setattr(ls, "WRITE_TIMEOUT_S", 3.0)
+    healthy = tmp_path / "healthy-home"
+    healthy.mkdir()
+    monkeypatch.setenv("HOME", str(healthy))
+    with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
+        runs = [answers(test_client) for _ in range(3)]
+    assert [got for got, _ in runs] == [REFERENCE] * 3
+    baseline = min(slowest for _, slowest in runs)
+
+    monkeypatch.setenv("HOME", str(isolated_home))
     folder = isolated_home / ".local" / "share" / "agentfly"
     folder.mkdir(parents=True)
     path = folder / ls.DB_NAME
@@ -837,9 +867,9 @@ def test_a_store_that_cannot_be_written_changes_and_delays_no_answer(
             holder.execute("BEGIN EXCLUSIVE")
     try:
         with TestClient(app_module.app, base_url="http://127.0.0.1:8787") as test_client:
-            got, slowest = answers(test_client)
-            assert got == ["allow", "allow", "deny", "allow"]
-            assert slowest < 0.2
+            got, slowest = answers(test_client)  # once: after a failed write the store skips them
+            assert got == REFERENCE
+            assert slowest < baseline + ls.WRITE_TIMEOUT_S / 2, "an answer waited for the store"
             # Reading a store in this state is an honest 503 or an empty list, never a crash.
             assert test_client.get("/api/sessions").status_code in {200, 503}
             if holder is not None:
