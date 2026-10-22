@@ -24,11 +24,12 @@ from typing import Any
 
 import pytest
 
-from agentfly.cli import doctor, main
+from agentfly.cli import doctor, init, main
 from agentfly.install import (
     InstallError,
     checks,
     cursor,
+    elevate,
     hookslog,
     installer,
     packages,
@@ -647,6 +648,202 @@ def test_a_plist_that_is_refused_unparsed_leaves_the_version_unread_and_doctor_a
         assert failing(results) == set(), name  # the log says the hooks loaded
 
 
+# ---- why the version is unread (V3d-fix3): the `events` line, and the `hooks-log` line when the
+# log cannot confirm the hooks, hold the cause `init -g` prints after "agentfly init: "
+
+
+def holding(data: bytes) -> Callable[[Path], None]:
+    def write(plist: Path) -> None:
+        plist.write_bytes(data)
+
+    return write
+
+
+def set_plist(plist: Path, make: Callable[[Path], None]) -> None:
+    """Replace whatever `plist` is (a file, a pipe, a folder, nothing) by what `make` puts there."""
+    if plist.is_dir():
+        plist.rmdir()
+    else:
+        plist.unlink(missing_ok=True)
+    make(plist)
+
+
+READ = "cannot read the Cursor version from {plist}"
+FULL_ADVICE = "After any Cursor update, quit and reopen Cursor, then run `agentfly doctor`."
+NOT_INSTALLED = "; is Cursor installed in /Applications?"
+# The ways the version can be unreadable: how the plist is made so, and the cause written out, with
+# the plist's path as `{plist}`, never computed from the code under test.
+UNREADABLE_VERSIONS: dict[str, tuple[Callable[[Path], None], str]] = {
+    "a missing file": (lambda plist: None, f"{READ} (FileNotFoundError){NOT_INSTALLED}"),
+    "a named pipe": (lambda plist: os.mkfifo(plist), f"{READ} (not a regular file)"),
+    "a folder": (lambda plist: plist.mkdir(), f"{READ} (not a regular file)"),
+    "over 1 MiB": (holding(b"<" * (cursor.MAX_PLIST_BYTES + 1)), f"{READ} (too large)"),
+    "not XML": (
+        holding(NOT_XML_PLISTS["a binary plist"]),
+        f"{READ} (not XML: AgentFly reads only a UTF-8 XML property list)",
+    ),
+    "a header that is not Apple's": (
+        holding(FOREIGN_HEADER_PLISTS["an internal subset with an ATTLIST"]),
+        f"{READ} (XML header is not Apple's: AgentFly reads only an XML declaration and the "
+        "plist DOCTYPE before <plist>)",
+    ),
+    "a malformed plist": (
+        holding(MALFORMED_PLISTS["a mismatched tag"]),
+        f"{READ} (ExpatError){NOT_INSTALLED}",
+    ),
+    "no version in it": (
+        holding(plistlib.dumps({"CFBundleName": "Cursor"})),
+        f"{READ} (KeyError){NOT_INSTALLED}",
+    ),
+    "a version that is not a string": (
+        holding(plistlib.dumps({"CFBundleShortVersionString": 3})),
+        "{plist} has no Cursor version string",
+    ),
+}
+
+
+def cannot_confirm(what: str, cause: str) -> str:
+    """The `hooks-log` text when the version is unread and the log says nothing."""
+    end = "" if cause.endswith("?") else "."
+    return (
+        f"{what}; AgentFly cannot confirm that Cursor loaded its hooks: {cause}{end} {FULL_ADVICE}"
+    )
+
+
+def test_the_events_and_hooks_log_lines_say_why_the_version_is_unread(world: World) -> None:
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    for name, (make, template) in UNREADABLE_VERSIONS.items():  # one install serves all
+        set_plist(plist, make)
+        cause = template.format(plist=plist)
+        context = world.context()
+        assert context.cursor_version is None, name
+        for case, (setup, what) in SAYS_NOTHING.items():
+            results = read_hooks_log(world, context, setup)
+            events, hooks_log = results["events"], results["hooks-log"]
+            assert (events.level, events.text) == ("warn", f"not checked: {cause}"), (name, case)
+            assert (hooks_log.level, hooks_log.text) == ("fail", cannot_confirm(what, cause)), (
+                name,
+                case,
+            )
+            assert failing(results) == {"hooks-log"}, (name, case)  # as at d49c9d1
+        results = read_hooks_log(world, context)  # a log that says the hooks loaded
+        assert results["hooks-log"].level == "ok", name
+        assert results["events"].text == f"not checked: {cause}", name
+        assert failing(results) == set(), name
+
+
+def test_the_cause_on_the_events_line_is_what_init_prints(
+    world: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(init, "SYSTEM", world.layout)
+    monkeypatch.setattr(elevate, "run_elevated", lambda *a, **k: pytest.fail("asked for sudo"))
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    for name, (make, template) in UNREADABLE_VERSIONS.items():
+        set_plist(plist, make)
+        assert main(["init", "-g"]) == 1, name
+        printed = capsys.readouterr()
+        cause = template.format(plist=plist)
+        assert (printed.out, printed.err) == ("", f"agentfly init: {cause}\n"), name
+        events = checks.check_events(world.context())
+        assert events.text == "not checked: " + printed.err.removeprefix("agentfly init: ").strip()
+
+
+def printed_line(level: str, id_: str, text: str) -> str:
+    """A line as `agentfly doctor` prints it, with its columns written out."""
+    return f"{level:<5} {id_:<16} {text}"
+
+
+def test_the_command_says_why_the_version_is_unread_and_exits_as_before(
+    command: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plist = command.layout.cursor_app / "Contents" / "Info.plist"
+    for name, (make, template) in UNREADABLE_VERSIONS.items():
+        set_plist(plist, make)
+        cause = template.format(plist=plist)
+        command.reset_log()  # the log says the hooks loaded: warn on events, exit 0
+        assert main(["doctor"]) == 0, name
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.split()[1] for line in lines] == IDS, name
+        assert printed_line("warn", "events", f"not checked: {cause}") in lines, name
+        command.log.unlink()  # nothing to confirm from: hooks-log fails
+        assert main(["doctor"]) == 1, name
+        lines = capsys.readouterr().out.splitlines()
+        what = f"Cursor's newest log folder {LOG_NAME} has no Hooks log yet"
+        assert printed_line("fail", "hooks-log", cannot_confirm(what, cause)) in lines, name
+        assert [line.split()[0] for line in lines].count("fail") == 1, name
+
+
+@pytest.mark.parametrize("kind", ["a missing file", "a version that is not a string"])
+def test_a_plist_path_with_an_escape_and_a_newline_is_shown_on_one_line(
+    world: World, tmp_path: Path, kind: str
+) -> None:
+    world.layout = replace(world.layout, cursor_app=tmp_path / f"Cursor{BAD}.app")
+    make_cursor_app(world.layout)
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    set_plist(plist, UNREADABLE_VERSIONS[kind][0])
+    shown = f"{tmp_path}/Cursor{SHOWN}.app/Contents/Info.plist"
+    cause = UNREADABLE_VERSIONS[kind][1].format(plist=shown)
+    context = world.context()
+    for case, (setup, what) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        events, hooks_log = results["events"], results["hooks-log"]
+        assert events.text == f"not checked: {cause}", case
+        assert hooks_log.text == cannot_confirm(what, cause), case
+        for line in (events, hooks_log):
+            assert_plain(line.text)  # no ESC, no newline, no bidi mark: one printable line
+            assert "\n" not in line.text, case
+
+
+def test_a_long_plist_path_is_shown_whole(world: World, tmp_path: Path) -> None:
+    """The cause is the path and AgentFly's own words, never the file's bytes: nothing is cut."""
+    world.layout = replace(world.layout, cursor_app=tmp_path / ("x" * 200 + ".app"))
+    make_cursor_app(world.layout)
+    plist = world.layout.cursor_app / "Contents" / "Info.plist"
+    set_plist(plist, UNREADABLE_VERSIONS["a missing file"][0])
+    cause = UNREADABLE_VERSIONS["a missing file"][1].format(plist=plist)
+    assert len(str(plist)) > 200
+    results = read_hooks_log(world, world.context(), SAYS_NOTHING["no Hooks log"][0])
+    assert results["events"].text == f"not checked: {cause}"
+    what = SAYS_NOTHING["no Hooks log"][1]
+    assert results["hooks-log"].text == cannot_confirm(what, cause)
+
+
+VERSIONS_READ = {  # a readable version that is not on the list: its lines are as at d49c9d1
+    NEWER: (
+        "warn",
+        f"unchecked Cursor version: Cursor {NEWER} is newer than the newest AgentFly has checked "
+        f"({NEWEST}); its registered events are compared with {NEWEST}'s. {FULL_ADVICE}",
+    ),
+    "1.0.0": (
+        "warn",
+        "Cursor 1.0.0 is not on AgentFly's list of verified versions (3.24.12, 3.25.9) and is "
+        f"not newer than {NEWEST}; its registered events could not be checked",
+    ),
+    "": (
+        "warn",
+        "Cursor  is not a plain dotted version number (like 3.25.9), so AgentFly cannot tell "
+        f"whether it is newer than {NEWEST}; its registered events could not be checked",
+    ),
+}
+
+
+@pytest.mark.parametrize("version", VERSIONS_READ)
+def test_a_readable_version_off_the_list_has_the_texts_it_had_before_the_cause_was_shown(
+    world: World, version: str
+) -> None:
+    write_version(world.layout, version)
+    context = world.context()
+    assert context.cursor_version == version
+    for case, (setup, what) in SAYS_NOTHING.items():
+        results = read_hooks_log(world, context, setup)
+        assert (results["events"].level, results["events"].text) == VERSIONS_READ[version], case
+        why = f"Cursor {version} is not on AgentFly's list of verified versions"
+        assert (results["hooks-log"].level, results["hooks-log"].text) == (
+            "fail",
+            f"{what}; {why}, so it cannot confirm that Cursor loaded its hooks. {FULL_ADVICE}",
+        ), case
+
+
 def test_a_plist_that_cannot_be_read_only_warns_and_never_crashes(world: World) -> None:
     write_plist(world.layout, MALFORMED_PLISTS["a mismatched tag"])  # `plistlib` raises ExpatError
     results = world.results()
@@ -874,7 +1071,7 @@ UNVERIFIED = {
     ),
     "unreadable": (
         lambda w: (w.layout.cursor_app / "Contents" / "Info.plist").unlink(),
-        "AgentFly cannot read the Cursor version",
+        "AgentFly cannot confirm that Cursor loaded its hooks: cannot read the Cursor version from",
     ),
     "empty": (lambda w: write_version(w.layout, ""), "is not on AgentFly's list"),
 }

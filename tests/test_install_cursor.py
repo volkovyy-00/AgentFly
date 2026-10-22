@@ -6,6 +6,7 @@ import os
 import plistlib
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tracemalloc
@@ -52,21 +53,42 @@ def open_descriptors() -> int:
     return len(os.listdir("/dev/fd"))
 
 
-def run_in_a_child(code: str, stdin: bytes) -> None:
+def run_in_a_child(
+    code: str, stdin: bytes, *, tree: Path = TREE, after: tuple[Path, ...] = ()
+) -> None:
     """Run `code` (it reads stdin) in a fresh interpreter whose `agentfly` is THIS tree's.
 
     A child, killed after 20 s, because a regex holds the GIL: a thread could not be given up on, as
     `call_unless_it_hangs` does for a call that waits. `-I` keeps the environment and the current
     folder out of the child's path, which would put an installed `agentfly` (not this tree) first:
-    the tree is put first by hand, and the child fails if it imported another.
+    the tree is put first by hand, and the child fails if it imported another. `after` are folders
+    put right behind the tree (the test of that check puts a sibling of the tree there).
     """
     first = (
-        "import sys; sys.path.insert(0, sys.argv[1]); import agentfly; "
-        "assert agentfly.__file__.startswith(sys.argv[1]), agentfly.__file__\n"
+        "import pathlib, sys; sys.path[:0] = sys.argv[1:]\n"
+        "import agentfly\n"
+        "assert pathlib.Path(agentfly.__file__).is_relative_to(sys.argv[1]), agentfly.__file__\n"
     )
     subprocess.run(
-        [sys.executable, "-I", "-c", first + code, str(TREE)], input=stdin, timeout=20, check=True
+        [sys.executable, "-I", "-c", first + code, str(tree), *map(str, after)],
+        input=stdin,
+        timeout=20,
+        check=True,
     )
+
+
+def test_the_child_fails_if_it_imports_an_agentfly_from_a_folder_next_to_the_tree(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "tree"
+    sibling = tmp_path / "tree-installed"  # its name starts with the tree's
+    for folder in (tree, sibling):
+        (folder / "agentfly").mkdir(parents=True)
+        (folder / "agentfly" / "__init__.py").write_text("")
+    run_in_a_child("", b"", tree=tree, after=(sibling,))  # the tree's own `agentfly` comes first
+    shutil.rmtree(tree / "agentfly")  # now only the sibling has one: found, and not the tree's
+    with pytest.raises(subprocess.CalledProcessError):
+        run_in_a_child("", b"", tree=tree, after=(sibling,))
 
 
 def check_version(tmp_path: Path, version: str, *events: str) -> str:

@@ -82,6 +82,16 @@ class Context:
     environment: packages.Environment | None  # the tool environment this AgentFly runs from
     environment_error: str
     health: dict[str, Any] | None = None  # what the recorder's /health answers; None: nothing
+    version_error: str = ""  # why `cursor_version` is None: what `init -g` prints; "" if read
+
+    @property
+    def why_version_unread(self) -> str:
+        """Why the Cursor version is unknown, escaped like any shown value so it stays one line.
+
+        `version_error` holds the plist's path, AgentFly's own words and an exception's class name,
+        never a byte of the file, so it is short and is shown whole.
+        """
+        return packages.visible(self.version_error)
 
     @property
     def version_is_listed(self) -> bool:
@@ -108,10 +118,12 @@ def build_context(
     search_path: list[str] | None = None,
     own_script: Path | None = None,
 ) -> Context:
+    version: str | None = None
+    version_error = ""
     try:
-        version: str | None = cursor.installed_version(layout.cursor_app)
-    except InstallError:
-        version = None
+        version = cursor.installed_version(layout.cursor_app)
+    except InstallError as exc:
+        version_error = str(exc)
     state: service.State | None = None
     error = ""
     try:
@@ -136,6 +148,7 @@ def build_context(
         environment=environment,
         environment_error=environment_error,
         health=service.health(),
+        version_error=version_error,
     )
 
 
@@ -279,7 +292,7 @@ def check_events(ctx: Context) -> Finding:
     if not found:
         return warn("no AgentFly entries are registered")
     if ctx.cursor_version is None:
-        return _not_checked("cannot read the Cursor version")
+        return _not_checked(ctx.why_version_unread)
     version = cursor.shown(ctx.cursor_version)
     verified = cursor.verified_as(ctx.cursor_version)
     if verified is None:
@@ -450,12 +463,16 @@ def _unconfirmed(ctx: Context, what: str) -> Finding:
     if ctx.version_is_listed:
         return warn(what)
     if ctx.cursor_version is None:
-        why = "AgentFly cannot read the Cursor version"
-    else:
-        version = cursor.shown(ctx.cursor_version)
-        why = f"Cursor {version} is not on AgentFly's list of verified versions"
+        cause = ctx.why_version_unread
+        end = "" if cause.endswith("?") else "."
+        return fail(
+            f"{what}; AgentFly cannot confirm that Cursor loaded its hooks: {cause}{end} "
+            f"{cursor.ADVICE}"
+        )
+    version = cursor.shown(ctx.cursor_version)
     return fail(
-        f"{what}; {why}, so it cannot confirm that Cursor loaded its hooks. {cursor.ADVICE}"
+        f"{what}; Cursor {version} is not on AgentFly's list of verified versions, so it cannot "
+        f"confirm that Cursor loaded its hooks. {cursor.ADVICE}"
     )
 
 
