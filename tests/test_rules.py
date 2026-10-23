@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
-from agentfly.recorder.rules import Session, decide, mark
+from agentfly.recorder.rules import Action, Session, decide, mark
 from agentfly.recorder.sessions import SessionStore
 from tests.cases import MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
 from tests.rules_helpers import default_as, ruleset_of
@@ -69,7 +69,7 @@ def _read(path: str, sid: str = "sess-a") -> dict[str, str]:
     }
 
 
-def _run(action: dict[str, str], session: Session) -> tuple[Session, str, str | None]:
+def _run(action: Action, session: Session) -> tuple[Session, str, str | None]:
     session = mark(action, session)
     verdict, rule_id = decide(action, session)
     return session, verdict, rule_id

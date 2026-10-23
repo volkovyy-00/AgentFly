@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -566,6 +567,18 @@ def test_the_checks_notice_commands_run_out_of_order() -> None:
 # `full` is the AGENTS.md Check line (CI runs that line itself); `quick` leaves out `slow` tests.
 
 QUICK_FILTER = '-m "not slow"'
+PYRIGHT = "env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml"
+# Each `.gitignore` line that is not hidden (`**/.*` covers those) and can hold a `.py` file, as the
+# pyright exclude that leaves it out: pyright does not read `.gitignore`.
+IGNORED_FOLDERS = {
+    "__pycache__/": "**/__pycache__",
+    "logs/": "**/logs",
+    "*.egg-info/": "**/*.egg-info",
+    "/dist/": "dist",
+    "build/": "**/build",
+    "/result": "result",
+}
+NOT_PYTHON = {"*.py[cod]"}
 
 
 def script_arms(text: str) -> dict[str, list[str]]:
@@ -577,9 +590,36 @@ def script_arms(text: str) -> dict[str, list[str]]:
     }
 
 
-def test_the_script_holds_a_quick_and_a_full_arm_of_three_commands_each() -> None:
+def test_the_script_holds_a_quick_and_a_full_arm_of_four_commands_each() -> None:
     arms = script_arms(read(CHECK_SCRIPT))
-    assert {name: len(lines) for name, lines in arms.items()} == {"quick": 3, "full": 3}
+    assert {name: len(lines) for name, lines in arms.items()} == {"quick": 4, "full": 4}
+
+
+def test_pyright_reads_only_the_tracked_files() -> None:
+    config = tomllib.loads(read(REPO / "pyproject.toml"))["tool"]["pyright"]
+    assert set(config) == {"typeCheckingMode", "pythonVersion", "exclude"}
+    assert (config["typeCheckingMode"], config["pythonVersion"]) == ("basic", "3.12")
+    lines = {line.strip() for line in read(REPO / ".gitignore").splitlines()}
+    lines = {line for line in lines if line and not line.startswith("#")}
+    shown = {line for line in lines if not line.lstrip("/").startswith(".")} - NOT_PYTHON
+    assert shown == set(IGNORED_FOLDERS), "map a new .gitignore line to a pyright exclude"
+    wanted = {"ui", ".venv", "**/.*", *IGNORED_FOLDERS.values()}
+    assert set(config["exclude"]) == wanted
+
+
+def test_pyright_is_in_the_dev_group() -> None:
+    # Else the check passes where an old pyright is still installed and fails on a fresh checkout.
+    dev = tomllib.loads(read(REPO / "pyproject.toml"))["dependency-groups"]["dev"]
+    names = {re.split(r"[^\w.-]", spec, maxsplit=1)[0] for spec in dev}
+    assert "pyright" in names, dev
+
+
+def test_the_check_line_runs_pyright_after_ruff_and_before_the_tests() -> None:
+    # The places below are compared with this line, so one that drops pyright fails there; this
+    # test fails when all of them drop it at once.
+    commands = agents_checks(read(AGENTS))["check"].split(" && ")
+    assert commands[2] == PYRIGHT, commands
+    assert commands[3].startswith("env PYTHONDONTWRITEBYTECODE=1 uv run pytest "), commands
 
 
 def test_full_runs_the_agents_md_check_line_word_for_word() -> None:
@@ -599,9 +639,9 @@ def test_one_changed_word_in_either_place_breaks_that_match() -> None:
 
 def test_quick_is_full_with_the_slow_tests_left_out_and_nothing_else() -> None:
     arms = script_arms(read(CHECK_SCRIPT))
-    *ruff, pytest_line = arms["full"]
-    assert arms["quick"] == [*ruff, f"{pytest_line} {QUICK_FILTER}"]  # the exact filter: a typo in
-    # a `-m` expression is not an error on pytest 9.1, it runs everything
+    *before, pytest_line = arms["full"]
+    # The exact filter: pytest 9.1 does not refuse a mistyped `-m` expression, it runs everything.
+    assert arms["quick"] == [*before, f"{pytest_line} {QUICK_FILTER}"]
 
 
 # A stand-in for `uv` that logs its words (the `|` keeps the word boundaries) and fails on call
@@ -618,10 +658,11 @@ echo >> "$UV_LOG"
 exit 0
 """
 RUFF_CALLS = ["run|ruff|check|.|", "run|ruff|format|--check|.|"]
+PYRIGHT_CALL = "run|pyright|-p|pyproject.toml|"
 PYTEST_CALL = "run|pytest|-q|-n|auto|--dist|loadgroup|"
 EXPECTED_CALLS = {
-    "quick": [*RUFF_CALLS, PYTEST_CALL + "-m|not slow|"],
-    "full": [*RUFF_CALLS, PYTEST_CALL],
+    "quick": [*RUFF_CALLS, PYRIGHT_CALL, PYTEST_CALL + "-m|not slow|"],
+    "full": [*RUFF_CALLS, PYRIGHT_CALL, PYTEST_CALL],
 }
 
 
@@ -669,14 +710,14 @@ def run_script(
 
 @pytest.mark.parametrize("mode", ["quick", "full"])
 @pytest.mark.slow
-def test_each_mode_runs_its_three_commands_once_each_and_succeeds(
+def test_each_mode_runs_its_four_commands_once_each_and_succeeds(
     mode: str, stub_dir: Path, tmp_path: Path
 ) -> None:
     result, calls = run_script(stub_dir, tmp_path, mode)
     assert (result.returncode, calls) == (0, EXPECTED_CALLS[mode]), result.stderr
 
 
-@pytest.mark.parametrize("fail_at", [1, 2, 3])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4])
 @pytest.mark.parametrize("mode", ["quick", "full"])
 @pytest.mark.slow
 def test_a_failed_check_fails_the_script_and_nothing_runs_after_it(

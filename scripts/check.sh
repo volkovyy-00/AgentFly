@@ -3,7 +3,8 @@
 #
 # Usage: scripts/check.sh quick|full
 #
-# - quick: ruff, then the parallel tests without the ones marked `slow` (tests/README.md).
+# - quick: ruff and pyright, then the parallel tests without the ones marked `slow`
+#   (tests/README.md).
 # - full: the AGENTS.md "Check" line, word for word (tests/test_ci_workflow.py compares them).
 # - Each check is its own line, never in a pipe or an `&&` list: under `set -e` the first one
 #   that fails ends the script with its exit code.
@@ -23,11 +24,13 @@ case "$1" in
   quick)
     uv run ruff check .
     uv run ruff format --check .
+    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml
     env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup -m "not slow"
     ;;
   full)
     uv run ruff check .
     uv run ruff format --check .
+    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml
     env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
     ;;
   *)

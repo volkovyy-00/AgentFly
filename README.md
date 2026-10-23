@@ -383,8 +383,8 @@ AgentFly is a first layer of defence, not a sandbox.
 ## Testing
 
 ```bash
-./scripts/check.sh quick   # while you work: ruff and the tests that take under 2 s each
-./scripts/check.sh full    # before you report or push: ruff and every test, as CI runs them
+./scripts/check.sh quick   # while you work: ruff, pyright and the tests that take under 2 s each
+./scripts/check.sh full    # before you report or push: ruff, pyright and every test, as CI runs them
 ```
 
 The tests need no Cursor and no network. The live Neo4j tests never read

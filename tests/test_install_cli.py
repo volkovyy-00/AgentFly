@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import re
@@ -78,7 +79,7 @@ def test_the_system_paths_are_the_ones_in_the_spec() -> None:
 
 def test_no_flag_or_variable_can_move_the_system_paths() -> None:
     parser = build_parser()
-    commands = next(a for a in parser._actions if hasattr(a, "choices") and a.choices)
+    commands = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     for name in ("init", "uninstall"):
         options = {s for a in commands.choices[name]._actions for s in a.option_strings}
         assert options <= {"-h", "--help", "-g", "--global"}, options

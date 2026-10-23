@@ -657,7 +657,7 @@ def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
             return False
     _probe(len(keys))
     for key, bucket in keys.items():
-        if last.get(key, -1) > at and _bucket_hit(bucket, last, at):
+        if key is not None and last.get(key, -1) > at and _bucket_hit(bucket, last, at):
             return True
     return False
 
@@ -1143,6 +1143,7 @@ def _list_lint(spec: RuleSpec, raw: Mapping[str, Any]) -> list[str]:
     for clause, table in tables:
         if clause is None or not clause.command:
             continue
+        assert table is not None  # a clause is parsed from its table
         name: str = table["command"]
         for keys in clause._index.values():
             for key, bucket in keys.items():

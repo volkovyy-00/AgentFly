@@ -318,7 +318,7 @@ def test_the_problem_is_one_line_even_if_it_holds_line_breaks(
 # ---------------------------------------------------------------- a real recorder process
 
 
-def run_child(home: Path, plant: Callable[[Path], None]) -> tuple[dict[str, Any], dict[str, Any]]:
+def run_child(home: Path, plant: Callable[[Path], object]) -> tuple[dict[str, Any], dict[str, Any]]:
     """A child recorder whose rules file is `<home>/test-rules.toml` (see `RECORDER_CODE`)."""
     plant(home / "test-rules.toml")
     port = free_port()

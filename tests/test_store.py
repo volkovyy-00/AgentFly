@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -88,7 +88,7 @@ _FORBIDDEN: tuple[str, ...] = (
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client() -> Iterator[TestClient]:
     # Keep Neo4j off during ordinary gate tests unless a live test re-enables it.
     previous_enabled: bool = graph_store.enabled
     graph_store.enabled = False

@@ -474,7 +474,7 @@ def put_another_agentfly_first(w: World) -> None:
 
 # The line each fault turns to fail. "a file the system user does not own" is two: the temporary
 # tree belongs to this user, so the rules file in it is not root's either, and `rules` says so.
-FAULTS: dict[str, tuple[str | set[str], Callable[[World], None]]] = {
+FAULTS: dict[str, tuple[str | set[str], Callable[[World], object]]] = {
     "a changed hook client": ("client", change_client),
     "a changed bundled Python": ("python", change_python),
     "a changed file of the package": ("package", change_package_file),
@@ -1001,7 +1001,7 @@ SAYS_NOTHING = {
 
 
 def read_hooks_log(
-    w: World, context: checks.Context, setup: Callable[[World], None] | None = None
+    w: World, context: checks.Context, setup: Callable[[World], object] | None = None
 ) -> dict[str, checks.Check]:
     """Put the log back, apply `setup`, run every check on `context`.
 
@@ -1301,7 +1301,7 @@ def swap_set_up(
     in_window = lambda name: name.startswith("window")  # noqa: E731
     in_output = lambda name: name.startswith("output_")  # noqa: E731
     if level == "start folder":
-        return hookslog._START_FOLDER.fullmatch, [start]
+        return lambda name: hookslog._START_FOLDER.fullmatch(name) is not None, [start]
     if level == "the only window folder":
         return in_window, [window]
     if level == "the only output folder":

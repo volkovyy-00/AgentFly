@@ -47,7 +47,7 @@ def sudo_command(tail: list[str], *, site: Path, python: Path | None = None) -> 
 
 
 def run_elevated(
-    tail: list[str], stdin: IO[bytes] | None = None, *, python: Path | None = None
+    tail: list[str], stdin: IO[bytes] | int | None = None, *, python: Path | None = None
 ) -> int:
     command = sudo_command(tail, site=packages.tool_environment().site, python=python)
     return subprocess.run(command, stdin=stdin, check=False).returncode

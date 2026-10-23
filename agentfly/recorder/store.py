@@ -12,7 +12,7 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 from neo4j import Driver, GraphDatabase
 
@@ -32,7 +32,7 @@ from agentfly.recorder.rules import Session, reads_secret
 
 logger = logging.getLogger("agentfly")
 
-_LABELS: tuple[str, ...] = ("Session", "Step", "File", "Command", "Host", "Rule")
+_LABELS: tuple[LiteralString, ...] = ("Session", "Step", "File", "Command", "Host", "Rule")
 _QUEUE_MAX: int = 256
 _SENTINEL: object = object()
 

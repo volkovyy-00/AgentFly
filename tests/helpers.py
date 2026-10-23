@@ -235,7 +235,7 @@ def start_recorder(
     )
 
 
-def wait_for_health(port: int, process: subprocess.Popen[bytes]) -> dict[str, Any]:
+def wait_for_health(port: int, process: subprocess.Popen[Any]) -> dict[str, Any]:
     deadline = time.time() + 30
     while time.time() < deadline:
         assert process.poll() is None, "recorder exited early"
@@ -248,7 +248,7 @@ def wait_for_health(port: int, process: subprocess.Popen[bytes]) -> dict[str, An
     raise AssertionError("recorder did not answer /health in 30 s")
 
 
-def stop_recorder(process: subprocess.Popen[bytes]) -> None:
+def stop_recorder(process: subprocess.Popen[Any]) -> None:
     process.terminate()
     try:
         process.wait(timeout=10)

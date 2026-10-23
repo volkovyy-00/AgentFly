@@ -6,6 +6,7 @@ install line names the Python the project is built for.
 
 from __future__ import annotations
 
+import argparse
 import gc
 import importlib.util
 import re
@@ -46,7 +47,8 @@ def commands() -> list[str]:
 
 
 def subcommands() -> set[str]:
-    return set(next(a.choices for a in build_parser()._actions if getattr(a, "choices", None)))
+    actions = build_parser()._actions
+    return set(next(a.choices for a in actions if isinstance(a, argparse._SubParsersAction)))
 
 
 SUBCOMMANDS = subcommands()
@@ -148,9 +150,15 @@ def _block_kind(line: str) -> str:
     return "start" if text[0] == ">" or _LIST_ITEM.match(text) else "text"
 
 
+def _match(pattern: re.Pattern[str], text: str, at: int) -> re.Match[str]:
+    match = pattern.match(text, at)
+    assert match is not None, at  # `_SPACES` matches anywhere; `_NAME` follows an `@` from `_AT`
+    return match
+
+
 def _container_start(line: str) -> bool:
     """A quote or list marker, then a heading, fence, code or link definition: in a container."""
-    at, marked = _SPACES.match(line).end(), False
+    at, marked = _match(_SPACES, line, 0).end(), False
     while True:
         if line[at : at + 1] == ">":
             at += 2 if line[at + 1 : at + 2] == " " else 1
@@ -161,7 +169,7 @@ def _container_start(line: str) -> bool:
         marked = True
         if _indent(line[at : at + 4]) >= 4:
             return True
-        at = _SPACES.match(line, at).end()
+        at = _match(_SPACES, line, at).end()
     return marked and (
         line[at : at + 1] == "#"
         or line[at : at + 3] in ("```", "~~~")
@@ -224,7 +232,7 @@ def _hidden_imports(
         seen = at
         if masked[at] != _NUL or at in starts or (not emphasis and text[at - 1 : at] == "`"):
             continue
-        hits[line, at - line_start] = _NAME.match(text, at).group()
+        hits[line, at - line_start] = _match(_NAME, text, at).group()
     return hits
 
 
@@ -317,7 +325,7 @@ def stray_imports(text: str, allowed: str | None = None) -> list[str]:
         if _ODD_SPACE.search(row):
             problems.append((number, "a tab or other odd space is not modelled"))
         for match in _AT.finditer(row):
-            found[number, match.start()] = _NAME.match(original, match.start()).group()
+            found[number, match.start()] = _match(_NAME, original, match.start()).group()
     reported = set()
     for (number, column), name in sorted(found.items()):
         if allowed and name == allowed and column == 0:

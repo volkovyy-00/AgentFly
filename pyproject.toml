@@ -23,6 +23,7 @@ agentfly-hook = "agentfly.hook_client:main"
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.414",
     "pytest>=9.1.1",
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.9",
@@ -44,6 +45,24 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+# Only the tracked files: `**/.*` leaves out every hidden folder (`.claude/worktrees` with its copies
+# of the tree among them), the rest are the other folders `.gitignore` lists (pyright does not read
+# it; tests/test_ci_workflow.py keeps the two in step).
+exclude = [
+    "ui",
+    ".venv",
+    "**/.*",
+    "**/__pycache__",
+    "**/logs",
+    "**/*.egg-info",
+    "dist",
+    "**/build",
+    "result",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
