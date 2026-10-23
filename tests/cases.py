@@ -102,6 +102,8 @@ SCRIPT_NOT_INLINE: list[str] = [
     "ruby -rset x.rb",
     "ruby -Cetc x.rb",
     "ruby -W:no-deprecated x.rb",
+    "perl --version",  # perl's long options take nothing and hold no code
+    "perl --help",
     "ruby -Xetc x.rb",
     "perldoc -f each",
 ]

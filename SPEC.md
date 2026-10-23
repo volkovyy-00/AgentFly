@@ -441,14 +441,16 @@ R1 may say, below, covers it, and no file can leave it out). It reads the file
 `file_path` names, and every name its `glob` can match; a search of a folder with
 no glob reads nothing by name (section 10). The glob is read as ripgrep reads one
 (`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes, a leading `!` that
-excludes, trailing blanks dropped unless escaped, as in a gitignore line), case-folded like a rule path, and each brace alternative is judged on
+excludes, trailing blanks dropped unless escaped, as in a gitignore line),
+case-folded like a rule path (a class allows a letter when it allows it in either
+case, so `.e[!A-Z]v` still reads `.env`), and each brace alternative is judged on
 its own by its file name, its folders taken as able to sit anywhere under
 `file_path` (anywhere at all with none). An alternative matches a condition's
 `path` when either:
 - it matches a sample name made from a `path` pattern (each `*` filled with
   nothing or with one fixed letter, a `?` or class with one character it allows:
   `.env`, `.env.x`, `x.pem`, `id_rsa`, `credentials`, …) that `path_except` does
-  not match, so `*`, `**/*`, `.env*`, `?env`, `.e[n]v` and `!*.py` read `.env`; or
+  not match, so `*`, `**/*`, `.env*`, `?env` and `.e[n]v` read `.env`; or
 - its own name, its `*` read as that letter and each `?` or class tried with each
   character of the condition's `path` patterns it allows, is matched by `path` and
   not by `path_except`, so `.env.prod*`, `credentials.*`, `.en?.local` and
@@ -458,7 +460,9 @@ its own by its file name, its folders taken as able to sit anywhere under
   one by one only to hold them against `path_except`, and when there are too many
   of them `path_except` is not used (toward marking).
 
-So `*.py`, `*.json`, `test_*.py` and `.env.example` read no secret. A `path`
+A glob with a leading `!` reads every file it does not name, so it counts as
+reading a secret unless it leaves out every name (`!*`). So `*.py`, `*.json`,
+`test_*.py` and `.env.example` read no secret, and `!*.py` reads one. A `path`
 pattern with `/` also needs its folders to fit under `file_path`; a `path_except`
 with `/` is not used for a search. The test has its own fixed bound, a count: a
 glob longer than 512 characters, with more than 64 brace alternatives, or whose
@@ -508,7 +512,8 @@ computer is blocked. After normalisation that covers:
   `-m…`, `-I`; ruby's `-r`, `-I`, `-C`, `-X`, `-E`, an encoding, and its long
   `--enable`, `--disable`, `--dump`, `--backtrace-limit`, `--parser`,
   `--crash-report` and the `--…encoding` options; ruby's `-0`, `-T` and `-W`
-  take only digits and `-K` one character, so `ruby -We` is code). A script file
+  take only digits and `-K` one character, so `ruby -We` is code; perl's long
+  options, `--version` and `--help`, hold no code). A script file
   (`perl x.pl`, `ruby x.rb`), `perl -c x.pl`, `perl -v` and `ruby --version` are
   not one-liners;
 - a command that cannot be parsed (an unbalanced quote, or a `<<EOF` block);
@@ -1030,8 +1035,10 @@ Other measures:
   `.env` that `.gitignore` does not list, all of them) and does not mark. Cursor
   3.27.6 sends no result in `postToolUse` for a search (`{"pattern":…,"success":true}`
   for every `output_mode`, no file names), so AgentFly cannot tell what came back,
-  and `postToolUse` is not registered. A glob built to miss the samples with `*`,
-  such as `credential*.py`, does not mark either. Names-only searches
+  and `postToolUse` is not registered. A glob that misses the samples with `*`,
+  such as `credential*.py`, `*.env.local` or `.env*.local`, does not mark either
+  (its `*` is read as one letter, owner 2026-10-23). An empty or blank `glob` is
+  no filter to ripgrep, so it is a search with no glob. Names-only searches
   ("files_with_matches", "count") never mark, so a secret could be guessed letter
   by letter through them. A glob past the search bound (section 5) marks, whatever
   it names.

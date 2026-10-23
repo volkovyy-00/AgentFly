@@ -553,6 +553,7 @@ SAMPLE_LETTER: str = "x"
 MAX_GLOB_CHARS: int = 512  # a longer glob counts as reading a secret, unread
 MAX_GLOB_ALTERNATIVES: int = 64  # brace alternatives, nested ones multiplied out
 MAX_GLOB_BRACE_DEPTH: int = 32
+MAX_GLOB_CLASSES: int = 32  # each costs about 100 compares to read (`_either_case`)
 # The steps one clause may take for one search (`search_work`), counted from the sizes before any
 # is taken: a compare, or a cell of `_can_match`'s table. Measured on the author's Mac, best of
 # three: the slowest shapes tried (200 `?` against ten patterns with classes) take about 0.2 us a
@@ -615,9 +616,39 @@ def _first_allowed(charset: str) -> str:
     return next((c for c in _PRINTABLE if fnmatch.fnmatchcase(c, charset)), "")
 
 
-def _glob_class(text: str, at: int) -> tuple[str, int]:
-    """The class that opens at `at`, as an `fnmatch` class, and where it ends. ripgrep's `[^…]`
-    is `[!…]`; a first `]` is a member; `\\` escapes a member."""
+def _class_text(chars: Iterable[str], negated: bool) -> str:
+    """An `fnmatch` class of these characters: `]` first, `!` and `-` last, so none is read as
+    syntax."""
+    held: set[str] = set(chars)
+    order: list[str] = [c for c in "]" if c in held] + sorted(held - set("]!-"))
+    order += [c for c in "!-" if c in held]
+    return f"[{'!' if negated else ''}{''.join(order)}]"
+
+
+def _either_case(body: str, negated: bool) -> tuple[str, str]:
+    """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
+    as allowed when the class allows it in either case, so folding only ever lets more through
+    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Characters past the printable ones and
+    the members are not listed: a negated class allows them."""
+    held = f"[{body}]"
+    seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
+    folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
+
+    def member(c: str) -> bool:
+        return fnmatch.fnmatchcase(c, held)
+
+    if negated:  # left out only when every case of it is a member
+        out: list[str] = [c for c in folded if member(c) and member(c.upper())]
+        return ("set", _class_text(out, True)) if out else ("one", "")
+    allowed: list[str] = [c for c in folded if member(c) or member(c.upper())]
+    if not allowed:
+        return "set", held  # only characters past the printable ones: `_first_allowed` says so
+    return ("lit", allowed[0]) if len(allowed) == 1 else ("set", _class_text(allowed, False))
+
+
+def _glob_class(text: str, at: int) -> tuple[tuple[str, str], int]:
+    """The class that opens at `at`, as a token (`_either_case`), and where it ends. ripgrep's
+    `[^…]` is `[!…]`; a first `]` is a member; `\\` escapes a member."""
     end: int = len(text)
     i: int = at + 1
     negated: bool = i < end and text[i] in "!^"
@@ -638,15 +669,17 @@ def _glob_class(text: str, at: int) -> tuple[str, int]:
         members.append(char)
         i += 1
     body: str = "".join(members)
-    if "]" in body[1:] or (not negated and body.startswith("!")):
+    if "]" in body[1:] or body.startswith("!"):
         raise _Unsure  # `fnmatch` would read it another way
-    return f"[{'!' if negated else ''}{body}]", i + 1
+    return _either_case(body, negated), i + 1
 
 
 def _glob_tokens(text: str) -> list[tuple[str, str]]:
-    """ripgrep's glob syntax as tokens; braces, separators and commas inside braces included."""
+    """ripgrep's glob syntax as tokens; braces, separators and commas inside braces included.
+    Literal characters are case-folded here, classes by `_either_case`."""
     tokens: list[tuple[str, str]] = []
     depth: int = 0
+    classes: int = 0
     i: int = 0
     while i < len(text):
         char: str = text[i]
@@ -654,11 +687,14 @@ def _glob_tokens(text: str) -> list[tuple[str, str]]:
         if char == "\\":
             if i >= len(text):
                 raise _Unsure
-            tokens.append(("lit", text[i]))
+            tokens += [("lit", c) for c in text[i].casefold()]
             i += 1
         elif char == "[":
-            charset, i = _glob_class(text, i - 1)
-            tokens.append(("set", charset))
+            classes += 1
+            if classes > MAX_GLOB_CLASSES:
+                raise _Unsure
+            token, i = _glob_class(text, i - 1)
+            tokens.append(token)
         elif char == "{":
             depth += 1
             if depth > MAX_GLOB_BRACE_DEPTH:
@@ -673,7 +709,7 @@ def _glob_tokens(text: str) -> list[tuple[str, str]]:
             tokens.append(("comma", ""))
         else:
             kind: str = {"*": "star", "?": "one", "/": "sep"}.get(char, "lit")
-            tokens.append((kind, char if kind == "lit" else ""))
+            tokens += [("lit", c) for c in char.casefold()] if kind == "lit" else [(kind, "")]
     if depth:
         raise _Unsure
     return tokens
@@ -751,10 +787,10 @@ def search_glob(text: str) -> _Glob | None:
     secret): over MAX_GLOB_CHARS or MAX_GLOB_ALTERNATIVES, or a syntax ripgrep refuses."""
     if len(text) > MAX_GLOB_CHARS:
         return None
-    folded: str = _trimmed(text).casefold()
-    negated: bool = folded.startswith("!")
+    trimmed: str = _trimmed(text)
+    negated: bool = trimmed.startswith("!")
     try:
-        alternatives = _expand(_glob_tokens(folded[1:] if negated else folded))
+        alternatives = _expand(_glob_tokens(trimmed[1:] if negated else trimmed))
     except _Unsure:
         return None
     # Only an alternative's name is judged: `{src,lib}/*.py` is one alternative, not two.
@@ -973,9 +1009,11 @@ def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None,
         return True  # a pattern that takes any name below its folders (`~/.ssh/**`)
     samples: list[str] = [sample for sample, index in searched.samples if fits[index]]
     if glob.negated:
-        if any(alt.slash for alt in glob.alts):
-            return True  # `!tests/**` reads every file outside one folder
-        return any(not any(_alt_takes(alt, s) for alt in glob.alts) for s in samples)
+        # It reads every file it does not name, so it reads a secret unless it leaves out every
+        # name (`!*`, `!**`): leaving out the samples is not leaving out every secret name.
+        return any(fits) and not any(
+            not alt.slash and (alt.any_name or alt.pattern == "*") for alt in glob.alts
+        )
     shown = [
         (name, elements)
         for name, elements, fit in zip(searched.names, searched.elements, fits, strict=True)
@@ -987,7 +1025,7 @@ def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None,
         if alt.any_name:
             continue
         choices: list[tuple[str, ...]] = _choices(alt, searched.letters)
-        if _listed(searched, [len(c) for c in choices]) is None or not all(choices):
+        if _listed(searched, _widths(alt, searched.letters)) is None or not all(choices):
             # No exception, past the bound, or a class with no character to list: the exceptions
             # are not used (toward marking).
             if any(_can_match(elements, choices) for _, elements in shown):

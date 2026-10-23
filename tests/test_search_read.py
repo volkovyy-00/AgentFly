@@ -44,6 +44,12 @@ MARKS = [
     "?env",
     "credential?.py",
     "credential???.py",  # lead 2026-10-23: many `?` are judged, not counted as read
+    "credential[a-z].py",  # B tries each letter a class allows
+    "id_rs[a-z].pub2",
+    ".e[!A-Z]v",  # a class allows a letter in either case: folding only lets more through
+    "[!A-Z]d_rsa",
+    "id[A-z]rsa",
+    ".e[N]v",
 ]
 ALLOWS = [
     "*.py",
@@ -53,6 +59,7 @@ ALLOWS = [
     ".env.example",
     "test_???.py",
     "log-[0-9][0-9][0-9].txt",
+    "*.[Pp][Yy]",
 ]
 LINE_MODES = ["content", None, "lines", 7]  # None: no `output_mode` at all
 NAMES_MODES = ["files_with_matches", "count"]
@@ -80,9 +87,10 @@ def curl_after(action: dict, rules: RuleSet | None = None) -> str:
 # ---------------------------------------------------------------- the brief's grid
 
 
+@pytest.mark.parametrize("mode", LINE_MODES)
 @pytest.mark.parametrize("file_path", ["/w/.env", "/w/repo/secret.key"])
-def test_a_search_of_a_secret_file_marks_the_chat(file_path: str) -> None:
-    assert curl_after(grep(file_path=file_path)) == "blocked"
+def test_a_search_of_a_secret_file_marks_the_chat(file_path: str, mode: Any) -> None:
+    assert curl_after(grep(file_path=file_path, mode=mode)) == "blocked"
 
 
 @pytest.mark.parametrize("mode", LINE_MODES)
@@ -244,6 +252,9 @@ def test_an_exception_keeps_a_template_unread_and_a_negated_glob_reads_the_rest(
     assert curl_after(grep("!.env")) == "blocked"  # `x.pem` and the rest are read
     assert curl_after(grep("!*")) == "allow"  # every file left out
     assert curl_after(grep("!tests/**")) == "blocked"  # a folder left out: unsure, read
+    # leaving out the samples is not leaving out every secret: `.env.local` is still read
+    assert curl_after(grep("!{.env,.env.x,.env.,*.pem,*.key,id_rsa*,credentials*}")) == "blocked"
+    assert curl_after(grep("!**")) == "allow"
 
 
 @pytest.mark.parametrize(
@@ -361,6 +372,27 @@ def test_the_work_count_is_pinned() -> None:
     assert curl_after(grep(long_name)) == "blocked"
     assert work("a" * 200 + ".py") == 11 + 45 * 204 + 10  # 9,201: judged
     assert curl_after(grep("a" * 200 + ".py")) == "allow"
+
+
+def test_the_count_covers_the_tries_listed_for_the_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # classes that allow fewer letters than the count assumed: listing is decided on the count
+    searched = r1_clause()._search
+    glob = "id_rsa[!.np][!.np]{a,b}{c,d}{e,f}.pub"
+    parsed = rulefile.search_glob(glob)
+    assert parsed is not None
+    counted = rulefile.search_work(searched, parsed, 1)
+    calls: list[str] = []
+    real = rulefile.fnmatch.fnmatchcase
+
+    def counting(name: str, pattern: str) -> bool:
+        calls.append(name)
+        return real(name, pattern)
+
+    monkeypatch.setattr(rulefile.fnmatch, "fnmatchcase", counting)
+    assert rulefile.glob_reads(searched, glob, "/w", "/home") is True  # not listed: toward read
+    assert len(calls) <= counted <= rulefile.MAX_SEARCH_WORK
 
 
 def test_past_the_exception_bound_the_exceptions_are_not_used() -> None:
