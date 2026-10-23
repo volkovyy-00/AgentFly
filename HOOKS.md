@@ -107,7 +107,9 @@ exit 0 and a warning on stderr.
 1. Read stdin as bytes. Anything that is not a JSON object (empty, malformed, non-UTF-8,
    a 5000-digit number, JSON nested 100,000 deep) goes to the offline guard on its raw text.
 2. Strip, at every depth: `content`, `output` and `edits` (`afterFileEdit.edits` becomes a
-   count). `tool_input` is dropped; only a file tool's `file_path` is kept. An MCP call keeps
+   count). `tool_input` is dropped; only a file tool's `file_path` is kept, and for Grep its
+   `glob` and `output_mode` (a value that is not a string goes as `null`), never its `pattern`
+   (the search text; SPEC §5 "A search is a `read`"). An MCP call keeps
    only the server and tool names (`mcp_server_name`, `tool_name`; unverified on Cursor
    3.24.12). Only `beforeShellExecution` keeps its `command`, and only in the request body.
 3. `POST` the stripped payload to `http://127.0.0.1:8787/hook`, header `X-Recorder-Token`.
@@ -119,8 +121,9 @@ exit 0 and a warning on stderr.
 5. Append `{ts, event, decision}` to the hook log. The log keeps no command text.
 6. If the recorder is down, slow, or answers with an error: the **offline guard** (SPEC §9)
    answers. It denies outbound commands (`curl`, `wget`, `nc`, `scp`, `ssh`, `rsync` unless
-   the host is local or private; `gh`, `aws`, `git push`; every inline `python -c` / `node -e`
-   one-liner, as SPEC §9 says, and any other `python`/`node` command that mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
+   the host is local or private; `gh`, `aws`, `git push`; every inline `python -c` / `node -e` /
+   `perl -e` / `ruby -e` one-liner, as SPEC §9 says, and any other `python`/`node` command that
+   mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
    names an AgentFly folder or a `hooks.json`. The message says to run `agentfly start`. It
    allows everything else and logs the call with `offline: true`.
 
@@ -248,6 +251,18 @@ version in its heading before you rely on it. Add what you learn here.
   edit's Read and Write; `afterFileEdit` has no id and fired for a create only; parallel reads'
   halves can return in reverse order. A Read of a missing file fires no `beforeReadFile`. The
   server merges by id, with a path fallback (SPEC §8 "Duplicates").
+
+**3.27.6** (owner at the keyboard, 2026-10-23; R1G)
+- Every text search fires `preToolUse` with `tool_name` "Grep" and `tool_input` = `pattern` (the
+  search text), `output_mode`, `file_path` (the folder or file searched, absolute) and, when
+  given, `glob`. No `beforeReadFile` fires.
+- A folder search with no glob returned lines of a hidden `.env` and of `demo.key` and skipped what
+  `.gitignore` lists; globs `.env*` and `**/.env*` returned an ignored `.env` too; `file_path` = an
+  ignored `secret.key` returned its line.
+- The Glob tool (names only) arrives as the same hook with `pattern` "", a `glob`, `output_mode`
+  "files_with_matches" and no `file_path`.
+- `postToolUse` for Grep carries no result: its `tool_output` is `{"pattern":…,"success":true}` for
+  every `output_mode`, no file names.
 
 ---
 

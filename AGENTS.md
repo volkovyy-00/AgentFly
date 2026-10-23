@@ -149,10 +149,11 @@ section 8.)
   say "run `agentfly start`" in the deny message. Plain allow only after
   `agentfly uninstall` has removed the registration. A 401 or 403 from the
   recorder (wrong token) and input the client cannot parse get the same guard,
-  never an allow. Every inline `python -c` / `node -e` is denied offline.
+  never an allow. Every inline `python -c` / `node -e` / `perl -e` / `ruby -e` is denied
+  offline.
 - Strip content before doing anything else: file contents, edit text, command output,
-  `tool_input` except a file tool's path and an MCP call's names, any nested `content` /
-  `output`. The log keeps no command text. Top-level fields such as `parent_tool_call_id` pass
+  `tool_input` except a file tool's path, Grep's `glob` and `output_mode` (never its `pattern`)
+  and an MCP call's names, any nested `content` / `output`. The log keeps no command text. Top-level fields such as `parent_tool_call_id` pass
   through (D21). Session events keep only ids and names; `subagentStart.task` never leaves the
   client. Fields: SPEC section 8 "Stripping"; every depth: HOOKS.md "Hook client behaviour" step 2.
 - On deny, put the rule text in BOTH `user_message` and `agent_message`, and
