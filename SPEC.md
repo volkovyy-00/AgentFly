@@ -266,7 +266,8 @@ even a secret packed into a web address. So we keep almost nothing:
    option value; its target is saved as any word. A word the shell may turn into
    no word or several makes the word after it a value (`<arg>`): an unquoted `$`
    (`$X`, `${X}`, `a$X`), `"$@"` or `"${X[@]}"`, a glob character (`*`, `?`, `[`),
-   a brace list (`{a,b}`, `{a..b}`) or a `<` or `>` inside the word; after ssh's
+   a brace list (`{a,b}`, `{a..b}`), a process substitution (`<(cmd)`, which is
+   no redirection) or a `<` or `>` inside the word; after ssh's
    options it may hold the destination, so it and the rest are ssh's command. A
    double-quoted `"$X"` is one word and is read as one. For any other program a
    word holding `://` right after an option (not `--`) or after such a word is
@@ -275,8 +276,9 @@ even a secret packed into a web address. So we keep almost nothing:
 3. Replace everything else with `<arg>`. A variable set in front of a command
    is saved as `NAME=<removed>`.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
-   backticks, or an inline text block such as `<<EOF`), keep only the program
-   name and the word `<unparsed>`. Ordinary balanced quotes are fine and are
+   backticks, an inline text block such as `<<EOF`, a carriage return, or an
+   unquoted `${` whose `}` is not in the same word, as in `${X:-a b}`), keep only
+   the program name and the word `<unparsed>`. Ordinary balanced quotes are fine and are
    handled by the steps above.
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,

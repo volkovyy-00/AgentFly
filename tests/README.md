@@ -58,6 +58,15 @@ the maintainers' work items and decisions, which are kept outside this repo.
   name and hosts (two strings change: `cd <arg> && curl -s x.com &`, and the continuation line
   `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 301-word part behind 16
   `(` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
+  Final verification and lenses (`test_final_verification_shapes`, `test_lens_shapes`,
+  `test_each_wrapper_value_option_takes_the_next_word`, `test_an_unclosed_brace_list_is_read_in_one_pass`
+  `@wallclock`): a character a backslash keeps is no operator or word break (`echo \>& ssh …`),
+  a `#` after a continuation is in its word, a redirection inside a wrapper's options is passed
+  over, `env -` and `sudo -s`/`-i`, `env -S`/`-i` leave the rest `<arg>`, `sudo/` is no wrapper,
+  `time`, `command`, `doas`, `nohup` and `xargs` are stepped over, every value letter of the
+  brief's wrapper lists takes the next word, an unclosed `${` in a word (`${X:-a b}`) and a `\r`
+  make the command `<unparsed>`, `<(x)` is a loose word (not a redirection), and a 64,000-comma
+  `{` word is read in well under 0.25 s; `leak_cases.py` holds each of these shapes with a value.
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`
   (`tests/test_app.py`); HEAD on an API route is 405; `/docs`, `/redoc` and
   `/openapi.json` are 404.

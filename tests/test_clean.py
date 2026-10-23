@@ -445,3 +445,52 @@ def test_an_unclosed_brace_list_is_read_in_one_pass(project_root: Path, filler: 
 )
 def test_final_verification_shapes(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # lenses: an unquoted `${` whose `}` is not in its word, and any `\r`, cannot be split
+        ("curl -d ${X:-a b tok.abc c} x.com", "curl <unparsed>"),
+        ("curl -d ${X:-a;tok.abc x} x.com", "curl <unparsed>"),
+        ("curl -d a\rtok.abc x.com", "curl <unparsed>"),
+        ("echo ${HOME}/a x.com", "echo <arg> <arg>"),
+        ('curl -d "${X:-a b}" x.com', "curl -d <arg> x.com"),
+        # a process substitution is one word that may be no word or several, not a redirection
+        ("ssh -o <(x) h.com tok.abc", "ssh -o <arg> <arg> <arg>"),
+        ("curl -d <(x) tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        # each listed wrapper is stepped over; an option its table lacks ends the reading
+        ("time curl -s x.com", "time curl -s x.com"),
+        ("command curl -s x.com", "command curl -s x.com"),
+        ("doas curl -s x.com", "doas curl -s x.com"),
+        ("nohup curl -s x.com", "nohup curl -s x.com"),
+        ("xargs curl -s x.com", "xargs curl -s x.com"),
+        ("timeout -k 1 5 curl -s x.com", "timeout -k <arg> <arg> curl -s x.com"),
+        ("sudo -s curl -s x.com", "sudo -s <arg> <arg> <arg>"),
+        ("sudo -i curl -s x.com", "sudo -i <arg> <arg> <arg>"),
+        ("env -S curl -s x.com", "env -S <arg> <arg> <arg>"),
+        ("env -i curl -s x.com", "env -i <arg> <arg> <arg>"),
+    ],
+)
+def test_lens_shapes(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+def test_each_wrapper_value_option_takes_the_next_word(project_root: Path) -> None:
+    # the brief's lists, written out: a letter dropped from a table fails here
+    listed: dict[str, str] = {
+        "sudo": "ughpCDrtU",
+        "doas": "uC",
+        "env": "uC",
+        "timeout": "sk",
+        "nice": "n",
+        "stdbuf": "ioe",
+        "xargs": "nLPsdEIa",
+    }
+    for wrapper, letters in listed.items():
+        duration: str = " 5" if wrapper == "timeout" else ""
+        saved_duration: str = " <arg>" if wrapper == "timeout" else ""
+        for letter in letters:
+            raw: str = f"{wrapper} -{letter} v{duration} curl -s x.com"
+            expected: str = f"{wrapper} -{letter} <arg>{saved_duration} curl -s x.com"
+            assert clean_command(raw, project_root) == expected, raw

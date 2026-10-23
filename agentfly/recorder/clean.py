@@ -148,6 +148,8 @@ _QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
 # backslash keeps (`\;`, `\>`: never an operator), a `#`, a redirection operator holding `&` or
 # `|` (`2>&1`, `<&3`, `&>f`, `>|f`), a separator (C1-fix1: `&`, `|&` and a new line too) and a
 # word break.
+# A word's `${`, `}` and the characters a backslash keeps (`\${` opens nothing).
+_BRACE_SCAN = re.compile(r"\\.|\$\{|\}")
 _SPLIT_TOKEN = re.compile(
     rf"""(?P<quoted>{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
     r"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#]|\\[^\n])++|\\\Z)|(?P<hash>\#)"""
@@ -171,13 +173,14 @@ _WORD_PIECE = re.compile(
 _DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
 # C1-fix1: a redirection at a word's start as written (`>f`, `2>&1`, `&>f`, `<f`, `{fd}>f`); when
 # it is the whole word (`>`, `2>`, `{fd}>`) the next word is its target.
-_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)")
+_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)(?!\()")
 # In a word's unquoted text, what may make it no word or several: a `$` (a variable may be empty
 # or hold spaces), a glob character (it may match a file named `-d`), a `<` or `>` after the
-# word's start (the shell cuts the word there) and a brace list or range (`{,}` is no word). The
+# word's start (the shell cuts the word there), a process substitution (`<(cmd)`, whose words may
+# run on) and a brace list or range (`{,}` is no word). The
 # brace part never steps back (possessive, and its first run stops at the first `,` or `..`), so
 # an unclosed `{,,,…` is read in one pass.
-_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
+_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\A[<>]\(|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -201,8 +204,10 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>"
 
+    parts: list[tuple[str, str]] | None = _split_keeping_seps(stripped)
+    if parts is None:
+        return f"{_first_program(stripped)} <unparsed>"
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
-    parts: list[tuple[str, str]] = _split_keeping_seps(stripped)
     cleaned_bits: list[str] = []
     for text, sep in parts:
         cleaned_bits.append(_clean_segment(text.strip(), disk))
@@ -212,7 +217,8 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
 
 
 def _needs_unparsed(cmd: str) -> bool:
-    if "`" in cmd or "$(" in cmd or "<<" in cmd:
+    # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not
+    if "`" in cmd or "$(" in cmd or "<<" in cmd or "\r" in cmd:
         return True
     return not _quotes_balanced(cmd)
 
@@ -270,18 +276,25 @@ def _first_program(cmd: str) -> str:
     return "cmd"
 
 
-def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
+def _split_keeping_seps(cmd: str) -> list[tuple[str, str]] | None:
     """Split on |, |&, &, &&, ||, ; and new lines outside quotes; return (segment,
     following_sep). A line continuation and a comment (`#` where a word starts, to the end of its
     line; a continuation does not start a word) are cut out of the segment's text; a new line is
-    saved as `;`, and one with nothing before it since the last separator is dropped."""
+    saved as `;`, and one with nothing before it since the last separator is dropped. None when an
+    unquoted `${` is not closed in its word: the shell reads its spaces and separators as part of
+    the word (`${X:-a b}`), which this splitting does not."""
     segments: list[tuple[str, str]] = []
     pieces: list[str] = []  # the segment's text, without its continuations and comments
     start: int = 0  # where the segment's text goes on
     at: int = 0
     word_start: bool = True  # a `#` here starts a comment
+    braces: int = 0  # the word's unquoted `${` not yet closed
     while (found := _SPLIT_TOKEN.match(cmd, at)) is not None:
         kind: str | None = found.lastgroup
+        if kind == "text" and (braces or "${" in found.group()):
+            braces = _open_braces(found.group(), braces)
+        elif braces and kind in ("redirect", "sep", "blank"):
+            return None
         if kind == "hash" and word_start:
             line_end: int = cmd.find("\n", at)
             pieces.append(cmd[start:at])
@@ -300,9 +313,21 @@ def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
         if kind != "join":
             word_start = kind in ("redirect", "sep", "blank")
         at = found.end()
+    if braces:
+        return None
     pieces.append(cmd[start:])
     segments.append(("".join(pieces), ""))
     return segments
+
+
+def _open_braces(text: str, braces: int) -> int:
+    """The unquoted `${` still open after a run of a word's text, `braces` open before it."""
+    for found in _BRACE_SCAN.finditer(text):
+        if found.group() == "${":
+            braces += 1
+        elif found.group() == "}" and braces:
+            braces -= 1
+    return braces
 
 
 def _shell_words(segment: str) -> list[str]:
@@ -406,7 +431,7 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
 
     idx, raw, program = found
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
-    prog_base: str = Path(program).name.lower()
+    prog_base: str = posixpath.basename(program).lower()
     rest: list[tuple[str, str]] = pairs[idx + 1 :]
     if prog_base in _WEB_TOOLS:
         out.extend(_clean_web_words(rest, prog_base, disk))

