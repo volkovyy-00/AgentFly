@@ -10,7 +10,6 @@ path outside every root as text is outside with no disk call. These run on real 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -296,9 +295,6 @@ def test_a_missing_folder_cancelled_by_dot_dot_still_follows_the_next_link(tree:
     assert not fires(write("new/../inner/f", roots))
 
 
-Counter = Callable[[], list[str]]
-
-
 @pytest.fixture()
 def lstat_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
@@ -329,7 +325,7 @@ def test_the_lookups_are_counted_and_shared_by_one_hook(tree: Path, lstat_calls:
         assert not fires(action)
         assert not fires(action)
     assert first > 0 and len(lstat_calls) == first, "the second clause asks the disk nothing"
-    assert meter.disk is not None and meter.disk.left == clean.LOOKUP_STEPS - first
+    assert meter.disk.left == clean.LOOKUP_STEPS - first
     lstat_calls.clear()
     assert not fires(action)  # no meter: a walker of its own
     assert len(lstat_calls) == first

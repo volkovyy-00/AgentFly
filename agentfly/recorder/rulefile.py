@@ -36,13 +36,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
 from agentfly.install.layout import SYSTEM
-from agentfly.recorder.clean import Walker
+from agentfly.recorder.clean import Walker, home_expanded
 from agentfly.recorder.names import hosts_in_command
 from agentfly.recorder.normalize import (
-    SUB_EMPTY,
-    SUB_PREFIX,
     Parsed,
     base_name,
+    holds_substitution,
     normalize,
     programs,
 )
@@ -267,10 +266,7 @@ def _glob(pattern: Sequence[str], segments: Sequence[str], blocks: _Blocks | Non
 def _resolved(path: str, home: str) -> str:
     """A path as the shell would hand it on: a leading `~`, `$HOME` or `${HOME}` is the home
     folder, and `..` and `//` are folded (the text only; no link is followed)."""
-    for prefix in ("~", "$HOME", "${HOME}"):
-        if path == prefix or path.startswith(prefix + "/"):
-            path = home + path[len(prefix) :]
-            break
+    path = home_expanded(path, home)
     return posixpath.normpath(path) if ".." in path or "//" in path else path
 
 
@@ -319,7 +315,7 @@ _AT_FILE_TOOLS: frozenset[str] = frozenset({"curl", "wget"})
 def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
     """The case-folded host names a command names. In a curl or wget command, an `@` word after an
     option is the file the option reads, not a host."""
-    reads_at: bool = any(base_name(word) in _AT_FILE_TOOLS for word in argv)
+    reads_at: bool = not _AT_FILE_TOOLS.isdisjoint(_first_positions(argv))
     kept: list[str] = [
         word
         for index, word in enumerate(argv)
@@ -333,7 +329,7 @@ def _unlisted_host(argv: tuple[str, ...], listed: frozenset[str]) -> bool:
     holds a variable or a substitution (`"$URL"`, `$(cat url)`) where a host may be, counts as
     yes (toward firing, owner 2026-10-23)."""
     hosts: tuple[str, ...] = _hosts_of(argv)
-    if not hosts or any("$" in w or SUB_PREFIX in w or SUB_EMPTY in w for w in argv):
+    if not hosts or any("$" in w or holds_substitution(w) for w in argv):
         return True
     return any(host not in listed for host in hosts)
 
@@ -466,22 +462,17 @@ class WorkLimit(Exception):
 @dataclass
 class Meter:
     """One hook's budget of steps (floating patterns and command lists), and the rules it left
-    unfinished (in order, once). `disk` is the hook's walker for `path_scope`, made on first use:
-    its look-ups have a budget of their own (`clean.LOOKUP_STEPS`), and a path or root it cannot
-    resolve in that budget counts as outside, so it never makes a rule unfinished."""
+    unfinished (in order, once). `disk` is the hook's walker for `path_scope`: its look-ups have
+    a budget of their own (`clean.LOOKUP_STEPS`), and a path or root it cannot resolve in that
+    budget counts as outside, so it never makes a rule unfinished."""
 
     left: int
     unfinished: list[str] = dataclasses.field(default_factory=list)
-    disk: Walker | None = None
+    disk: Walker = dataclasses.field(default_factory=Walker)
 
     def note(self, rule_id: str) -> None:
         if rule_id not in self.unfinished:
             self.unfinished.append(rule_id)
-
-    def walker(self) -> Walker:
-        if self.disk is None:
-            self.disk = Walker()
-        return self.disk
 
 
 # This hook's meter, or None: then nothing is charged (pure tests, `rules test`, `doctor`, D27).
@@ -564,19 +555,21 @@ def event_of(action: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _action_path(action: Mapping[str, Any], event: str) -> str:
-    source: Mapping[str, Any] = _tool_input(action) if event == "write" else action
+def _action_path(action: Mapping[str, Any]) -> str:
+    """The `file_path` a read names, or a tool's (the Write tool, a search) in its input."""
+    tool: bool = action.get("hook_event_name") == "preToolUse"
+    source: Mapping[str, Any] = _tool_input(action) if tool else action
     value: Any = source.get("file_path")
     return value if isinstance(value, str) else ""
 
 
-def _outside_workspace(action: Mapping[str, Any], event: str, home: str) -> bool:
+def _outside_workspace(action: Mapping[str, Any], home: str) -> bool:
     """`path_scope = "outside_workspace"`: the file a read or write names, or the folder or file a
     search names (none: outside), is under none of the event's `workspace_roots` (`Walker`). The
     hook's walker answers, or one of its own when no meter runs (a test, `rules test`)."""
-    path: str = _action_path(action, "write" if is_search(action) else event)
+    path: str = _action_path(action)
     meter: Meter | None = _METER.get()
-    walker: Walker = meter.walker() if meter is not None else Walker()
+    walker: Walker = meter.disk if meter is not None else Walker()
     return not walker.inside_any(action.get("workspace_roots"), path, home)
 
 
@@ -1177,7 +1170,7 @@ def _flag_tokens(word: str) -> tuple[str, ...]:
         return (f"{FLAG}--{name.casefold()}",) if name else ()
     if word.startswith("-"):
         run = _FLAG_RUN.match(word, 1)
-        return tuple(f"{FLAG}-{c}" for c in run.group()) if run is not None else ()
+        return tuple(f"{FLAG}-{c}" for c in dict.fromkeys(run.group())) if run is not None else ()
     return ()
 
 
@@ -1509,17 +1502,16 @@ class Clause:
         views: Iterator[_Simple] = self._matched(parsed)
         if listed:
             views = (view for view in views if _unlisted_host(view.argv, listed))
-        if self.pipe_into:
+        if self.pipe_into and not (parsed.unparsed or parsed.links_unknown):
             return self._pipe_hit(parsed, {view.argv for view in views})
+        # With `pipe_into`, text that does not parse, or hides what feeds what
+        # (`Parsed.links_unknown`), counts as feeding a listed program once a command matched.
         return any(True for _ in views)
 
     def _pipe_hit(self, parsed: Parsed, matched: set[tuple[str, ...]]) -> bool:
-        """A matched simple command, wherever it stands in the line, feeds a listed program; text
-        that does not parse, or hides what feeds what (`Parsed.links_unknown`), counts as one."""
+        """A matched simple command, wherever it stands in the line, feeds a listed program."""
         if not matched:
             return False
-        if parsed.unparsed or parsed.links_unknown:
-            return True
         sources = (index for index, argv in enumerate(parsed.commands) if argv in matched)
         return _feeds(parsed, sources, self.pipe_into)
 
@@ -1541,10 +1533,10 @@ class Clause:
                 if event == "read" and is_search(action):
                     hit: bool = self._search_hit(action, home)
                 else:
-                    hit = self._path_hit(_action_path(action, event), home)
+                    hit = self._path_hit(_action_path(action), home)
                 if not hit:
                     return False
-            return not self.path_scope or _outside_workspace(action, event, home)
+            return not self.path_scope or _outside_workspace(action, home)
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
@@ -2207,12 +2199,21 @@ def _coverage_problems(after: Clause) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _conditions(clause: Clause) -> set[str]:
+    """The conditions a clause sets besides its events: an allow-list check of R1 (D27) then
+    refuses a field added later without being told of it."""
+    return {
+        field.name
+        for field in dataclasses.fields(clause)
+        if field.init and field.name != "events" and getattr(clause, field.name)
+    }
+
+
 def _then_problem(then: Clause) -> bool:
     return (
         then.events != ("shell",)
         or then.command_class != "outbound"
-        or bool(then.path or then.path_except or then.command or then.host_not_in)
-        or bool(then.path_scope)
+        or _conditions(then) != {"command_class"}
     )
 
 
@@ -2231,7 +2232,7 @@ def _minimum_problems(specs: Sequence[RuleSpec]) -> list[str]:
     if r1.severity != "block":
         problems.append(f'{where}: severity must stay "block" (it is {r1.severity!r}) (D27)')
     after: Clause = r1.after
-    if after.command or after.command_class or after.host_not_in or after.path_scope:
+    if not _conditions(after) <= {"path", "path_except"}:
         problems.append(f"{where}: its 'after' may hold only event, path and path_except (D27)")
     if not {"read", "shell"} <= set(after.events):
         problems.append(f"{where}: its 'after' must fire on both read and shell (D27)")

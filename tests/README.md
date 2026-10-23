@@ -88,7 +88,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   unmarked, bare, wrapped and unparseable. V5c: `PIPED_CODE` is outbound after a mark, bare and
   wrapped, and `PIPED_NOT_INLINE` (`git diff | python3 tool.py`, `python3 -m json.tool`,
   `python3 < x.py`, `perl -MFoo=a,b x.pl`, `ps aux | grep python3`) is allowed; groups nested
-  past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes). Subagent mark (`tests/test_subagent_mark.py`):
+  past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes),
+  and so does a line of many heredocs (`c<<A;` 8,000 times). Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps

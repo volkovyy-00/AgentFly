@@ -23,6 +23,8 @@ from agentfly.recorder import rules as rules_mod
 from tests.cases import wrapped
 
 EXAMPLE = rulefile.default_path().with_name("example.toml")
+LOADED = rulefile.load_bytes(EXAMPLE.read_bytes())
+AFTER_THEN = frozenset(spec.id for spec in LOADED.rules if spec.kind == "after_then")
 ROOTS = ("/work/app",)
 
 
@@ -62,6 +64,7 @@ SHELL_FORMS = (
 )
 FLAG_FORMS = ("cluster", "attached", "=value", "long prefix")
 PATH_FORMS = ("relative", "./", "..", "//", "$HOME", "upper case path")
+FORMS = (*SHELL_FORMS, *FLAG_FORMS, *PATH_FORMS)
 
 
 def wrapped_forms(command: str) -> dict[str, str]:
@@ -316,15 +319,10 @@ NOT_APPLICABLE: dict[tuple[str, str], str] = {
 }
 
 
-def is_after_then(rule: str) -> bool:
-    return rule in {"R1", "npm-publish-after-env"} or rule.split("-")[0] in {"s03", "s04", "s13"}
-
-
 def grid(rule: str) -> list[str]:
-    forms: list[str] = [*SHELL_FORMS, *FLAG_FORMS, *PATH_FORMS]
-    if is_after_then(rule):
-        return [f"{part} {form}" for part in ("trigger", "follow-up") for form in forms]
-    return forms
+    if rule in AFTER_THEN:
+        return [f"{part} {form}" for part in ("trigger", "follow-up") for form in FORMS]
+    return list(FORMS)
 
 
 RULE_IDS: tuple[str, ...] = (
@@ -347,9 +345,8 @@ RULE_IDS: tuple[str, ...] = (
 
 
 def ruleset() -> rules_mod.RuleSet:
-    loaded = rulefile.load_bytes(EXAMPLE.read_bytes())
-    assert loaded.errors == (), loaded.errors
-    return rules_mod.build_ruleset(loaded, source="file", path=str(EXAMPLE))
+    assert LOADED.errors == (), LOADED.errors
+    return rules_mod.build_ruleset(LOADED, source="file", path=str(EXAMPLE))
 
 
 RULESET = ruleset()
@@ -393,12 +390,11 @@ def table() -> str:
     """The rule-by-form table: `x` fires (`T`/`F`: on the trigger / the follow-up), `-` does not
     apply (the reasons follow)."""
     covered: set[tuple[str, str]] = {(case.rule, case.form) for case in FIRES}
-    forms: list[str] = [*SHELL_FORMS, *FLAG_FORMS, *PATH_FORMS]
-    lines: list[str] = ["| rule | " + " | ".join(forms) + " |", "|---" * (len(forms) + 1) + "|"]
+    lines: list[str] = ["| rule | " + " | ".join(FORMS) + " |", "|---" * (len(FORMS) + 1) + "|"]
     for rule in RULE_IDS:
         cells: list[str] = []
-        for form in forms:
-            if is_after_then(rule):
+        for form in FORMS:
+            if rule in AFTER_THEN:
                 cell = (
                     "".join(
                         mark

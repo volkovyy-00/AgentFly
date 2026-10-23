@@ -80,7 +80,8 @@ class Parsed:
     unquoted_heredoc: bool = False
     code_heredoc: bool = False
     loose: tuple[tuple[str, ...], ...] = ()
-    links: tuple[tuple[int, int], ...] = ()
+    # Not hashed (it is compared): a long line's links would make every cache look-up slow.
+    links: tuple[tuple[int, int], ...] = field(default=(), hash=False)
     links_unknown: bool = False
     piped_code: bool = False
 
@@ -540,9 +541,12 @@ class _Scanner:
         def end_command() -> None:
             nonlocal cmd
             if cmd.words:
-                for doc in heredocs:
-                    if doc.owner is cmd.words:
-                        doc.index = len(out.commands)
+                # This command's heredocs are the last ones listed: a scan of all of them at every
+                # command would be quadratic on a line of many `c<<A;`.
+                for doc in reversed(heredocs):
+                    if doc.owner is not cmd.words:
+                        break
+                    doc.index = len(out.commands)
                 self.finish_command(cmd)
             cmd = _Cmd()
             self.target = ""
@@ -1083,13 +1087,13 @@ def _piped_code(out: _Out) -> bool:
     """Some command that reads a pipe (every command, when the links are unknown) is an
     interpreter or a shell that reads its code from stdin (`reads_stdin`). Its redirect targets
     are no words of its own, and stdin redirected from a file names a script."""
-    count: int = len(out.commands)
-    fed: set[int] = set(range(count)) if out.links_unknown else out.fed
-    for index in sorted(i for i in fed if i < count):
+    for index in range(len(out.commands)) if out.links_unknown else out.fed:
         meta: _Meta = out.meta[index]
         if meta.stdin == "file":
             continue
-        argv: tuple[str, ...] = out.commands[index]
-        if reads_stdin([word for at, word in enumerate(argv) if at not in meta.targets]):
+        argv: Sequence[str] = out.commands[index]
+        if meta.targets:
+            argv = [word for at, word in enumerate(argv) if at not in meta.targets]
+        if reads_stdin(argv):
             return True
     return False

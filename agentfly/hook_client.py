@@ -501,8 +501,9 @@ _PIPE_STAGES: int = 1000
 def _programs(argv: Sequence[str]) -> range | tuple[int, ...]:
     """`normalize.programs`: the first word after assignments and keywords, and every word after
     a wrapper."""
+    assignment: re.Pattern[str] = re.compile(_ASSIGNMENT)
     for index, word in enumerate(argv):
-        if word in _KEYWORDS or re.compile(_ASSIGNMENT).match(word):
+        if word in _KEYWORDS or assignment.match(word):
             continue
         if word in _HEADS:
             return ()
@@ -513,7 +514,9 @@ def _programs(argv: Sequence[str]) -> range | tuple[int, ...]:
 
 
 def _is_stdin(word: str) -> bool:
-    return word in ("-", "/dev/stdin") or re.compile(_DEV_FD).fullmatch(word) is not None
+    if word in ("-", "/dev/stdin"):
+        return True
+    return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
 
 
 def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
@@ -572,9 +575,10 @@ def _stage_reads_stdin(stage: str) -> bool:
         stage = stage.replace(start, f" {_SUB} ")
     argv: list[str] = []
     found: list[str] = words(stage)
+    redirect_word: re.Pattern[str] = re.compile(_REDIRECT)
     index: int = 0
     while index < len(found):
-        redirect: re.Match[str] | None = re.compile(_REDIRECT).fullmatch(found[index])
+        redirect: re.Match[str] | None = redirect_word.fullmatch(found[index])
         if redirect is None:
             argv.append(found[index])
             index += 1
@@ -639,6 +643,7 @@ def _quoted_one_liner(text: str) -> bool:
     _QUOTED_WORDS words the text counts as one."""
     lists: list[str] = [text]
     quoted: re.Pattern[str] = re.compile(_QUOTED_WORD)
+    space: re.Pattern[str] = re.compile(r"\s")  # what `str.isspace` takes, without a loop a letter
     read: int = 0
     for _ in range(_QUOTED_DEPTH):
         again: list[str] = []
@@ -654,7 +659,7 @@ def _quoted_one_liner(text: str) -> bool:
                 table: list[bool] = _one_liner_table(argv, _perl_step)
                 if any(table[i + 1] for i in perls):
                     return True
-            again += [word for word in argv if any(c.isspace() for c in word)]
+            again += [word for word in argv if space.search(word)]
         lists = again
     return False
 

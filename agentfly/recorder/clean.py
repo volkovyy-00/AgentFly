@@ -366,6 +366,14 @@ def _folded(text: str) -> str:
     return posixpath.normpath("/" + text.lstrip("/"))  # normpath keeps a leading `//`
 
 
+def home_expanded(path: str, home: str) -> str:
+    """A leading `~`, `$HOME` or `${HOME}` is the home folder (rules' paths and `path_scope`)."""
+    for prefix in ("~", "$HOME", "${HOME}"):
+        if path == prefix or path.startswith(prefix + "/"):
+            return home + path[len(prefix) :]
+    return path
+
+
 class _OverBudget(Exception):
     """The hook's look-ups are used up; the word being walked is not looked up."""
 
@@ -488,10 +496,7 @@ class Walker:
         return None if resolved is None or resolved == "/" else (_folded(root), resolved)
 
     def _judge(self, sent: tuple[str, ...], path: str, home: str) -> bool:
-        for prefix in ("~", "$HOME", "${HOME}"):
-            if path == prefix or path.startswith(prefix + "/"):
-                path = home + path[len(prefix) :]
-                break
+        path = home_expanded(path, home)
         if not path.startswith("/"):
             if not sent or self._usable(sent[0]) is None:
                 return False

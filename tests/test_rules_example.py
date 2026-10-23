@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from agentfly.cli import main
 from agentfly.install.layout import Layout
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_mod
 from tests.rules_helpers import default_with
+from tests.test_rules_cli import run
 
 DEFAULT = rulefile.default_path()
 EXAMPLE = DEFAULT.with_name("example.toml")
@@ -37,12 +37,6 @@ EXAMPLE_IDS = (
     "npm-publish-after-env",
 )
 L21 = "`init -g` replaces an unedited copy with the newest default; change any byte to keep yours"
-
-
-def run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str, str]:
-    code = main(["rules", *argv])
-    out = capsys.readouterr()
-    return code, out.out, out.err
 
 
 def example() -> rulefile.RuleFile:
