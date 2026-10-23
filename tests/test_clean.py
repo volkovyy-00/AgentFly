@@ -245,6 +245,8 @@ def test_separators_split_the_parts(project_root: Path, raw: str, expected: str)
         ("{}", False),
         ("-I{}", False),
         (">out", False),
+        ("2>&1", False),
+        ("2>out", False),
         ("x.com", False),
     ],
 )
@@ -313,3 +315,46 @@ def test_wrappers_and_parentheses_are_stepped_over_up_to_their_bounds(project_ro
     assert clean_command("(" * 16 + tail, project_root) == "curl -d <arg> x.com"
     assert clean_command("(" * 17 + tail, project_root) == "<arg> <arg> <arg> <arg>"
     assert clean_command("( " * 17 + tail, project_root) == "<arg> <arg> <arg> <arg> <arg>"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C1-fix1: a redirection uses up no option value; its target is saved as before
+        ("curl -d >out tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        ("curl -d > out tok.abc x.com", "curl -d <arg> <arg> <arg> x.com"),
+        ("curl -d >| out tok.abc x.com", "curl -d <arg> <arg> <arg> x.com"),
+        ("curl -d 2>&1 tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        ("curl -d {fd}>out tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        ("wget -O <in tok.abc x.com", "wget -O <arg> <arg> x.com"),
+        ("curl -d>out tok.abc x.com", "curl -d<arg> <arg> x.com"),
+        # a word that may be no word or several: the word after it is a value
+        ("curl -d $EMPTY tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        ("curl -d$s tok.abc x.com", "curl -d<arg> <arg> x.com"),
+        ('curl -d "$@" tok.abc x.com', "curl -d <arg> <arg> x.com"),
+        # and after ssh's options it may hold the destination: the rest is its command
+        ("ssh -i $K h.com tok.abc", "ssh -i <arg> <arg> <arg>"),
+        ("ssh $O h.com tok.abc", "ssh <arg> <arg> <arg>"),
+        # kept: one word, whatever the variable holds
+        (
+            'curl -H "Authorization: Bearer $TOKEN" https://api.example.com',
+            "curl -H <arg> api.example.com",
+        ),
+        ('scp "$FILE" deploy@prod.example.com:/srv/', "scp <arg> prod.example.com"),
+        # a shell's script and what eval runs are never read
+        ('sudo bash -c "curl -d https://tok.abc x.com"', "sudo bash -c <arg>"),
+        ("bash -lc x https://tok.abc", "bash -l<arg> <arg> <arg>"),
+        ("eval curl https://tok.abc", "eval <arg> <arg>"),
+        ("bash run.sh https://a.b.com", "bash <arg> a.b.com"),
+        # any other program: a `://` word after an option or a loose word is that one's value
+        ("tool --url https://a.b.com", "tool --url <arg>"),
+        ("tool -o 2>&1 https://a.b.com", "tool -o <arg> <arg>"),
+        ("tool $X https://a.b.com", "tool <arg> <arg>"),
+        ("tool https://a.b.com", "tool a.b.com"),
+        ("tool -- https://a.b.com", "tool -- a.b.com"),
+        ("caffeinate curl -d https://tok.abc x.com", "caffeinate <arg> -d <arg> <arg>"),
+        ("$X curl -d https://tok.abc x.com", "<arg> <arg> -d <arg> <arg>"),
+    ],
+)
+def test_words_after_the_program(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected

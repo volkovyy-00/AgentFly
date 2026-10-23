@@ -91,6 +91,8 @@ _NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
     ),
 }
 _WEB_TOOLS: frozenset[str] = frozenset(_NO_VALUE)
+# C1-fix1: the shells whose `-c` script, like what `eval` runs, is never read.
+_SHELLS: frozenset[str] = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 # C1-fix1: the programs that run the program after them, each with its short options that take a
 # value. Any other option of theirs (`sudo -E`, `env -S`) leaves the rest of the part `<arg>`.
 _WRAPPERS: dict[str, str] = {
@@ -317,7 +319,9 @@ def _out_of_step(raw: str) -> bool:
     """Whether a word as written may stand for no word or several, so that the words after it
     may not be the ones they look like (C1-fix1): an unquoted `$`, glob character, brace list or
     `<`/`>` after its start, or a double-quoted `"$@"` or `"${X[@]}"`. A quoted `"$X"` is one
-    word."""
+    word. A redirection is no word, whatever its target holds."""
+    if _REDIRECT.match(raw):
+        return False
     if not _has_quoting(raw):
         return _LOOSE_TEXT.search(raw) is not None
     plain: list[str] = []  # the unquoted text, each quoted or escaped piece one `_`
@@ -383,15 +387,47 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
     if idx is None:
         return " ".join(out)
 
-    program: str = pairs[idx][1]
+    raw, program = pairs[idx]
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
     prog_base: str = Path(program).name.lower()
-    words: list[str] = [word for _, word in pairs[idx + 1 :]]
+    rest: list[tuple[str, str]] = pairs[idx + 1 :]
     if prog_base in _WEB_TOOLS:
-        out.extend(_clean_web_words(words, prog_base, disk))
+        out.extend(_clean_web_words(rest, prog_base, disk))
+    elif prog_base == "eval":
+        _rest_unread(rest, 0, out)
     else:
-        out.extend(_classify_word(word, disk, web_tool=False) for word in words)
+        # a shell's words from its `-c` on are a script and its arguments: never read
+        end: int = _script_start(rest) if prog_base in _SHELLS else len(rest)
+        out.extend(_clean_other_words(rest[:end], disk, loose=_out_of_step(raw)))
+        _rest_unread(rest, end, out)
     return " ".join(out)
+
+
+def _script_start(pairs: list[tuple[str, str]]) -> int:
+    """The index after a shell's short option holding `c` (`-c`, `-lc`), or the end."""
+    for at, (_, word) in enumerate(pairs):
+        if word.startswith("-") and not word.startswith("--") and "c" in word:
+            return at + 1
+    return len(pairs)
+
+
+def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bool) -> list[str]:
+    """The words of a program that is no web tool, read as any program's (C1-fix1 backstop): a
+    word with `://` right after an option, or after a word that may be no word or several
+    (`loose`), is that one's value, `<arg>`. Redirections and their targets are passed over."""
+    out: list[str] = []
+    target: bool = False  # the word after a bare redirection is its target
+    for raw, word in pairs:
+        if target or _REDIRECT.match(raw):
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = not target and _REDIRECT.fullmatch(raw) is not None
+            continue
+        if loose and "://" in word:
+            out.append("<arg>")
+        else:
+            out.append(_classify_word(word, disk, web_tool=False))
+        loose = (_is_option(word) and word != "--") or _out_of_step(raw)
+    return out
 
 
 def _program_index(pairs: list[tuple[str, str]], out: list[str], disk: Lookups) -> int | None:
@@ -509,21 +545,30 @@ def _wrapper_value(pairs: list[tuple[str, str]], at: int, out: list[str]) -> int
     return at + 1
 
 
-def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
+def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> list[str]:
     """A web tool's words (C1): the word after an option that takes a value is that value, and
     every word after ssh's destination is its remote command; neither is ever a website. Where
     the reading may be a word out of step it falls toward `<arg>`: an option where a value was
     expected is saved as that value and its own value comes next, and the word after an option
-    that may already hold its value (`-p22`) may be ssh's destination."""
+    that may already hold its value (`-p22`) may be ssh's destination. C1-fix1: a redirection
+    and its target use up no value; the word after one that may be no word or several is a
+    value, and for ssh that word and the rest are its command (it may hold the destination)."""
     out: list[str] = []
     value_next: bool = False
     may_be_whole: bool = False  # the option before this value may already hold its own value
     options_ended: bool = False
     remote: bool = False
-    for word in words:
-        if remote:
+    target: bool = False  # the word after a bare redirection is its target
+    for raw, word in pairs:
+        if remote or (tool == "ssh" and _out_of_step(raw)):
             out.append("<arg>")
-        elif value_next:
+            remote = True
+            continue
+        if target or _REDIRECT.match(raw):
+            out.append(_classify_word(word, disk, web_tool=True))
+            target = not target and _REDIRECT.fullmatch(raw) is not None
+            continue
+        if value_next:
             out.append(disk.project_relative(word) or "<arg>")
             if _is_option(word) and word != "--":
                 # the tool may have read it as the value it stands in place of, so the word
@@ -541,6 +586,8 @@ def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
                 options_ended = word == "--"
                 value_next = not options_ended and _takes_value(word, tool)
                 may_be_whole = _may_hold_value(word, tool)
+        if _out_of_step(raw):  # after the option's own reading: `-d$s` still waits for a value
+            value_next = may_be_whole = True
     return out
 
 
