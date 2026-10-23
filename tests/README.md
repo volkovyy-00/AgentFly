@@ -290,6 +290,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   saved by its base name). Read and Write `file_path` keep `relative_file_path`. `@wallclock`:
   300 distinct words of 1,022 characters, 2- and 60-character folders, outside, inside and
   missing, inside and existing, answer within the client's wait through `apply_rules`.
+- One-liner walks (`tests/test_one_liner_walk.py`, R1G, owner 2026-10-23): node's answer at every
+  position equals the old walk's over the shared cases and 3,000 random runs of node's options, in
+  the recorder and the offline guard; 20,000 copies of `node`, `perl`, `ruby`, `python3`, `nodejs`
+  or `perl5.34` make the walks look at no more than two words per word (counted, not timed), with
+  and without code at the end.
 - Searches (`tests/test_search_read.py`, R1G): with R1 from `default.toml` a curl is blocked after a
   Grep of `/w/.env` or `/w/repo/secret.key`, or over `/w` or no folder with each glob the brief
   lists (`.env*`, `*`, `{a,.env}`, `.e[^x]v`, `!*.py`, `.en?.local`, `credential?.py`,
@@ -302,7 +307,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   non-string glob and work over `MAX_SEARCH_WORK` mark, with the work count pinned and no compare
   made over the bound; a search never charges the hook's meter. Through `apply_rules`, a marking
   search in a subagent marks its parent, and the stored step holds neither the search text nor
-  the glob.
+  the glob. Trailing blanks are dropped as ripgrep drops them (`.env ` marks), a pattern with no
+  parts (`~/.`) loads, a class with no character to list falls toward marking, and alternatives
+  that differ only in folders are judged once.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
