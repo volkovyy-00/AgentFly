@@ -122,9 +122,16 @@ _SINGLE: str = r"'[^']*+"
 _DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
 # A closed quoted run, or a quote that is never closed (it runs to the end).
 _QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
-# What `_split_keeping_seps` cuts on, and the quoted runs it skips (an unclosed one runs to the
-# end, a lone backslash at the end with it).
-_SPLIT_SCAN = re.compile(rf"""{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z)|\|\||&&|[|;]""", re.DOTALL)
+# What `_split_keeping_seps` cuts on, and what it skips: a quoted run (an unclosed one runs to the
+# end, a lone backslash at the end with it), a backslash and the character it keeps in the word
+# (`\;`; `\` and a new line join two lines), and a comment (`#` where a word starts, to the end of
+# its line). C1-fix1: `&` and `|&` end a part too, and so does a new line; an `&` after `<` or
+# `>`, or before `>`, belongs to a redirection (`2>&1`, `&>f`), and `>|` is one.
+_SPLIT_SCAN = re.compile(
+    rf"""{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z)|\\.|(?<![^\s;&|()<>])#[^\n]*"""
+    r"""|\|\||\|&|&&|(?<![<>])&(?!>)|(?<!>)\||[;\n]""",
+    re.DOTALL,
+)
 # `shlex.split` (POSIX, no comments) cuts words on these four characters only, not on every
 # character `str.split` calls a space.
 _SHELL_SPACE: str = " \t\r\n"
@@ -233,16 +240,29 @@ def _first_program(cmd: str) -> str:
 
 
 def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
-    """Split on |, &&, ||, ; outside quotes; return (segment, following_sep)."""
+    """Split on |, |&, &, &&, ||, ; and new lines outside quotes; return (segment,
+    following_sep). A line continuation and a comment are cut out of the segment's text; a new
+    line is saved as `;`, and one with nothing before it since the last separator is dropped."""
     segments: list[tuple[str, str]] = []
+    pieces: list[str] = []  # the segment's text, without its continuations and comments
     start: int = 0
     for found in _SPLIT_SCAN.finditer(cmd):
         sep: str = found.group()
-        if sep[0] in "'\"":
+        if sep[0] in "'\"" or (sep[0] == "\\" and sep != "\\\n"):
             continue
-        segments.append((cmd[start : found.start()], sep))
+        pieces.append(cmd[start : found.start()])
         start = found.end()
-    segments.append((cmd[start:], ""))
+        if sep == "\\\n" or sep[0] == "#":
+            continue
+        text: str = "".join(pieces)
+        pieces = []
+        if sep == "\n":
+            if not text.strip(_SHELL_SPACE):
+                continue
+            sep = ";"
+        segments.append((text, sep))
+    pieces.append(cmd[start:])
+    segments.append(("".join(pieces), ""))
     return segments
 
 

@@ -191,3 +191,75 @@ def test_no_value_tables_hold_option_names() -> None:
         assert len(set(short)) == len(short), tool
         # curl's `--http1.1` and `--tlsv1.2` hold a dot, which a saved option name may not
         assert all(clean_mod._LONG_OPTION_NAME.fullmatch(n.replace(".", "_")) for n in long), tool
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C1-fix1: `&`, `|&` and a new line end a part too (a new line is saved as `;`)
+        ("curl x.com & ssh h.com tok.abc", "curl x.com & ssh h.com <arg>"),
+        ("curl x.com |& ssh h.com tok.abc", "curl x.com |& ssh h.com <arg>"),
+        ("curl x.com\nssh h.com tok.abc", "curl x.com ; ssh h.com <arg>"),
+        ("a &\nb", "a & b"),
+        ("curl x.com\n\nssh h.com", "curl x.com ; ssh h.com"),
+        # `&` after `<` or `>`, or before `>`, is part of a redirection
+        ("curl -s x.com 2>&1 | head", "curl -s x.com <arg> | head"),
+        ("curl -s x.com &>log", "curl -s x.com <arg>"),
+        # a backslash joins the lines, or keeps a separator in its word
+        ("curl -d \\\n tok.abc x.com", "curl -d <arg> x.com"),
+        (r"curl -d a\;tok.abc x.com", "curl -d <arg> x.com"),
+        (r"find . -exec rm {} \;", "find . -e<arg> <arg> <arg> <arg>"),
+        # a comment runs to its line's end, and a backslash in it joins nothing
+        ("curl x.com # \\\nssh h.com tok.abc", "curl x.com ; ssh h.com <arg>"),
+        ("# note\ncurl x.com", "curl x.com"),
+        ("echo a#b", "echo <arg>"),
+    ],
+)
+def test_separators_split_the_parts(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "loose"),
+    [
+        # C1-fix1: a word that may stand for no word or several
+        ("$E", True),
+        ("${E}", True),
+        ("a$E", True),
+        ("$'x'", True),
+        ('"$@"', True),
+        ('"${A[@]}"', True),
+        ("-d>s", True),
+        ("*.abc", True),
+        ("?d", True),
+        ("[ab]", True),
+        ("{,}", True),
+        ("{a..b}", True),
+        ('a{b,"c"}', True),
+        # one word, whatever the variable holds
+        ('"$X"', False),
+        ('"Bearer $T"', False),
+        ('"${SRC}/"', False),
+        ("'$X'", False),
+        ("\\$X", False),
+        ("{}", False),
+        ("-I{}", False),
+        (">out", False),
+        ("x.com", False),
+    ],
+)
+def test_a_word_out_of_step(raw: str, loose: bool) -> None:
+    assert clean_mod._out_of_step(raw) is loose
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C1-fix1: the `)` that closes a part is cut off before its words are read
+        ("curl x.com)", "curl x.com"),
+        ("curl x.com ) )", "curl x.com"),
+        ("curl x.com\\)", "curl <arg>"),
+    ],
+)
+def test_a_closing_parenthesis_is_cut(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
