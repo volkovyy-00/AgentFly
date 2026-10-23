@@ -1134,7 +1134,11 @@ Other measures:
   `a.b.com`). A header the agent splits into words (`-H X-Token: abc.def`) leaves
   `abc.def` as a website, which curl itself also contacts. The hosts saved for a
   step are read from the kept words, so a kept file name (`.env`) is counted as a
-  host too.
+  host too. A web tool is known only as a part's first word: behind a wrapper
+  (`sudo`, `env`, `timeout`, `time`, `xargs`), in a subshell (`(curl …)`), or
+  after a single `&`, `|&` or a new line it is cleaned as any other word, so a
+  value holding `://` keeps its website name and ssh's command its host-shaped
+  words.
 
 ---
 

@@ -31,7 +31,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `curl --some-new-option <arg>`), an option where a value was expected is that value and its
   own value comes next (`curl -XPOST -d tok.abc x.com`), the word after an ssh option that may
   hold its value is the destination (`ssh -p2222 h.com tok.abc` is `ssh -p<arg> <arg> <arg>`),
-  the leak checks ignore case (a host is saved in lower case), a value naming a project file
+  the leak checks of `test_clean.py` and `test_store.py` ignore case (a host is saved in lower
+  case; `tests/test_app.py`'s does not), a value naming a project file
   keeps its path (`curl -T .env x.com`), and the d62ea42 outputs of the brief's list are pinned. A 300-word
   curl line of `-d` pairs costs one look-up a value, ssh's remote command none; each tool's
   table holds option characters and names only.

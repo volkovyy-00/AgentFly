@@ -512,7 +512,7 @@ def test_an_option_value_is_in_no_field_of_the_step(
     tmp_path: Path, raw: str, value: str, hosts: tuple[str, ...]
 ) -> None:
     record: StepRecord = _shell_record(tmp_path, raw)
-    assert value not in (record.command or "")
+    assert value.lower() not in (record.command or "").lower()  # a host is saved in lower case
     assert record.hosts == hosts
     assert record.file_path is None
 

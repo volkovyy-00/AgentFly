@@ -151,8 +151,11 @@ def test_an_option_value_is_never_a_website(project_root: Path, raw: str, expect
         # word after a glued value may be ssh's destination, so what follows is its command
         ("curl -XPOST -d tok.abc x.com", "curl -X<arg> <arg> <arg> x.com"),
         ("ssh -p2222 h.com tok.abc", "ssh -p<arg> <arg> <arg>"),
-        ("ssh -p22 -i key h.com tok.abc", "ssh -p<arg> <arg> <arg> h.com <arg>"),
+        # after a glued value `-i` may be `-p`'s value, so `key` may be the destination
+        ("ssh -p22 -i key h.com tok.abc", "ssh -p<arg> <arg> <arg> <arg> <arg>"),
         ("ssh -qi key h.com cat tok.abc", "ssh -q<arg> <arg> h.com <arg> <arg>"),
+        ("ssh -i -p h.com tok.abc", "ssh -i <arg> <arg> <arg>"),
+        ("curl -5 tok.abc x.com", "curl -5 <arg> x.com"),  # curl 8 has no -5
         ("curl -- -d x.com", "curl -- -d x.com"),
         ("curl -d -- x.com", "curl -d <arg> x.com"),
         ("ssh -T git@github.com", "ssh -T github.com"),

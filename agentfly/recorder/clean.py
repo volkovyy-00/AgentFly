@@ -25,7 +25,7 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
 # nc(1). Any other option takes a value, so the word after it is never saved as a website.
 _NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
     "curl": (
-        "#0123456:BGIJLMNORSVZafgijklnpqsv",
+        "#012346:BGIJLMNORSVZafgijklnpqsv",
         frozenset(
             """anyauth append basic ca-native cert-status compressed compressed-ssh create-dirs
             crlf digest disable disable-eprt disable-epsv disallow-username-in-url
@@ -332,8 +332,10 @@ def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
         elif value_next:
             out.append(disk.project_relative(word) or "<arg>")
             if _is_option(word) and word != "--":
+                # the tool may have read it as the value it stands in place of, so the word
+                # after it may be no value at all (ssh's destination)
                 value_next = _takes_value(word, tool)
-                may_be_whole = _may_hold_value(word, tool)
+                may_be_whole = True
             else:
                 value_next = False
                 remote = may_be_whole and tool == "ssh"

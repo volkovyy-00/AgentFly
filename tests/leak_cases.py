@@ -108,6 +108,8 @@ _VALUE_FORMS: tuple[str, ...] = (
     "ssh -p2222 h.com https://{V}",
     "ssh -oBatchMode=no h.com {V}",
     "ssh -i~/.ssh/id h.com {V}",
+    "ssh -i -p h.com {V}",
+    "curl -5 {V} x.com",
 )
 _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET}.abc")
 
