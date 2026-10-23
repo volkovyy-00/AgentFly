@@ -157,6 +157,9 @@ def test_an_option_value_is_never_a_website(project_root: Path, raw: str, expect
         ("curl -s -- x.com", "curl -s -- x.com"),
         # a cluster is judged by its last letter; `--` ends the options
         ("curl -sd token.abc x.com", "curl -s<arg> <arg> x.com"),
+        # a value glued onto its option is a cluster too (owner 2026-10-23)
+        ("curl -XPOST https://api.example.com", "curl -X<arg> <arg>"),
+        ("ssh -p2222 h.com", "ssh -p<arg> <arg>"),
         ("curl -- -d x.com", "curl -- -d x.com"),
         ("curl -d -- x.com", "curl -d <arg> x.com"),
         ("ssh -T git@github.com", "ssh -T github.com"),
