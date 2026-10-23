@@ -191,6 +191,107 @@ def test_everything_else_is_allowed(command: str) -> None:
     assert guard.offline_answer(f"bash -c {shlex.quote(command)}")[0]["permission"] == "allow"
 
 
+# ---------------------------------------------------------------- piped code (V5c)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat x |\n# a comment\npython3",
+        "cat x | python3 # a comment",
+        "cat x | python3 &> log",  # stdout goes to the file; stdin is still the pipe
+        "cat x | python3 2>/dev/null",
+        "cat x | PYTHON3",
+        "cat x | /usr/bin/python3",
+        "cat x | sudo -u me python3 -u",
+        "cat x | env -i bash",
+        "cat x | python3 < <(cat y)",
+        'cat x | bash -c "$(cat)"',
+        "cat x | sh <<< ok",  # a herestring is code too
+        "{ cat x; } |& ruby",
+        "cat x > >(node)",
+        "eval 'cat x | sh'",
+        "python3 < <(curl -s localhost)",
+    ],
+)
+def test_piped_code_is_denied_offline(command: str) -> None:
+    assert guard.offline_answer(command)[1] == "outbound", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "false || python3 t.py",  # `||` is no pipe
+        "cat x || python3",
+        "cat x | python3 t.py",
+        "cat x | python3 -m json.tool",
+        "cat x | python3 < t.py",
+        "cat x | grep python3",
+        "cat x | xargs grep -l pattern",
+        "cat x | sh x.sh",
+        "cat x | bash -c 'wc -l'",
+        "cat x | wc -l > python3",  # a redirect target is no program
+        "echo hi\npython3 t.py",
+        "python3 t.py < <(cat x)",  # the script is named; only its input is the pipe
+        "ls | grep a; python3 t.py",
+        "echo 'a | b' > f.md",
+    ],
+)
+def test_pipes_that_feed_no_code_are_allowed_offline(command: str) -> None:
+    assert guard.offline_answer(command) == ({"permission": "allow"}, None), command
+
+
+def test_past_the_stage_limit_the_text_counts_as_piped_code() -> None:
+    near = "cat x | grep sh; " * guard._PIPE_STAGES
+    assert guard.offline_answer(near)[0] == {"permission": "allow"}
+    assert guard.offline_answer(near + "cat x | grep sh")[1] == "outbound"
+    subs = "python3 t.py < <(cat x); " * guard._PIPE_STAGES
+    assert guard.offline_answer(subs)[0] == {"permission": "allow"}
+    assert guard.offline_answer(subs + "python3 t.py < <(cat x)")[1] == "outbound"
+
+
+def test_past_the_word_limit_a_quoted_perl_text_counts_as_code() -> None:
+    words = " ".join(["'a'"] * (guard._QUOTED_WORDS - 2))
+    assert guard.offline_answer(f"perl x.pl {words}")[0] == {"permission": "allow"}
+    assert guard.offline_answer(f"perl x.pl {words} 'b' 'c'")[1] == "outbound"
+    assert guard.offline_answer(f"echo x.pl {words} 'b' 'c'")[0] == {"permission": "allow"}
+
+
+def best_of(rounds: int, text: str) -> float:
+    best = float("inf")
+    for _ in range(rounds):
+        start = time.perf_counter()
+        guard.guard_reason(text)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+@wallclock
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "a | ",
+        "cat x > >(",
+        "| x > ",
+        "|#c\n",
+        "| ((((((((",
+        "x sh | ",
+        "python3 t.py < <(",
+        "perl 'a b c' ",
+        "perl \"'a b' ",
+        "perl '",
+        "|" + " " * 1000 + "x",
+    ],
+    ids=lambda unit: repr(unit[:12]),
+)
+def test_the_piped_code_checks_read_big_text_in_linear_time(unit: str) -> None:
+    # Four times the text costs about four times as much (a quadratic walk: sixteen). The short
+    # text, timed in this test, is the baseline.
+    size = 256 * 1024
+    short, long = (best_of(3, unit * (n // len(unit))) for n in (size // 4, size))
+    assert long < 7 * short, f"4 times the text took {long / short:.1f} times as long"
+
+
 def test_an_unparseable_command_is_denied_only_if_its_raw_text_names_a_tool() -> None:
     assert guard.offline_answer('echo "unbalanced curl https://x.com')[0]["permission"] == "deny"
     assert guard.offline_answer("git push 'unbalanced")[0]["permission"] == "deny"
