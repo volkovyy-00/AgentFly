@@ -391,6 +391,23 @@ path = "names"
     assert decide(grep(glob), fresh(), rules)[1] == "names"
 
 
+@pytest.mark.parametrize("pattern", ["sec[\\u007f]", "sec[\\u0001-\\u001f]", "sec[! -~]"])
+def test_a_class_of_control_characters_still_has_a_sample(pattern: str) -> None:
+    # judged by its sample `sec\x7f` / `sec\x01`, not taken as any name
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    line = f'names = ["{pattern}"]\n'
+    rules = ruleset_of(rulefile.default_text().replace("[lists]\n", "[lists]\n" + line, 1) + rule)
+    assert decide(grep("*.py"), fresh(), rules)[1] is None
+
+
 def test_loading_a_class_costs_about_its_own_length(monkeypatch: pytest.MonkeyPatch) -> None:
     # Clauses are built before the file's work is judged, so a class must not cost a scan of every
     # character (96 compares) at load: `[~]` answers with its own member.
