@@ -457,10 +457,16 @@ def _outbound_words(argv: list[str], text: str) -> bool:
 
 _SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
-_WRAPPERS: frozenset[str] = frozenset(  # the same list as `normalize.WRAPPERS`
-    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
-    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+_RUNNERS: frozenset[str] = frozenset(  # `normalize.RUNNERS`
+    {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
+    | {"pyenv", "rbenv", "nodenv", "mise", "asdf", "npx", "pnpm", "yarn"}
 )
+_RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
+_WRAPPERS: frozenset[str] = _RUNNERS | frozenset(  # `normalize.WRAPPERS`, and `eval` (the
+    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}  # recorder
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "eval"}  # reads its words
+)  # again as a command)
+_DURATION: str = r"\d+(?:\.\d+)?[smhd]?"
 _KEYWORDS: frozenset[str] = frozenset(
     {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac"}
 )
@@ -471,6 +477,10 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
 _DEV_FD: str = r"/dev/fd/\d+"
+_NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
+# A shell's `-c` script is read as a stage of its own, this many levels deep at most; deeper, it
+# counts as reading code from the pipe.
+_SCRIPT_DEPTH: int = 4
 _STDIN: int = -1
 _SCRIPT: int = 0
 _SUB: str = "\x00"  # stands for a `$(`, a backtick, `<(` or `>(` in a stage's words
@@ -484,13 +494,15 @@ _SUB: str = "\x00"  # stands for a `$(`, a backtick, `<(` or `>(` in a stage's w
 _NAMES: str = r"(?i:python|node|perl|ruby|sh)"
 _STAGE_TO_NAME: str = (
     r"(?:\s|[({!]|#[^\n]*)*+(?P<start>)"
-    rf"(?:[^;&|\n)>\s#pnrsPNRS]++|\s(?!#)|>(?!\()|&(?=>)|#|(?!{_NAMES})[pnrsPNRS])*+{_NAMES}"
+    rf"(?:[^;&|\n)>\s#pnrsPNRS]++|\s(?!#)|>(?!\()|&(?=>)|(?<=[<>])&|#|(?!{_NAMES})[pnrsPNRS])*+"
+    rf"{_NAMES}"
 )
 _FED_STAGES: tuple[str, ...] = (r"(?<!\|)\|(?!\|)&?" + _STAGE_TO_NAME, r">\(" + _STAGE_TO_NAME)
-_CUT: str = r";|&(?!>)|\||\n|\)|\s#|>\("
+_CUT: str = r";|(?<![<>])&(?!>)|\||\n|\)|\s#|>\("
 _STDIN_SUB: str = r"<[ \t]*<\("  # `python3 < <(cat x)`
 _OWNER_START: str = ";|&\n(){}`'\""
-_REDIRECT: str = r"\d*(<<<|<<-?|<>|<|>>|>)(.*)"
+_REDIRECT: str = r"(\d*)(<<<|<<-?|<>|<|>>|>)(.*)"
+_DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file, no word
 # Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
 # rule does): each costs a walk in Python.
 _PIPE_STAGES: int = 1000
@@ -499,28 +511,57 @@ _PIPE_STAGES: int = 1000
 
 
 def _programs(argv: Sequence[str]) -> range | tuple[int, ...]:
-    """`normalize.programs`: the first word after assignments and keywords, and every word after
-    a wrapper."""
+    """`normalize.programs(narrow=True)`: the first word after assignments and keywords; after a
+    wrapper, the program plainly next to it, down the chain, or every word if an option or
+    `parallel` comes first."""
     assignment: re.Pattern[str] = re.compile(_ASSIGNMENT)
     for index, word in enumerate(argv):
         if word in _KEYWORDS or assignment.match(word):
             continue
         if word in _HEADS:
             return ()
-        if word.split("/")[-1].lower() in _WRAPPERS:
-            return range(index, len(argv))
-        return (index,)
+        if word.split("/")[-1].lower() not in _WRAPPERS:
+            return (index,)
+        return _chain(argv, index, assignment)
     return ()
 
 
+def _chain(argv: Sequence[str], at: int, assignment: re.Pattern[str]) -> range | tuple[int, ...]:
+    """`normalize._chain`."""
+    found: list[int] = [at]
+    while (name := argv[at].split("/")[-1].lower()) in _WRAPPERS:
+        if name == "parallel":
+            return range(found[0], len(argv))
+        at += 1
+        duration: bool = at < len(argv) and re.compile(_DURATION).fullmatch(argv[at]) is not None
+        if name in ("timeout", "gtimeout") and duration:
+            at += 1
+        while at < len(argv) and (
+            (name in _RUNNERS and argv[at] in _RUNNER_VERBS)
+            or (name in ("env", "sudo") and assignment.match(argv[at]))
+        ):
+            at += 1
+        if at >= len(argv):
+            break
+        if argv[at].startswith("-"):
+            return range(found[0], len(argv))
+        found.append(at)
+    return tuple(found)
+
+
 def _is_stdin(word: str) -> bool:
-    if word in ("-", "/dev/stdin"):
+    return word == "-" or _is_stdin_device(word)
+
+
+def _is_stdin_device(word: str) -> bool:
+    if word == "/dev/stdin":
         return True
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
 
 
-def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
-    """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on."""
+def _stdin_step(family: str, words: Sequence[str], at: int, depth: int) -> int:
+    """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
+    `-c` script is read as a stage (the recorder reads it as a command line)."""
     arg: str = words[at]
     if _is_stdin(arg):
         return _STDIN
@@ -532,19 +573,33 @@ def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
         if arg.startswith("--"):
             return 2 if arg in _SHELL_VALUE_OPTIONS else 1
         if "c" in arg[1:]:
-            return _STDIN if at + 1 < len(words) and _SUB in words[at + 1] else _SCRIPT
+            if at + 1 >= len(words):
+                return _SCRIPT
+            script: str = words[at + 1]
+            fed: bool = _SUB in script or _stage_reads_stdin(script, depth + 1)
+            return _STDIN if fed else _SCRIPT
         if "s" in arg[1:]:
             return _STDIN
         return 2 if ("o" in arg[1:] or "O" in arg[1:]) else 1
     if not arg.startswith("-"):
         return _SCRIPT
     if family == "node":
-        return _STDIN if _node_code(arg) else 2 if arg in _NODE_VALUE_OPTIONS else 1
+        return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
     move: int = _STEPS[family](arg)
     return _STDIN if move == _CODE else _SCRIPT if move == _END else move
 
 
-def _reads_stdin(words: Sequence[str]) -> bool:
+def _node_takes_value(words: Sequence[str], at: int) -> bool:
+    """`normalize._node_takes_value`."""
+    arg: str = words[at]
+    if arg in _NODE_VALUE_OPTIONS:
+        return True
+    if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
+        return False
+    return re.compile(_NODE_SCRIPT).search(words[at + 1]) is None
+
+
+def _reads_stdin(words: Sequence[str], depth: int) -> bool:
     """`normalize.reads_stdin`: an interpreter or a shell at a program position that names no
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
@@ -560,7 +615,7 @@ def _reads_stdin(words: Sequence[str]) -> bool:
         if family not in tables:
             found: list[bool] = [True] * (len(words) + 2)
             for index in range(len(words) - 1, -1, -1):
-                move: int = _stdin_step(family, words, index)
+                move: int = _stdin_step(family, words, index, depth)
                 found[index] = move == _STDIN or (move > 0 and found[index + move])
             tables[family] = found
         if tables[family][at + 1]:
@@ -568,11 +623,15 @@ def _reads_stdin(words: Sequence[str]) -> bool:
     return False
 
 
-def _stage_reads_stdin(stage: str) -> bool:
+def _stage_reads_stdin(stage: str, depth: int = 0) -> bool:
     """One command of a pipe, as raw text: its redirects dropped (stdin from a file names the
-    script; from `<(`, a herestring or a heredoc it is code), then the stdin walk."""
+    script; from `<(`, a herestring, a heredoc, `/dev/stdin` or another fd it is code; `3<` is not
+    stdin), then the stdin walk."""
+    if depth > _SCRIPT_DEPTH:
+        return True
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
+    stage = re.compile(_DUPLICATE).sub(" ", stage)
     argv: list[str] = []
     found: list[str] = words(stage)
     redirect_word: re.Pattern[str] = re.compile(_REDIRECT)
@@ -583,15 +642,16 @@ def _stage_reads_stdin(stage: str) -> bool:
             argv.append(found[index])
             index += 1
             continue
-        target: str = redirect.group(2)
+        fd, operator, target = redirect.groups()
         if not target:
             index += 1
             target = found[index] if index < len(found) else ""
         index += 1
-        operator: str = redirect.group(1)
-        if operator in ("<", "<>") and _SUB not in target:
+        if operator not in ("<", "<>") or fd not in ("", "0") or target.startswith("&"):
+            continue
+        if _SUB not in target and not _is_stdin_device(target):
             return False  # `python3 < x.py`
-    return _reads_stdin(argv)
+    return _reads_stdin(argv, depth)
 
 
 def _piped_code(text: str) -> bool:
@@ -599,6 +659,7 @@ def _piped_code(text: str) -> bool:
     command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
     `< <(` (`python3 < <(cat x)`). Stages with no interpreter or shell name are skipped in C
     (`_FED_STAGES`); past _PIPE_STAGES of either kind the text counts as piped code."""
+    text = text.replace("\\\n", " ")  # a line continuation: `| \` and a newline go on
     cut: re.Pattern[str] = re.compile(_CUT)
     count: int = 0
     for source in _FED_STAGES:

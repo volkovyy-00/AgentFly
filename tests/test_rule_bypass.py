@@ -8,6 +8,9 @@ that sets it off (the trigger) and once on the step it judges (the follow-up). E
 near misses that must stay quiet. A form that cannot apply to a rule is listed with the reason,
 and every cell of the grid is a case or such a line. Ids read `<rule>-<form>`.
 
+R1's piped code after a wrapper (owner 2026-10-23, option 2) has a table of its own: each
+command after a `.env` read, and offline.
+
 `uv run python -m tests.test_rule_bypass` prints the rule-by-form table for the report.
 """
 
@@ -17,6 +20,7 @@ from dataclasses import dataclass
 
 import pytest
 
+import agentfly.hook_client as guard
 from agentfly.cli.rules_test import action_for
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_mod
@@ -280,6 +284,20 @@ QUIET: list[Case] = [
     Case("s14-download-pipe-shell", "near miss", ("shell: curl x > f; sh f",)),
 ]
 
+# R1 after a `.env` read, and the offline guard: True when both deny. After a wrapper whose
+# program is plainly the next word, a search word is no program; an option first keeps every
+# word one (owner 2026-10-23, option 2).
+PIPED_AFTER_WRAPPER: dict[str, bool] = {
+    **{f"git ls-files | xargs grep -l {name}": False for name in ("node", "python", "perl")},
+    **{f"git ls-files | xargs grep -l {name}": False for name in ("ruby", "sh", "bash")},
+    "cat x | sudo grep python": False,
+    "git ls-files | xargs -0 grep -l sh": True,
+    "echo 'import socket' | sudo python3": True,
+    "echo 'import socket' | env X=1 python3": True,
+    "echo 'import socket' | timeout 5 python3": True,
+    "echo 'import socket' | sudo -u bob python3": True,
+}
+
 _FLAGS_NONE = "its lists name no flag"
 _NO_PATH = "it names no path"
 _WRITE_ONLY = "it judges the write tool; a shell write is S3's open gap (brief: not included)"
@@ -374,6 +392,12 @@ def test_each_rule_is_quiet_on_its_near_misses(case: Case) -> None:
     assert not fires(case), f"rule {case.rule} fired on a near miss: {case.steps}"
 
 
+@pytest.mark.parametrize(("command", "denied"), PIPED_AFTER_WRAPPER.items())
+def test_r1_and_the_guard_read_piped_code_after_a_wrapper(command: str, denied: bool) -> None:
+    assert fires(Case("R1", "piped", ("read: .env", f"shell: {command}"))) is denied, command
+    assert (guard.offline_answer(command)[0]["permission"] == "deny") is denied, command
+
+
 def test_every_cell_is_a_case_or_has_a_reason() -> None:
     covered: set[tuple[str, str]] = {(case.rule, case.form) for case in FIRES}
     for rule in RULE_IDS:
@@ -412,6 +436,10 @@ def table() -> str:
         reasons.setdefault(reason, []).append(f"{rule} {form}")
     lines.append("")
     lines += [f"- `-` {reason}: {len(cells)} cells" for reason, cells in reasons.items()]
+    lines += ["", "| R1 after a `.env` read, and offline | answer |", "|---|---|"]
+    for command, denied in PIPED_AFTER_WRAPPER.items():
+        shown = command.replace("|", "\\|")
+        lines.append(f"| `{shown}` | {'deny' if denied else 'allow'} |")
     return "\n".join(lines)
 
 

@@ -81,6 +81,20 @@ PIPED_CODE: list[str] = [
     "echo 'import socket' | 2>&1 python3",
     "echo 'import socket' | eval python3",
     "echo 'import socket' | sh -c python3",
+    # V5c, owner 2026-10-23 (option 2): a wrapper with an option after it, or `parallel`, keeps
+    # every later word a program; with the program plainly next, that program counts
+    "git ls-files | xargs -0 grep -l sh",
+    "echo 'import socket' | sudo -u bob python3",
+    "echo 'import socket' | sudo python3",
+    "echo 'import socket' | env X=1 python3",
+    "echo 'import socket' | timeout 5 python3",
+    "echo 'import socket' | xargs python3",
+    "echo 'import socket' | sudo env X=1 timeout 5s nice python3",
+    "echo 'import socket' | sudo X=1 python3",
+    "echo 'import socket' | npx node",
+    "echo 'import socket' | yarn run node",
+    "echo 'import socket' | uv run --with rich python",
+    "git ls-files | parallel grep -l sh",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [
@@ -114,6 +128,19 @@ PIPED_NOT_INLINE: list[str] = [
     "perl -dt:Foo x.pl",
     "for f in a b; do python3 t.py < $f; done",
     "echo x | grep y\npython3 t.py",  # the pipe ends with its line
+    # owner 2026-10-23 (option 2): after a wrapper whose program is plainly the next word, only
+    # that word and the wrapper chain are programs; a search word is not
+    "git ls-files | xargs grep -l node",
+    "git ls-files | xargs grep -l python",
+    "git ls-files | xargs grep -l perl",
+    "git ls-files | xargs grep -l ruby",
+    "git ls-files | xargs grep -l sh",
+    "git ls-files | xargs grep -l bash",
+    "cat x | sudo grep python",
+    "cat x | env X=1 grep python",
+    "cat x | timeout 5 grep python",
+    "cat x | uv run grep python",
+    "cat x | xargs 2>/dev/null grep -l sh",
 ]
 
 NAMED_OUTBOUND: list[str] = [

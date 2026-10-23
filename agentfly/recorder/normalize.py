@@ -299,15 +299,20 @@ def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
 
 # ---------------------------------------------------------------- programs and piped code (V5c)
 
-# Programs that run the words after them as a command: after one, every later word may be a
-# program (`sudo -u me bash`, `xargs -n1 sh`). The runners that start a tool from their own
-# environment count too (`uv run python`, `bundle exec ruby`, `arch -arm64 python3`).
-WRAPPERS: frozenset[str] = frozenset(
-    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
-    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
-    | {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
+# The runners that start a tool from their own environment (`uv run python`, `bundle exec ruby`,
+# `arch -arm64 python3`), and the words that may stand between one and the tool.
+RUNNERS: frozenset[str] = frozenset(
+    {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
     | {"pyenv", "rbenv", "nodenv", "mise", "asdf", "npx", "pnpm", "yarn"}
 )
+RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
+# Programs that run the words after them as a command (`sudo -u me bash`, `xargs -n1 sh`), the
+# runners among them.
+WRAPPERS: frozenset[str] = RUNNERS | frozenset(
+    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+)
+_DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")  # `timeout 5s`
 # Shell words that stand before or around a command and are no program.
 _KEYWORDS: frozenset[str] = frozenset(
     {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac"}
@@ -316,19 +321,46 @@ _HEADS: frozenset[str] = frozenset({"for", "select", "case"})  # their words are
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 
 
-def programs(argv: Sequence[str]) -> tuple[int, ...]:
+def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
     """Where a program stands in a simple command: the first word after assignments and shell
     keywords, and, when that word is a wrapper (`WRAPPERS`), every word after it too. A `for`,
-    `select` or `case` head has none. So `grep python3` has one (`grep`), `sudo -u me bash` all."""
+    `select` or `case` head has none. So `grep python3` has one (`grep`), `sudo -u me bash` all.
+
+    `narrow` (piped code; owner 2026-10-23): a wrapper whose next word is plainly a program adds
+    only that word, and so on down the chain; `env` and `sudo` assignments, `timeout`'s duration
+    and a runner's verb (`uv run`) are skipped. An option there, or `parallel`, keeps every word.
+    So `xargs grep -l node` has two (`xargs`, `grep`), `xargs -0 grep -l sh` all."""
     for index, word in enumerate(argv):
         if word in _KEYWORDS or _ASSIGNMENT.match(word):
             continue
         if word in _HEADS:
             return ()
-        if base_name(word) in WRAPPERS:
-            return tuple(range(index, len(argv)))
-        return (index,)
+        if base_name(word) not in WRAPPERS:
+            return (index,)
+        return _chain(argv, index) if narrow else tuple(range(index, len(argv)))
     return ()
+
+
+def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
+    """`programs(narrow=True)` from the wrapper at `at`."""
+    found: list[int] = [at]
+    while (name := base_name(argv[at])) in WRAPPERS:
+        if name == "parallel":
+            return tuple(range(found[0], len(argv)))
+        at += 1
+        if name in ("timeout", "gtimeout") and at < len(argv) and _DURATION.fullmatch(argv[at]):
+            at += 1
+        while at < len(argv) and (
+            (name in RUNNERS and argv[at] in RUNNER_VERBS)
+            or (name in ("env", "sudo") and _ASSIGNMENT.match(argv[at]))
+        ):
+            at += 1
+        if at >= len(argv):
+            break
+        if argv[at].startswith("-"):
+            return tuple(range(found[0], len(argv)))
+        found.append(at)
+    return tuple(found)
 
 
 def _stdin_family(name: str) -> str | None:
@@ -424,7 +456,7 @@ def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:
 def reads_stdin(words: Sequence[str]) -> bool:
     """Does an interpreter or a shell at a program position read its code from stdin?"""
     tables: dict[str, list[bool]] = {}
-    for at in programs(words):
+    for at in programs(words, narrow=True):
         family: str | None = _stdin_family(base_name(words[at]))
         if family is None:
             continue

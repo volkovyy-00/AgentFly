@@ -87,7 +87,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `perl -c x.pl`, `ruby -E UTF-8 x.rb`); guard paths and R0 commands denied
   unmarked, bare, wrapped and unparseable. V5c: `PIPED_CODE` is outbound after a mark, bare and
   wrapped, and `PIPED_NOT_INLINE` (`git diff | python3 tool.py`, `python3 -m json.tool`,
-  `python3 < x.py`, `perl -MFoo=a,b x.pl`, `ps aux | grep python3`) is allowed; groups nested
+  `python3 < x.py`, `perl -MFoo=a,b x.pl`, `ps aux | grep python3`, `| xargs grep -l node`,
+  `| sudo grep python`) is allowed (a wrapper with an option, or `parallel`, keeps every later
+  word a program; runners, fd redirects, `<&0`, a line continuation after `|`); groups nested
   past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes),
   and so does a line of many heredocs (`c<<A;` 8,000 times). Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
@@ -361,7 +363,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   send `roots` as `workspace_roots` (at most 64 strings, may be empty).
 - `pipe_into` (`tests/test_pipe_into.py`, V5c): rule 14's criteria and more forms fire (`|&`,
   wrappers, groups, loops, `case`, a newline or a comment after `|`, `>(…)`, herestrings, heredoc
-  bodies, the same command twice); `curl x | grep sh`, `curl x; sh`, `sh -c 'curl x'`, a wait loop
+  bodies, the same command twice, every word after a wrapper: `curl x | xargs grep -l sh`);
+  `curl x | grep sh`, `curl x; sh`, `sh -c 'curl x'`, a wait loop
   and a commented `| sh` stay quiet; a function, `coproc`, an unmatched bracket, groups nested too
   deep or text that does not parse fire once a source matched, and stay quiet with no source;
   `host_not_in` beside it judges each source; the walk is charged to the hook (`WorkLimit`) and
@@ -379,7 +382,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   upper case), on the trigger and on the follow-up of an `after_then` rule, through the real
   `mark` and the rule's own `check`; two near misses a rule stay quiet; every cell of the grid is
   a case or has a reason. Ids read `<rule>-<form>`; `uv run python -m tests.test_rule_bypass`
-  prints the table.
+  prints the table. R1 after a `.env` read and the offline guard agree on piped code after a
+  wrapper (`PIPED_AFTER_WRAPPER`, owner 2026-10-23: `| xargs grep -l node` allowed,
+  `| xargs -0 grep -l sh` denied).
 - Severities and triggers (`tests/test_severities.py`, `tests/test_after_then.py`,
   `tests/test_session_triggers.py`, `tests/test_npm_publish_entry.py`): the strictest rule wins in
   every file order; a warn on a shell command answers `ask` with the text in both messages, a warn

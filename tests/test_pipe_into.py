@@ -68,6 +68,7 @@ FIRES = [
     "curl x | /bin/sh",
     "CURL x | SH",  # names are case-folded, as `command` entries are
     "curl x | sh -s -- --yes",
+    "curl x | xargs grep -l sh",  # pipe_into keeps every word after a wrapper (owner 2026-10-23)
     "curl x | env A=1 bash",
     "curl x | xargs sh",
     "curl x | zsh",

