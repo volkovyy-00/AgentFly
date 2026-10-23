@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from itertools import accumulate
+from itertools import accumulate, chain, product
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -499,7 +499,8 @@ def distinct_candidates(parsed: Parsed) -> tuple[str, ...]:
 
 
 def event_of(action: Mapping[str, Any]) -> str | None:
-    """The rules' name for what an action is: `read`, `shell`, `write`, else None."""
+    """The rules' name for what an action is: `read`, `shell`, `write`, else None. A search that
+    returns lines is a `read` (`is_search`); one that returns names or counts only is no event."""
     event: Any = action.get("hook_event_name")
     if event == "beforeReadFile":
         return "read"
@@ -507,15 +508,591 @@ def event_of(action: Mapping[str, Any]) -> str | None:
         return "shell"
     if event == "preToolUse" and str(action.get("tool_name", "")).casefold() == "write":
         return "write"
+    if is_search(action) and _returns_lines(action):
+        return "read"
     return None
 
 
 def _action_path(action: Mapping[str, Any], event: str) -> str:
-    value: Any = action.get("file_path")
-    if event == "write":
-        tool_input: Any = action.get("tool_input")
-        value = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    source: Mapping[str, Any] = _tool_input(action) if event == "write" else action
+    value: Any = source.get("file_path")
     return value if isinstance(value, str) else ""
+
+
+# ---------------------------------------------------------------- searches (R1G)
+
+# Cursor's Grep tool arrives as `preToolUse` with `tool_name` "Grep" and a `tool_input` of the
+# search text (the hook client drops it), `output_mode`, `file_path` (the folder or file searched)
+# and, when given, `glob` (HOOKS.md "Observed on Cursor", 3.27.6); no `beforeReadFile` fires. A
+# search that returns lines is a `read` of the file it names and of every name its glob can match,
+# for every rule; one that returns names or counts only reads no file text and is no event.
+#
+# A glob is read as ripgrep reads one (`{a,b}`, `[!…]` and `[^…]`, `**`, `\` escapes, a leading
+# `!` that excludes), case-folded like a rule path, and only its file name is judged: its folders
+# are taken as able to sit anywhere under `file_path` (anywhere at all with none). Each brace
+# alternative is judged on its own against each `path` pattern of the clause, two ways:
+#   A. the glob matches a sample name made from the pattern (every `*` filled with nothing, or
+#      every `*` with SAMPLE_LETTER; a `?` or class with one character it allows) that no
+#      exception matches: `*`, `.env*` and `?env` read `.env`;
+#   B. the glob's own name, its `*` read as SAMPLE_LETTER and each `?` or class tried with each
+#      character of the clause's `path` patterns it allows, is matched by the pattern and by no
+#      exception: `.env.prod*`, `credentials.*` and `credential?.py` read a secret name. Whether
+#      some try is matched by the pattern is worked out position by position (`_can_match`), not
+#      try by try, so `test_???.py` costs no more than `test_.py` (lead 2026-10-23); the tries
+#      are listed one by one only to hold them against the exceptions, and only while they cost
+#      at most MAX_EXCEPT_WORK compares: past that the exceptions are not used (toward marking).
+# So `*.py` reads none, and neither does a glob built to miss the samples with `*`, such as
+# `credential*.py` (SPEC section 10, owner 2026-10-23). A pattern with `/` also needs its folders
+# to fit under `file_path` (`_folders_fit`); a `path_except` with `/` is not used here (a search
+# may read paths it does not cover). Whatever cannot be judged, or would cost more than
+# MAX_SEARCH_WORK, counts as read: marking too often is harmless (SPEC section 5), and R1 is never
+# cut short, so this work has its own bound, a count, and never charges the hook's meter.
+SEARCH_TOOL: str = "grep"  # `tool_name`, case-folded
+NAMES_ONLY_MODES: frozenset[str] = frozenset({"files_with_matches", "count"})
+SAMPLE_LETTER: str = "x"
+MAX_GLOB_CHARS: int = 512  # a longer glob counts as reading a secret, unread
+MAX_GLOB_ALTERNATIVES: int = 64  # brace alternatives, nested ones multiplied out
+MAX_GLOB_BRACE_DEPTH: int = 32
+MAX_GLOB_CLASSES: int = 32  # each costs about 100 compares to read (`_either_case`)
+# The steps one clause may take for one search (`search_work`), counted from the sizes before any
+# is taken: a compare, or a cell of `_can_match`'s table. Measured on the author's Mac, best of
+# three: the slowest shapes tried (200 `?` against ten patterns with classes) take about 0.2 us a
+# step, so a clause stays under about 2 ms; R1 of the default on a 200-letter name takes 0.65 ms.
+# A file's MAX_WORK allows at most about 66 clauses with a `path`, so a search costs a hook at most
+# about 130 ms, as much as the slowest command the rules limit allows.
+MAX_SEARCH_WORK: int = 10_000
+MAX_EXCEPT_WORK: int = 2_000  # B's tries held one by one against the exceptions, at most
+_SET_WORK: int = 96  # what finding the characters a class allows costs on top of the letters
+_ASCII: str = "".join(chr(code) for code in range(0x01, 0x80))
+_PRINTABLE: str = SAMPLE_LETTER + "".join(chr(code) for code in range(0x20, 0x7F))
+
+
+def _tool_input(action: Mapping[str, Any]) -> Mapping[str, Any]:
+    tool_input: Any = action.get("tool_input")
+    return tool_input if isinstance(tool_input, dict) else {}
+
+
+def is_search(action: Mapping[str, Any]) -> bool:
+    """Cursor's text search (the Grep tool), whatever it returns."""
+    return (
+        action.get("hook_event_name") == "preToolUse"
+        and str(action.get("tool_name", "")).casefold() == SEARCH_TOOL
+    )
+
+
+def _returns_lines(action: Mapping[str, Any]) -> bool:
+    """Every `output_mode` but the two names-only ones: missing, "content", a value AgentFly does
+    not know, or one that is not a string."""
+    mode: Any = _tool_input(action).get("output_mode")
+    return not (isinstance(mode, str) and mode in NAMES_ONLY_MODES)
+
+
+class _Unsure(Exception):
+    """A glob that cannot be judged (a syntax ripgrep refuses, or one over a bound): it counts as
+    reading a secret."""
+
+
+class _Alt(NamedTuple):
+    """One brace alternative of a glob, by its file name.
+
+    `tokens` is the name as (kind, text): `lit` a character, `star`, `one` (a `?`), `set` a class
+    written for `fnmatch`. `pattern` is the same name as an `fnmatch` pattern. `any_name`: the
+    name is a whole `**` (or the glob ends in `/`), so every file below counts. `slash`: the
+    alternative has a folder in it."""
+
+    tokens: tuple[tuple[str, str], ...]
+    pattern: str
+    any_name: bool
+    slash: bool
+
+
+class _Glob(NamedTuple):
+    negated: bool  # a leading `!`: every file but the ones it names is read
+    alts: tuple[_Alt, ...]
+
+
+def _first_allowed(charset: str) -> str:
+    """A character this `fnmatch` class allows (SAMPLE_LETTER first, then a printable one), or ""
+    if it allows no ASCII character.
+
+    Its own printable members are tried first, so a plain class answers at once and a negated one
+    costs about as many compares as it has members: this runs for every class of a rules file at
+    load. A control character only when the class allows nothing printable (`[\x01_]` gives `_`)."""
+    members: str = charset[1:-1]
+    shown: Iterable[str] = (c for c in members if c in _PRINTABLE)
+    tried = chain(SAMPLE_LETTER, shown, _PRINTABLE, members, _ASCII)
+    return next((c for c in tried if fnmatch.fnmatchcase(c, charset)), "")
+
+
+def _class_text(chars: Iterable[str], negated: bool) -> str:
+    """An `fnmatch` class of these characters: `]` first, `!` and `-` last, so none is read as
+    syntax (a first `!` only in a negated class)."""
+    held: set[str] = set(chars)
+    order: list[str] = [c for c in "]" if c in held] + sorted(held - set("]!-"))
+    order += [c for c in "!-" if c in held]
+    if not negated and order[:1] == ["!"]:  # `[!-]` would be a negated class: write `[-!]`
+        order = order[1:] + order[:1]
+    return f"[{'!' if negated else ''}{''.join(order)}]"
+
+
+# `a-c-e`: ripgrep carries the range on to `e`, `fnmatch` reads `a-c`, `-`, `e`.
+_CHAINED_RANGE = re.compile(r".-.-.", re.DOTALL)
+
+
+def _plain_class(body: str) -> bool:
+    """A class read the same by ripgrep and `fnmatch`: printable ASCII members (a range over
+    control characters has one at an end), no `\\` and no chained range (`[a-c-e]`)."""
+    return set(body) <= set(_PRINTABLE) and "\\" not in body and not _CHAINED_RANGE.search(body)
+
+
+def _either_case(body: str, negated: bool) -> tuple[str, str]:
+    """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
+    as allowed when the class allows it in either case, so folding only ever lets more through
+    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). A class that is not plain
+    (`_plain_class`: `[ą-ż]`, `[é]`, `[a\\-z]`, `[a-c-e]`) or allows no printable character is read
+    as any one character (owner 2026-10-23: when unsure, it matches)."""
+    held = f"[{body}]"
+    if not _plain_class(body):
+        return "one", ""
+    seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
+    folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
+
+    def member(c: str) -> bool:
+        return fnmatch.fnmatchcase(c, held)
+
+    if negated:  # left out only when every case of it is a member
+        out: list[str] = [c for c in folded if member(c) and member(c.upper())]
+        return ("set", _class_text(out, True)) if out else ("one", "")
+    allowed: list[str] = [c for c in folded if member(c) or member(c.upper())]
+    if not set(allowed) & set(_PRINTABLE):
+        return "one", ""
+    return ("lit", allowed[0]) if len(allowed) == 1 else ("set", _class_text(allowed, False))
+
+
+def _glob_class(text: str, at: int) -> tuple[tuple[str, str], int]:
+    """The class that opens at `at`, as a token (`_either_case`), and where it ends. ripgrep's
+    `[^…]` is `[!…]`; a first `]` is a member, and so is a `\\`."""
+    end: int = len(text)
+    i: int = at + 1
+    negated: bool = i < end and text[i] in "!^"
+    if negated:
+        i += 1
+    members: list[str] = []
+    while True:
+        if i >= end:
+            raise _Unsure  # never closed
+        char: str = text[i]
+        if char == "]" and members:
+            break
+        members.append(char)  # ripgrep reads `\\` here as a member: not plain
+        i += 1
+    body: str = "".join(members)
+    if "]" in body[1:] or body.startswith("!"):
+        raise _Unsure  # `fnmatch` would read it another way
+    return _either_case(body, negated), i + 1
+
+
+def _glob_tokens(text: str) -> list[tuple[str, str]]:
+    """ripgrep's glob syntax as tokens; braces, separators and commas inside braces included.
+    Literal characters are case-folded here, classes by `_either_case`."""
+    tokens: list[tuple[str, str]] = []
+    depth: int = 0
+    classes: int = 0
+    i: int = 0
+    while i < len(text):
+        char: str = text[i]
+        i += 1
+        if char == "\\":
+            if i >= len(text):
+                raise _Unsure
+            tokens += [("lit", c) for c in text[i].casefold()]
+            i += 1
+        elif char == "[":
+            classes += 1
+            if classes > MAX_GLOB_CLASSES:
+                raise _Unsure
+            token, i = _glob_class(text, i - 1)
+            tokens.append(token)
+        elif char == "{":
+            depth += 1
+            if depth > MAX_GLOB_BRACE_DEPTH:
+                raise _Unsure
+            tokens.append(("open", ""))
+        elif char == "}":
+            if not depth:
+                raise _Unsure
+            depth -= 1
+            tokens.append(("close", ""))
+        elif char == "," and depth:
+            tokens.append(("comma", ""))
+        else:
+            kind: str = {"*": "star", "?": "one", "/": "sep"}.get(char, "lit")
+            tokens += [("lit", c) for c in char.casefold()] if kind == "lit" else [(kind, "")]
+    if depth:
+        raise _Unsure
+    return tokens
+
+
+def _expand(tokens: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """Every brace alternative, nested ones multiplied out, as token lists without braces."""
+    at: int = 0
+
+    def sequence() -> list[list[tuple[str, str]]]:
+        nonlocal at
+        found: list[list[tuple[str, str]]] = [[]]
+        while at < len(tokens) and tokens[at][0] not in ("comma", "close"):
+            token: tuple[str, str] = tokens[at]
+            at += 1
+            if token[0] != "open":
+                for alternative in found:
+                    alternative.append(token)
+                continue
+            options: list[list[tuple[str, str]]] = []
+            while True:
+                options += sequence()
+                if len(options) > MAX_GLOB_ALTERNATIVES:
+                    raise _Unsure
+                at += 1  # the comma or the closing brace
+                if tokens[at - 1][0] == "close":
+                    break
+            if len(found) * len(options) > MAX_GLOB_ALTERNATIVES:
+                raise _Unsure
+            found = [head + option for head in found for option in options]
+        return found
+
+    return sequence()
+
+
+def _name_pattern(tokens: Sequence[tuple[str, str]]) -> str:
+    out: list[str] = []
+    for kind, text in tokens:
+        if kind == "lit":
+            out.append(f"[{text}]" if text in "*?[" else text)
+        else:
+            out.append({"star": "*", "one": "?"}.get(kind, text))
+    return "".join(out)
+
+
+def _one_star(tokens: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    """The tokens with each run of `*` made one (`a**b` is `a*b`)."""
+    kept: list[tuple[str, str]] = []
+    for token in tokens:
+        if not (token[0] == "star" and kept[-1:] == [token]):
+            kept.append(token)
+    return tuple(kept)
+
+
+def _alternative(tokens: list[tuple[str, str]]) -> _Alt:
+    last: int = max((i for i, (kind, _) in enumerate(tokens) if kind == "sep"), default=-1)
+    slash: bool = last >= 0
+    name: list[tuple[str, str]] = tokens[last + 1 :]
+    any_name: bool = name == [("star", ""), ("star", "")] or (slash and not name)
+    kept: tuple[tuple[str, str], ...] = _one_star(name)
+    return _Alt(kept, _name_pattern(kept), any_name, slash)
+
+
+# Unicode's White_Space characters, which ripgrep's `trim_end` drops. Python's bare `rstrip` would
+# also drop \x1c-\x1f, which ripgrep keeps.
+_WHITESPACE: str = (
+    "\t\n\x0b\x0c\r \x85\xa0\u1680"
+    + "".join(map(chr, range(0x2000, 0x200B)))
+    + "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _trimmed(text: str) -> str:
+    """The glob as ripgrep 14 reads a gitignore line: trailing whitespace dropped (`.env\\r` reads
+    `.env`), unless the glob ends in `\\` and a space; then all of it stays (`.env\\ ` reads
+    `.env `)."""
+    return text if text.endswith("\\ ") else text.rstrip(_WHITESPACE)
+
+
+@lru_cache(maxsize=64)
+def search_glob(text: str) -> _Glob | None:
+    """A glob as a search reads it; None when it cannot be judged (then it counts as reading a
+    secret): over MAX_GLOB_CHARS or MAX_GLOB_ALTERNATIVES, or a syntax ripgrep refuses."""
+    if len(text) > MAX_GLOB_CHARS:
+        return None
+    trimmed: str = _trimmed(text)
+    negated: bool = trimmed.startswith("!")
+    try:
+        alternatives = _expand(_glob_tokens(trimmed[1:] if negated else trimmed))
+    except _Unsure:
+        return None
+    # Only an alternative's name is judged: `{src,lib}/*.py` is one alternative, not two.
+    return _Glob(negated, tuple(dict.fromkeys(_alternative(tokens) for tokens in alternatives)))
+
+
+def _name_tokens(name: str) -> list[tuple[str, str]]:
+    """A case-folded `fnmatch` name pattern as (kind, text): `lit`, `star`, `one`, `set` (a class
+    as `fnmatch` reads it; a `[` that never closes is a plain character)."""
+    found: list[tuple[str, str]] = []
+    i: int = 0
+    while i < len(name):
+        charset = _CLASS.match(name, i) if name[i] == "[" else None
+        if charset is not None:
+            found.append(("set", charset.group()))
+            i = charset.end()
+            continue
+        kind: str = {"*": "star", "?": "one"}.get(name[i], "lit")
+        found.append((kind, name[i] if kind == "lit" else ""))
+        i += 1
+    return found
+
+
+def _samples(name: str) -> tuple[str, ...]:
+    """Sample names this case-folded `fnmatch` name pattern matches: every `*` filled with
+    nothing, then with SAMPLE_LETTER; a `?` is SAMPLE_LETTER, a class one character it allows.
+    None when a class allows no ASCII character (the first such class ends the reading)."""
+    tokens: list[tuple[str, str]] = []
+    for kind, text in _name_tokens(name):
+        if kind == "set":
+            text = _first_allowed(text)
+            if not text:
+                return ()
+            kind = "lit"
+        tokens.append((kind, text))
+    fills: dict[str, str] = {"one": SAMPLE_LETTER}
+    found: list[str] = []
+    for fill in ("", SAMPLE_LETTER):
+        fills["star"] = fill
+        found.append("".join(text if kind == "lit" else fills[kind] for kind, text in tokens))
+    return tuple(dict.fromkeys(s for s in found if s and fnmatch.fnmatchcase(s, name)))
+
+
+class _Searched(NamedTuple):
+    """A clause as a search reads it, worked out once (it depends on the clause only).
+
+    `names`: per `path` pattern, its file-name pattern (None: taken as any name), and
+    `elements` the same as tokens (`_name_tokens`, each run of `*` made one). `samples`: (sample,
+    index into `names`) for A, those no name-only exception matches. `excepts`: the name-only
+    exceptions. `letters`: the characters B tries for a `?` or a class. `rows` and `set_rows`:
+    what `_can_match` costs, per position of a glob's name and per character tried there."""
+
+    patterns: tuple[Pattern, ...]
+    names: tuple[str | None, ...]
+    elements: tuple[tuple[tuple[str, str], ...] | None, ...]
+    samples: tuple[tuple[str, int], ...]
+    excepts: tuple[str, ...]
+    letters: str
+    rows: int
+    set_rows: int
+
+
+@lru_cache(maxsize=64)  # clauses that name the same list read it once
+def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _Searched:
+    names: list[str | None] = []
+    found: list[tuple[str, int]] = []
+    for index, pattern in enumerate(path):
+        last: str = pattern.text if pattern.name_only else (pattern.parts or ("**",))[-1]
+        # Taken as any name (toward marking): a last `**`; `~/.`, which has no parts; a name past
+        # ASCII, where ripgrep's `?` is one byte (`secr??t` lists `secrét`); and a name with no
+        # sample, a class that allows no ASCII character.
+        made: tuple[str, ...] = _samples(last) if last != "**" and last.isascii() else ()
+        names.append(last if made else None)
+        found += [(sample, index) for sample in made]
+    elements = tuple(None if name is None else _one_star(_name_tokens(name)) for name in names)
+    excepts: tuple[str, ...] = tuple(p.text for p in path_except if p.name_only)
+    samples: list[tuple[str, int]] = [
+        (sample, index)
+        for sample, index in found
+        if not any(fnmatch.fnmatchcase(sample, e) for e in excepts)
+    ]
+    shown: list[tuple[tuple[str, str], ...]] = [e for e in elements if e is not None]
+    # B tries the characters the patterns' names hold. A pattern with a class may want any other
+    # character there (`key[0-9].pem` against a glob `key[-1-8].pem` must try `5`), so its clause
+    # tries every ASCII character: no class is read at load, and the tries are counted.
+    named: set[str] = {text for e in shown for kind, text in e if kind == "lit"}
+    if any(kind == "set" for e in shown for kind, _ in e):
+        named |= set(_ASCII)
+    letters: str = "".join(sorted(named))
+    return _Searched(
+        path,
+        tuple(names),
+        elements,
+        tuple(samples),
+        excepts,
+        letters or SAMPLE_LETTER,
+        sum(len(e) + 1 for e in shown),
+        sum(1 for e in shown for kind, _ in e if kind == "set"),
+    )
+
+
+def _widths(alt: _Alt, letters: str) -> list[int]:
+    """At most how many characters B tries at each position of the alternative's name."""
+    return [len(letters) if kind in ("one", "set") else 1 for kind, _ in alt.tokens]
+
+
+def _tries_count(widths: Sequence[int], limit: int) -> int:
+    """How many names the widths make, counted no further than just past `limit`."""
+    tries: int = 1
+    for width in widths:
+        tries *= width
+        if tries > limit:
+            break
+    return tries
+
+
+def _listed(searched: _Searched, widths: Sequence[int]) -> int | None:
+    """What holding B's tries one by one against the patterns and exceptions costs, or None when
+    they are not listed: the clause has no exception, or the cost is over MAX_EXCEPT_WORK."""
+    against: int = len(searched.names) + len(searched.excepts)
+    cost: int = _tries_count(widths, MAX_EXCEPT_WORK) * against
+    return cost if searched.excepts and cost <= MAX_EXCEPT_WORK else None
+
+
+def search_work(searched: _Searched, glob: _Glob, start_depth: int) -> int:
+    """The steps a search with this glob costs one clause at most, from the sizes alone: the
+    folder test of each anchored pattern and, per alternative, A's samples, the letters each
+    class allows, `_can_match`'s table for each pattern, and B's tries against the patterns and
+    exceptions when there are exceptions and the tries fit MAX_EXCEPT_WORK."""
+    anchored: int = sum(1 for p in searched.patterns if not p.name_only and p.anchor)
+    work: int = anchored * start_depth
+    for alt in glob.alts:
+        work += len(searched.samples)
+        if not glob.negated and not alt.any_name:
+            widths: list[int] = _widths(alt, searched.letters)
+            work += sum(len(searched.letters) + _SET_WORK for k, _ in alt.tokens if k == "set")
+            work += searched.rows * (len(widths) + 1) + searched.set_rows * sum(widths)
+            work += _listed(searched, widths) or 0
+        if work > MAX_SEARCH_WORK:
+            break
+    return work
+
+
+def _choices(alt: _Alt, letters: str) -> list[tuple[str, ...]]:
+    """B's characters at each position: `*` is SAMPLE_LETTER, a `?` each letter, a class each
+    letter it allows (or, if it allows none of them, one character it does)."""
+    choices: list[tuple[str, ...]] = []
+    for kind, text in alt.tokens:
+        if kind == "lit":
+            choices.append((text,))
+        elif kind == "star":
+            choices.append((SAMPLE_LETTER,))
+        elif kind == "one":
+            choices.append(tuple(letters))
+        else:
+            allowed = tuple(c for c in letters if fnmatch.fnmatchcase(c, text))
+            choices.append(allowed or tuple(_first_allowed(text)))
+    return choices
+
+
+def _fits(kind: str, text: str, choices: tuple[str, ...]) -> bool:
+    if kind == "lit":
+        return text in choices
+    if kind == "one":
+        return bool(choices)
+    return any(fnmatch.fnmatchcase(c, text) for c in choices)
+
+
+def _can_match(elements: Sequence[tuple[str, str]], choices: Sequence[tuple[str, ...]]) -> bool:
+    """Does the name pattern match some name made by picking one character at each position?
+
+    The positions are picked apart from each other, so this is the usual wildcard table, one row
+    per element: `reach[j]` says the elements so far can take exactly the first j positions. It
+    costs (elements + 1) x (positions + 1) cells, and a class each character it is tried on,
+    however many names the choices make."""
+    reach: list[bool] = [True] + [False] * len(choices)
+    for kind, text in elements:
+        if kind == "star":
+            seen: bool = False
+            for j, here in enumerate(reach):
+                seen = seen or here
+                reach[j] = seen
+        else:
+            reach = [False] + [
+                here and _fits(kind, text, choices[j]) for j, here in enumerate(reach[:-1])
+            ]
+        if not any(reach):
+            return False
+    return reach[-1]
+
+
+def _folders_fit(pattern: Pattern, start: tuple[str, ...] | None, home: str) -> bool:
+    """Can a file under the folder `start` (case-folded segments; None: anywhere) sit where this
+    pattern's folders are? Only an anchored pattern with `/` can say no: its folders, read from
+    the root or the home folder, must agree with `start` as far as `start` goes, and leave room
+    for the file name below it."""
+    if start is None or pattern.name_only or not pattern.anchor:
+        return True
+    base: tuple[str, ...] = _home_segments(home) if pattern.anchor == "home" else ()
+    if start[: len(base)] != base[: len(start)]:
+        return False
+    parts: tuple[str, ...] = pattern.parts
+    folders: tuple[str, ...] = parts if parts[-1:] == ("**",) else parts[:-1]
+    for index, segment in enumerate(start[len(base) :]):
+        if index >= len(folders):
+            return False
+        if folders[index] == "**":
+            return True
+        if not _part_hit(segment, folders[index]):
+            return False
+    return True
+
+
+def _start_of(start: str | None, home: str) -> tuple[str, ...] | None:
+    """The searched folder's case-folded segments, or None when the search may start anywhere (no
+    `file_path`, or one that is not absolute)."""
+    if start is None:
+        return None
+    resolved, segments = _folded_segments(start, home)
+    return segments if resolved.startswith("/") else None
+
+
+def _alt_takes(alt: _Alt, name: str) -> bool:
+    return alt.any_name or fnmatch.fnmatchcase(name, alt.pattern)
+
+
+def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None, home: str) -> bool:
+    fits: tuple[bool, ...] = tuple(_folders_fit(p, start, home) for p in searched.patterns)
+    if any(name is None and fit for name, fit in zip(searched.names, fits, strict=True)):
+        return True  # a pattern that takes any name below its folders (`~/.ssh/**`)
+    samples: list[str] = [sample for sample, index in searched.samples if fits[index]]
+    if glob.negated:
+        # It reads every file it does not name, so it reads a secret unless it leaves out every
+        # name (`!*`, `!**`): leaving out the samples is not leaving out every secret name.
+        return any(fits) and not any(
+            not alt.slash and (alt.any_name or alt.pattern == "*") for alt in glob.alts
+        )
+    shown = [
+        (name, elements)
+        for name, elements, fit in zip(searched.names, searched.elements, fits, strict=True)
+        if fit and name is not None and elements is not None
+    ]
+    for alt in glob.alts:
+        if any(_alt_takes(alt, s) for s in samples):
+            return True
+        if alt.any_name:
+            continue
+        choices: list[tuple[str, ...]] = _choices(alt, searched.letters)
+        if _listed(searched, _widths(alt, searched.letters)) is None or not all(choices):
+            # No exception, past the bound, or a class with no character to list: the exceptions
+            # are not used (toward marking).
+            if any(_can_match(elements, choices) for _, elements in shown):
+                return True
+            continue
+        hit: list[str] = [name for name, elements in shown if _can_match(elements, choices)]
+        for picked in product(*choices) if hit else ():
+            name: str = "".join(picked)
+            if any(fnmatch.fnmatchcase(name, p) for p in hit) and not any(
+                fnmatch.fnmatchcase(name, e) for e in searched.excepts
+            ):
+                return True
+    return False
+
+
+def glob_reads(searched: _Searched, raw: Any, start: str | None, home: str) -> bool:
+    """Does a search with this `glob` value read a file the clause's patterns name? A value that
+    is not a string, or a glob that cannot be judged or costs more than MAX_SEARCH_WORK, does."""
+    if not isinstance(raw, str):
+        return True
+    glob: _Glob | None = search_glob(raw)
+    if glob is None:
+        return True
+    segments: tuple[str, ...] | None = _start_of(start, home)
+    if search_work(searched, glob, len(segments or ())) > MAX_SEARCH_WORK:
+        return True
+    return _glob_reads(searched, glob, segments, home)
 
 
 class _Bucket(NamedTuple):
@@ -666,9 +1243,10 @@ def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
 class Clause:
     """The conditions of a `match` rule, or of the `after` / `then` table of an `after_then`.
 
-    Every condition that is present must hold. `path` applies to a read or write's file and, in a
-    shell command, to every word (and to the text after the last `=` and the last `@` of a word,
-    so `--env-file=.env` and `-d@.env` count). The others apply to shell commands only.
+    Every condition that is present must hold. `path` applies to a read or write's file, to what a
+    search reads (`glob_reads`) and, in a shell command, to every word (and to the text after the
+    last `=` and the last `@` of a word, so `--env-file=.env` and `-d@.env` count). The others
+    apply to shell commands only.
     """
 
     events: tuple[str, ...]
@@ -683,14 +1261,28 @@ class Clause:
         default_factory=dict, init=False, hash=False, compare=False, repr=False
     )
 
+    # How a search reads `path` and `path_except` (R1G), made here for the same reason.
+    _search: _Searched = dataclasses.field(init=False, hash=False, compare=False, repr=False)
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "_index", _command_index(self.command))
+        object.__setattr__(self, "_search", _searched(self.path, self.path_except))
 
     def _path_hit(self, text: str, home: str) -> bool:
         name: str = _folded_name(text)
         return any(p.matches(text, name, home) for p in self.path) and not any(
             p.matches(text, name, home) for p in self.path_except
         )
+
+    def _search_hit(self, action: Mapping[str, Any], home: str) -> bool:
+        """A search reads the file `file_path` names (a string only) and every name its glob can
+        match under it; with no glob a folder search reads nothing by name (SPEC section 10)."""
+        tool_input: Mapping[str, Any] = _tool_input(action)
+        start: Any = tool_input.get("file_path")
+        start = start if isinstance(start, str) and start else None
+        if start is not None and self._path_hit(start, home):
+            return True
+        return "glob" in tool_input and glob_reads(self._search, tool_input["glob"], start, home)
 
     def _words_hit(self, parsed: Parsed) -> bool:
         home: str = os.path.expanduser("~")  # once for the clause, not for each pattern test
@@ -734,9 +1326,12 @@ class Clause:
         if event is None or event not in self.events:
             return False
         if event != "shell":
-            return not self.path or self._path_hit(
-                _action_path(action, event), os.path.expanduser("~")
-            )
+            if not self.path:
+                return True
+            home: str = os.path.expanduser("~")
+            if event == "read" and is_search(action):
+                return self._search_hit(action, home)
+            return self._path_hit(_action_path(action, event), home)
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
@@ -1415,13 +2010,14 @@ def _with_minimum(parsed: RuleFile) -> RuleFile:
 # The sha256 of every `default.toml` the package has carried, oldest first, the current one last
 # (D28). `init -g` replaces the installed rules file only when it is byte for byte one of these:
 # nobody edited it. Add the new hash here, and keep the old ones, whenever `default.toml` changes;
-# `tests/test_rules_shipped.py` fails until you do. The three earlier files are kept under
+# `tests/test_rules_shipped.py` fails until you do. The earlier files are kept under
 # `tests/fixtures/shipped_defaults/` so the hashes can be checked against the text.
 SHIPPED_DEFAULTS: tuple[str, ...] = (
     "1b066ff522dd2f00cfaa451f62a1dc88071198b98d2296cbf4671fb85fe3beb9",  # V5b, R1 only
     "185c15585c6646cb25e146eeca328051b5ec714daf992436437784222f357d8d",  # V5b, + npm publish
     "50872ebe24b5cf25fb580523f2f541cd9a1dd0c92629d3accb5f86a873c93912",  # V5b, audit fixes
     "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
+    "6cd80b9824295273e33c2dd9a0d4aac82c6ddf2c90b1e894977b942132178c82",  # R1G, a search is a read
 )
 
 

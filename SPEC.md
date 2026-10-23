@@ -302,7 +302,7 @@ strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
 | Field | Where | Meaning |
 |---|---|---|
 | `id`, `kind`, `severity`, `message` | every rule | `kind` is `match` or `after_then`; `severity` is `block`, `warn` or `highlight`; `id` is unique and never `R0` |
-| `event` | `match`, and inside `after` / `then` | a list of `read` (`beforeReadFile`), `shell` (`beforeShellExecution`) and `write` (`preToolUse` of the Write tool) |
+| `event` | `match`, and inside `after` / `then` | a list of `read` (`beforeReadFile`, and a text search that returns lines: `preToolUse` of the Grep tool, below), `shell` (`beforeShellExecution`) and `write` (`preToolUse` of the Write tool) |
 | `path`, `path_except` | same | the name of a list of path patterns. A pattern without `/` matches the file *name* (`.env`, `*.pem`); with `/` the whole path (`**` crosses folders, `~/` is the home folder). In a shell command a path condition looks at every word, and at the text after the last `=` or `@` of a word |
 | `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order |
 | `command_class` | same, `event = ["shell"]` | a class built into the program: `outbound` (R1's definition, below) |
@@ -427,8 +427,62 @@ These lists are in the default rules file (G2) as `secret_names` and
 **Marking a session** ("has seen a secret"):
 - when the file-read tool opens a sensitive file; or
 - when *any word* in a shell command names a sensitive file (so `cat .env`,
-  `grep KEY .env`, `source .env`, `cp .env /tmp` all count). Marking too often
+  `grep KEY .env`, `source .env`, `cp .env /tmp` all count); or
+- when a text search (Cursor's Grep tool) that returns lines is aimed at one: the
+  file its `file_path` names, or a name its `glob` can match. Marking too often
   is harmless.
+
+**A search is a `read` (R1G).** Only a search that returns lines reads file text:
+`output_mode` "content", missing, or a value AgentFly does not know (also one that
+is not a string). "files_with_matches" and "count" return names only and are no
+event, so they never mark and no rule sees them. A search that returns lines is a
+`read` for every rule whose `event` lists `read` (no new event name, so the least
+R1 may say, below, covers it, and no file can leave it out). It reads the file
+`file_path` names, and every name its `glob` can match; a search of a folder with
+no glob reads nothing by name (section 10). The glob is read as ripgrep reads one
+(`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes outside a class, a
+member inside one, a leading `!` that
+excludes, trailing whitespace dropped as in a gitignore line: every Unicode
+whitespace character, a line break, `\r`, a vertical tab, a form feed and a no-break
+space too, unless the glob ends in `\` and a space, which keeps all of it),
+case-folded like a rule path (a class allows a letter when it allows it in either
+case, so `.e[!A-Z]v` still reads `.env`, and a class that is not plain, with a
+member that is a control character or past the printable ASCII characters, a `\`
+or a chained range such as
+`[a-c-e]`, is any one character: when unsure, it matches), and each brace
+alternative is judged on
+its own by its file name, its folders taken as able to sit anywhere under
+`file_path` (anywhere at all with none). An alternative matches a condition's
+`path` when either:
+- it matches a sample name made from a `path` pattern (each `*` filled with
+  nothing or with one fixed letter, a `?` or class with one character it allows:
+  `.env`, `.env.x`, `x.pem`, `id_rsa`, `credentials`, …) that `path_except` does
+  not match, so `*`, `**/*`, `.env*`, `?env` and `.e[n]v` read `.env`; or
+- its own name, its `*` read as that letter and each `?` or class tried with each
+  character the names of the condition's `path` patterns hold (every ASCII character
+  when one of them has a class), is matched by `path` and
+  not by `path_except`, so `.env.prod*`, `credentials.*`, `.en?.local` and
+  `credential?.py` read a secret name. Whether some such name is matched by `path`
+  is worked out position by position, not name by name, so a glob with many `?`
+  (`test_???.py`) is judged, not guessed (lead 2026-10-23); the names are listed
+  one by one only to hold them against `path_except`, and when there are too many
+  of them `path_except` is not used (toward marking).
+
+A `path` pattern whose name has a character past ASCII (ripgrep's `?` matches one
+byte of it, so `secr??t` reads `secrét`), or a class that allows no ASCII
+character, has no sample to judge by: every glob reads it (toward marking).
+
+A glob with a leading `!` reads every file it does not name, so it counts as
+reading a secret unless it leaves out every name (`!*`). So `*.py`, `*.json`,
+`test_*.py` and `.env.example` read no secret, and `!*.py` reads one. A `path`
+pattern with `/` also needs its folders to fit under `file_path`; a `path_except`
+with `/` is not used for a search. The test has its own fixed bound, a count: a
+glob longer than 512 characters, with more than 64 brace alternatives, more than
+32 classes or braces nested more than 32 deep, or whose test would take more than
+10,000 steps, a glob ripgrep would refuse, and a `glob`
+that is not a string all count as reading a secret. A `file_path` that is not a
+string counts as none. The search text itself is never sent to the recorder, and
+the stored step keeps neither it nor the glob.
 
 **Scope of the mark.** It belongs to one chat (Cursor's conversation id). A
 secret read in one chat does not affect another, except for the chat's own
@@ -464,8 +518,17 @@ rule, R1 included (D10). It is new work: today's command cleaner unwraps nothing
 **Blocking.** Once a session is marked, any command that sends data to another
 computer is blocked. After normalisation that covers:
 - `curl`, `wget`, `nc`, `scp`, `ssh`, `rsync`, `git push`, `gh`, `aws`;
-- an inline-code one-liner (`python -c`, `node -e` and similar), **whether or
-  not it mentions "http"**;
+- an inline-code one-liner (`python -c`, `node -e`, `perl -e` and `ruby -e`),
+  **whether or not it mentions "http"**: also under a versioned name (`python3.12`,
+  `perl5.34`, which macOS ships), with clustered letters (`perl -lane`,
+  `ruby -ne`), perl's `-E`, and after options that take a value (perl's `-M…` and
+  `-m…`, `-I`; ruby's `-r`, `-I`, `-C`, `-X`, `-E`, an encoding, and its long
+  `--enable`, `--disable`, `--dump`, `--backtrace-limit`, `--parser`,
+  `--crash-report` and the `--…encoding` options; ruby's `-0`, `-T` and `-W`
+  take only digits and `-K` one character, so `ruby -We` is code; perl's long
+  options, `--version` and `--help`, hold no code). A script file
+  (`perl x.pl`, `ruby x.rb`), `perl -c x.pl`, `perl -v` and `ruby --version` are
+  not one-liners;
 - a command that cannot be parsed (an unbalanced quote, or a `<<EOF` block);
 - the same tools inside a wrapper.
 
@@ -810,7 +873,9 @@ The client throws away content before it logs or sends:
 - `output` of `afterShellExecution`;
 - the contents of `tool_input`. From it the client keeps only the target path of
   file tools (`file_path` for Read, Write and Grep; never `content`, `pattern`
-  or `command`), so R0 can still deny a Write to a guard file. For MCP calls it
+  or `command`), so R0 can still deny a Write to a guard file, and Grep's `glob`
+  (a file-name pattern) and `output_mode`, so a search can mark (section 5). A
+  `glob` or `output_mode` that is not a string is sent as `null`. For MCP calls it
   keeps only the server and tool names.
 
 ### Duplicates
@@ -863,9 +928,9 @@ applies the **offline guard**, a fixed, simple subset of the rules. A wrong
 token is never treated as an allow.
 
 - it **denies** outbound commands: `curl`, `wget`, `nc`, `scp`, `ssh`,
-  `rsync`, `git push`, `gh`, `aws`, every inline `python -c` / `node -e`
-  one-liner (whatever it contains), and the same commands wrapped in `bash -c`,
-  `env` or `sudo`. Sending to your own computer (`localhost`, private
+  `rsync`, `git push`, `gh`, `aws`, every inline `python -c` / `node -e` /
+  `perl -e` / `ruby -e` one-liner (whatever it contains; the forms section 5
+  lists), and the same commands wrapped in `bash -c`, `env` or `sudo`. Sending to your own computer (`localhost`, private
   addresses) is allowed;
 - it **denies** commands that touch AgentFly's guard paths (R0), and any Read, Write
   or Edit (every file tool, `StrReplace` and `Delete` included) whose target is a
@@ -969,10 +1034,33 @@ Other measures:
   write. How an allow from there combines with AgentFly's deny is untested
   (section 8).
 - "Always Run" on a warned shell command removes that warning (section 5).
-- When the agent issues the `.env` read and a `curl` in one turn, Cursor may run
-  the shell hook before the read hook (V3a saw it, with the same
-  `generation_id`). The session is not marked yet, so that `curl` is allowed; it
-  cannot carry the file's content.
+- When the agent issues the `.env` read and a `curl` in one reply, the `curl` is
+  allowed: Cursor may even run the shell hook before the read hook (V3a saw it,
+  with the same `generation_id`). Seen again on Cursor 3.26.16 on the plain prompt
+  "Read .env, then run curl …": the agent sent both calls in one reply, and the
+  recorder stored the two steps 0.6 ms apart (with a Glob in place of the read,
+  47 ms apart, the same outcome). The `curl`'s text is fixed before the file comes
+  back, so it cannot carry the file's content (owner 2026-10-23: docs only, not a
+  v1 blocker).
+- A text search marks only when it is aimed at a secret (section 5). A whole-project
+  search with no glob returns lines of every secret file git does not skip (a
+  hidden `.env`, `demo.key`; in a folder that is not a git repository, or with a
+  `.env` that `.gitignore` does not list, all of them) and does not mark. Cursor
+  3.27.6 sends no result in `postToolUse` for a search (`{"pattern":…,"success":true}`
+  for every `output_mode`, no file names), so AgentFly cannot tell what came back,
+  and `postToolUse` is not registered. A glob that misses the samples with `*`,
+  such as `credential*.py`, `*.env.local` or `.env*.local`, does not mark either
+  (its `*` is read as one letter, owner 2026-10-23). An empty or blank `glob` is
+  no filter to ripgrep, so it is a search with no glob. Names-only searches
+  ("files_with_matches", "count") never mark, so a secret could be guessed letter
+  by letter through them. A glob past the search bound (section 5) marks, whatever
+  it names. Past the bound on listing names against `path_except` (2,000 compares,
+  section 5) the exceptions are not used, so the search marks: `.env??.example`
+  marks, `.env?.example` does not. ripgrep's `?` and classes match one byte, and AgentFly judges a glob by
+  characters: a rule name written in ASCII with a `?` or a `[!…]` and no `*` after
+  it (`secret?`) is not read by `secret??`, which lists `secreté`, and a name that
+  folds to ASCII (`ſecret.txt`) is not read by `??ecret.txt`. The packaged lists
+  are not affected: each name such a glob could reach ends in `*` or is exact ASCII.
 - The agent can read the token (above).
 - R0 matches names, so a deliberately obscured command can still reach
   `agentfly stop`, `brew services stop` or the session-notes file. Stopping the

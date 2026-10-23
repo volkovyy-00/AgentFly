@@ -29,11 +29,15 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (surrogates, non-UTF-8, 5000-digit numbers, deep nesting, random bytes) always gives
   one JSON object and exit 0; planted markers in content, edits, output, nested
   fields and `tool_input` never reach the log, stderr or the request body;
-  `parent_tool_call_id` arrives; an unknown agent gets allow and a stderr warning.
+  `parent_tool_call_id` arrives; an unknown agent gets allow and a stderr warning. A Grep keeps
+  `file_path`, `glob` and `output_mode` and never its `pattern` (a value that is not a string goes
+  as `null`, its nested text never); another tool keeps no `glob`; a 4,096-character glob of
+  nested braces and a list glob, sent through the client, mark the chat (R1G).
 - Offline guard (`tests/test_offline_guard.py`): with no recorder, a slow one, or
   401/403, outbound commands (bare and wrapped in `bash -c`, `env`, `sudo`), every
   one-liner and guard-path commands are denied with "agentfly start"; `ls`,
-  `curl localhost:8000/health` and private addresses are allowed.
+  `curl localhost:8000/health` and private addresses are allowed. The perl and ruby one-liners of
+  `tests/cases.py` are denied, bare and wrapped, and its `SCRIPT_NOT_INLINE` runs are allowed.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -72,7 +76,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `/` with the query kept; missing `ui/dist` logs a warning and does not
   prevent the app from importing.
 - Normaliser and R0 (`tests/test_normalize.py`, `tests/cases.py`, `tests/test_r0.py`):
-  wrappers, substitutions, heredocs and one-liners; guard paths and R0 commands denied
+  wrappers, substitutions, heredocs and one-liners (`perl -e`, `perl -lne`, `perl -MIO::Socket -e`,
+  `perl -I lib -e`, `perl5.34 -e`, `ruby -e`, `ruby --disable gems -e`, `ruby -rnet/http -e`,
+  `ruby -r json -e`, R1G; not `perl x.pl`, `ruby x.rb`, `perl -v`, `ruby --version`,
+  `perl -c x.pl`, `ruby -E UTF-8 x.rb`); guard paths and R0 commands denied
   unmarked, bare, wrapped and unparseable. Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
@@ -283,6 +290,42 @@ the maintainers' work items and decisions, which are kept outside this repo.
   saved by its base name). Read and Write `file_path` keep `relative_file_path`. `@wallclock`:
   300 distinct words of 1,022 characters, 2- and 60-character folders, outside, inside and
   missing, inside and existing, answer within the client's wait through `apply_rules`.
+- One-liner walks (`tests/test_one_liner_walk.py`, R1G, owner 2026-10-23): each family's table
+  (`_one_liner_table`) gives the reference walk's answer at every position over the shared cases
+  and 3,000 random runs of options, values and interpreter names, in the recorder and the offline
+  guard; 20,000 words of `node`, `perl`, `ruby`, `python3`, `-/ruby`, `-I/perl`, `perl -I` and
+  more make at most one table a family, over the whole command, and at most four steps a word
+  (counted, not timed), with and without code at the end.
+- Searches (`tests/test_search_read.py`, R1G): with R1 from `default.toml` a curl is blocked after a
+  Grep of `/w/.env` or `/w/repo/secret.key`, or over `/w` or no folder with each glob the brief
+  lists (`.env*`, `*`, `{a,.env}`, `.e[^x]v`, `!*.py`, `.en?.local`, `credential?.py`,
+  `credential???.py`, …) and `output_mode` "content", none, `"lines"` or `7`; allowed after `*.py`,
+  `**/*.ts`, `*.json`, `test_*.py`, `.env.example`, `test_???.py`, `log-[0-9][0-9][0-9].txt` and
+  a folder search with no glob (with each of those `output_mode`s); "files_with_matches", "count"
+  (over `/w`, `/w/.env`, `/w/repo/secret.key` or no folder) and the Glob shape never mark. A body
+  the hook client sanitized (`output_mode` 7 or `["x"]` sent as null, glob `.env*`) marks.
+  `npm-publish-after-env`, a widened list (`*.secret`), R1 at D27's minimum, a `match` read rule and
+  a `then` on read all see a content search; a folder pattern needs the search to start where it
+  can be. The bound: a glob over 512 characters, 64 alternatives or 32 classes, one ripgrep refuses, a
+  non-string glob and work over `MAX_SEARCH_WORK` mark, with the work count pinned and no compare
+  made over the bound; a search never charges the hook's meter. Through `apply_rules`, a marking
+  search in a subagent marks its parent, and the stored step holds neither the search text nor
+  the glob. Trailing whitespace is dropped as ripgrep 14 drops it (`.env `, `.env\r`, `*.pem\n`,
+  `.env\xa0` mark; `.env\ ` and `*.py\n` do not; `.env\` and `\r` is refused and marks; `\x1c`
+  stays), a pattern with no
+  parts (`~/.`) loads, a class with no character to list falls toward marking, alternatives
+  that differ only in folders are judged once, a class allows a letter in either case
+  (`.e[!A-Z]v` marks) and one past the printable characters (`[ą-ż]`) is any character, a `!`
+  glob marks unless it leaves out every name (`!*`, `!**`), and the
+  count covers the tries listed for the exceptions; a `\` inside a class is a member
+  (`id[a\-z]rsa` marks), `[-!]` stays a plain class, a class with a `\` or a chained range
+  (`[a-c-e]`) is any character, B tries a pattern's literal `!` and `]` and, for a pattern with a class, every ASCII
+  character, and loading a class costs about its own length; a rule name past ASCII
+  (`secrét`, read by `secr??t`) or with a class that allows no ASCII character is read by every
+  glob, and a class of control characters (`sec[\u007f]`) is still judged by its sample, a
+  sample takes a printable member first (`id[\u0001_]rsa` read by `*_rsa`), a glob range over
+  control characters is any character, and a class that allows nothing, or a list two rules
+  share, is read once at load.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.

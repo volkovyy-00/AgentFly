@@ -14,6 +14,7 @@ No I/O, no shell is ever run, and `normalize` never raises.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -96,57 +97,165 @@ def is_reader(name: str) -> bool:
     return name in SHELLS or name.rstrip("0123456789.") in _READERS or interpreter(name) is not None
 
 
-def _python_one_liner(args: list[str]) -> bool:
+# What a one-liner walk does at one word of an interpreter's options: CODE (inline code, yes),
+# END (the options end here, no), or how many words it moves on (2 when the word's option takes
+# the next word as its value). A walk is these steps from the word after the interpreter's name.
+_CODE: int = -1
+_END: int = 0
+
+
+def _python_step(arg: str) -> int:
     """`-c` in python's own options, found letter by letter (`-Sc`, `-c1`, `-X dev -c`)."""
-    options = iter(args)
-    for arg in options:
-        if arg == "--" or not arg.startswith("-") or arg.startswith("-m"):
-            return False  # the script (first plain word), `--`, or `python -m module`
-        if arg.startswith("--"):
-            if arg == "--check-hash-based-pycs":
-                next(options, None)
-            continue
-        for index, letter in enumerate(arg[1:], 1):
-            if letter == "c":
-                return True
-            if letter == "m":
-                return False
-            if letter in "WXQ":  # the rest of the word, or the next word, is its value
-                if index == len(arg) - 1:
-                    next(options, None)
-                break
-    return False
+    if arg == "--" or not arg.startswith("-") or arg.startswith("-m"):
+        return _END  # the script (first plain word), `--`, or `python -m module`
+    if arg.startswith("--"):
+        return 2 if arg == "--check-hash-based-pycs" else 1
+    for index, letter in enumerate(arg[1:], 1):
+        if letter == "c":
+            return _CODE
+        if letter == "m":
+            return _END
+        if letter in "WXQ":  # the rest of the word, or the next word, is its value
+            return 2 if index == len(arg) - 1 else 1
+    return 1
 
 
-def _node_one_liner(args: list[str]) -> bool:
-    """`-e`, `-p`, `--eval[=]`, `--print[=]` before node's script.
+def _node_stop(arg: str) -> bool:
+    """`--` or a word that names a script file: node's options end there."""
+    return arg == "--" or arg.endswith((".js", ".mjs", ".cjs", ".ts"))
 
-    Node has too many options that take a value to walk past them, so the options end at the
-    first word that names a script file or at `--`.
+
+def _node_code(arg: str) -> bool:
+    """`-e`, `-p` (alone or clustered), `--eval[=]`, `--print[=]`."""
+    if arg.startswith(("--eval", "--print")):
+        return True
+    letters: str = arg[1:]
+    return (
+        arg.startswith("-")
+        and not arg.startswith("--")
+        and letters.isalpha()
+        and ("e" in letters or "p" in letters)
+    )
+
+
+def _node_step(arg: str) -> int:
+    """Node has too many options that take a value to walk past them, so its options end at the
+    first word that names a script file or at `--`, and a `-e`, `-p`, `--eval` or `--print`
+    before that is code."""
+    return _END if _node_stop(arg) else _CODE if _node_code(arg) else 1
+
+
+def script_family(name: str) -> str | None:
+    """'perl' for perl, perl5.34; 'ruby' for ruby, ruby3.2; else None (`perldoc` is neither)."""
+    base: str = name.rstrip("0123456789.")
+    return base if base in ("perl", "ruby") else None
+
+
+def _perl_step(arg: str) -> int:
+    """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
+
+    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
+    alone, the next word; a long option (`--version`) takes nothing. The script (the first plain
+    word), `-` or `--` ends the options.
     """
-    for arg in args:
-        if arg == "--" or arg.endswith((".js", ".mjs", ".cjs", ".ts")):
-            return False
-        if arg.startswith(("--eval", "--print")):
-            return True
-        if arg.startswith("-") and not arg.startswith("--") and arg[1:].isalpha():
-            if "e" in arg[1:] or "p" in arg[1:]:
-                return True
-    return False
+    if arg in ("-", "--") or not arg.startswith("-"):
+        return _END
+    if arg.startswith("--"):
+        return 1
+    for index, letter in enumerate(arg[1:], 1):
+        if letter in "eE":
+            return _CODE
+        if letter in "MmI":
+            return 2 if letter == "I" and index == len(arg) - 1 else 1
+    return 1
+
+
+# Ruby's long options that take the next word as their value (unless it is glued on with `=`).
+_RUBY_VALUE_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--enable",
+        "--disable",
+        "--dump",
+        "--encoding",
+        "--external-encoding",
+        "--internal-encoding",
+        "--backtrace-limit",
+        "--parser",
+        "--crash-report",
+    }
+)
+
+
+def _ruby_step(arg: str) -> int:
+    """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`, `-We`).
+
+    `-r`, `-I`, `-C`, `-X` and `-E` (an encoding, not code) take the rest of their word or, alone,
+    the next word; `-x`, `-F`, `-i` and `-W:` take the rest of their word; `-K` takes one
+    character (`-Ke` is a character set) and `-0`, `-T` and `-W` their digits, and the letters
+    after those are options again (`-0e` is code). The script (the first plain word), `-` or `--`
+    ends the options.
+    """
+    if arg in ("-", "--") or not arg.startswith("-"):
+        return _END
+    if arg.startswith("--"):
+        return 2 if arg in _RUBY_VALUE_OPTIONS else 1
+    index: int = 1
+    while index < len(arg):
+        letter: str = arg[index]
+        index += 1
+        if letter == "e":
+            return _CODE
+        if letter in "rICXE":
+            return 2 if index == len(arg) else 1
+        if letter in "xFi" or (letter == "W" and arg[index : index + 1] == ":"):
+            return 1
+        if letter == "K":
+            index += 1
+        elif letter in "0TW":
+            while index < len(arg) and arg[index].isdigit():
+                index += 1
+    return 1
+
+
+_STEPS: dict[str, Callable[[str], int]] = {
+    "python": _python_step,
+    "node": _node_step,
+    "perl": _perl_step,
+    "ruby": _ruby_step,
+}
+
+
+def _one_liner_table(args: Sequence[str], step: Callable[[str], int]) -> list[bool]:
+    """For every position i: does a walk of these steps over `args[i:]` find code?
+
+    Worked out once for the whole command, from the right, so each word is stepped on once
+    however many interpreter names the command holds (`perl -I perl -I perl ...`, `-/ruby`): a
+    walk from each name would read the rest again.
+    """
+    found: list[bool] = [False] * (len(args) + 2)
+    for at in range(len(args) - 1, -1, -1):
+        move: int = step(args[at])
+        found[at] = move == _CODE or (move != _END and found[at + move])
+    return found
 
 
 def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
-    """An inline one-liner anywhere in the command: `python -c`, `node -e` (SPEC section 9).
+    """An inline one-liner anywhere in the command: `python -c`, `node -e`, `perl -e`, `ruby -e`
+    (SPEC sections 5 and 9).
 
     Only the words after the interpreter are looked at, so the `-c` of `bash -c 'python3 x.py'`
     or of `python3 -m pytest -c cfg` is not taken for it.
     """
     args: list[str] = list(argv)
+    tables: dict[str, list[bool]] = {}  # `_one_liner_table`, one per family, made when needed
     for index, word in enumerate(args):
-        family: str | None = interpreter(base_name(word))
-        if family == "python" and _python_one_liner(args[index + 1 :]):
-            return True
-        if family == "node" and _node_one_liner(args[index + 1 :]):
+        name: str = base_name(word)
+        family: str | None = interpreter(name) or script_family(name)
+        if family is None:
+            continue
+        if family not in tables:
+            tables[family] = _one_liner_table(args, _STEPS[family])
+        if tables[family][index + 1]:
             return True
     return False
 
