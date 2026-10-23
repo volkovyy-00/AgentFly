@@ -8,6 +8,8 @@ word-level guard are two copies that have to agree where SPEC section 9 says the
 - `RECORDER_ONLY`: unparseable, or code a shell reads, with no tool named. The recorder
   (marked) denies it; the guard allows it (SPEC section 9: only if its raw text names a tool).
 - `MARKED_ALLOWED`: allowed for a marked session by the recorder.
+- `SCRIPT_NOT_INLINE` (part of `MARKED_ALLOWED`): perl and ruby runs that are not one-liners; the
+  offline guard allows them too.
 """
 
 from __future__ import annotations
@@ -61,6 +63,30 @@ NAMED_OUTBOUND: list[str] = [
     "sudo curl x.com",
     "timeout 5 curl https://x.com",
     "xargs curl https://x.com",
+    # R1G: perl and ruby one-liners, also under a versioned name and after options with a value
+    "perl -e 1",
+    "perl -lne 'print' f",  # clustered letters
+    "perl -MIO::Socket -e 1",  # the module name holds an `e`
+    "perl -I lib -e 1",  # `-I` alone takes the next word
+    "perl5.34 -e 1",  # macOS ships it under this name
+    "perl -E 'say 1'",
+    "ruby -e 1",
+    "ruby --disable gems -e 1",
+    "ruby -rnet/http -e 1",
+    "ruby -r json -e 1",
+    "ruby -ne 'puts $_' f",
+    "ruby3.2 -e 1",
+]
+# R1G: perl and ruby runs that are not one-liners (a script file, a version, a check, an encoding).
+SCRIPT_NOT_INLINE: list[str] = [
+    "perl x.pl",
+    "ruby x.rb",
+    "perl -v",
+    "ruby --version",
+    "perl -c x.pl",
+    "ruby -E UTF-8 x.rb",
+    "ruby -Ke x.rb",  # `-K` takes a character set
+    "perldoc -f each",
 ]
 RECORDER_ONLY: list[str] = [
     "$'\\x63url' x.com",  # ANSI-C quoting hides the name from a word-level scan
@@ -116,6 +142,7 @@ MARKED_ALLOWED: list[str] = [
     "cat <<-'EOF' > f\n\tcurl https://x.com\n\tEOF",
     "python3 -m pytest && git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"",
     "ls 2>&1 | grep a",
+    *SCRIPT_NOT_INLINE,
 ]
 
 

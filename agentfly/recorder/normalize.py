@@ -135,18 +135,94 @@ def _node_one_liner(args: list[str]) -> bool:
     return False
 
 
+def script_family(name: str) -> str | None:
+    """'perl' for perl, perl5.34; 'ruby' for ruby, ruby3.2; else None (`perldoc` is neither)."""
+    for family in _READERS:
+        rest: str = name.removeprefix(family)
+        if rest != name and not rest.strip("0123456789."):
+            return family
+    return None
+
+
+def _perl_one_liner(args: list[str]) -> bool:
+    """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
+
+    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
+    alone, the next word. The script (the first plain word), `-` or `--` ends the options.
+    """
+    options = iter(args)
+    for arg in options:
+        if arg in ("-", "--") or not arg.startswith("-"):
+            return False
+        for index, letter in enumerate(arg[1:], 1):
+            if letter in "eE":
+                return True
+            if letter in "MmI":
+                if letter == "I" and index == len(arg) - 1:
+                    next(options, None)
+                break
+    return False
+
+
+# Ruby's long options that take the next word as their value (unless it is glued on with `=`).
+_RUBY_VALUE_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--enable",
+        "--disable",
+        "--dump",
+        "--encoding",
+        "--external-encoding",
+        "--internal-encoding",
+    }
+)
+
+
+def _ruby_one_liner(args: list[str]) -> bool:
+    """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`).
+
+    `-r`, `-I`, `-C` and `-E` (an encoding, not code) take the rest of their word or, alone, the
+    next word; `-x`, `-0`, `-F`, `-i`, `-K`, `-T` and `-W` take the rest of their word (`-Ke` is
+    a character set). The script (the first plain word), `-` or `--` ends the options.
+    """
+    options = iter(args)
+    for arg in options:
+        if arg in ("-", "--") or not arg.startswith("-"):
+            return False
+        if arg.startswith("--"):
+            if arg in _RUBY_VALUE_OPTIONS:
+                next(options, None)
+            continue
+        for index, letter in enumerate(arg[1:], 1):
+            if letter == "e":
+                return True
+            if letter in "rICE":
+                if index == len(arg) - 1:
+                    next(options, None)
+                break
+            if letter in "x0FiKTW":
+                break
+    return False
+
+
 def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
-    """An inline one-liner anywhere in the command: `python -c`, `node -e` (SPEC section 9).
+    """An inline one-liner anywhere in the command: `python -c`, `node -e`, `perl -e`, `ruby -e`
+    (SPEC sections 5 and 9).
 
     Only the words after the interpreter are looked at, so the `-c` of `bash -c 'python3 x.py'`
     or of `python3 -m pytest -c cfg` is not taken for it.
     """
     args: list[str] = list(argv)
     for index, word in enumerate(args):
-        family: str | None = interpreter(base_name(word))
-        if family == "python" and _python_one_liner(args[index + 1 :]):
+        name: str = base_name(word)
+        family: str | None = interpreter(name) or script_family(name)
+        rest: list[str] = args[index + 1 :]
+        if family == "python" and _python_one_liner(rest):
             return True
-        if family == "node" and _node_one_liner(args[index + 1 :]):
+        if family == "node" and _node_one_liner(rest):
+            return True
+        if family == "perl" and _perl_one_liner(rest):
+            return True
+        if family == "ruby" and _ruby_one_liner(rest):
             return True
     return False
 

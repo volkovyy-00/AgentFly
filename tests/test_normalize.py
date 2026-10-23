@@ -11,7 +11,14 @@ import pytest
 
 from agentfly.recorder.normalize import MAX_DEPTH, MAX_SCANS, _Scanner, normalize, shell_script
 from agentfly.recorder.rules import parsed_is_outbound
-from tests.cases import HEREDOC_COMMIT, MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
+from tests.cases import (
+    HEREDOC_COMMIT,
+    MARKED_ALLOWED,
+    NAMED_OUTBOUND,
+    RECORDER_ONLY,
+    SCRIPT_NOT_INLINE,
+    wrapped,
+)
 
 
 def words_of(command: str) -> list[str]:
@@ -429,3 +436,16 @@ def test_the_first_eval_covers_the_later_ones() -> None:
     assert ("curl", "x") in normalize("eval eval eval curl x").commands
     assert ("curl", "x") in normalize("bash bash -c 'curl x'").commands
     assert normalize("eval " * 40 + "curl x").unparsed  # too deep: counted as unparseable
+
+
+# ---------------------------------------------------------------- perl and ruby one-liners (R1G)
+
+
+@pytest.mark.parametrize("command", [c for c in NAMED_OUTBOUND if c.startswith(("perl", "ruby"))])
+def test_a_perl_or_ruby_one_liner_is_inline_code(command: str) -> None:
+    assert normalize(command).one_liner, command
+
+
+@pytest.mark.parametrize("command", SCRIPT_NOT_INLINE)
+def test_a_perl_or_ruby_script_run_is_not_inline_code(command: str) -> None:
+    assert not normalize(command).one_liner, command

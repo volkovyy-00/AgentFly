@@ -13,7 +13,14 @@ import pytest
 
 import agentfly.hook_client as guard
 from agentfly.recorder.rules import is_outbound_send
-from tests.cases import GUARD_PATHS, NAMED_OUTBOUND, PACKAGE_ALLOWED, RECORDER_ONLY, wrapped
+from tests.cases import (
+    GUARD_PATHS,
+    NAMED_OUTBOUND,
+    PACKAGE_ALLOWED,
+    RECORDER_ONLY,
+    SCRIPT_NOT_INLINE,
+    wrapped,
+)
 from tests.helpers import (
     StubRecorder,
     answer_of,
@@ -112,6 +119,7 @@ ALLOWED = [
     "make test",
     "agentfly status",
     *PACKAGE_ALLOWED,
+    *SCRIPT_NOT_INLINE,
 ]
 
 
