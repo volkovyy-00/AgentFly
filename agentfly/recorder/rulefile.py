@@ -36,6 +36,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
 from agentfly.install.layout import SYSTEM
+from agentfly.recorder.clean import Walker
 from agentfly.recorder.names import hosts_in_command
 from agentfly.recorder.normalize import SUB_EMPTY, SUB_PREFIX, Parsed, base_name, normalize
 
@@ -60,12 +61,14 @@ CLAUSE_FIELDS: tuple[str, ...] = (
     "command",
     "command_class",
     "host_not_in",
+    "path_scope",
 )
 COMMAND_CLASSES: frozenset[str] = frozenset({"outbound"})  # implemented by rules.py
+PATH_SCOPES: frozenset[str] = frozenset({"outside_workspace"})
 
 _RULE_FIELDS: frozenset[str] = frozenset({"id", "kind", "severity", "message", "test"})
 _TOP_FIELDS: frozenset[str] = frozenset({"schema", "lists", "rule"})
-_TEST_FIELDS: frozenset[str] = frozenset({"steps", "expect"})
+_TEST_FIELDS: frozenset[str] = frozenset({"steps", "expect", "roots"})
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _FIELDS_OF: dict[str, frozenset[str]] = {
     "match": _RULE_FIELDS | set(CLAUSE_FIELDS),
@@ -90,6 +93,11 @@ WORK_SLASH: int = 4  # a pattern with "/" is a walk through the path's folders .
 WORK_STAR: int = 12  # ... and each "**" (an unanchored pattern has one more) multiplies it
 WORK_PARTS_FREE: int = 4  # WORK_SLASH covers a walk of this many folders and a file name ...
 WORK_PART: int = 1  # ... each part past them is a step more for every position reached
+# `path_scope` (V5c) asks the file system, but one hook's walker answers a path once for all the
+# clauses (`clean.Walker`), within its own budget of LOOKUP_STEPS calls; what a clause adds is the
+# look-up of that answer. Measured on the author's Mac: a whole budget of `lstat` calls takes about
+# 25 ms, once per hook; a clause after the first about 2 us.
+WORK_SCOPE: int = 2
 WORK_ERROR: str = "asks for too much matching work per hook"
 MAX_PATTERN_CHARS: int = 200
 MAX_STARS: int = 8
@@ -97,6 +105,7 @@ MAX_MESSAGE_CHARS: int = 500
 MAX_TESTS: int = 50
 MAX_STEPS: int = 20
 MAX_STEP_CHARS: int = 2000
+MAX_TEST_ROOTS: int = 64  # `roots` of an inline test (what it sends as `workspace_roots`)
 MAX_SUMMARY_CHARS: int = 300
 
 CommandClass = Callable[[Parsed], bool]
@@ -444,14 +453,22 @@ class WorkLimit(Exception):
 @dataclass
 class Meter:
     """One hook's budget of steps (floating patterns and command lists), and the rules it left
-    unfinished (in order, once)."""
+    unfinished (in order, once). `disk` is the hook's walker for `path_scope`, made on first use:
+    its look-ups have a budget of their own (`clean.LOOKUP_STEPS`), and a path or root it cannot
+    resolve in that budget counts as outside, so it never makes a rule unfinished."""
 
     left: int
     unfinished: list[str] = dataclasses.field(default_factory=list)
+    disk: Walker | None = None
 
     def note(self, rule_id: str) -> None:
         if rule_id not in self.unfinished:
             self.unfinished.append(rule_id)
+
+    def walker(self) -> Walker:
+        if self.disk is None:
+            self.disk = Walker()
+        return self.disk
 
 
 # This hook's meter, or None: then nothing is charged (pure tests, `rules test`, `doctor`, D27).
@@ -538,6 +555,16 @@ def _action_path(action: Mapping[str, Any], event: str) -> str:
     source: Mapping[str, Any] = _tool_input(action) if event == "write" else action
     value: Any = source.get("file_path")
     return value if isinstance(value, str) else ""
+
+
+def _outside_workspace(action: Mapping[str, Any], event: str, home: str) -> bool:
+    """`path_scope = "outside_workspace"`: the file a read or write names, or the folder or file a
+    search names (none: outside), is under none of the event's `workspace_roots` (`Walker`). The
+    hook's walker answers, or one of its own when no meter runs (a test, `rules test`)."""
+    path: str = _action_path(action, "write" if is_search(action) else event)
+    meter: Meter | None = _METER.get()
+    walker: Walker = meter.walker() if meter is not None else Walker()
+    return not walker.inside_any(action.get("workspace_roots"), path, home)
 
 
 # ---------------------------------------------------------------- searches (R1G)
@@ -1358,6 +1385,7 @@ class Clause:
     command: tuple[tuple[str, ...], ...] = ()  # program, then extra whole words; case-folded
     command_class: str = ""
     host_not_in: frozenset[str] = frozenset()
+    path_scope: str = ""  # "outside_workspace", or "" for none (read and write only)
     # `command` as a look-up table, made here (a clause built by hand has one too). It follows from
     # `command`, so it is no part of the clause's identity (a clause is hashed to cache a file).
     _index: _Index = dataclasses.field(
@@ -1441,12 +1469,15 @@ class Clause:
         if event is None or event not in self.events:
             return False
         if event != "shell":
-            if not self.path:
-                return True
             home: str = os.path.expanduser("~")
-            if event == "read" and is_search(action):
-                return self._search_hit(action, home)
-            return self._path_hit(_action_path(action, event), home)
+            if self.path:  # the path first: it asks no disk
+                if event == "read" and is_search(action):
+                    hit: bool = self._search_hit(action, home)
+                else:
+                    hit = self._path_hit(_action_path(action, event), home)
+                if not hit:
+                    return False
+            return not self.path_scope or _outside_workspace(action, event, home)
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
@@ -1470,13 +1501,16 @@ def pattern_work(pattern: Pattern) -> int:
 
 def clause_work(clause: Clause | None) -> int:
     """What a clause costs per hook: a fixed part and its path patterns, which are tried on every
-    word. A command is read once for all its clauses (where each program first, and each word
-    last, stands; the host names), so an entry is a look-up and a long list of them costs
-    nothing worth counting (measured: 198 rules of 200 entries on the command's own program
-    take 31-35 ms for the whole hook, as the default alone does)."""
-    if clause is None or not (clause.path or clause.path_except):
+    word, and WORK_SCOPE for a `path_scope`. A command is read once for all its clauses (where
+    each program first, and each word last, stands; the host names), so an entry is a look-up and
+    a long list of them costs nothing worth counting (measured: 198 rules of 200 entries on the
+    command's own program take 31-35 ms for the whole hook, as the default alone does)."""
+    if clause is None:
         return 0
-    return WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
+    work: int = WORK_SCOPE if clause.path_scope else 0
+    if clause.path or clause.path_except:
+        work += WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
+    return work
 
 
 def rule_work(spec: RuleSpec) -> int:
@@ -1497,6 +1531,7 @@ def file_work(specs: Sequence[RuleSpec]) -> int:
 class InlineTest:
     steps: tuple[tuple[str, str], ...]  # (event, value), in order
     expect: str  # what the last step gets: block, warn, highlight or allow
+    roots: tuple[str, ...] = ()  # sent with every step as `workspace_roots` (none: not sent)
 
 
 @dataclass(frozen=True)
@@ -1694,8 +1729,10 @@ def _clause(
     problems: _Problems,
     *,
     needs_condition: bool,
+    scope_ok: bool = True,
 ) -> Clause | None:
-    """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition."""
+    """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition.
+    `path_scope` may stand in `match` and `after` (`scope_ok`), not in `then`."""
     if not isinstance(table, dict):
         problems.add(where, "must be a table")
         return None
@@ -1725,6 +1762,15 @@ def _clause(
             where, f"command_class {command_class!r} is not one of {sorted(COMMAND_CLASSES)}"
         )
         command_class = ""
+    scope: Any = table.get("path_scope", "")
+    if "path_scope" in table:
+        if not (isinstance(scope, str) and scope in PATH_SCOPES):
+            problems.add(where, f"path_scope {scope!r} is not one of {sorted(PATH_SCOPES)}")
+        elif not scope_ok:
+            problems.add(where, "'path_scope' may stand in 'match' and 'after', not in 'then'")
+        elif events and not set(events) <= {"read", "write"}:
+            problems.add(where, '\'path_scope\' needs event = ["read"], ["write"] or both')
+        scope = scope if isinstance(scope, str) else ""
     if path_except and not path:
         problems.add(where, "'path_except' needs a 'path'")
     if hosts and not (command or command_class):
@@ -1733,11 +1779,11 @@ def _clause(
         problems.add(where, "'host_not_in' needs a 'command' or a 'command_class' beside it")
     if (command or hosts or command_class) and events and events != ["shell"]:
         problems.add(where, "'command', 'command_class' and 'host_not_in' need event = [\"shell\"]")
-    if needs_condition and not (path or command or hosts or command_class):
+    if needs_condition and not (path or command or hosts or command_class or scope):
         problems.add(where, f"matches every {'/'.join(events) or 'action'} action; add a condition")
     if len(problems.errors) > start:
         return None
-    return Clause(tuple(events), path, path_except, command, command_class, hosts)
+    return Clause(tuple(events), path, path_except, command, command_class, hosts, scope)
 
 
 def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
@@ -1766,8 +1812,15 @@ def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
                 parsed.append((event, value.strip()))
         if steps is None:
             problems.add(label, f"'steps' must be 1 to {MAX_STEPS} strings")
-        elif len(parsed) == len(steps) and expect in EXPECTS:
-            found.append(InlineTest(tuple(parsed), expect))
+        roots: Any = item.get("roots", [])
+        if not (
+            isinstance(roots, list)
+            and len(roots) <= MAX_TEST_ROOTS
+            and all(isinstance(r, str) and len(r) <= MAX_STEP_CHARS for r in roots)
+        ):
+            problems.add(label, f"'roots' must be at most {MAX_TEST_ROOTS} folder paths (strings)")
+        elif steps is not None and len(parsed) == len(steps) and expect in EXPECTS:
+            found.append(InlineTest(tuple(parsed), expect, tuple(roots)))
     return tuple(found)
 
 
@@ -1818,7 +1871,9 @@ def _rule(
         if "after" in raw:
             after = _clause(f"{where} after", raw["after"], lists, problems, needs_condition=True)
         if "then" in raw:
-            then = _clause(f"{where} then", raw["then"], lists, problems, needs_condition=False)
+            then = _clause(
+                f"{where} then", raw["then"], lists, problems, needs_condition=False, scope_ok=False
+            )
     for pattern in _patterns_of((clause, after, then), "path_except"):
         if floating(pattern):  # spec §4.6: it would walk every word of every command
             problems.add(where, f"exception {pattern.text!r} {FLOATING_EXCEPTION}")
@@ -2073,6 +2128,7 @@ def _then_problem(then: Clause) -> bool:
         then.events != ("shell",)
         or then.command_class != "outbound"
         or bool(then.path or then.path_except or then.command or then.host_not_in)
+        or bool(then.path_scope)
     )
 
 
@@ -2091,7 +2147,7 @@ def _minimum_problems(specs: Sequence[RuleSpec]) -> list[str]:
     if r1.severity != "block":
         problems.append(f'{where}: severity must stay "block" (it is {r1.severity!r}) (D27)')
     after: Clause = r1.after
-    if after.command or after.command_class or after.host_not_in:
+    if after.command or after.command_class or after.host_not_in or after.path_scope:
         problems.append(f"{where}: its 'after' may hold only event, path and path_except (D27)")
     if not {"read", "shell"} <= set(after.events):
         problems.append(f"{where}: its 'after' must fire on both read and shell (D27)")
