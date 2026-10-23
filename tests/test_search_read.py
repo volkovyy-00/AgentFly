@@ -377,9 +377,11 @@ def test_the_work_count_is_pinned() -> None:
 def test_the_count_covers_the_tries_listed_for_the_exceptions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # classes that allow fewer letters than the count assumed: listing is decided on the count
+    # Classes that allow fewer letters than the count assumes (17 x 17 tries counted, 1 x 2 real):
+    # listing is decided on the count, so the tries are not listed and the exception `id_rsa*.pub`
+    # is not used (toward marking), and no compare is made that the count did not include.
     searched = r1_clause()._search
-    glob = "id_rsa[!.np][!.np]{a,b}{c,d}{e,f}.pub"
+    glob = "id_rsa[ab][cd]{a,b}{c,d}{e,f}.pub"
     parsed = rulefile.search_glob(glob)
     assert parsed is not None
     counted = rulefile.search_work(searched, parsed, 1)
