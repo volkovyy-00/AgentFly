@@ -94,6 +94,20 @@ _VALUE_FORMS: tuple[str, ...] = (
     "rsync --rsh {V} src h.com:dst",
     "rsync --rsh={V} src h.com:dst",
     "rsync src h.com:dst -e {V}",
+    # a value option right after a glued value or an unlisted option, which the cleaner already
+    # read as taking the next word; and ssh's remote command after a glued value
+    "curl -XPOST -d {V} x.com",
+    "curl --no-fail -d {V} x.com",
+    "curl -d -d {V} x.com",
+    "wget --quie -O {V} x.com",
+    "nc -s1.2.3.4 -s {V} h.com 80",
+    "scp -P22 -i {V} f user@h.com:/p",
+    "rsync --no-perms -e {V} src h.com:dst",
+    "ssh -p22 -i {V} h.com",
+    "ssh -p2222 h.com {V}",
+    "ssh -p2222 h.com https://{V}",
+    "ssh -oBatchMode=no h.com {V}",
+    "ssh -i~/.ssh/id h.com {V}",
 )
 _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET}.abc")
 

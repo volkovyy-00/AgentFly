@@ -317,9 +317,13 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
 
 def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
     """A web tool's words (C1): the word after an option that takes a value is that value, and
-    every word after ssh's destination is its remote command; neither is ever a website."""
+    every word after ssh's destination is its remote command; neither is ever a website. Where
+    the reading may be a word out of step it falls toward `<arg>`: an option where a value was
+    expected is saved as that value and its own value comes next, and the word after an option
+    that may already hold its value (`-p22`) may be ssh's destination."""
     out: list[str] = []
     value_next: bool = False
+    may_be_whole: bool = False  # the option before this value may already hold its own value
     options_ended: bool = False
     remote: bool = False
     for word in words:
@@ -327,7 +331,12 @@ def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
             out.append("<arg>")
         elif value_next:
             out.append(disk.project_relative(word) or "<arg>")
-            value_next = False
+            if _is_option(word) and word != "--":
+                value_next = _takes_value(word, tool)
+                may_be_whole = _may_hold_value(word, tool)
+            else:
+                value_next = False
+                remote = may_be_whole and tool == "ssh"
         else:
             out.append(_classify_word(word, disk, web_tool=True))
             if options_ended or not _is_option(word):
@@ -335,6 +344,7 @@ def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
             else:
                 options_ended = word == "--"
                 value_next = not options_ended and _takes_value(word, tool)
+                may_be_whole = _may_hold_value(word, tool)
     return out
 
 
@@ -350,6 +360,16 @@ def _takes_value(option: str, tool: str) -> bool:
     if option.startswith("--"):
         return "=" not in option and option[2:] not in long
     return option[-1] not in short
+
+
+def _may_hold_value(option: str, tool: str) -> bool:
+    """Whether `option` may carry its own value, so that the word after it is no value: a long
+    option, or a cluster with a letter before its last that is not listed as taking none (the
+    tool reads the rest of the word as that letter's value). Only ssh asks: its destination."""
+    if tool != "ssh":
+        return False
+    short, _ = _NO_VALUE[tool]
+    return option.startswith("--") or bool(option[1:-1].strip(short))  # strip: C speed
 
 
 def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:

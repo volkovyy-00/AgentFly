@@ -28,8 +28,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   and a token. A cluster is judged by its last letter (`curl -sd token.abc x.com` is
   `curl -s<arg> <arg> x.com`, `curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`), `--`
   ends the options, an unlisted option takes a value (`curl --some-new-option x.com` is
-  `curl --some-new-option <arg>`), a value naming a project file keeps its path
-  (`curl -T .env x.com`), and the d62ea42 outputs of the brief's list are pinned. A 300-word
+  `curl --some-new-option <arg>`), an option where a value was expected is that value and its
+  own value comes next (`curl -XPOST -d tok.abc x.com`), the word after an ssh option that may
+  hold its value is the destination (`ssh -p2222 h.com tok.abc` is `ssh -p<arg> <arg> <arg>`),
+  the leak checks ignore case (a host is saved in lower case), a value naming a project file
+  keeps its path (`curl -T .env x.com`), and the d62ea42 outputs of the brief's list are pinned. A 300-word
   curl line of `-d` pairs costs one look-up a value, ssh's remote command none; each tool's
   table holds option characters and names only.
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`

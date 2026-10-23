@@ -231,9 +231,13 @@ even a secret packed into a web address. So we keep almost nothing:
    option the list does not hold counts as taking a value. A cluster (`-fsSL`)
    is judged by its last letter, so `curl -sd token.abc x.com` is saved as
    `curl -s<arg> <arg> x.com`, and a value stuck on its option counts as a
-   cluster (`curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`). `--` takes
-   no value and ends the options. Every word after ssh's destination is its
-   remote command and is `<arg>`. The trade (owner 2026-10-23): history shows
+   cluster (`curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`, owner
+   2026-10-23). An option where a value was expected is saved as that value and
+   its own value comes next (`curl -XPOST -d tok.abc x.com` is
+   `curl -X<arg> <arg> <arg> x.com`). `--` takes no value and ends the options.
+   Every word after ssh's destination is its remote command and is `<arg>`; the
+   word after an ssh option that may already hold its value (`-p2222`) may be
+   the destination, so `ssh -p2222 h.com cmd` is `ssh -p<arg> <arg> <arg>`. The trade (owner 2026-10-23): history shows
    fewer websites but never a secret. A real website after an option the list
    does not hold is `<arg>` (`curl --some-new-option x.com` is
    `curl --some-new-option <arg>`), and so is a website given as an option's

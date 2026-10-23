@@ -76,7 +76,8 @@ def test_command_for_storage_respects_toggle(
 
 @pytest.mark.parametrize("raw", LEAKY_COMMANDS)
 def test_no_secret_survives_cleaning(project_root: Path, raw: str) -> None:
-    assert SECRET not in clean_command(raw, project_root)
+    # a web address's host is saved in lower case
+    assert SECRET.lower() not in clean_command(raw, project_root).lower()
 
 
 @pytest.mark.parametrize(
@@ -146,6 +147,12 @@ def test_an_option_value_is_never_a_website(project_root: Path, raw: str, expect
         # a value glued onto its option is a cluster too (owner 2026-10-23)
         ("curl -XPOST https://api.example.com", "curl -X<arg> <arg>"),
         ("ssh -p2222 h.com", "ssh -p<arg> <arg>"),
+        # an option where a value was expected is that value, and its own value comes next; the
+        # word after a glued value may be ssh's destination, so what follows is its command
+        ("curl -XPOST -d tok.abc x.com", "curl -X<arg> <arg> <arg> x.com"),
+        ("ssh -p2222 h.com tok.abc", "ssh -p<arg> <arg> <arg>"),
+        ("ssh -p22 -i key h.com tok.abc", "ssh -p<arg> <arg> <arg> h.com <arg>"),
+        ("ssh -qi key h.com cat tok.abc", "ssh -q<arg> <arg> h.com <arg> <arg>"),
         ("curl -- -d x.com", "curl -- -d x.com"),
         ("curl -d -- x.com", "curl -d <arg> x.com"),
         ("ssh -T git@github.com", "ssh -T github.com"),

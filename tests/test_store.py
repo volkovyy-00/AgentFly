@@ -502,7 +502,7 @@ def _shell_record(tmp_path: Path, command: str) -> StepRecord:
 
 @pytest.mark.parametrize("raw", LEAKY_COMMANDS)
 def test_builder_keeps_no_secret_in_any_stored_field(tmp_path: Path, raw: str) -> None:
-    assert SECRET not in repr(_shell_record(tmp_path, raw))
+    assert SECRET.lower() not in repr(_shell_record(tmp_path, raw)).lower()  # hosts: lower case
 
 
 @pytest.mark.parametrize(
