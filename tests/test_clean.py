@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 
 import agentfly.recorder.clean as clean_mod
 from agentfly.recorder.clean import clean_command, command_for_storage
+from tests.helpers import wallclock
 from tests.leak_cases import LEAKY_COMMANDS, NEWLY_SAVED, OBSERVED_VALUE_LEAKS, SECRET
 
 
@@ -410,3 +412,13 @@ def test_a_long_line_of_parentheses_wrappers_and_parts_reads_each_word_once(
         assert "tok.abc" not in saved and "x.com" in saved
         assert len(calls) <= words
         assert disk.left >= clean_mod.LOOKUP_STEPS - words
+
+
+@wallclock
+@pytest.mark.parametrize("filler", [",", "."])
+def test_an_unclosed_brace_list_is_read_in_one_pass(project_root: Path, filler: str) -> None:
+    # C1-fix1: a brace word of 64,000 characters with no closing `}`; read with backtracking it
+    # took about 14 s, read in one pass it takes a few ms
+    started: float = time.perf_counter()
+    assert clean_command("echo {" + filler * 64_000, project_root) == "echo <arg>"
+    assert time.perf_counter() - started < 0.25

@@ -172,8 +172,10 @@ _DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
 _REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)")
 # In a word's unquoted text, what may make it no word or several: a `$` (a variable may be empty
 # or hold spaces), a glob character (it may match a file named `-d`), a `<` or `>` after the
-# word's start (the shell cuts the word there) and a brace list or range (`{,}` is no word).
-_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\{[^{}]*(?:,|\.\.)[^{}]*\}")
+# word's start (the shell cuts the word there) and a brace list or range (`{,}` is no word). The
+# brace part never steps back (possessive, and its first run stops at the first `,` or `..`), so
+# an unclosed `{,,,…` is read in one pass.
+_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
