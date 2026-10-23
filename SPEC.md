@@ -1138,7 +1138,12 @@ Other measures:
   (`sudo`, `env`, `timeout`, `time`, `xargs`), in a subshell (`(curl …)`), or
   after a single `&`, `|&` or a new line it is cleaned as any other word, so a
   value holding `://` keeps its website name and ssh's command its host-shaped
-  words.
+  words. The words are the shell's words before expansion and redirection, so a
+  web tool's reading can be a word out of step and keep a value as a website: a
+  redirection between an option and its value (`curl -d >out tok.abc x.com`), a
+  word that starts with `$` and may expand to no word or several
+  (`curl -d $EMPTY tok.abc x.com`), and a separator after a backslash
+  (`curl -d a\;tok.abc x.com` is cut at the `;`).
 
 ---
 
