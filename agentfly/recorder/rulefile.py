@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from itertools import accumulate, product
+from itertools import accumulate, chain, product
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -612,12 +612,13 @@ class _Glob(NamedTuple):
 
 
 def _first_allowed(charset: str) -> str:
-    """A character this `fnmatch` class allows (SAMPLE_LETTER first), or "" if none printable.
+    """A character this `fnmatch` class allows (SAMPLE_LETTER first, then a printable one), or ""
+    if it allows no ASCII character.
 
     Its own members are tried first, so a plain class answers at once and a negated one costs about
     as many compares as it has members: this runs for every class of a rules file at load."""
-    tried: dict[str, None] = dict.fromkeys((SAMPLE_LETTER, *charset[1:-1], *_PRINTABLE))
-    return next((c for c in tried if c in _PRINTABLE and fnmatch.fnmatchcase(c, charset)), "")
+    tried = chain(SAMPLE_LETTER, charset[1:-1], _PRINTABLE, _ASCII)
+    return next((c for c in tried if fnmatch.fnmatchcase(c, charset)), "")
 
 
 def _class_text(chars: Iterable[str], negated: bool) -> str:
@@ -843,7 +844,7 @@ def _samples(name: str) -> tuple[str, ...]:
 class _Searched(NamedTuple):
     """A clause as a search reads it, worked out once (it depends on the clause only).
 
-    `names`: per `path` pattern, its file-name pattern (None: any name, a last `**`), and
+    `names`: per `path` pattern, its file-name pattern (None: taken as any name), and
     `elements` the same as tokens (`_name_tokens`, each run of `*` made one). `samples`: (sample,
     index into `names`) for A, those no name-only exception matches. `excepts`: the name-only
     exceptions. `letters`: the characters B tries for a `?` or a class. `rows` and `set_rows`:
@@ -861,16 +862,20 @@ class _Searched(NamedTuple):
 
 def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _Searched:
     names: list[str | None] = []
-    for pattern in path:
+    found: list[tuple[str, int]] = []
+    for index, pattern in enumerate(path):
         last: str = pattern.text if pattern.name_only else (pattern.parts or ("**",))[-1]
-        names.append(None if last == "**" else last)  # `~/.` has no parts: taken as any name
+        # Taken as any name (toward marking): a last `**`; `~/.`, which has no parts; a name past
+        # ASCII, where ripgrep's `?` is one byte (`secr??t` lists `secrét`); and a name with no
+        # sample, a class that allows no ASCII character.
+        made: tuple[str, ...] = _samples(last) if last != "**" and last.isascii() else ()
+        names.append(last if made else None)
+        found += [(sample, index) for sample in made]
     elements = tuple(None if name is None else _one_star(_name_tokens(name)) for name in names)
     excepts: tuple[str, ...] = tuple(p.text for p in path_except if p.name_only)
     samples: list[tuple[str, int]] = [
         (sample, index)
-        for index, name in enumerate(names)
-        if name is not None
-        for sample in _samples(name)
+        for sample, index in found
         if not any(fnmatch.fnmatchcase(sample, e) for e in excepts)
     ]
     shown: list[tuple[tuple[str, str], ...]] = [e for e in elements if e is not None]

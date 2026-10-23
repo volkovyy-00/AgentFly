@@ -361,6 +361,36 @@ path = "names"
     assert decide(grep(glob), fresh(), rules)[1] == "names"
 
 
+@pytest.mark.parametrize(
+    ("pattern", "glob"),
+    [
+        *[(p, g) for p in ("secr[éè]t", "secrét") for g in ("*", "**", "**/*", "sec*", "secr??t")],
+        *[
+            (p, g)
+            for p in ("sec[\\u007f]", "sec[\\u0001-\\u001f]", "sec[! -~]")
+            for g in ("*", "**", "**/*", "sec*", "sec?")
+        ],
+    ],
+)
+def test_a_name_past_the_printable_characters_is_read_by_a_wide_glob(
+    pattern: str, glob: str
+) -> None:
+    # ripgrep 14 lists `secrét` for `*` and `secr??t` (a `?` is one byte), `sec\x7f` and
+    # `sec\x01` for `*` and `sec*`; a pattern's class with no printable member gave A no sample
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    line = f'names = ["{pattern}"]\n'  # not through `re.sub`: the TOML holds `\\u` escapes
+    rules = ruleset_of(rulefile.default_text().replace("[lists]\n", "[lists]\n" + line, 1) + rule)
+    assert decide(grep(glob), fresh(), rules)[1] == "names"
+
+
 def test_loading_a_class_costs_about_its_own_length(monkeypatch: pytest.MonkeyPatch) -> None:
     # Clauses are built before the file's work is judged, so a class must not cost a scan of every
     # character (96 compares) at load: `[~]` answers with its own member.

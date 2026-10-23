@@ -464,6 +464,10 @@ its own by its file name, its folders taken as able to sit anywhere under
   one by one only to hold them against `path_except`, and when there are too many
   of them `path_except` is not used (toward marking).
 
+A `path` pattern whose name has a character past ASCII (ripgrep's `?` matches one
+byte of it, so `secr??t` reads `secrét`), or a class that allows no ASCII
+character, has no sample to judge by: every glob reads it (toward marking).
+
 A glob with a leading `!` reads every file it does not name, so it counts as
 reading a secret unless it leaves out every name (`!*`). So `*.py`, `*.json`,
 `test_*.py` and `.env.example` read no secret, and `!*.py` reads one. A `path`
