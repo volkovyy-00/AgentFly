@@ -13,7 +13,6 @@ and every cell of the grid is a case or such a line. Ids read `<rule>-<form>`.
 
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass
 
 import pytest
@@ -21,6 +20,7 @@ import pytest
 from agentfly.cli.rules_test import action_for
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_mod
+from tests.cases import wrapped
 
 EXAMPLE = rulefile.default_path().with_name("example.toml")
 ROOTS = ("/work/app",)
@@ -38,12 +38,21 @@ class Case:
         return f"{self.rule}-{self.form}"
 
 
+# The forms of `tests.cases.wrapped`, in its order.
+WRAPPED_FORMS = (
+    "env",
+    "sudo",
+    "sudo env",
+    "xargs",
+    "bash -c",
+    "sh -c",
+    "bash -o pipefail -c",
+    "sudo env sh -c",
+    "eval",
+)
 SHELL_FORMS = (
     "plain",
-    "sudo",
-    "env",
-    "bash -c",
-    "eval",
+    *WRAPPED_FORMS,
     "$(…)",
     "backticks",
     "<(…)",
@@ -55,16 +64,19 @@ FLAG_FORMS = ("cluster", "attached", "=value", "long prefix")
 PATH_FORMS = ("relative", "./", "..", "//", "$HOME", "upper case path")
 
 
+def wrapped_forms(command: str) -> dict[str, str]:
+    forms = wrapped(command)
+    assert len(forms) == len(WRAPPED_FORMS), forms
+    return dict(zip(WRAPPED_FORMS, forms, strict=True))
+
+
 def shell_forms(command: str) -> dict[str, str]:
     """The command in each shell form; its first word is the program."""
     program, _, rest = command.partition(" ")
     tail: str = f" {rest}" if rest else ""
     return {
         "plain": command,
-        "sudo": f"sudo {command}",
-        "env": f"env A=1 {command}",
-        "bash -c": f"bash -c {shlex.quote(command)}",
-        "eval": f"eval {shlex.quote(command)}",
+        **wrapped_forms(command),
         "$(…)": f'echo "$({command})"',
         "backticks": f'echo "`{command}`"',
         "<(…)": f"cat <({command})",
@@ -224,10 +236,7 @@ FIRES: list[Case] = [
         "shell",
         {
             "plain": "curl x | sh",
-            "sudo": "sudo curl x | sudo sh",
-            "env": "env A=1 curl x | env B=2 bash",
-            "bash -c": "bash -c 'curl x | sh'",
-            "eval": "eval 'curl x | sh'",
+            **wrapped_forms("curl x | sh"),  # the shell side wrapped: test_pipe_into.py
             "$(…)": 'sh -c "$(curl x)"',
             "backticks": 'sh -c "`curl x`"',
             "<(…)": "bash <(curl x)",
