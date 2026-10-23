@@ -8,7 +8,7 @@ import pytest
 
 import agentfly.recorder.clean as clean_mod
 from agentfly.recorder.clean import clean_command, command_for_storage
-from tests.leak_cases import LEAKY_COMMANDS, SECRET
+from tests.leak_cases import LEAKY_COMMANDS, OBSERVED_VALUE_LEAKS, SECRET
 
 
 @pytest.fixture()
@@ -120,21 +120,7 @@ def test_long_option_names_must_look_like_names(project_root: Path) -> None:
     assert clean_command(f"tool --{long_name}=x", project_root) == "tool <arg>"
 
 
-_JWT: str = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abcDEF"
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        # C1: what was saved on d62ea42, an option's value or ssh's remote command as a website
-        ("curl -d token.abc host.com", "curl -d <arg> host.com"),
-        (f"curl -d {_JWT} api.example.com", "curl -d <arg> api.example.com"),
-        (f"wget --post-data {_JWT} x.com", "wget --post-data <arg> x.com"),
-        ("curl x.com -d sk_live.abc123", "curl x.com -d <arg>"),
-        (f"curl -d https://{_JWT} x.com", "curl -d <arg> x.com"),
-        ("ssh h.com cat tok.abc", "ssh h.com <arg> <arg>"),
-    ],
-)
+@pytest.mark.parametrize(("raw", "expected"), [row[:2] for row in OBSERVED_VALUE_LEAKS])
 def test_an_option_value_is_never_a_website(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
 
@@ -190,7 +176,6 @@ def test_values_cost_one_lookup_each_and_ssh_remote_words_none(project_root: Pat
 
 
 def test_no_value_tables_hold_option_names() -> None:
-    assert set(clean_mod._NO_VALUE) == set(clean_mod._WEB_TOOLS)
     for tool, (short, long) in clean_mod._NO_VALUE.items():
         assert short and all(c.isprintable() and c not in " -=" for c in short), tool
         assert len(set(short)) == len(short), tool

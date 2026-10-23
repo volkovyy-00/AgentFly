@@ -19,8 +19,6 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
     "off",
 }
 
-_WEB_TOOLS: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
-
 # C1: per web tool, the short option letters and the long option names that take no value, each
 # from the tool's own manual: curl 8.7.1 (`curl --help all`), GNU Wget 1.25.0 (the gnu.org
 # manual), OpenSSH 9.9 (`man ssh`, `man scp`), rsync 3.5.1 (the samba.org manual) and OpenBSD
@@ -92,6 +90,7 @@ _NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
         ),
     ),
 }
+_WEB_TOOLS: frozenset[str] = frozenset(_NO_VALUE)
 
 # A long option name is kept only if it looks like a name; anything else may be a value.
 _LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
@@ -329,14 +328,19 @@ def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
         elif value_next:
             out.append(disk.project_relative(word) or "<arg>")
             value_next = False
-        elif options_ended or not word.startswith("-") or word == "-":
-            out.append(_classify_word(word, disk, web_tool=True))
-            remote = tool == "ssh"  # the first word that is no option is ssh's destination
         else:
             out.append(_classify_word(word, disk, web_tool=True))
-            options_ended = word == "--"
-            value_next = not options_ended and _takes_value(word, tool)
+            if options_ended or not _is_option(word):
+                remote = tool == "ssh"  # the first word that is no option is ssh's destination
+            else:
+                options_ended = word == "--"
+                value_next = not options_ended and _takes_value(word, tool)
     return out
+
+
+def _is_option(word: str) -> bool:
+    """`-x`, `-xyz`, `--name`, `--name=v` and `--`; a lone `-` is a word (standard input)."""
+    return word.startswith("-") and word != "-"
 
 
 def _takes_value(option: str, tool: str) -> bool:
@@ -357,7 +361,7 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
         if not _LONG_OPTION_NAME.fullmatch(name):
             return "<arg>"
         return f"--{name}=<arg>" if "=" in word else word
-    if word.startswith("-") and word != "-":
+    if _is_option(word):
         # -pX and -la look alike, so a cluster keeps only its first letter.
         return word if len(word) == 2 else f"{word[:2]}<arg>"
 

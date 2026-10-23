@@ -3,6 +3,23 @@
 from __future__ import annotations
 
 SECRET: str = "SEKRET9"
+JWT: str = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abcDEF"
+
+# C1: what d62ea42 saved with an option's value or ssh's remote command as a website, as
+# (command, what is saved now, the kept part that must go, the step's hosts).
+OBSERVED_VALUE_LEAKS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("curl -d token.abc host.com", "curl -d <arg> host.com", "token.abc", ("host.com",)),
+    (
+        f"curl -d {JWT} api.example.com",
+        "curl -d <arg> api.example.com",
+        "abcDEF",
+        ("api.example.com",),
+    ),
+    (f"wget --post-data {JWT} x.com", "wget --post-data <arg> x.com", "abcDEF", ("x.com",)),
+    ("curl x.com -d sk_live.abc123", "curl x.com -d <arg>", "sk_live", ("x.com",)),
+    (f"curl -d https://{JWT} x.com", "curl -d <arg> x.com", "abcDEF", ("x.com",)),
+    ("ssh h.com cat tok.abc", "ssh h.com <arg> <arg>", "tok.abc", ("h.com",)),
+)
 
 LEAKY_COMMANDS: tuple[str, ...] = (
     # attached short options
