@@ -314,7 +314,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (`.e[!A-Z]v` marks) and one past the printable characters (`[ą-ż]`) is any character, a `!`
   glob marks unless it leaves out every name (`!*`, `!**`), and the
   count covers the tries listed for the exceptions; a `\` inside a class is a member
-  (`id[a\-z]rsa` marks), `[-!]` stays a plain class, and B tries what a pattern's class allows.
+  (`id[a\-z]rsa` marks), `[-!]` stays a plain class, a chained range (`[a-c-e]`) is any
+  character, B tries a pattern's literal `!` and `]` and, for a pattern with a class, every ASCII
+  character, and loading a class costs about its own length.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.

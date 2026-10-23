@@ -563,7 +563,7 @@ MAX_GLOB_CLASSES: int = 32  # each costs about 100 compares to read (`_either_ca
 MAX_SEARCH_WORK: int = 10_000
 MAX_EXCEPT_WORK: int = 2_000  # B's tries held one by one against the exceptions, at most
 _SET_WORK: int = 96  # what finding the characters a class allows costs on top of the letters
-_LETTER_SYNTAX: frozenset[str] = frozenset("*?[]!/")
+_ASCII: str = "".join(chr(code) for code in range(0x01, 0x80))
 _PRINTABLE: str = SAMPLE_LETTER + "".join(chr(code) for code in range(0x20, 0x7F))
 
 
@@ -612,8 +612,12 @@ class _Glob(NamedTuple):
 
 
 def _first_allowed(charset: str) -> str:
-    """A character this `fnmatch` class allows (SAMPLE_LETTER first), or "" if none printable."""
-    return next((c for c in _PRINTABLE if fnmatch.fnmatchcase(c, charset)), "")
+    """A character this `fnmatch` class allows (SAMPLE_LETTER first), or "" if none printable.
+
+    Its own members are tried first, so a plain class answers at once and a negated one costs about
+    as many compares as it has members: this runs for every class of a rules file at load."""
+    tried: dict[str, None] = dict.fromkeys((SAMPLE_LETTER, *charset[1:-1], *_PRINTABLE))
+    return next((c for c in tried if c in _PRINTABLE and fnmatch.fnmatchcase(c, charset)), "")
 
 
 def _class_text(chars: Iterable[str], negated: bool) -> str:
@@ -627,14 +631,19 @@ def _class_text(chars: Iterable[str], negated: bool) -> str:
     return f"[{'!' if negated else ''}{''.join(order)}]"
 
 
+# `a-c-e`: ripgrep carries the range on to `e`, `fnmatch` reads `a-c`, `-`, `e`.
+_CHAINED_RANGE = re.compile(r".-.-.", re.DOTALL)
+
+
 def _either_case(body: str, negated: bool) -> tuple[str, str]:
     """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
     as allowed when the class allows it in either case, so folding only ever lets more through
     (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Only printable characters are listed, so
-    a class with a member past them (`[ą-ż]`, `[é]`), or one that allows none of them, is read as
-    any one character (toward marking)."""
+    a class with a member past them (`[ą-ż]`, `[é]`), one that allows none of them, or one with a
+    chained range (`[a-c-e]`, which ripgrep and `fnmatch` read apart) is read as any one character
+    (toward marking)."""
     held = f"[{body}]"
-    if not body.isascii():
+    if not body.isascii() or _CHAINED_RANGE.search(body):
         return "one", ""
     seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
     folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
@@ -865,17 +874,12 @@ def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _S
         if not any(fnmatch.fnmatchcase(sample, e) for e in excepts)
     ]
     shown: list[tuple[tuple[str, str], ...]] = [e for e in elements if e is not None]
-    # B tries the characters the patterns name, and every printable one a pattern's class allows
-    # (`key[0-9].pem` against a glob `key[-1-8].pem` must try `5`).
-    named: set[str] = set("".join(p.text for p in path)) - _LETTER_SYNTAX
-    named |= {
-        c
-        for e in shown
-        for kind, text in e
-        if kind == "set"
-        for c in _PRINTABLE
-        if fnmatch.fnmatchcase(c, text)
-    }
+    # B tries the characters the patterns' names hold. A pattern with a class may want any other
+    # character there (`key[0-9].pem` against a glob `key[-1-8].pem` must try `5`), so its clause
+    # tries every ASCII character: no class is read at load, and the tries are counted.
+    named: set[str] = {text for e in shown for kind, text in e if kind == "lit"}
+    if any(kind == "set" for e in shown for kind, _ in e):
+        named |= set(_ASCII)
     letters: str = "".join(sorted(named))
     return _Searched(
         path,

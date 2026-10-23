@@ -336,6 +336,54 @@ path = "names"
     assert decide(grep(glob), fresh(), rules)[1] == "names"
 
 
+@pytest.mark.parametrize("glob", [".en[u-u-w]", "credential[a-c-t]", "*.k[a-d-f]y"])
+def test_a_chained_range_is_any_character(glob: str) -> None:
+    # ripgrep reads `[a-c-e]` as a..e, `fnmatch` as a-c, `-`, `e` (ripgrep 14.1.1, by hand)
+    assert curl_after(grep(glob)) == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("pattern", "glob"),
+    [("a!*b", "a?c*b"), ("x]*y", "x?z*y"), ("sec[\\u0001-\\u001f]", "sec[\x05a]")],
+)
+def test_b_tries_a_patterns_literal_and_control_characters(pattern: str, glob: str) -> None:
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    line = f'names = ["{pattern}"]\n'  # not through `re.sub`: the TOML holds `\\u` escapes
+    rules = ruleset_of(rulefile.default_text().replace("[lists]\n", "[lists]\n" + line, 1) + rule)
+    assert decide(grep(glob), fresh(), rules)[1] == "names"
+
+
+def test_loading_a_class_costs_about_its_own_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Clauses are built before the file's work is judged, so a class must not cost a scan of every
+    # character (96 compares) at load: `[~]` answers with its own member.
+    rule = '\n[[rule]]\nid = "m"\nkind = "match"\nseverity = "highlight"\nmessage = "m"\n'
+    rule += 'event = ["read"]\npath = "many"\n'
+    calls: list[str] = []
+    real = rulefile.fnmatch.fnmatchcase
+
+    def counting(name: str, pattern: str) -> bool:
+        calls.append(pattern)
+        return real(name, pattern)
+
+    def compares(patterns: str) -> int:
+        calls.clear()
+        rulefile.parse(default_with(f"many = [{patterns}]\n", rule))
+        return len(calls)
+
+    monkeypatch.setattr(rulefile.fnmatch, "fnmatchcase", counting)
+    plain = compares(", ".join(f'"a{i}b"' for i in range(150)))
+    classes = compares(", ".join(f'"[~]{i}[!x]"' for i in range(150)))
+    assert classes - plain <= 150 * 2 * 4  # two classes, two samples, a few compares each
+
+
 def test_a_class_with_no_character_to_list_falls_toward_reading() -> None:
     # `[é]` allows no letter of R1's patterns and no printable character: no name to list
     assert curl_after(grep(".env.[é]")) == "blocked"

@@ -445,7 +445,8 @@ member inside one, a leading `!` that
 excludes, trailing blanks dropped unless escaped, as in a gitignore line),
 case-folded like a rule path (a class allows a letter when it allows it in either
 case, so `.e[!A-Z]v` still reads `.env`, and a class with a member past the
-printable ASCII characters is any one character), and each brace alternative is judged on
+printable ASCII characters, or with a chained range such as `[a-c-e]`, is any one
+character), and each brace alternative is judged on
 its own by its file name, its folders taken as able to sit anywhere under
 `file_path` (anywhere at all with none). An alternative matches a condition's
 `path` when either:
@@ -454,8 +455,8 @@ its own by its file name, its folders taken as able to sit anywhere under
   `.env`, `.env.x`, `x.pem`, `id_rsa`, `credentials`, …) that `path_except` does
   not match, so `*`, `**/*`, `.env*`, `?env` and `.e[n]v` read `.env`; or
 - its own name, its `*` read as that letter and each `?` or class tried with each
-  character of the condition's `path` patterns it allows (and each printable one a
-  class in those patterns allows), is matched by `path` and
+  character the names of the condition's `path` patterns hold (every ASCII character
+  when one of them has a class), is matched by `path` and
   not by `path_except`, so `.env.prod*`, `credentials.*`, `.en?.local` and
   `credential?.py` read a secret name. Whether some such name is matched by `path`
   is worked out position by position, not name by name, so a glob with many `?`
