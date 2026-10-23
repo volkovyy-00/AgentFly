@@ -175,7 +175,7 @@ def test_every_problem_is_printed_not_only_the_first(
     text = (
         with_rule(GOOD_RULE)
         .replace('severity = "warn"', 'severity = "fatal"')
-        .replace('"git push"', '"git push --f*"')
+        .replace('"git push"', '"git push -f*"')  # a `*` only ends a long flag (V5c)
     )
     _, _, err = run(capsys, "check", str(rules_file(text)))
     assert "severity" in err and "wildcard" in err
