@@ -147,6 +147,13 @@ _WORD_PIECE = re.compile(
 )
 # In double quotes a backslash goes only before `"` and before another backslash.
 _DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
+# C1-fix1: a redirection at a word's start as written (`>f`, `2>&1`, `&>f`, `<f`, `{fd}>f`); when
+# it is the whole word (`>`, `2>`, `{fd}>`) the next word is its target.
+_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)")
+# In a word's unquoted text, what may make it no word or several: a `$` (a variable may be empty
+# or hold spaces), a glob character (it may match a file named `-d`), a `<` or `>` after the
+# word's start (the shell cuts the word there) and a brace list or range (`{,}` is no word).
+_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\{[^{}]*(?:,|\.\.)[^{}]*\}")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -269,17 +276,53 @@ def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
 def _shell_words(segment: str) -> list[str]:
     """`shlex.split(segment)`, the same words. A segment that is not whole words (an unclosed
     quote, a backslash at the end) goes to `shlex.split`, which raises `ValueError` as before."""
+    return [word for _, word in _raw_words(segment)]
+
+
+def _raw_words(segment: str) -> list[tuple[str, str]]:
+    """`_shell_words`, each word with its text as written: the quoting says what the shell does
+    with it (a redirection, a `$`)."""
     if not _has_quoting(segment):
-        return _PLAIN_WORD.findall(segment)
-    words: list[str] = []
+        return [(word, word) for word in _PLAIN_WORD.findall(segment)]
+    pairs: list[tuple[str, str]] = []
     at: int = len(segment) - len(segment.lstrip(_SHELL_SPACE))
     while at < len(segment):
         found = _SHELL_WORD.match(segment, at)
         if found is None:
-            return shlex.split(segment)
-        words.append(_unquote(found.group(1)))
+            return [(word, word) for word in shlex.split(segment)]
+        pairs.append((found.group(1), _unquote(found.group(1))))
         at = found.end()
-    return words
+    return pairs
+
+
+def _out_of_step(raw: str) -> bool:
+    """Whether a word as written may stand for no word or several, so that the words after it
+    may not be the ones they look like (C1-fix1): an unquoted `$`, glob character, brace list or
+    `<`/`>` after its start, or a double-quoted `"$@"` or `"${X[@]}"`. A quoted `"$X"` is one
+    word."""
+    if not _has_quoting(raw):
+        return _LOOSE_TEXT.search(raw) is not None
+    plain: list[str] = []  # the unquoted text, each quoted or escaped piece one `_`
+    for piece in _WORD_PIECE.finditer(raw):
+        if piece.lastindex == 4:
+            plain.append(piece.group(4))
+            continue
+        quoted: str = piece.group(piece.lastindex or 0)
+        if piece.lastindex == 3 and (
+            "$@" in quoted or "${@" in quoted or ("[@]" in quoted and "$" in quoted)
+        ):
+            return True
+        plain.append("_")
+    return _LOOSE_TEXT.search("".join(plain)) is not None
+
+
+def _without_closing(segment: str) -> str:
+    """The segment without the `)` that close it, glued to its last word or alone (`x.com)`,
+    `x.com ) )`); an escaped `\\)` stays."""
+    kept: str = segment.rstrip(_SHELL_SPACE + ")")
+    if (len(kept) - len(kept.rstrip("\\"))) % 2:
+        kept = segment[: len(kept) + 1]  # the backslash keeps the character after it
+    return kept
 
 
 def cleaned_words(command: str) -> list[str]:
@@ -309,6 +352,7 @@ def _unquote(word: str) -> str:
 
 
 def _clean_segment(segment: str, disk: Lookups) -> str:
+    segment = _without_closing(segment)
     if not segment:
         return ""
     try:
