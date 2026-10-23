@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import agentfly.recorder.normalize as normalize_module
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_mod
 from agentfly.recorder.normalize import MAX_DEPTH
@@ -240,3 +241,13 @@ def test_pipe_into_costs_no_work_units() -> None:
 
 def test_the_walk_price_is_pinned() -> None:
     assert rulefile.LINKS_PER_STEP == 1  # measured: see the comment above it
+
+
+def test_past_max_links_a_lines_links_count_as_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rules-engine lens F6: nested groups link a command once for each pipe around it. Past
+    # MAX_LINKS the links are dropped and count as unknown (toward firing), so the parse and the
+    # walk stay within the client's wait.
+    monkeypatch.setattr(normalize_module, "MAX_LINKS", 3)
+    assert not normalize_module.normalize.__wrapped__("curl x | grep y").links_unknown
+    parsed = normalize_module.normalize.__wrapped__("curl x | grep y | sort | uniq")
+    assert parsed.links_unknown and parsed.links == ()

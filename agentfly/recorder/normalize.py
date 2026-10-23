@@ -16,7 +16,7 @@ No I/O, no shell is ever run, and `normalize` never raises.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -26,6 +26,9 @@ SUB_EMPTY: str = "@sub@"
 
 MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
+# Past this many links a line's links count as unknown (toward firing): groups nested in groups
+# link a command once for each pipe around them, and the parse must stay within the client's wait.
+MAX_LINKS: int = 20_000
 
 SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 # A quoted heredoc is literal data unless one of these reads it (D10, narrowed 2026-10-16).
@@ -567,9 +570,17 @@ class _Out:
         would make them quadratic)."""
         if self.links_unknown:
             return
-        for index in range(start, len(self.commands)):
-            self.links.append((hub, index))
-            self.fed.add(index)
+        self.link((hub, index) for index in range(start, len(self.commands)))
+        self.fed.update(range(start, len(self.commands)))
+
+    def link(self, pairs: Iterable[tuple[int, int]]) -> None:
+        """Keep these links; past MAX_LINKS drop them all and count them as unknown."""
+        if self.links_unknown:
+            return
+        self.links.extend(pairs)
+        if len(self.links) > MAX_LINKS:
+            self.links_unknown = True
+            self.links.clear()
 
 
 class _Scanner:
@@ -616,8 +627,7 @@ class _Scanner:
             if frame.hub is not None:
                 out.feed(frame.hub, frame.start)
             hub: int = out.hub()
-            if not out.links_unknown:
-                out.links += [(index, hub) for index in range(frame.start, len(out.commands))]
+            out.link((index, hub) for index in range(frame.start, len(out.commands)))
             frame.start, frame.hub = len(out.commands), hub
 
         def open_group(kind: str) -> None:
@@ -751,10 +761,10 @@ class _Scanner:
         for kind, first, last in cmd.subs:
             for inner in range(first, last):
                 if kind == "out":  # `>(…)` reads what the command writes
-                    out.links.append((index, inner))
+                    out.link(((index, inner),))
                     out.fed.add(inner)
                 else:
-                    out.links.append((inner, index))
+                    out.link(((inner, index),))
         names: list[str] = [base_name(w) for w in words]
         reader: bool = any(is_reader(name) for name in names)
         if herestrings and reader:
@@ -917,7 +927,7 @@ class _Scanner:
             if any(name in SHELLS for name in names):
                 self.sub_scan(text)
         if doc.index >= 0:
-            self.out.links += [(i, doc.index) for first, last in inner for i in range(first, last)]
+            self.out.link((i, doc.index) for first, last in inner for i in range(first, last))
 
     def expansions(self, body: str) -> list[tuple[int, int]]:
         """Parse the substitutions of an unquoted heredoc body, as inside double quotes; return

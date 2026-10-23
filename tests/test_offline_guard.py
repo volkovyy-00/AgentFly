@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import shlex
 import time
@@ -266,12 +267,22 @@ def test_past_the_word_limit_a_quoted_perl_text_counts_as_code() -> None:
     assert guard.offline_answer(f"echo x.pl {words} 'b' 'c'")[0] == {"permission": "allow"}
 
 
-def best_of(rounds: int, text: str) -> float:
-    best = float("inf")
-    for _ in range(rounds):
-        start = time.perf_counter()
-        guard.guard_reason(text)
-        best = min(best, time.perf_counter() - start)
+def fastest(texts: list[str], rounds: int) -> list[float]:
+    """The least CPU time of `rounds` checks of each text, taken in turns, with the collector off
+    (as `tests/test_normalize.py` times the parser): the other workers' load is not this process's
+    CPU time, and a busy stretch slows each size alike."""
+    best = [float("inf")] * len(texts)
+    was_on = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(rounds):
+            for index, text in enumerate(texts):
+                start = time.process_time()
+                guard.guard_reason(text)
+                best[index] = min(best[index], time.process_time() - start)
+    finally:
+        if was_on:
+            gc.enable()
     return best
 
 
@@ -294,11 +305,11 @@ def best_of(rounds: int, text: str) -> float:
     ids=lambda unit: repr(unit[:12]),
 )
 def test_the_piped_code_checks_read_big_text_in_linear_time(unit: str) -> None:
-    # Four times the text costs about four times as much (a quadratic walk: sixteen). The short
-    # text, timed in this test, is the baseline.
+    # Eight times the text costs about eight times as much (a quadratic walk: sixty-four). CPU
+    # time, measured on a loaded machine: 2.2 to 9.5 times; the limit is twice the linear ratio.
     size = 256 * 1024
-    short, long = (best_of(5, unit * (n // len(unit))) for n in (size // 4, size))
-    assert long < 7 * short, f"4 times the text took {long / short:.1f} times as long"
+    short, long = fastest([unit * (n // len(unit)) for n in (size // 8, size)], 5)
+    assert long < 16 * short, f"8 times the text took {long / short:.1f} times as long"
 
 
 def test_an_unparseable_command_is_denied_only_if_its_raw_text_names_a_tool() -> None:

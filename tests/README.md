@@ -43,7 +43,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   pipes that feed no code (`cat x | xargs grep -l pattern`) are allowed; a quoted `|` counts as a
   pipe offline but not in the recorder (`grep -E 'node|python'`; owner 2026-10-23: accepted);
   past 1,000 stages or 20,000 quoted words the text is denied; the piped-code checks read big
-  text in linear time (`@wallclock`, best of five).
+  text in linear time (CPU time, best of five, an 8x step against a 16x limit).
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -372,7 +372,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   deep or text that does not parse fire once a source matched, and stay quiet with no source;
   `host_not_in` beside it judges each source; the walk is charged to the hook (`WorkLimit`) and
   runs only when a source matched; field errors; entries are base names, case-folded; it costs no
-  units and `LINKS_PER_STEP` is pinned.
+  units and `LINKS_PER_STEP` is pinned; past `MAX_LINKS` a line's links count as unknown.
 - Example rules (`tests/test_rules_example.py`, V5c): `rules check` and `rules test` pass on
   `example.toml` and `default.toml` through the CLI; the example holds R1, the ten and
   `npm-publish-after-env` in order, its bundled rules equal the default's, it fits `MAX_WORK`,
