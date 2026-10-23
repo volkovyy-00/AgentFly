@@ -336,9 +336,12 @@ path = "names"
     assert decide(grep(glob), fresh(), rules)[1] == "names"
 
 
-@pytest.mark.parametrize("glob", [".en[u-u-w]", "credential[a-c-t]", "*.k[a-d-f]y"])
-def test_a_chained_range_is_any_character(glob: str) -> None:
-    # ripgrep reads `[a-c-e]` as a..e, `fnmatch` as a-c, `-`, `e` (ripgrep 14.1.1, by hand)
+@pytest.mark.parametrize(
+    "glob", [".en[u-u-w]", "credential[a-c-t]", "*.k[a-d-f]y", ".en[\\]", ".en[a\\]"]
+)
+def test_a_class_that_is_not_plain_is_any_character(glob: str) -> None:
+    # ripgrep reads `[a-c-e]` as a..e, `fnmatch` as a-c, `-`, `e` (ripgrep 14.1.1, by hand); a
+    # class with a `\` is unusual too (owner 2026-10-23: when unsure, it matches)
     assert curl_after(grep(glob)) == "blocked"
 
 

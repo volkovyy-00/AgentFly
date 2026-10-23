@@ -639,16 +639,20 @@ def _class_text(chars: Iterable[str], negated: bool) -> str:
 _CHAINED_RANGE = re.compile(r".-.-.", re.DOTALL)
 
 
+def _plain_class(body: str) -> bool:
+    """A class read the same by ripgrep and `fnmatch`: printable ASCII members (a range over
+    control characters has one at an end), no `\\` and no chained range (`[a-c-e]`)."""
+    return set(body) <= set(_PRINTABLE) and "\\" not in body and not _CHAINED_RANGE.search(body)
+
+
 def _either_case(body: str, negated: bool) -> tuple[str, str]:
     """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
     as allowed when the class allows it in either case, so folding only ever lets more through
-    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Only printable characters are listed, so
-    a class with a member past them (`[ą-ż]`, `[é]`, `[\x01-\x1f]`: a range over control
-    characters has one at an end), one that allows none of them, or one with a chained range
-    (`[a-c-e]`, which ripgrep and `fnmatch` read apart) is read as any one character (toward
-    marking)."""
+    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). A class that is not plain
+    (`_plain_class`: `[ą-ż]`, `[é]`, `[a\\-z]`, `[a-c-e]`) or allows no printable character is read
+    as any one character (owner 2026-10-23: when unsure, it matches)."""
     held = f"[{body}]"
-    if not set(body) <= set(_PRINTABLE) or _CHAINED_RANGE.search(body):
+    if not _plain_class(body):
         return "one", ""
     seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
     folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
@@ -680,7 +684,7 @@ def _glob_class(text: str, at: int) -> tuple[tuple[str, str], int]:
         char: str = text[i]
         if char == "]" and members:
             break
-        members.append(char)  # ripgrep reads `\\` here as a member (`[a\\-z]` holds `_`)
+        members.append(char)  # ripgrep reads `\\` here as a member: not plain
         i += 1
     body: str = "".join(members)
     if "]" in body[1:] or body.startswith("!"):

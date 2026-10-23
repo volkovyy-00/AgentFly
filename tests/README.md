@@ -314,8 +314,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (`.e[!A-Z]v` marks) and one past the printable characters (`[ą-ż]`) is any character, a `!`
   glob marks unless it leaves out every name (`!*`, `!**`), and the
   count covers the tries listed for the exceptions; a `\` inside a class is a member
-  (`id[a\-z]rsa` marks), `[-!]` stays a plain class, a chained range (`[a-c-e]`) is any
-  character, B tries a pattern's literal `!` and `]` and, for a pattern with a class, every ASCII
+  (`id[a\-z]rsa` marks), `[-!]` stays a plain class, a class with a `\` or a chained range
+  (`[a-c-e]`) is any character, B tries a pattern's literal `!` and `]` and, for a pattern with a class, every ASCII
   character, and loading a class costs about its own length; a rule name past ASCII
   (`secrét`, read by `secr??t`) or with a class that allows no ASCII character is read by every
   glob, and a class of control characters (`sec[\u007f]`) is still judged by its sample, a
