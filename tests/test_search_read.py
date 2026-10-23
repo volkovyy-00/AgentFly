@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 import agentfly.recorder.app as app_module
+from agentfly import hook_client
 from agentfly.recorder import rulefile
 from agentfly.recorder.memory import memory_steps
 from agentfly.recorder.rules import RuleSet, Session, decide, mark
@@ -106,16 +107,25 @@ def test_a_glob_that_names_no_secret_does_not_mark(glob: str, mode: Any) -> None
     assert curl_after(grep(glob, "/w", mode)) == "allow"
 
 
-def test_a_folder_search_with_no_glob_reads_nothing_by_name() -> None:
+@pytest.mark.parametrize("mode", LINE_MODES)
+def test_a_folder_search_with_no_glob_reads_nothing_by_name(mode: Any) -> None:
     # SPEC section 10: it returns lines of a `.env` git does not skip, and does not mark (owner)
-    assert curl_after(grep(None, "/w")) == "allow"
+    assert curl_after(grep(None, "/w", mode)) == "allow"
 
 
 @pytest.mark.parametrize("mode", NAMES_MODES)
+@pytest.mark.parametrize("file_path", ["/w", "/w/.env", "/w/repo/secret.key", None])
 @pytest.mark.parametrize("glob", [None, *MARKS])
-def test_a_names_only_search_never_marks(glob: Any, mode: str) -> None:
-    assert curl_after(grep(glob, "/w", mode)) == "allow"
-    assert curl_after(grep(glob, "/w/.env", mode)) == "allow"
+def test_a_names_only_search_never_marks(glob: Any, file_path: Any, mode: str) -> None:
+    assert curl_after(grep(glob, file_path, mode)) == "allow"
+
+
+@pytest.mark.parametrize("mode", [7, ["x"]])
+def test_an_output_mode_the_client_sent_as_null_still_marks(mode: Any) -> None:
+    # the hook client sends an `output_mode` that is not a string as null (SPEC section 8)
+    body = hook_client.sanitize(grep(".env*", mode=mode), "preToolUse")
+    assert body["tool_input"]["output_mode"] is None
+    assert curl_after(body) == "blocked"
 
 
 def test_the_glob_shape_never_marks() -> None:
@@ -265,15 +275,30 @@ def test_more_spellings_that_reach_a_secret(glob: str) -> None:
     assert curl_after(grep(glob)) == "blocked"
 
 
-@pytest.mark.parametrize("glob", [".env ", ".env\t", "*.pem  ", ".env* \t"])
-def test_trailing_blanks_are_dropped_as_ripgrep_drops_them(glob: str) -> None:
-    # ripgrep reads a glob as a gitignore line: `.env ` is `.env` (audit, ripgrep run by hand)
+TRAILING = [".env ", ".env\t", "*.pem  ", ".env* \t", ".env\r", ".env\n", ".env\xa0"]
+TRAILING += [".env\x0b", ".env\x0c", "*.pem\n", "x.key\r", ".env\u2028", ".env\x85", ".env \u3000"]
+
+
+@pytest.mark.parametrize("glob", TRAILING)
+def test_trailing_whitespace_is_dropped_as_ripgrep_drops_it(glob: str) -> None:
+    # ripgrep 14 reads a glob as a gitignore line and drops every Unicode whitespace at its end:
+    # `.env\r` is `.env` (audit and lead, ripgrep 14.1.1 run by hand)
     assert curl_after(grep(glob)) == "blocked"
 
 
 def test_an_escaped_trailing_blank_stays() -> None:
     assert rulefile.search_glob(".env\\ ") != rulefile.search_glob(".env")
+    assert curl_after(grep(".env\\ ")) == "allow"  # it reads `.env ` with its space
     assert curl_after(grep("x.py\\ ")) == "allow"
+    assert curl_after(grep("*.py\n")) == "allow"
+    # only `\` and a space keep it: `.env\` and a line break is a dangling `\`, refused
+    assert rulefile.search_glob(".env\\\r") is None
+    assert curl_after(grep(".env\\\r")) == "blocked"
+
+
+def test_a_character_ripgrep_does_not_count_as_whitespace_stays() -> None:
+    # Python's `isspace` takes \x1c to \x1f; ripgrep keeps them (lead, ripgrep 14.1.1)
+    assert rulefile.search_glob(".env\x1c") != rulefile.search_glob(".env")
 
 
 def test_a_folder_pattern_with_no_parts_loads_and_reads_any_name_below() -> None:
@@ -513,6 +538,14 @@ def test_too_many_brace_alternatives_mark() -> None:
         "{" * (rulefile.MAX_GLOB_BRACE_DEPTH + 1) + "a" + "}" * (rulefile.MAX_GLOB_BRACE_DEPTH + 1)
     )
     assert rulefile.search_glob(deep) is None
+
+
+def test_too_many_classes_mark() -> None:
+    most = "[a]" * rulefile.MAX_GLOB_CLASSES + ".py"
+    assert rulefile.search_glob(most) is not None
+    assert curl_after(grep(most)) == "allow"
+    assert rulefile.search_glob("[a]" + most) is None
+    assert curl_after(grep("[a]" + most)) == "blocked"
 
 
 def test_alternatives_that_differ_only_in_folders_are_judged_once() -> None:

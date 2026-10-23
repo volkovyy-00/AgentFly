@@ -791,12 +791,20 @@ def _alternative(tokens: list[tuple[str, str]]) -> _Alt:
     return _Alt(kept, _name_pattern(kept), any_name, slash)
 
 
+# Unicode's White_Space characters, which ripgrep's `trim_end` drops. Python's bare `rstrip` would
+# also drop \x1c-\x1f, which ripgrep keeps.
+_WHITESPACE: str = (
+    "\t\n\x0b\x0c\r \x85\xa0\u1680"
+    + "".join(map(chr, range(0x2000, 0x200B)))
+    + "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
 def _trimmed(text: str) -> str:
-    """The glob as ripgrep reads a gitignore line: trailing spaces and tabs dropped, unless the
-    last one is escaped with `\\` (`.env ` reads `.env`)."""
-    trimmed: str = text.rstrip(" \t")
-    escapes: int = len(trimmed) - len(trimmed.rstrip("\\"))
-    return trimmed + text[len(trimmed)] if trimmed != text and escapes % 2 else trimmed
+    """The glob as ripgrep 14 reads a gitignore line: trailing whitespace dropped (`.env\\r` reads
+    `.env`), unless the glob ends in `\\` and a space; then all of it stays (`.env\\ ` reads
+    `.env `)."""
+    return text if text.endswith("\\ ") else text.rstrip(_WHITESPACE)
 
 
 @lru_cache(maxsize=64)
