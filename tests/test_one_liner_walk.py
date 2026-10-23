@@ -36,6 +36,7 @@ def old_node_one_liner(args: Iterable[str]) -> bool:
 NODE_WORDS = [
     "node", "-e", "-p", "-pe", "-r", "--eval", "--eval=x", "--print", "--print=1", "--", "app.js",
     "x.mjs", "x.ts", "x.cjs", "-C", "dev", "--input-type", "module", "-e1", "-", "x", "prod",
+    "--eval.js", "--print=x.ts",  # code and a script name at once: the script name wins
 ]  # fmt: skip
 
 
