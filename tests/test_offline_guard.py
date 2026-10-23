@@ -241,6 +241,15 @@ def test_pipes_that_feed_no_code_are_allowed_offline(command: str) -> None:
     assert guard.offline_answer(command) == ({"permission": "allow"}, None), command
 
 
+def test_a_quoted_pipe_counts_offline_but_not_in_the_recorder() -> None:
+    # SPEC section 10, owner 2026-10-23: accepted. The guard reads a `|` inside quotes as a pipe
+    # (to see into `bash -c '...'`), so this search is denied while the recorder is down
+    command = "ps aux | grep -E 'node|python'"
+    answer, reason = guard.offline_answer(command)
+    assert answer["permission"] == "deny" and reason == "outbound"
+    assert not is_outbound_send({"hook_event_name": "beforeShellExecution", "command": command})
+
+
 def test_past_the_stage_limit_the_text_counts_as_piped_code() -> None:
     near = "cat x | grep sh; " * guard._PIPE_STAGES
     assert guard.offline_answer(near)[0] == {"permission": "allow"}

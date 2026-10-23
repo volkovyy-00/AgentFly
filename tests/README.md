@@ -40,9 +40,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `tests/cases.py` are denied, bare and wrapped, and its `SCRIPT_NOT_INLINE` runs are allowed.
   V5c: `PIPED_CODE` (code piped into an interpreter or a shell, `< <(…)`, `>(…)`, `/dev/stdin`,
   a fed `bash -c "$(cat)"`, quoted perl module values) is denied and `PIPED_NOT_INLINE` allowed;
-  pipes that feed no code (`cat x | xargs grep -l pattern`) are allowed; past 1,000 stages or
-  20,000 quoted words the text is denied; the piped-code checks read big text in linear time
-  (`@wallclock`, best of five).
+  pipes that feed no code (`cat x | xargs grep -l pattern`) are allowed; a quoted `|` counts as a
+  pipe offline but not in the recorder (`grep -E 'node|python'`; owner 2026-10-23: accepted);
+  past 1,000 stages or 20,000 quoted words the text is denied; the piped-code checks read big
+  text in linear time (`@wallclock`, best of five).
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;

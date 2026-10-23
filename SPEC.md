@@ -1198,7 +1198,8 @@ Other measures:
   substitution. The offline guard reads each pipe stage with a regular
   expression, which costs about 150 ms more per MiB of text made of pipes; past
   its caps (section 9) it denies. It reads a quoted `|` as a pipe on purpose (to
-  see into `bash -c '…'`), so `grep -E 'x|python'` is denied offline.
+  see into `bash -c '…'`), so `ps aux | grep -E 'node|python'` is denied offline,
+  though the recorder allows it (owner 2026-10-23: accepted).
 - What piped code does not see, after a mark and offline: `source /dev/stdin`
   and `eval "$(cat)"` fed by a pipe (`source` and `eval` are not in section 5's
   list; rule 14 lists them as shells), and, offline only, a compound command
