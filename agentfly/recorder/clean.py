@@ -11,6 +11,8 @@ from functools import cached_property
 from pathlib import Path
 from urllib.parse import urlparse
 
+from agentfly.recorder.normalize import SHELLS
+
 # On by default. Set CLEAN_COMMANDS=0|false|no|off to store raw commands (unsafe).
 CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not in {
     "0",
@@ -91,8 +93,6 @@ _NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
     ),
 }
 _WEB_TOOLS: frozenset[str] = frozenset(_NO_VALUE)
-# C1-fix1: the shells whose `-c` script, like what `eval` runs, is never read.
-_SHELLS: frozenset[str] = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 # C1-fix1: the programs that run the program after them, each with its short options that take a
 # value. Any other option of theirs (`sudo -E`, `env -S`) leaves the rest of the part `<arg>`.
 _WRAPPERS: dict[str, str] = {
@@ -344,9 +344,14 @@ def _without_closing(segment: str) -> str:
     """The segment without the `)` that close it, glued to its last word or alone (`x.com)`,
     `x.com ) )`); an escaped `\\)` stays."""
     kept: str = segment.rstrip(_SHELL_SPACE + ")")
-    if (len(kept) - len(kept.rstrip("\\"))) % 2:
+    if _ends_in_escape(kept):
         kept = segment[: len(kept) + 1]  # the backslash keeps the character after it
     return kept
+
+
+def _ends_in_escape(text: str) -> bool:
+    """Whether `text` ends in a backslash that keeps the character after it (an odd run)."""
+    return (len(text) - len(text.rstrip("\\"))) % 2 == 1
 
 
 def cleaned_words(command: str) -> list[str]:
@@ -385,11 +390,11 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
         return f"{_first_program(segment)} <unparsed>"
 
     out: list[str] = []
-    idx: int | None = _program_index(pairs, out, disk)
-    if idx is None:
+    found: tuple[int, str, str] | None = _program_index(pairs, out, disk)
+    if found is None:
         return " ".join(out)
 
-    raw, program = pairs[idx]
+    idx, raw, program = found
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
     prog_base: str = Path(program).name.lower()
     rest: list[tuple[str, str]] = pairs[idx + 1 :]
@@ -399,7 +404,7 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
         _rest_unread(rest, 0, out)
     else:
         # a shell's words from its `-c` on are a script and its arguments: never read
-        end: int = _script_start(rest) if prog_base in _SHELLS else len(rest)
+        end: int = _script_start(rest) if prog_base in SHELLS else len(rest)
         out.extend(_clean_other_words(rest[:end], disk, loose=_out_of_step(raw)))
         _rest_unread(rest, end, out)
     return " ".join(out)
@@ -413,6 +418,16 @@ def _script_start(pairs: list[tuple[str, str]]) -> int:
     return len(pairs)
 
 
+def _redirection_step(raw: str, target: bool) -> bool | None:
+    """None when the word is neither a redirection nor the target of a bare one just before it
+    (`target`); else whether the word after it is its target (`>`, `2>`, `{fd}>` alone)."""
+    if target:
+        return False
+    if _REDIRECT.match(raw):
+        return _REDIRECT.fullmatch(raw) is not None
+    return None
+
+
 def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bool) -> list[str]:
     """The words of a program that is no web tool, read as any program's (C1-fix1 backstop): a
     word with `://` right after an option, or after a word that may be no word or several
@@ -420,9 +435,9 @@ def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bo
     out: list[str] = []
     target: bool = False  # the word after a bare redirection is its target
     for raw, word in pairs:
-        if target or _REDIRECT.match(raw):
+        if (after := _redirection_step(raw, target)) is not None:
             out.append(_classify_word(word, disk, web_tool=False))
-            target = not target and _REDIRECT.fullmatch(raw) is not None
+            target = after
             continue
         if loose and "://" in word:
             out.append("<arg>")
@@ -432,36 +447,34 @@ def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bo
     return out
 
 
-def _program_index(pairs: list[tuple[str, str]], out: list[str], disk: Lookups) -> int | None:
+def _program_index(
+    pairs: list[tuple[str, str]], out: list[str], disk: Lookups
+) -> tuple[int, str, str] | None:
     """Save into `out` the words before the part's program (C1-fix1): opening `(` (not saved),
     assignments, redirections with their targets, and wrappers with their options. Returns the
-    program's index (its `(` cut off in `pairs`), or None when there is none or the rest of the
-    part is saved as `<arg>`: past `MAX_OPEN_PARENS` `(` or `MAX_WRAPPERS` wrappers, after a
-    wrapper option no table lists, or where a wrapper's word may be no word or several."""
+    program's index and its word as written and as read, its `(` cut off; or None when there is
+    none or the rest of the part is saved as `<arg>`: past `MAX_OPEN_PARENS` `(` or
+    `MAX_WRAPPERS` wrappers, after a wrapper option no table lists, or where a wrapper's word may
+    be no word or several."""
     opened: int = 0
     wrappers: int = 0
     target: bool = False  # the word after a bare redirection is its target
-    idx: int | None = 0
-    while idx is not None and idx < len(pairs):
+    idx: int = 0
+    while idx < len(pairs):
         raw, word = pairs[idx]
-        if target:
-            out.append(_classify_word(word, disk, web_tool=False))
-            target = False
-            idx += 1
-            continue
-        opens: int = len(raw) - len(raw.lstrip("("))
+        opens: int = 0 if target else len(raw) - len(raw.lstrip("("))
         if opens:
             opened += opens
             if opened > MAX_OPEN_PARENS:
-                return _rest_unread(pairs, idx, out)
+                _rest_unread(pairs, idx, out)
+                return None
             raw, word = raw[opens:], word[opens:]  # unquoted, so `word` starts with them too
-            pairs[idx] = (raw, word)
             if not raw:
                 idx += 1
                 continue
-        if _REDIRECT.match(raw):
+        if (after := _redirection_step(raw, target)) is not None:
             out.append(_classify_word(word, disk, web_tool=False))
-            target = _REDIRECT.fullmatch(raw) is not None
+            target = after
             idx += 1
         elif (name := _assign_name(word)) is not None:
             out.append(f"{name}=<removed>")
@@ -469,11 +482,14 @@ def _program_index(pairs: list[tuple[str, str]], out: list[str], disk: Lookups) 
         elif (wrapper := Path(word).name.lower()) in _WRAPPERS:
             wrappers += 1
             if wrappers > MAX_WRAPPERS:
-                return _rest_unread(pairs, idx, out)
+                _rest_unread(pairs, idx, out)
+                return None
             out.append(word if _PROGRAM_NAME.fullmatch(word) else "<arg>")
-            idx = _after_wrapper(pairs, idx + 1, wrapper, out, disk)
+            if (next_idx := _after_wrapper(pairs, idx + 1, wrapper, out, disk)) is None:
+                return None
+            idx = next_idx
         else:
-            return idx
+            return idx, raw, word
     return None
 
 
@@ -496,8 +512,7 @@ def _after_assignment(pairs: list[tuple[str, str]], at: int) -> int:
 
 def _closes(raw: str) -> bool:
     """Whether a word as written ends in a `)` that no backslash keeps."""
-    body: str = raw[:-1]
-    return raw.endswith(")") and (len(body) - len(body.rstrip("\\"))) % 2 == 0
+    return raw.endswith(")") and not _ends_in_escape(raw[:-1])
 
 
 def _after_wrapper(
@@ -511,7 +526,8 @@ def _after_wrapper(
     while at < len(pairs):
         raw, word = pairs[at]
         if _out_of_step(raw):
-            return _rest_unread(pairs, at, out)
+            _rest_unread(pairs, at, out)
+            return None
         if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
             out.append(f"{name}=<removed>")
             at = _after_assignment(pairs, at)
@@ -524,7 +540,8 @@ def _after_wrapper(
             break
         if word.startswith("--") or word[1] not in values:
             out.append(_classify_word(word, disk, web_tool=False))
-            return _rest_unread(pairs, at, out)
+            _rest_unread(pairs, at, out)
+            return None
         if len(word) > 2:
             out.append(f"{word[:2]}<arg>")
             continue
@@ -542,7 +559,8 @@ def _wrapper_value(pairs: list[tuple[str, str]], at: int, out: list[str]) -> int
         return at
     raw: str = pairs[at][0]
     if _out_of_step(raw) or _REDIRECT.match(raw):
-        return _rest_unread(pairs, at, out)
+        _rest_unread(pairs, at, out)
+        return None
     out.append("<arg>")
     return at + 1
 
@@ -562,13 +580,14 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
     remote: bool = False
     target: bool = False  # the word after a bare redirection is its target
     for raw, word in pairs:
-        if remote or (tool == "ssh" and _out_of_step(raw)):
+        loose: bool = not remote and _out_of_step(raw)
+        if remote or (loose and tool == "ssh"):
             out.append("<arg>")
             remote = True
             continue
-        if target or _REDIRECT.match(raw):
+        if (after := _redirection_step(raw, target)) is not None:
             out.append(_classify_word(word, disk, web_tool=True))
-            target = not target and _REDIRECT.fullmatch(raw) is not None
+            target = after
             continue
         if value_next:
             out.append(disk.project_relative(word) or "<arg>")
@@ -588,7 +607,7 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
                 options_ended = word == "--"
                 value_next = not options_ended and _takes_value(word, tool)
                 may_be_whole = _may_hold_value(word, tool)
-        if _out_of_step(raw):  # after the option's own reading: `-d$s` still waits for a value
+        if loose:  # after the option's own reading: `-d$s` still waits for a value
             value_next = may_be_whole = True
     return out
 
