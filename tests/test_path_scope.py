@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from agentfly.cli.rules_test import action_for, run_tests
-from agentfly.recorder import clean, rulefile
+from agentfly.recorder import clean, rulefile, store
 from agentfly.recorder import rules as rules_mod
 from agentfly.recorder.rulefile import Clause, Meter, metered
 from tests.rules_helpers import default_with, ruleset_of
@@ -340,6 +340,40 @@ def test_one_hook_spends_at_most_one_budget(
         results = [fires(action) for action in paths]
     assert len(lstat_calls) <= 40
     assert results[0] is False and results[-1] is True, "past the budget: outside"
+
+
+@pytest.mark.parametrize(
+    ("payload", "budgets"),
+    [
+        ({"hook_event_name": "beforeReadFile", "file_path": "/w/a.py"}, 0),
+        (
+            {
+                "hook_event_name": "preToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": "f"},
+            },
+            0,
+        ),
+        ({"hook_event_name": "preToolUse", "tool_name": "Grep", "tool_input": {"path": "src"}}, 0),
+        ({"hook_event_name": "afterFileEdit", "file_path": "/w/a.py"}, 0),
+        ({"hook_event_name": "beforeShellExecution", "command": "ls src"}, 1),
+    ],
+)
+def test_the_step_record_makes_a_budget_only_where_path_scope_cannot_run(
+    payload: dict[str, Any], budgets: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One budget a hook: a scope judges read, write and search hooks (`rules check` refuses it
+    beside a shell event), and the step record's `Lookups` runs on shell hooks only."""
+    made: list[Path] = []
+
+    def counted(root: Path) -> clean.Lookups:
+        made.append(root)
+        return clean.Lookups(root)
+
+    monkeypatch.setattr(store, "Lookups", counted)
+    session = rules_mod.Session(id="s", marked=False, start_time="t", next_step=1)
+    store.build_step_record({**payload, "workspace_roots": ["/w"]}, session, "allow", None, order=1)
+    assert len(made) == budgets
 
 
 # ---------------------------------------------------------------- the rules file

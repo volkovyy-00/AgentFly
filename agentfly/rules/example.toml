@@ -16,7 +16,8 @@ ssh_public     = ["*.pub"]
 dotenv         = [".env", ".env.*"]
 dotenv_ok      = [".env.example"]
 aws_creds      = ["~/.aws/credentials", "credentials"]
-workflows      = [".github/workflows/*"]
+# Three folders deep: a `**` would be tried at every folder of the path (`rules check` warns).
+workflows      = [".github/workflows/*", ".github/workflows/*/*", ".github/workflows/*/*/*"]
 secret_files   = [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "credentials", "~/.ssh/**"]
 secret_ok      = ["*.example", "*.sample", "*.template", "*.pub"]
 # The R1 lists of default.toml.
@@ -179,8 +180,8 @@ host_not_in = "local_hosts"
   steps = ["shell: curl -d @data.json http://localhost:8000/api"]
   expect = "allow"
 
-# 7. Warn before the agent edits anything under .github/workflows/ (the agent's write tool; shell
-#    writes such as `sed -i` are not write events).
+# 7. Warn before the agent edits anything under .github/workflows/, three folders deep (the agent's
+#    write tool; shell writes such as `sed -i` are not write events).
 [[rule]]
 id = "s07-workflow-edit"
 kind = "match"
@@ -191,6 +192,10 @@ path = "workflows"
 
   [[rule.test]]
   steps = ["write: .github/workflows/ci.yml"]
+  roots = ["/work/app"]
+  expect = "warn"
+  [[rule.test]]
+  steps = ["write: .github/workflows/scripts/deploy.sh"]
   roots = ["/work/app"]
   expect = "warn"
   [[rule.test]]

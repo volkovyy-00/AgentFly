@@ -19,21 +19,8 @@ from agentfly.recorder import rules as rules_mod
 from agentfly.recorder.rulefile import Clause, Meter, WorkLimit, metered
 from tests.rules_helpers import default_with, list_line, ruleset_of
 
-UPLOADS = list_line(
-    "uploads",
-    *("curl -d", "curl -F", "curl -T", "curl --data*", "curl --form*", "curl --json"),
-    *("curl --upload-file", "wget --post-d*", "wget --post-f*", "wget --body-d*", "wget --body-f*"),
-) + list_line("local", "localhost", "127.0.0.1", "::1")
-RULE5 = """
-[[rule]]
-id = "s05-no-uploads"
-kind = "match"
-severity = "block"
-message = "Blocked: uploads with curl or wget to other hosts are not allowed."
-event = ["shell"]
-command = "uploads"
-host_not_in = "local"
-"""
+# Rule 5 as `example.toml` holds it: the brief's criteria are about that file's rule.
+EXAMPLE = rulefile.load_bytes(rulefile.default_path().with_name("example.toml").read_bytes())
 
 
 def shell(command: str) -> dict[str, Any]:
@@ -61,7 +48,13 @@ command = "these"
     return clause_of(list_line("these", *entries), rule, "t")
 
 
-RULE5_CLAUSE = clause_of(UPLOADS, RULE5, "s05-no-uploads")
+def example_clause(rule_id: str) -> Clause:
+    clause = next(spec.clause for spec in EXAMPLE.rules if spec.id == rule_id)
+    assert clause is not None
+    return clause
+
+
+RULE5_CLAUSE = example_clause("s05-no-uploads")
 
 
 def rule5(command: str) -> bool:

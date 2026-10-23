@@ -341,7 +341,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
-- Flags in `command` (`tests/test_command_flags.py`, V5c): rule 5 fires on `curl -sd @f host`,
+- Flags in `command` (`tests/test_command_flags.py`, V5c): `example.toml`'s own rule 5 fires on
+  `curl -sd @f host`,
   `-d@f`, `--data=x`, `--data-binary @f`, `--form a=b`, `--json x`, `wget --post-file=f` and the
   getopt abbreviations, and is quiet on `curl -s`, `-fsSL`, `wget -T 5` and `curl -d @f localhost`;
   a cluster entry is each of its letters in any order, case-sensitive (`-4d`, `-#d` hold `-d`);
@@ -358,7 +359,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   outside; a search with no `file_path` is outside; out of steps, too many hops, a path over the
   word limit, a link loop and a file where a folder should be count as outside; a missing folder
   cancelled by `..` still follows the next link; a path outside as text makes no look-up; one hook
-  spends one budget, shared with the step record; `rules check` refuses a scope beside a shell
+  spends one budget (the step record makes its `Lookups` on shell hooks only, where no scope
+  runs); `rules check` refuses a scope beside a shell
   event, in `then` and in R1; a scope alone is a condition; `WORK_SCOPE` is pinned; inline tests
   send `roots` as `workspace_roots` (at most 64 strings, may be empty).
 - `pipe_into` (`tests/test_pipe_into.py`, V5c): rule 14's criteria and more forms fire (`|&`,

