@@ -84,8 +84,10 @@ def test_no_secret_survives_cleaning(project_root: Path, raw: str) -> None:
     [
         ("mysql -pSEKRET9 db", "mysql -p<arg> <arg>"),
         ("mysql -p'SEKRET9' db", "mysql -p<arg> <arg>"),
-        ("curl -uuser:SEKRET9 https://h.com", "curl -u<arg> h.com"),
-        ("curl -H'Authorization: Bearer SEKRET9' https://h.com", "curl -H<arg> h.com"),
+        # C1: the cluster `-uuser:SEKRET9` ends in a letter that takes a value, so the next word is
+        # read as its value (the last-letter rule falls toward `<arg>`)
+        ("curl -uuser:SEKRET9 https://h.com", "curl -u<arg> <arg>"),
+        ("curl -H'Authorization: Bearer SEKRET9' https://h.com", "curl -H<arg> <arg>"),
         (
             "tool --password=SEKRET9 --token=SEKRET9 --api-key=SEKRET9",
             ("tool --password=<arg> --token=<arg> --api-key=<arg>"),
@@ -116,3 +118,78 @@ def test_flag_cluster_keeps_only_its_first_letter(project_root: Path) -> None:
 def test_long_option_names_must_look_like_names(project_root: Path) -> None:
     long_name: str = "a" * 41
     assert clean_command(f"tool --{long_name}=x", project_root) == "tool <arg>"
+
+
+_JWT: str = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abcDEF"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C1: what was saved on d62ea42, an option's value or ssh's remote command as a website
+        ("curl -d token.abc host.com", "curl -d <arg> host.com"),
+        (f"curl -d {_JWT} api.example.com", "curl -d <arg> api.example.com"),
+        (f"wget --post-data {_JWT} x.com", "wget --post-data <arg> x.com"),
+        ("curl x.com -d sk_live.abc123", "curl x.com -d <arg>"),
+        (f"curl -d https://{_JWT} x.com", "curl -d <arg> x.com"),
+        ("ssh h.com cat tok.abc", "ssh h.com <arg> <arg>"),
+    ],
+)
+def test_an_option_value_is_never_a_website(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # saved exactly as on d62ea42
+        ("curl -fsSL x.com", "curl -f<arg> x.com"),
+        ("curl -s x.com", "curl -s x.com"),
+        ("curl -L -o out x.com", "curl -L -o <arg> x.com"),
+        ("curl -X POST x.com", "curl -X <arg> x.com"),
+        ("curl --compressed x.com", "curl --compressed x.com"),
+        ("wget -q x.com", "wget -q x.com"),
+        ("ssh -i key user@h.com", "ssh -i <arg> h.com"),
+        ("ssh -p 22 h.com", "ssh -p <arg> h.com"),
+        ("scp f user@h.com:/p", "scp <arg> h.com"),
+        ("rsync -av src h.com:dst", "rsync -a<arg> <arg> h.com"),
+        ("nc -v h.com 80", "nc -v h.com <arg>"),
+        ("curl -s -- x.com", "curl -s -- x.com"),
+        # a cluster is judged by its last letter; `--` ends the options
+        ("curl -sd token.abc x.com", "curl -s<arg> <arg> x.com"),
+        ("curl -- -d x.com", "curl -- -d x.com"),
+        ("curl -d -- x.com", "curl -d <arg> x.com"),
+        ("ssh -T git@github.com", "ssh -T github.com"),
+        # the trade (owner 2026-10-23): an option no table lists takes a value
+        ("curl --some-new-option x.com", "curl --some-new-option <arg>"),
+        ("curl --data=a.b x.com", "curl --data=<arg> x.com"),
+        # other programs keep their old cleaning
+        ("git -C a.b push", "git -C <arg> <arg>"),
+    ],
+)
+def test_web_tool_option_values(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+def test_a_value_that_names_a_project_file_keeps_its_path(project_root: Path) -> None:
+    assert clean_command("curl -T .env x.com", project_root) == "curl -T .env x.com"
+
+
+def test_values_cost_one_lookup_each_and_ssh_remote_words_none(project_root: Path) -> None:
+    disk = clean_mod.Lookups(project_root)
+    words: str = " ".join(f"-d v{i}" for i in range(150))
+    clean_command(f"curl {words}", project_root, disk)
+    assert disk.left == clean_mod.LOOKUP_STEPS - 150
+    disk = clean_mod.Lookups(project_root)
+    remote: str = " ".join(f"w{i}" for i in range(300))
+    assert clean_command(f"ssh h.com {remote}", project_root, disk) == "ssh h.com" + " <arg>" * 300
+    assert disk.left == clean_mod.LOOKUP_STEPS
+
+
+def test_no_value_tables_hold_option_names() -> None:
+    assert set(clean_mod._NO_VALUE) == set(clean_mod._WEB_TOOLS)
+    for tool, (short, long) in clean_mod._NO_VALUE.items():
+        assert short and all(c.isprintable() and c not in " -=" for c in short), tool
+        assert len(set(short)) == len(short), tool
+        # curl's `--http1.1` and `--tlsv1.2` hold a dot, which a saved option name may not
+        assert all(clean_mod._LONG_OPTION_NAME.fullmatch(n.replace(".", "_")) for n in long), tool

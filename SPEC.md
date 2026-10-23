@@ -222,6 +222,23 @@ even a secret packed into a web address. So we keep almost nothing:
    (like `-H`, `-d`; a value stuck onto its option, as in `-uadmin:pw` or
    `-pSECRET`, is a value and is dropped too), and file paths inside the
    workspace (relative).
+   For the six web tools (curl, wget, nc, scp, ssh, rsync) the word right after
+   an option is that option's value: it is never saved as a website, also when it
+   holds `://`, and is saved as its workspace path when it names an existing
+   file there (`curl -T .env x.com` still names `.env`), else as `<arg>`. Each
+   tool has a list of the options that take no value, taken from its own manual
+   (curl 8, GNU wget 1.2x, OpenSSH's ssh and scp pages, rsync 3, OpenBSD nc); an
+   option the list does not hold counts as taking a value. A cluster (`-fsSL`)
+   is judged by its last letter, so `curl -sd token.abc x.com` is saved as
+   `curl -s<arg> <arg> x.com`, and a value stuck on its option counts as a
+   cluster (`curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`). `--` takes
+   no value and ends the options. Every word after ssh's destination is its
+   remote command and is `<arg>`. The trade (owner 2026-10-23): history shows
+   fewer websites but never a secret. A real website after an option the list
+   does not hold is `<arg>` (`curl --some-new-option x.com` is
+   `curl --some-new-option <arg>`), and so is a website given as an option's
+   value (`--url`, `-x proxy`, `ssh -J jump`), after a `--no-…` form or a
+   shortened wget option the manual does not list, or in ssh's remote command.
 3. Replace everything else with `<arg>`. A variable set in front of a command
    is saved as `NAME=<removed>`.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
@@ -1103,6 +1120,17 @@ Other measures:
   can read it; the check does not look inside.
 - "Write a script file, then run it" is not caught: only inline one-liners and
   heredocs fed to the shells and interpreters listed in section 5 count.
+- The command cleaner (section 4) keeps less than a secret, not nothing. An
+  option's value equal to an existing workspace file's name is saved as that path
+  (a secret would have to be a file's name, which AgentFly saves anyway, owner
+  2026-10-23). A web address whose host is itself a token (`curl https://<JWT>`)
+  keeps rule 5's last two parts. Only the six web tools have option lists; for
+  any other program an option's value that holds `://` keeps its website name
+  (`git -c x=https://h.com/t` keeps nothing, `tool --url https://a.b.com` keeps
+  `a.b.com`). A header the agent splits into words (`-H X-Token: abc.def`) leaves
+  `abc.def` as a website, which curl itself also contacts. The hosts saved for a
+  step are read from the kept words, so a kept file name (`.env`) is counted as a
+  host too.
 
 ---
 

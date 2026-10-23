@@ -20,6 +20,18 @@ the maintainers' work items and decisions, which are kept outside this repo.
   options, long options, URL credentials, env-prefix and `export`):
   `mysql -pX db` is saved as `mysql -p<arg> <arg>`, and a flag cluster keeps only
   its first letter (`ls -la` is `ls -l<arg>`). `tests/leak_cases.py` lists them.
+  For the six web tools (`tests/test_clean.py`, `tests/test_store.py`, C1) the word after an
+  option is its value and never a website, also with `://`: `curl -d token.abc host.com` is
+  `curl -d <arg> host.com`, `ssh h.com cat tok.abc` is `ssh h.com <arg> <arg>`, and the value
+  is in neither the step's command, hosts nor file; `leak_cases.py` holds each option form of
+  each tool (short, cluster, attached, long, `=`, after the destination) with a dotted value
+  and a token. A cluster is judged by its last letter (`curl -sd token.abc x.com` is
+  `curl -s<arg> <arg> x.com`, `curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`), `--`
+  ends the options, an unlisted option takes a value (`curl --some-new-option x.com` is
+  `curl --some-new-option <arg>`), a value naming a project file keeps its path
+  (`curl -T .env x.com`), and the d62ea42 outputs of the brief's list are pinned. A 300-word
+  curl line of `-d` pairs costs one look-up a value, ssh's remote command none; each tool's
+  table holds option characters and names only.
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`
   (`tests/test_app.py`); HEAD on an API route is 405; `/docs`, `/redoc` and
   `/openapi.json` are 404.

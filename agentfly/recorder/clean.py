@@ -21,6 +21,78 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
 
 _WEB_TOOLS: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
 
+# C1: per web tool, the short option letters and the long option names that take no value, each
+# from the tool's own manual: curl 8.7.1 (`curl --help all`), GNU Wget 1.25.0 (the gnu.org
+# manual), OpenSSH 9.9 (`man ssh`, `man scp`), rsync 3.5.1 (the samba.org manual) and OpenBSD
+# nc(1). Any other option takes a value, so the word after it is never saved as a website.
+_NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
+    "curl": (
+        "#0123456:BGIJLMNORSVZafgijklnpqsv",
+        frozenset(
+            """anyauth append basic ca-native cert-status compressed compressed-ssh create-dirs
+            crlf digest disable disable-eprt disable-epsv disallow-username-in-url
+            doh-cert-status doh-insecure fail fail-early fail-with-body false-start form-escape
+            ftp-create-dirs ftp-pasv ftp-pret ftp-skip-pasv-ip ftp-ssl-ccc ftp-ssl-control get
+            globoff haproxy-protocol head http0.9 http1.0 http1.1 http2 http2-prior-knowledge
+            http3 http3-only ignore-content-length include insecure ipv4 ipv6
+            junk-session-cookies list-only location location-trusted mail-rcpt-allowfails
+            manual metalink negotiate netrc netrc-optional next no-alpn no-buffer no-clobber
+            no-keepalive no-npn no-progress-meter no-sessionid ntlm ntlm-wb parallel
+            parallel-immediate path-as-is post301 post302 post303 progress-bar proxy-anyauth
+            proxy-basic proxy-ca-native proxy-digest proxy-http2 proxy-insecure proxy-negotiate
+            proxy-ntlm proxy-ssl-allow-beast proxy-ssl-auto-client-cert proxy-tlsv1 proxytunnel
+            raw remote-header-name remote-name remote-name-all remote-time remove-on-error
+            retry-all-errors retry-connrefused sasl-ir show-error silent socks5-basic
+            socks5-gssapi socks5-gssapi-nec ssl ssl-allow-beast ssl-auto-client-cert
+            ssl-no-revoke ssl-reqd ssl-revoke-best-effort sslv2 sslv3 styled-output
+            suppress-connect-headers tcp-fastopen tcp-nodelay tftp-no-options tlsv1 tlsv1.0
+            tlsv1.1 tlsv1.2 tlsv1.3 tr-encoding trace-ids trace-time use-ascii verbose version
+            xattr""".split()
+        ),
+    ),
+    "wget": (
+        "46EFHKLNSVbcdhkmpqrvx",
+        frozenset(
+            """version help background debug quiet verbose no-verbose keep-badhash
+            metalink-over-http xattr force-html no-clobber no-netrc continue show-progress
+            timestamping no-if-modified-since no-use-server-timestamps server-response spider
+            random-wait no-proxy no-dns-cache inet4-only inet6-only retry-connrefused
+            ask-password no-iri unlink no-directories force-directories no-host-directories
+            protocol-directories adjust-extension no-http-keep-alive no-cache no-cookies
+            keep-session-cookies ignore-length save-headers content-disposition
+            content-on-error trust-server-names auth-no-challenge retry-on-host-error
+            https-only no-check-certificate no-hsts warc-cdx no-warc-compression
+            no-warc-digests no-warc-keep-log no-remove-listing no-glob no-passive-ftp
+            preserve-permissions retr-symlinks ftps-implicit no-ftps-resume-ssl
+            ftps-clear-data-connection ftps-fallback-to-ftp recursive delete-after
+            convert-links convert-file-only backup-converted mirror page-requisites
+            strict-comments follow-ftp ignore-case span-hosts relative no-parent""".split()
+        ),
+    ),
+    "nc": ("46cDdFhklNnrStUuvz", frozenset()),
+    "scp": ("346ABCOpqRrsTv", frozenset()),
+    "ssh": ("46AaCfGgKkMNnqsTtVvXxYy", frozenset()),
+    "rsync": (
+        "0468ACDEFHIJKLNOPRSUVWXabcdghiklmnopqrstuvxyz",
+        frozenset(
+            """verbose quiet no-motd checksum archive recursive inc-recursive i-r
+            no-inc-recursive no-i-r relative no-implied-dirs backup update inplace append
+            append-verify dirs old-dirs old-d mkpath links copy-links copy-unsafe-links
+            safe-links insecure-links munge-links copy-dirlinks keep-dirlinks hard-links perms
+            executability acls xattrs owner group devices copy-devices write-devices specials
+            drop-D times atimes open-noatime crtimes omit-dir-times omit-link-times super
+            fake-super sparse preallocate dry-run whole-file no-whole-file no-W
+            one-file-system existing ignore-non-existing ignore-existing remove-source-files
+            del delete delete-before delete-during delete-delay delete-after delete-excluded
+            ignore-missing-args delete-missing-args ignore-errors force partial delay-updates
+            prune-empty-dirs numeric-ids ignore-times size-only fuzzy compress cvs-exclude
+            from0 old-args secluded-args trust-sender blocking-io stats 8-bit-output
+            human-readable progress itemize-changes list-only fsync ipv4 ipv6 version
+            help""".split()
+        ),
+    ),
+}
+
 # A long option name is kept only if it looks like a name; anything else may be a value.
 _LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
 # A program name made of anything else (spaces, quotes, `$`) may be part of a secret.
@@ -237,15 +309,43 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
     program: str = tokens[idx]
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
     prog_base: str = Path(program).name.lower()
-    web_tool: bool = prog_base in _WEB_TOOLS
-    idx += 1
-
-    while idx < len(tokens):
-        word: str = tokens[idx]
-        out.append(_classify_word(word, disk, web_tool=web_tool))
-        idx += 1
-
+    if prog_base in _WEB_TOOLS:
+        out.extend(_clean_web_words(tokens[idx + 1 :], prog_base, disk))
+    else:
+        out.extend(_classify_word(word, disk, web_tool=False) for word in tokens[idx + 1 :])
     return " ".join(out)
+
+
+def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:
+    """A web tool's words (C1): the word after an option that takes a value is that value, and
+    every word after ssh's destination is its remote command; neither is ever a website."""
+    out: list[str] = []
+    value_next: bool = False
+    options_ended: bool = False
+    remote: bool = False
+    for word in words:
+        if remote:
+            out.append("<arg>")
+        elif value_next:
+            out.append(disk.project_relative(word) or "<arg>")
+            value_next = False
+        elif options_ended or not word.startswith("-") or word == "-":
+            out.append(_classify_word(word, disk, web_tool=True))
+            remote = tool == "ssh"  # the first word that is no option is ssh's destination
+        else:
+            out.append(_classify_word(word, disk, web_tool=True))
+            options_ended = word == "--"
+            value_next = not options_ended and _takes_value(word, tool)
+    return out
+
+
+def _takes_value(option: str, tool: str) -> bool:
+    """Whether the word after `option` (`-x`, `-xyz`, `--name`, `--name=v`) is its value. A
+    cluster is judged by its last letter, and an option the tool's table lacks takes a value."""
+    short, long = _NO_VALUE[tool]
+    if option.startswith("--"):
+        return "=" not in option and option[2:] not in long
+    return option[-1] not in short
 
 
 def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
