@@ -288,7 +288,7 @@ def test_the_piped_code_checks_read_big_text_in_linear_time(unit: str) -> None:
     # Four times the text costs about four times as much (a quadratic walk: sixteen). The short
     # text, timed in this test, is the baseline.
     size = 256 * 1024
-    short, long = (best_of(3, unit * (n // len(unit))) for n in (size // 4, size))
+    short, long = (best_of(5, unit * (n // len(unit))) for n in (size // 4, size))
     assert long < 7 * short, f"4 times the text took {long / short:.1f} times as long"
 
 
