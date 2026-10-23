@@ -2291,6 +2291,7 @@ SHIPPED_DEFAULTS: tuple[str, ...] = (
     "50872ebe24b5cf25fb580523f2f541cd9a1dd0c92629d3accb5f86a873c93912",  # V5b, audit fixes
     "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
     "6cd80b9824295273e33c2dd9a0d4aac82c6ddf2c90b1e894977b942132178c82",  # R1G, a search is a read
+    "fe87aa40b73a59c97b4bc9b9922a71cd85f84f7a245d62b8cf8495d21cf1a6bf",  # V5c, header: new fields
 )
 
 
