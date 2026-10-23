@@ -440,7 +440,8 @@ event, so they never mark and no rule sees them. A search that returns lines is 
 R1 may say, below, covers it, and no file can leave it out). It reads the file
 `file_path` names, and every name its `glob` can match; a search of a folder with
 no glob reads nothing by name (section 10). The glob is read as ripgrep reads one
-(`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes, a leading `!` that
+(`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes outside a class, a
+member inside one, a leading `!` that
 excludes, trailing blanks dropped unless escaped, as in a gitignore line),
 case-folded like a rule path (a class allows a letter when it allows it in either
 case, so `.e[!A-Z]v` still reads `.env`, and a class with a member past the
@@ -453,7 +454,8 @@ its own by its file name, its folders taken as able to sit anywhere under
   `.env`, `.env.x`, `x.pem`, `id_rsa`, `credentials`, …) that `path_except` does
   not match, so `*`, `**/*`, `.env*`, `?env` and `.e[n]v` read `.env`; or
 - its own name, its `*` read as that letter and each `?` or class tried with each
-  character of the condition's `path` patterns it allows, is matched by `path` and
+  character of the condition's `path` patterns it allows (and each printable one a
+  class in those patterns allows), is matched by `path` and
   not by `path_except`, so `.env.prod*`, `credentials.*`, `.en?.local` and
   `credential?.py` read a secret name. Whether some such name is matched by `path`
   is worked out position by position, not name by name, so a glob with many `?`

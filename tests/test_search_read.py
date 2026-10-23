@@ -308,6 +308,34 @@ path = "names"
     assert decide(grep(glob), fresh(), rules)[1] == "names"
 
 
+def test_a_backslash_in_a_class_is_a_member_as_ripgrep_reads_it() -> None:
+    # `[a\\-z]` is `a` and the range from `\\` to `z`, which holds `_` (ripgrep 14.1.1, by hand)
+    assert curl_after(grep("id[a\\-z]rsa")) == "blocked"
+    assert curl_after(grep("id[\\-z]rsa*")) == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("pattern", "glob"),
+    [
+        ("my-secret.txt", "my[-!]secret.txt"),  # not `[!-]`, a negated class
+        ("key[0-9].pem", "key[-1-8].pem"),  # B tries what the pattern's class allows: `5`
+        ("k[!a]", "k[!kx]"),
+    ],
+)
+def test_a_class_against_a_pattern_tries_what_both_allow(pattern: str, glob: str) -> None:
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    rules = ruleset_of(default_with(f'names = ["{pattern}"]\n', rule))
+    assert decide(grep(glob), fresh(), rules)[1] == "names"
+
+
 def test_a_class_with_no_character_to_list_falls_toward_reading() -> None:
     # `[é]` allows no letter of R1's patterns and no printable character: no name to list
     assert curl_after(grep(".env.[é]")) == "blocked"

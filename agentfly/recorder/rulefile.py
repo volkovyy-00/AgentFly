@@ -618,10 +618,12 @@ def _first_allowed(charset: str) -> str:
 
 def _class_text(chars: Iterable[str], negated: bool) -> str:
     """An `fnmatch` class of these characters: `]` first, `!` and `-` last, so none is read as
-    syntax."""
+    syntax (a first `!` only in a negated class)."""
     held: set[str] = set(chars)
     order: list[str] = [c for c in "]" if c in held] + sorted(held - set("]!-"))
     order += [c for c in "!-" if c in held]
+    if not negated and order[:1] == ["!"]:  # `[!-]` would be a negated class: write `[-!]`
+        order = order[1:] + order[:1]
     return f"[{'!' if negated else ''}{''.join(order)}]"
 
 
@@ -651,7 +653,7 @@ def _either_case(body: str, negated: bool) -> tuple[str, str]:
 
 def _glob_class(text: str, at: int) -> tuple[tuple[str, str], int]:
     """The class that opens at `at`, as a token (`_either_case`), and where it ends. ripgrep's
-    `[^…]` is `[!…]`; a first `]` is a member; `\\` escapes a member."""
+    `[^…]` is `[!…]`; a first `]` is a member, and so is a `\\`."""
     end: int = len(text)
     i: int = at + 1
     negated: bool = i < end and text[i] in "!^"
@@ -664,12 +666,7 @@ def _glob_class(text: str, at: int) -> tuple[tuple[str, str], int]:
         char: str = text[i]
         if char == "]" and members:
             break
-        if char == "\\":
-            if i + 1 >= end:
-                raise _Unsure
-            i += 1
-            char = text[i]
-        members.append(char)
+        members.append(char)  # ripgrep reads `\\` here as a member (`[a\\-z]` holds `_`)
         i += 1
     body: str = "".join(members)
     if "]" in body[1:] or body.startswith("!"):
@@ -867,8 +864,19 @@ def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _S
         for sample in _samples(name)
         if not any(fnmatch.fnmatchcase(sample, e) for e in excepts)
     ]
-    letters: str = "".join(sorted(set("".join(p.text for p in path)) - _LETTER_SYNTAX))
     shown: list[tuple[tuple[str, str], ...]] = [e for e in elements if e is not None]
+    # B tries the characters the patterns name, and every printable one a pattern's class allows
+    # (`key[0-9].pem` against a glob `key[-1-8].pem` must try `5`).
+    named: set[str] = set("".join(p.text for p in path)) - _LETTER_SYNTAX
+    named |= {
+        c
+        for e in shown
+        for kind, text in e
+        if kind == "set"
+        for c in _PRINTABLE
+        if fnmatch.fnmatchcase(c, text)
+    }
+    letters: str = "".join(sorted(named))
     return _Searched(
         path,
         tuple(names),
