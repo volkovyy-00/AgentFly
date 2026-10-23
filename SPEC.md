@@ -443,7 +443,8 @@ no glob reads nothing by name (section 10). The glob is read as ripgrep reads on
 (`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes, a leading `!` that
 excludes, trailing blanks dropped unless escaped, as in a gitignore line),
 case-folded like a rule path (a class allows a letter when it allows it in either
-case, so `.e[!A-Z]v` still reads `.env`), and each brace alternative is judged on
+case, so `.e[!A-Z]v` still reads `.env`, and a class with a member past the
+printable ASCII characters is any one character), and each brace alternative is judged on
 its own by its file name, its folders taken as able to sit anywhere under
 `file_path` (anywhere at all with none). An alternative matches a condition's
 `path` when either:

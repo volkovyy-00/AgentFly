@@ -282,6 +282,32 @@ def test_a_folder_pattern_with_no_parts_loads_and_reads_any_name_below() -> None
     assert decide(grep("*.py", home), fresh(), rules)[1] == "keys"
 
 
+@pytest.mark.parametrize(
+    ("pattern", "glob"),
+    [
+        ("hasło.txt", "has[ą-ż]o.txt"),  # `ł` sits inside the range
+        ("hasło.txt", "has[a-ż]o.txt"),
+        ("tajné.key", "tajn[À-Ö].key"),
+        ("id_rsa?", "id_rsa[éè]"),  # a rule `?` against a class of non-ASCII letters only
+        ("id_rsa?", "id_rsa[\x01-\x02]"),  # a class that allows no printable character
+    ],
+)
+def test_a_class_past_the_printable_characters_is_read_as_any_character(
+    pattern: str, glob: str
+) -> None:
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    rules = ruleset_of(default_with(f'names = ["{pattern}"]\n', rule))  # not JSON: `\\u` escapes
+    assert decide(grep(glob), fresh(), rules)[1] == "names"
+
+
 def test_a_class_with_no_character_to_list_falls_toward_reading() -> None:
     # `[é]` allows no letter of R1's patterns and no printable character: no name to list
     assert curl_after(grep(".env.[é]")) == "blocked"

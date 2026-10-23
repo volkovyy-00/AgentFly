@@ -311,7 +311,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   the glob. Trailing blanks are dropped as ripgrep drops them (`.env ` marks), a pattern with no
   parts (`~/.`) loads, a class with no character to list falls toward marking, alternatives
   that differ only in folders are judged once, a class allows a letter in either case
-  (`.e[!A-Z]v` marks), a `!` glob marks unless it leaves out every name (`!*`, `!**`), and the
+  (`.e[!A-Z]v` marks) and one past the printable characters (`[ą-ż]`) is any character, a `!`
+  glob marks unless it leaves out every name (`!*`, `!**`), and the
   count covers the tries listed for the exceptions.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in

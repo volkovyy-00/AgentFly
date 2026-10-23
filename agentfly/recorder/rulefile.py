@@ -628,9 +628,12 @@ def _class_text(chars: Iterable[str], negated: bool) -> str:
 def _either_case(body: str, negated: bool) -> tuple[str, str]:
     """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
     as allowed when the class allows it in either case, so folding only ever lets more through
-    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Characters past the printable ones and
-    the members are not listed: a negated class allows them."""
+    (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Only printable characters are listed, so
+    a class with a member past them (`[ą-ż]`, `[é]`), or one that allows none of them, is read as
+    any one character (toward marking)."""
     held = f"[{body}]"
+    if not body.isascii():
+        return "one", ""
     seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
     folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
 
@@ -641,8 +644,8 @@ def _either_case(body: str, negated: bool) -> tuple[str, str]:
         out: list[str] = [c for c in folded if member(c) and member(c.upper())]
         return ("set", _class_text(out, True)) if out else ("one", "")
     allowed: list[str] = [c for c in folded if member(c) or member(c.upper())]
-    if not allowed:
-        return "set", held  # only characters past the printable ones: `_first_allowed` says so
+    if not set(allowed) & set(_PRINTABLE):
+        return "one", ""
     return ("lit", allowed[0]) if len(allowed) == 1 else ("set", _class_text(allowed, False))
 
 
