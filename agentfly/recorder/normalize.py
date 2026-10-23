@@ -5,8 +5,10 @@ quotes removed and everything that would run looked into: `$(...)`, backticks, `
 `bash -c '...'`, `eval`, and the bodies of heredocs read by a shell. It also reports the three
 things R1 treats as outbound by themselves: text it could not parse (`unparsed`), a quoted
 heredoc or herestring that a shell or interpreter reads (`code_heredoc`), and inline code
-(`one_liner`). Wrappers such as `env`, `sudo`, `xargs` or `timeout` need no list: every word
-of every simple command is kept, wherever it stands.
+(`one_liner`: a `-c`/`-e` one-liner, or code piped into an interpreter that names no script).
+Wrappers such as `env`, `sudo`, `xargs` or `timeout` need no list: every word of every simple
+command is kept, wherever it stands. Which command feeds which (pipes, substitutions, groups) is
+kept in `links` (V5c).
 
 No I/O, no shell is ever run, and `normalize` never raises.
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 # The word that stands for a substitution; R0 reads the program names after the prefix.
@@ -61,6 +63,16 @@ class Parsed:
     a plain word scan of the raw text, so such text still shows its words. `unquoted_heredoc`
     (`<<EOF`) parses fine but R1 counts it as unparseable (D10). `code_heredoc` is a heredoc or
     herestring that a shell or interpreter reads.
+
+    `links` (V5c) are the edges of "what this command writes, that one reads": (from, to), where a
+    node is an index into `commands` or a hub (a negative number) that stands for one pipe. A pipe
+    links each command of the part before it to its hub, and the hub to each command of the part
+    after it (a part is everything between two operators: a group, a loop and the substitutions
+    inside count). A substitution (`$(…)`, backticks, `<(…)`, in a herestring or a heredoc body)
+    links each command inside it to the command it stands in; `>(…)` the other way. When the text
+    can hide what feeds what (a function, `coproc`, an opener or closer that does not match, groups
+    nested too deep), `links_unknown` says so. `piped_code` is code read from a pipe: a command fed
+    by one (`programs` names an interpreter or a shell) that names no script (`reads_stdin`).
     """
 
     commands: tuple[tuple[str, ...], ...]
@@ -68,6 +80,9 @@ class Parsed:
     unquoted_heredoc: bool = False
     code_heredoc: bool = False
     loose: tuple[tuple[str, ...], ...] = ()
+    links: tuple[tuple[int, int], ...] = ()
+    links_unknown: bool = False
+    piped_code: bool = False
 
     def all_commands(self) -> tuple[tuple[str, ...], ...]:
         """The parsed commands, plus the loose scan when the text could not be parsed."""
@@ -75,7 +90,7 @@ class Parsed:
 
     @property
     def one_liner(self) -> bool:
-        return any(has_inline_code(argv) for argv in self.commands)
+        return self.piped_code or any(has_inline_code(argv) for argv in self.commands)
 
 
 def base_name(word: str) -> str:
@@ -151,12 +166,26 @@ def script_family(name: str) -> str | None:
     return base if base in ("perl", "ruby") else None
 
 
+# What `-M`, `-m`, `-d:` and `-dt:` may name in perl and still be a module (`Foo::Bar`, `-strict`,
+# `Foo=a,b`); anything else is code perl runs (`-MIO::Socket;print 1`), V5c.
+PERL_MODULE = re.compile(r"-?[A-Za-z_]\w*(?:::\w+)*(?:=[\w:]+(?:,[\w:]+)*)?", re.ASCII)
+
+
+def _perl_value(arg: str, index: int) -> str | None:
+    """The module a `-d:` or `-dt:` at `index` names, else None."""
+    for lead in (":", "t:"):
+        if arg.startswith(lead, index + 1):
+            return arg[index + 1 + len(lead) :]
+    return None
+
+
 def _perl_step(arg: str) -> int:
     """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
 
-    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
-    alone, the next word; a long option (`--version`) takes nothing. The script (the first plain
-    word), `-` or `--` ends the options.
+    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), as do `-d:` and
+    `-dt:`, and that rest is code unless it is a module name (`PERL_MODULE`); `-I` takes the rest
+    or, alone, the next word; a long option (`--version`) takes nothing. The script (the first
+    plain word), `-` or `--` ends the options.
     """
     if arg in ("-", "--") or not arg.startswith("-"):
         return _END
@@ -165,8 +194,13 @@ def _perl_step(arg: str) -> int:
     for index, letter in enumerate(arg[1:], 1):
         if letter in "eE":
             return _CODE
-        if letter in "MmI":
-            return 2 if letter == "I" and index == len(arg) - 1 else 1
+        if letter in "Mm":
+            return 1 if PERL_MODULE.fullmatch(arg[index + 1 :]) else _CODE
+        if letter == "I":
+            return 2 if index == len(arg) - 1 else 1
+        value: str | None = _perl_value(arg, index) if letter == "d" else None
+        if value is not None:
+            return 1 if PERL_MODULE.fullmatch(value) else _CODE
     return 1
 
 
@@ -260,6 +294,123 @@ def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- programs and piped code (V5c)
+
+# Programs that run the words after them as a command: after one, every later word may be a
+# program (`sudo -u me bash`, `xargs -n1 sh`).
+WRAPPERS: frozenset[str] = frozenset(
+    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+)
+# Shell words that stand before or around a command and are no program.
+_KEYWORDS: frozenset[str] = frozenset(
+    {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac"}
+)
+_HEADS: frozenset[str] = frozenset({"for", "select", "case"})  # their words are no command
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+
+
+def programs(argv: Sequence[str]) -> tuple[int, ...]:
+    """Where a program stands in a simple command: the first word after assignments and shell
+    keywords, and, when that word is a wrapper (`WRAPPERS`), every word after it too. A `for`,
+    `select` or `case` head has none. So `grep python3` has one (`grep`), `sudo -u me bash` all."""
+    for index, word in enumerate(argv):
+        if word in _KEYWORDS or _ASSIGNMENT.match(word):
+            continue
+        if word in _HEADS:
+            return ()
+        if base_name(word) in WRAPPERS:
+            return tuple(range(index, len(argv)))
+        return (index,)
+    return ()
+
+
+def _stdin_family(name: str) -> str | None:
+    """The family whose stdin walk reads this program: an interpreter, or "shell"."""
+    if name.rstrip("0123456789.") in SHELLS:
+        return "shell"
+    return interpreter(name) or script_family(name)
+
+
+_STDIN: int = -1  # a stdin walk ends here: the code comes from stdin
+_SCRIPT: int = 0  # ... or a script is named
+_DEV_FD = re.compile(r"/dev/fd/\d+")
+# Node options that take the next word (unless glued on with `=`): a plain word after them is no
+# script.
+_NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
+    {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
+    | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
+)
+
+
+def _is_stdin(word: str) -> bool:
+    return word in ("-", "/dev/stdin") or _DEV_FD.fullmatch(word) is not None
+
+
+def holds_substitution(word: str) -> bool:
+    """Does the word hold the output of a `$(…)` or backticks (`placeholder`)?"""
+    return SUB_PREFIX in word or SUB_EMPTY in word
+
+
+def _shell_stdin_step(words: Sequence[str], at: int) -> int:
+    """A shell's options: `-c` takes the next word as the script (code the command does not name
+    when that word holds a substitution: `cat x | bash -c "$(cat)"`), `-s` reads stdin, `-o`/`-O`
+    and `--rcfile`/`--init-file` take a value, and a plain word is a script file."""
+    arg: str = words[at]
+    if not arg.startswith(("-", "+")):
+        return _SCRIPT
+    if arg.startswith("--"):
+        return 2 if arg in _SHELL_VALUE_OPTIONS else 1
+    letters: str = arg[1:]
+    if "c" in letters:
+        return _STDIN if at + 1 < len(words) and holds_substitution(words[at + 1]) else _SCRIPT
+    if "s" in letters:
+        return _STDIN
+    return 2 if ("o" in letters or "O" in letters) else 1
+
+
+def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
+    """One step of a stdin walk: _STDIN, _SCRIPT, or how many words it moves on."""
+    arg: str = words[at]
+    if _is_stdin(arg):
+        return _STDIN
+    if arg == "--":  # what follows is the script, if anything does
+        return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
+    if family == "shell":
+        return _shell_stdin_step(words, at)
+    if not arg.startswith("-"):
+        return _SCRIPT
+    if family == "node":
+        return _STDIN if _node_code(arg) else 2 if arg in _NODE_VALUE_OPTIONS else 1
+    move: int = _STEPS[family](arg)
+    return _STDIN if move == _CODE else _SCRIPT if move == _END else move
+
+
+def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:
+    """For every position i: does a stdin walk over `words[i:]` end with no script named (it ran
+    out, or reached `-`, `/dev/stdin`, code, ...)? Worked out once, from the right (linear), as
+    `_one_liner_table`."""
+    found: list[bool] = [True] * (len(words) + 2)  # ran out: no script
+    for at in range(len(words) - 1, -1, -1):
+        move: int = _stdin_step(family, words, at)
+        found[at] = move == _STDIN or (move > 0 and found[at + move])
+    return found
+
+
+def reads_stdin(words: Sequence[str]) -> bool:
+    """Does an interpreter or a shell at a program position read its code from stdin?"""
+    tables: dict[str, list[bool]] = {}
+    for at in programs(words):
+        family: str | None = _stdin_family(base_name(words[at]))
+        if family is None:
+            continue
+        if family not in tables:
+            tables[family] = _stdin_table(family, words)
+        if tables[family][at + 1]:
+            return True
+    return False
+
+
 def loose_commands(text: str) -> tuple[tuple[str, ...], ...]:
     """Plain word scan, one tuple per `;`, `|`, `&` or line: quotes and `$( ` only split words."""
     for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
@@ -278,15 +429,91 @@ class _Heredoc:
     quoted: bool
     strip_tabs: bool
     owner: list[str]  # the words of the simple command that owns the redirect
+    index: int = -1  # that command's index, once it is made
+
+
+# A substitution as the scanner meets it: "in" (its output goes into the command it stands in) or
+# "out" (`>(…)`), and the range of command indices it holds.
+_Sub = tuple[str, int, int]
+
+
+@dataclass
+class _Cmd:
+    """The simple command being read. `targets`: positions of words that are redirect targets;
+    `stdin`: "file" or "sub" when stdin is redirected (`< f`, `< <(…)`); `subs`: the
+    substitutions in its words and herestrings; `start`: no program word yet (only keywords such
+    as `then` or `!`)."""
+
+    words: list[str] = field(default_factory=list)
+    herestrings: list[str] = field(default_factory=list)
+    targets: list[int] = field(default_factory=list)
+    stdin: str = ""
+    subs: list[_Sub] = field(default_factory=list)
+    start: bool = True
+
+
+@dataclass(frozen=True)
+class _Meta:
+    targets: frozenset[int]
+    stdin: str
+
+
+@dataclass
+class _Frame:
+    """A list of commands being read: the whole text, a substitution's, or a group's (`(`, `{`,
+    or the keyword that opened it). `start` is the first command of the part being read, `hub` the
+    pipe that feeds it; `pattern`: a `case` that is reading a pattern, where `)` ends it."""
+
+    kind: str
+    start: int
+    hub: int | None = None
+    pattern: bool = False
+
+
+# Group words at the start of a command, what closes each, and the words after which the next one
+# still starts a command.
+_OPENERS: dict[str, str] = {
+    "{": "}",
+    "if": "fi",
+    "while": "done",
+    "until": "done",
+    "for": "done",
+    "select": "done",
+    "case": "esac",
+}
+_CLOSERS: frozenset[str] = frozenset(_OPENERS.values())
+_STARTERS: frozenset[str] = frozenset(
+    {"then", "do", "else", "elif", "!", "time", "if", "while", "until", "{"}
+)
+_HIDERS: frozenset[str] = frozenset({"function", "coproc"})  # what runs, and where, is unseen
 
 
 class _Out:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
+        self.meta: list[_Meta] = []
         self.unparsed: bool = False
         self.unquoted_heredoc: bool = False
         self.code_heredoc: bool = False
         self.scans: int = 0  # nested scans so far; MAX_SCANS caps the work of one command
+        self.links: list[tuple[int, int]] = []
+        self.hubs: int = 0
+        self.fed: set[int] = set()  # commands that read a pipe (or `>(…)`, or `< <(…)`)
+        self.links_unknown: bool = False
+
+    def hub(self) -> int:
+        self.hubs += 1
+        return -self.hubs
+
+    def feed(self, hub: int, start: int) -> None:
+        """The hub feeds every command from `start` on (a part after a pipe). Once the links are
+        unknown every command counts as fed, and no more are kept (groups nested past MAX_DEPTH
+        would make them quadratic)."""
+        if self.links_unknown:
+            return
+        for index in range(start, len(self.commands)):
+            self.links.append((hub, index))
+            self.fed.add(index)
 
 
 class _Scanner:
@@ -298,30 +525,82 @@ class _Scanner:
         self.i: int = 0
         self.out: _Out = out
         self.depth: int = depth
+        self.subs: list[_Sub] = []  # substitutions read and not yet given to their command
+        self.target: str = ""  # "<" or ">": the next word is a redirect's target
 
     # ------------------------------------------------------------ commands
 
     def parse_list(self, closer: str | None) -> bool:
         """Parse commands until `closer` (consumed) or the end. True if the closer was found."""
-        s, n = self.s, self.n
-        words: list[str] = []
-        herestrings: list[str] = []
+        s, n, out = self.s, self.n, self.out
+        cmd: _Cmd = _Cmd()
         heredocs: list[_Heredoc] = []
+        frames: list[_Frame] = [_Frame("", len(out.commands))]
 
         def end_command() -> None:
-            nonlocal words, herestrings
-            if words:
-                self.finish_command(words, herestrings)
-            words, herestrings = [], []
+            nonlocal cmd
+            if cmd.words:
+                for doc in heredocs:
+                    if doc.owner is cmd.words:
+                        doc.index = len(out.commands)
+                self.finish_command(cmd)
+            cmd = _Cmd()
+            self.target = ""
+
+        def end_part(frame: _Frame) -> None:
+            if frame.hub is not None:
+                out.feed(frame.hub, frame.start)
+            frame.start, frame.hub = len(out.commands), None
+
+        def pipe(frame: _Frame) -> None:
+            if frame.hub is not None:
+                out.feed(frame.hub, frame.start)
+            hub: int = out.hub()
+            if not out.links_unknown:
+                out.links += [(index, hub) for index in range(frame.start, len(out.commands))]
+            frame.start, frame.hub = len(out.commands), hub
+
+        def open_group(kind: str) -> None:
+            if len(frames) > MAX_DEPTH:
+                out.links_unknown = True
+            frames.append(_Frame(kind, len(out.commands), pattern=kind == "case"))
+
+        def close_group(word: str) -> None:
+            if len(frames) > 1 and _OPENERS.get(frames[-1].kind) == word:
+                end_part(frames.pop())
+            else:
+                out.links_unknown = True  # a closer that closes nothing
+
+        def take(added: int) -> None:
+            """Give the substitutions just read to the command; mark a redirect's target."""
+            cmd.subs += self.subs
+            self.subs.clear()
+            if added and self.target:
+                at: int = len(cmd.words) - 1
+                cmd.targets.append(at)
+                if self.target == "<":
+                    cmd.stdin = "sub" if cmd.words[at].startswith(SUB_PREFIX) else "file"
+                self.target = ""
+
+        def finish() -> None:
+            end_command()
+            for frame in reversed(frames):
+                end_part(frame)
+            if len(frames) > 1:
+                out.links_unknown = True  # an opener that is never closed
 
         while self.i < n:
             c: str = s[self.i]
             if c == "\n":
                 self.i += 1
+                top: _Frame = frames[-1]
+                piping: bool = top.hub is not None and len(out.commands) == top.start
                 end_command()
                 if heredocs:
                     self.read_bodies(heredocs, closer)
                     heredocs = []
+                if not piping:  # a pipe at the end of a line goes on to the next
+                    end_part(top)
                 continue
             if c in " \t\r":
                 self.i += 1
@@ -335,36 +614,86 @@ class _Scanner:
                 continue
             if c in ";&|" and not s.startswith("&>", self.i):
                 end_command()
+                first: int = self.i
                 self.i += 1
                 while self.i < n and s[self.i] in ";&|":
                     self.i += 1
+                operator: str = s[first : self.i]
+                if operator in ("|", "|&"):
+                    pipe(frames[-1])
+                else:
+                    end_part(frames[-1])
+                    if frames[-1].kind == "case" and operator.startswith((";;", ";&")):
+                        frames[-1].pattern = True
                 continue
             if c == "(":
+                if frames[-1].kind == "case" and frames[-1].pattern:
+                    self.i += 1  # `case x in (a)`: the pattern's optional parenthesis
+                    continue
+                after: int = self.i + 1
+                while after < n and s[after] in " \t":  # each blank once: one `(` before it
+                    after += 1
+                if cmd.words and not cmd.words[-1].endswith("=") and s.startswith(")", after):
+                    out.links_unknown = True  # `name ( )`: a function, called by name later
                 end_command()
                 self.i += 1
+                open_group("(")
                 continue
             if c == ")":
                 end_command()
                 self.i += 1
-                if closer == ")":
+                top = frames[-1]
+                if top.kind == "(":
+                    end_part(frames.pop())
+                elif top.kind == "case" and top.pattern:
+                    top.pattern = False  # the end of a pattern
+                elif closer == ")":
+                    finish()
                     if heredocs:
                         self.out.unparsed = True
                     return True
+                else:
+                    out.links_unknown = True  # a `)` that closes nothing
                 continue
             if c in "<>&":
-                self.redirect(words, herestrings, heredocs)
+                before: int = len(cmd.words)
+                self.redirect(cmd, heredocs)
+                take(len(cmd.words) - before)
                 continue
             word: str = self.word()
             if word.isdigit() and self.i < n and s[self.i] in "<>":
+                self.subs.clear()
                 continue  # the fd of `2>&1`
-            words.append(word)
-        end_command()
+            if cmd.start:
+                if word in _CLOSERS:
+                    close_group(word)
+                elif word in _OPENERS:
+                    open_group(word)
+                elif word in _HIDERS:
+                    out.links_unknown = True
+                cmd.start = word in _STARTERS
+            cmd.words.append(word)
+            take(1)
+        finish()
         if heredocs:
             self.out.unparsed = True  # a heredoc whose body never began
         return False
 
-    def finish_command(self, words: list[str], herestrings: list[str]) -> None:
-        self.out.commands.append(tuple(words))
+    def finish_command(self, cmd: _Cmd) -> None:
+        out: _Out = self.out
+        index: int = len(out.commands)
+        words, herestrings = cmd.words, cmd.herestrings
+        out.commands.append(tuple(words))
+        out.meta.append(_Meta(frozenset(cmd.targets), cmd.stdin))
+        if cmd.stdin == "sub":
+            out.fed.add(index)
+        for kind, first, last in cmd.subs:
+            for inner in range(first, last):
+                if kind == "out":  # `>(…)` reads what the command writes
+                    out.links.append((index, inner))
+                    out.fed.add(inner)
+                else:
+                    out.links.append((inner, index))
         names: list[str] = [base_name(w) for w in words]
         reader: bool = any(is_reader(name) for name in names)
         if herestrings and reader:
@@ -372,20 +701,25 @@ class _Scanner:
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
         # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work.
         texts: dict[str, None] = {}
-        for index, name in enumerate(names):
+        read: set[str] = set()  # herestrings a shell reads: what they run feeds the shell
+        for position, name in enumerate(names):
             if name in SHELLS:
-                script: str | None = shell_script(words[index + 1 :])
+                script: str | None = shell_script(words[position + 1 :])
                 if script is not None:
                     texts[script] = None
                 texts.update(dict.fromkeys(herestrings))
+                read.update(herestrings)
             elif (
                 name == "eval"
-                and index + 1 < len(words)
-                and not any(n == "eval" for n in names[:index])
+                and position + 1 < len(words)
+                and not any(n == "eval" for n in names[:position])
             ):
-                texts[" ".join(words[index + 1 :])] = None
+                texts[" ".join(words[position + 1 :])] = None
         for text in texts:
+            first = len(out.commands)
             self.sub_scan(text)
+            if text in read:
+                out.links += [(inner, index) for inner in range(first, len(out.commands))]
 
     def sub_scan(self, text: str) -> None:
         self.out.scans += 1
@@ -394,33 +728,38 @@ class _Scanner:
             return
         _Scanner(text, self.out, self.depth + 1).parse_list(None)
 
-    def nested(self) -> str:
-        """After `$(` or `<(`: parse to the matching `)`. Returns the placeholder word."""
+    def nested(self, kind: str = "in") -> str:
+        """After `$(`, `<(` or (`kind` "out") `>(`: parse to the matching `)`. Returns the
+        placeholder word; the range of commands inside waits in `subs` for its command."""
         if self.depth >= MAX_DEPTH:
             self.out.unparsed = True
             self.i = self.n
             return SUB_EMPTY
         before: int = len(self.out.commands)
+        subs, target = self.subs, self.target  # the outer command's, kept out of the inner list
+        self.subs, self.target = [], ""
         self.depth += 1
         found: bool = self.parse_list(")")
         self.depth -= 1
+        self.subs, self.target = subs, target
         if not found:
             self.out.unparsed = True
+        self.subs.append((kind, before, len(self.out.commands)))
         return placeholder(self.out.commands[before:])
 
     # ------------------------------------------------------------ redirects, heredocs
 
-    def redirect(self, words: list[str], herestrings: list[str], heredocs: list[_Heredoc]) -> None:
+    def redirect(self, cmd: _Cmd, heredocs: list[_Heredoc]) -> None:
         s, n = self.s, self.n
         c: str = s[self.i]
         if c in "<>" and s.startswith("(", self.i + 1):  # process substitution: a word
             self.i += 2
-            words.append(self.nested())
+            cmd.words.append(self.nested("out" if c == ">" else "in"))
             return
         if s.startswith("<<<", self.i):
             self.i += 3
             self.skip_blanks()
-            herestrings.append(self.word())
+            cmd.herestrings.append(self.word())
             return
         if s.startswith("<<", self.i):
             self.i += 2
@@ -432,13 +771,18 @@ class _Scanner:
             if not delimiter:
                 self.out.unparsed = True
                 return
-            heredocs.append(_Heredoc(delimiter, quoted, strip, words))
+            heredocs.append(_Heredoc(delimiter, quoted, strip, cmd.words))
             return
+        first: int = self.i
         self.i += 1  # `>`, `>>`, `>&`, `<&`, `&>`, `>|`, `<>`: the target stays a word
         while self.i < n and s[self.i] in "<>&|":
             self.i += 1
+        operator: str = s[first : self.i]
+        fd: bool = False
         while s[self.i - 1 : self.i] == "&" and self.i < n and s[self.i] in "0123456789-":
             self.i += 1  # the fd of `>&2`
+            fd = True
+        self.target = "" if fd else "<" if operator in ("<", "<>") else ">"
 
     def skip_blanks(self) -> None:
         while self.i < self.n and self.s[self.i] in " \t":
@@ -502,21 +846,29 @@ class _Scanner:
             body.append(line)
             pos = n if end < 0 else end + 1
         text: str = "\n".join(body)
+        inner: list[tuple[int, int]] = []  # what runs in the body feeds the command it is for
         if not doc.quoted:
             self.out.unquoted_heredoc = True  # D10: counts as unparseable for R1
-            self.expansions(text)  # the shell expands $(...) and backticks in the body
+            inner += self.expansions(text)  # the shell expands $(...) and backticks in the body
         if reader:
             self.out.code_heredoc = True  # D10: a quoted body is data unless something runs it
             if any(name in SHELLS for name in names):
+                first: int = len(self.out.commands)
                 self.sub_scan(text)
+                inner.append((first, len(self.out.commands)))
+        if doc.index >= 0:
+            self.out.links += [(i, doc.index) for first, last in inner for i in range(first, last)]
 
-    def expansions(self, body: str) -> None:
-        """Parse the substitutions of an unquoted heredoc body, as inside double quotes."""
+    def expansions(self, body: str) -> list[tuple[int, int]]:
+        """Parse the substitutions of an unquoted heredoc body, as inside double quotes; return
+        the ranges of commands they hold."""
         if self.depth >= MAX_DEPTH:
             self.out.unparsed = True
-            return
+            return []
         quoted: str = body.replace('"', '\\"') + ' "'  # a `\` at the end must not eat the quote
-        _Scanner(quoted, self.out, self.depth + 1).double_quoted()
+        scanner = _Scanner(quoted, self.out, self.depth + 1)
+        scanner.double_quoted()
+        return [(first, last) for _, first, last in scanner.subs]
 
     # ------------------------------------------------------------ words
 
@@ -626,6 +978,7 @@ class _Scanner:
     def parse_inner(self, text: str) -> str:
         before: int = len(self.out.commands)
         self.sub_scan(text)
+        self.subs.append(("in", before, len(self.out.commands)))
         return placeholder(self.out.commands[before:])
 
     def ansi_c(self) -> str:
@@ -709,10 +1062,34 @@ def normalize(text: str) -> Parsed:
     loose: tuple[tuple[str, ...], ...] = ()
     if out.unparsed:
         loose = loose_commands(text)
+    try:
+        piped: bool = _piped_code(out)
+    except Exception:  # noqa: BLE001 - as above: the text then counts as unparsed
+        out.unparsed, piped = True, False
+        loose = loose_commands(text)
     return Parsed(
         commands=tuple(out.commands),
         unparsed=out.unparsed,
         unquoted_heredoc=out.unquoted_heredoc,
         code_heredoc=out.code_heredoc,
         loose=loose,
+        links=tuple(out.links),
+        links_unknown=out.links_unknown,
+        piped_code=piped,
     )
+
+
+def _piped_code(out: _Out) -> bool:
+    """Some command that reads a pipe (every command, when the links are unknown) is an
+    interpreter or a shell that reads its code from stdin (`reads_stdin`). Its redirect targets
+    are no words of its own, and stdin redirected from a file names a script."""
+    count: int = len(out.commands)
+    fed: set[int] = set(range(count)) if out.links_unknown else out.fed
+    for index in sorted(i for i in fed if i < count):
+        meta: _Meta = out.meta[index]
+        if meta.stdin == "file":
+            continue
+        argv: tuple[str, ...] = out.commands[index]
+        if reads_stdin([word for at, word in enumerate(argv) if at not in meta.targets]):
+            return True
+    return False

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 
@@ -312,12 +313,26 @@ def _script_family(name: str) -> str | None:
     return base if base in ("perl", "ruby") else None
 
 
+# What `-M`, `-m`, `-d:` and `-dt:` may name in perl and still be a module (`Foo::Bar`, `-strict`,
+# `Foo=a,b`); anything else is code perl runs (`-MIO::Socket;print 1`), V5c.
+PERL_MODULE = re.compile(r"-?[A-Za-z_]\w*(?:::\w+)*(?:=[\w:]+(?:,[\w:]+)*)?", re.ASCII)
+
+
+def _perl_value(arg: str, index: int) -> str | None:
+    """The module a `-d:` or `-dt:` at `index` names, else None."""
+    for lead in (":", "t:"):
+        if arg.startswith(lead, index + 1):
+            return arg[index + 1 + len(lead) :]
+    return None
+
+
 def _perl_step(arg: str) -> int:
     """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
 
-    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
-    alone, the next word; a long option (`--version`) takes nothing. The script (the first plain
-    word), `-` or `--` ends the options.
+    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), as do `-d:` and
+    `-dt:`, and that rest is code unless it is a module name (`PERL_MODULE`); `-I` takes the rest
+    or, alone, the next word; a long option (`--version`) takes nothing. The script (the first
+    plain word), `-` or `--` ends the options.
     """
     if arg in ("-", "--") or not arg.startswith("-"):
         return _END
@@ -326,8 +341,13 @@ def _perl_step(arg: str) -> int:
     for index, letter in enumerate(arg[1:], 1):
         if letter in "eE":
             return _CODE
-        if letter in "MmI":
-            return 2 if letter == "I" and index == len(arg) - 1 else 1
+        if letter in "Mm":
+            return 1 if PERL_MODULE.fullmatch(arg[index + 1 :]) else _CODE
+        if letter == "I":
+            return 2 if index == len(arg) - 1 else 1
+        value: str | None = _perl_value(arg, index) if letter == "d" else None
+        if value is not None:
+            return 1 if PERL_MODULE.fullmatch(value) else _CODE
     return 1
 
 

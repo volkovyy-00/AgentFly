@@ -10,6 +10,9 @@ word-level guard are two copies that have to agree where SPEC section 9 says the
 - `MARKED_ALLOWED`: allowed for a marked session by the recorder.
 - `SCRIPT_NOT_INLINE` (part of `MARKED_ALLOWED`): perl and ruby runs that are not one-liners; the
   offline guard allows them too.
+- `PIPED_CODE` (part of `NAMED_OUTBOUND`): code piped into an interpreter or a shell that names no
+  script (V5c), and a perl module value that is not a plain name. `PIPED_NOT_INLINE` (part of
+  `MARKED_ALLOWED`): pipes into a program that names its script, or into no interpreter.
 """
 
 from __future__ import annotations
@@ -17,6 +20,79 @@ from __future__ import annotations
 import shlex
 
 HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nfix: don't (x) break\n\nBody line.\nEOF\n)\""
+
+# V5c: the brief's "Starts at" lines first, then the other ways stdin carries the code.
+PIPED_CODE: list[str] = [
+    "echo 'print(1)' | python3",
+    "cat a.rb | ruby",
+    "echo 1 | node",
+    "echo 'curl x' | sh",
+    "perl '-MIO::Socket;print 1' x.pl",
+    "cat x.pl | perl",
+    "echo 'print(1)' | python3.12",
+    "echo 1 | nodejs",
+    "echo ls | bash",
+    "echo ls | zsh",
+    "echo ls | dash",
+    "echo ls | ksh",
+    "echo ls | bash5.2",
+    "echo ls | bash -s",
+    "echo ls | bash -o pipefail",  # an option and its value, then nothing: stdin
+    "echo ls | sudo bash",
+    "echo ls | sudo -u me bash",
+    "echo ls | env A=1 bash",
+    "cat x | python3 -",
+    "cat x | python3 -u",
+    "cat x | python3 /dev/stdin",
+    "cat x | python3 /dev/fd/0",
+    "cat x | python3 --",
+    "cat x | ruby -",
+    "cat x | perl -",
+    "cat x | node -",
+    "cat x | node -r esm",  # an option that takes a value
+    "cat x |& python3",
+    "python3 < <(cat x)",
+    'echo hi | bash -c "$(cat)"',
+    "echo hi | bash -c `cat`",
+    "cat x > >(python3)",
+    "cat x | tee >(sh)",
+    "cat x |\npython3",  # a pipe at the end of a line goes on to the next
+    "(cat x) | python3",
+    "{ cat x; } | python3",
+    "cat x | (python3)",
+    "perl -M'IO::Socket;print 1' x.pl",
+    "perl '-d:Foo;print 1' x.pl",
+    "perl '-dt:Foo;print 1' x.pl",
+    "perl '-mFoo qw(x)' x.pl",
+]
+# V5c: none of these reads code from its input.
+PIPED_NOT_INLINE: list[str] = [
+    "git diff | python3 tool.py",
+    "cat x.json | python3 -m json.tool",
+    "python3 < x.py",
+    "perl -MFoo x.pl",
+    "perl -MFoo=a,b x.pl",
+    "echo hi | grep h",
+    "ps aux | grep python3",
+    "echo x | python3 t.py; true",
+    "cat x | python3 -u t.py",
+    "cat x | node app.js",
+    "cat x | ruby x.rb",
+    "cat x | perl x.pl",
+    "cat x | bash x.sh",
+    "cat x | sh -c 'wc -l'",
+    "cat x | python3 < t.py",  # stdin is the file, not the pipe
+    "python3 x.py | grep sh",
+    "echo bash | xargs echo",
+    "python3",  # nothing is piped in
+    "python3 -",
+    "perl -MFoo::Bar=a,b:c x.pl",
+    "perl -M-warnings x.pl",
+    "perl -d:NYTProf x.pl",
+    "perl -d:Trace x.pl",  # an `e` in a module name is no `-e`
+    "perl -dt:Foo x.pl",
+    "for f in a b; do python3 t.py < $f; done",
+]
 
 NAMED_OUTBOUND: list[str] = [
     "curl https://x.com",
@@ -85,6 +161,7 @@ NAMED_OUTBOUND: list[str] = [
     "ruby -X /tmp -e 1",  # `-X` is `-C`
     "ruby --parser prism -e 1",  # ruby 3 long options that take the next word
     "ruby --backtrace-limit 1 -e 1",
+    *PIPED_CODE,
 ]
 # R1G: perl and ruby runs that are not one-liners (a script file, a version, a check, an encoding).
 SCRIPT_NOT_INLINE: list[str] = [
@@ -132,6 +209,9 @@ RECORDER_ONLY: list[str] = [
     "bash <<< 'ls'",
     "python3 <<< 'print(1)'",
     "bash -o pipefail -c 'ls; echo \"unbalanced'",
+    # V5c: piped code the offline guard does not see (its stage ends at the `;`)
+    "cat x | if true; then python3; fi",
+    "cat x | while read -r l; do sh; done",
 ]
 MARKED_ALLOWED: list[str] = [
     "ls",
@@ -162,6 +242,7 @@ MARKED_ALLOWED: list[str] = [
     "python3 -m pytest && git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"",
     "ls 2>&1 | grep a",
     *SCRIPT_NOT_INLINE,
+    *PIPED_NOT_INLINE,
 ]
 
 

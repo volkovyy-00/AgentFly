@@ -17,6 +17,7 @@ from tests.cases import (
     GUARD_PATHS,
     NAMED_OUTBOUND,
     PACKAGE_ALLOWED,
+    PIPED_NOT_INLINE,
     RECORDER_ONLY,
     SCRIPT_NOT_INLINE,
     wrapped,
@@ -120,6 +121,7 @@ ALLOWED = [
     "agentfly status",
     *PACKAGE_ALLOWED,
     *SCRIPT_NOT_INLINE,
+    *PIPED_NOT_INLINE,
 ]
 
 
