@@ -408,6 +408,30 @@ path = "names"
     assert decide(grep("*.py"), fresh(), rules)[1] is None
 
 
+@pytest.mark.parametrize(
+    ("pattern", "glob"),
+    [
+        ("id[\\u0001_]rsa", "*_rsa"),  # the sample takes the printable member, `_`
+        ("key[\\u0001.]pem", "*.pem"),
+        ("sec[\\u0005]", "sec[a\x01-\x1f]"),  # a glob range over control characters
+        ("sec\\u0005", "sec[a\x01-\x1f]"),
+    ],
+)
+def test_control_characters_on_either_side_still_mark(pattern: str, glob: str) -> None:
+    rule = """
+[[rule]]
+id = "names"
+kind = "match"
+severity = "block"
+message = "a named file"
+event = ["read"]
+path = "names"
+"""
+    line = f'names = ["{pattern}"]\n'
+    rules = ruleset_of(rulefile.default_text().replace("[lists]\n", "[lists]\n" + line, 1) + rule)
+    assert decide(grep(glob), fresh(), rules)[1] == "names"
+
+
 def test_loading_a_class_costs_about_its_own_length(monkeypatch: pytest.MonkeyPatch) -> None:
     # Clauses are built before the file's work is judged, so a class must not cost a scan of every
     # character (96 compares) at load: `[~]` answers with its own member.
@@ -422,13 +446,23 @@ def test_loading_a_class_costs_about_its_own_length(monkeypatch: pytest.MonkeyPa
 
     def compares(patterns: str) -> int:
         calls.clear()
-        rulefile.parse(default_with(f"many = [{patterns}]\n", rule))
+        assert not rulefile.parse(default_with(f"many = [{patterns}]\n", rule)).errors
         return len(calls)
 
     monkeypatch.setattr(rulefile.fnmatch, "fnmatchcase", counting)
     plain = compares(", ".join(f'"a{i}b"' for i in range(150)))
     classes = compares(", ".join(f'"[~]{i}[!x]"' for i in range(150)))
     assert classes - plain <= 150 * 2 * 4  # two classes, two samples, a few compares each
+    # a class that allows nothing ends the name's samples: about 230 compares, not one per class
+    empty = compares(", ".join(f'"{"[z-a]" * 20}{i}"' for i in range(150)))
+    assert empty - plain <= 150 * 240
+    # clauses that share a list read it once (new names each time: a list read before is cached)
+    once = compares(", ".join(f'"x{i}[!~]"' for i in range(60)))  # two rules stay under MAX_WORK
+    twice = rule + rule.replace('id = "m"', 'id = "n"')
+    calls.clear()
+    listed = ", ".join(f'"y{i}[!~]"' for i in range(60))
+    assert not rulefile.parse(default_with(f"many = [{listed}]\n", twice)).errors
+    assert len(calls) - once <= 60 * 2
 
 
 def test_a_class_with_no_character_to_list_falls_toward_reading() -> None:

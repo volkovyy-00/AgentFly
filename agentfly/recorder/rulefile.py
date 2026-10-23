@@ -615,9 +615,12 @@ def _first_allowed(charset: str) -> str:
     """A character this `fnmatch` class allows (SAMPLE_LETTER first, then a printable one), or ""
     if it allows no ASCII character.
 
-    Its own members are tried first, so a plain class answers at once and a negated one costs about
-    as many compares as it has members: this runs for every class of a rules file at load."""
-    tried = chain(SAMPLE_LETTER, charset[1:-1], _PRINTABLE, _ASCII)
+    Its own printable members are tried first, so a plain class answers at once and a negated one
+    costs about as many compares as it has members: this runs for every class of a rules file at
+    load. A control character only when the class allows nothing printable (`[\x01_]` gives `_`)."""
+    members: str = charset[1:-1]
+    shown: Iterable[str] = (c for c in members if c in _PRINTABLE)
+    tried = chain(SAMPLE_LETTER, shown, _PRINTABLE, members, _ASCII)
     return next((c for c in tried if fnmatch.fnmatchcase(c, charset)), "")
 
 
@@ -640,11 +643,12 @@ def _either_case(body: str, negated: bool) -> tuple[str, str]:
     """ripgrep's class (its members unfolded) as a token on case-folded names: a character counts
     as allowed when the class allows it in either case, so folding only ever lets more through
     (`[!A-Z]` still allows `n`, `[A-z]` still allows `_`). Only printable characters are listed, so
-    a class with a member past them (`[ą-ż]`, `[é]`), one that allows none of them, or one with a
-    chained range (`[a-c-e]`, which ripgrep and `fnmatch` read apart) is read as any one character
-    (toward marking)."""
+    a class with a member past them (`[ą-ż]`, `[é]`, `[\x01-\x1f]`: a range over control
+    characters has one at an end), one that allows none of them, or one with a chained range
+    (`[a-c-e]`, which ripgrep and `fnmatch` read apart) is read as any one character (toward
+    marking)."""
     held = f"[{body}]"
-    if not body.isascii() or _CHAINED_RANGE.search(body):
+    if not set(body) <= set(_PRINTABLE) or _CHAINED_RANGE.search(body):
         return "one", ""
     seen: set[str] = set(_PRINTABLE) | set(body) | set(body.swapcase())
     folded: set[str] = {c.lower() for c in seen if len(c.lower()) == 1}
@@ -826,18 +830,21 @@ def _name_tokens(name: str) -> list[tuple[str, str]]:
 
 def _samples(name: str) -> tuple[str, ...]:
     """Sample names this case-folded `fnmatch` name pattern matches: every `*` filled with
-    nothing, then with SAMPLE_LETTER; a `?` is SAMPLE_LETTER, a class one character it allows."""
-    tokens: list[tuple[str, str]] = _name_tokens(name)
+    nothing, then with SAMPLE_LETTER; a `?` is SAMPLE_LETTER, a class one character it allows.
+    None when a class allows no ASCII character (the first such class ends the reading)."""
+    tokens: list[tuple[str, str]] = []
+    for kind, text in _name_tokens(name):
+        if kind == "set":
+            text = _first_allowed(text)
+            if not text:
+                return ()
+            kind = "lit"
+        tokens.append((kind, text))
     fills: dict[str, str] = {"one": SAMPLE_LETTER}
     found: list[str] = []
     for fill in ("", SAMPLE_LETTER):
         fills["star"] = fill
-        found.append(
-            "".join(
-                text if kind == "lit" else _first_allowed(text) if kind == "set" else fills[kind]
-                for kind, text in tokens
-            )
-        )
+        found.append("".join(text if kind == "lit" else fills[kind] for kind, text in tokens))
     return tuple(dict.fromkeys(s for s in found if s and fnmatch.fnmatchcase(s, name)))
 
 
@@ -860,6 +867,7 @@ class _Searched(NamedTuple):
     set_rows: int
 
 
+@lru_cache(maxsize=64)  # clauses that name the same list read it once
 def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _Searched:
     names: list[str | None] = []
     found: list[tuple[str, int]] = []

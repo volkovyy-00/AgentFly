@@ -318,7 +318,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   character, B tries a pattern's literal `!` and `]` and, for a pattern with a class, every ASCII
   character, and loading a class costs about its own length; a rule name past ASCII
   (`secrét`, read by `secr??t`) or with a class that allows no ASCII character is read by every
-  glob, and a class of control characters (`sec[\u007f]`) is still judged by its sample.
+  glob, and a class of control characters (`sec[\u007f]`) is still judged by its sample, a
+  sample takes a printable member first (`id[\u0001_]rsa` read by `*_rsa`), a glob range over
+  control characters is any character, and a class that allows nothing, or a list two rules
+  share, is read once at load.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.

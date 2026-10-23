@@ -1049,7 +1049,11 @@ Other measures:
   no filter to ripgrep, so it is a search with no glob. Names-only searches
   ("files_with_matches", "count") never mark, so a secret could be guessed letter
   by letter through them. A glob past the search bound (section 5) marks, whatever
-  it names.
+  it names. ripgrep's `?` and classes match one byte, and AgentFly judges a glob by
+  characters: a rule name written in ASCII with a `?` or a `[!…]` and no `*` after
+  it (`secret?`) is not read by `secret??`, which lists `secreté`, and a name that
+  folds to ASCII (`ſecret.txt`) is not read by `??ecret.txt`. The packaged lists
+  are not affected: each name such a glob could reach ends in `*` or is exact ASCII.
 - The agent can read the token (above).
 - R0 matches names, so a deliberately obscured command can still reach
   `agentfly stop`, `brew services stop` or the session-notes file. Stopping the
