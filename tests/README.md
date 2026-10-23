@@ -301,14 +301,18 @@ the maintainers' work items and decisions, which are kept outside this repo.
   lists (`.env*`, `*`, `{a,.env}`, `.e[^x]v`, `!*.py`, `.en?.local`, `credential?.py`,
   `credential???.py`, …) and `output_mode` "content", none, `"lines"` or `7`; allowed after `*.py`,
   `**/*.ts`, `*.json`, `test_*.py`, `.env.example`, `test_???.py`, `log-[0-9][0-9][0-9].txt` and
-  a folder search with no glob; "files_with_matches", "count" and the Glob shape never mark.
+  a folder search with no glob (with each of those `output_mode`s); "files_with_matches", "count"
+  (over `/w`, `/w/.env`, `/w/repo/secret.key` or no folder) and the Glob shape never mark. A body
+  the hook client sanitized (`output_mode` 7 or `["x"]` sent as null, glob `.env*`) marks.
   `npm-publish-after-env`, a widened list (`*.secret`), R1 at D27's minimum, a `match` read rule and
   a `then` on read all see a content search; a folder pattern needs the search to start where it
-  can be. The bound: a glob over 512 characters or 64 alternatives, one ripgrep refuses, a
+  can be. The bound: a glob over 512 characters, 64 alternatives or 32 classes, one ripgrep refuses, a
   non-string glob and work over `MAX_SEARCH_WORK` mark, with the work count pinned and no compare
   made over the bound; a search never charges the hook's meter. Through `apply_rules`, a marking
   search in a subagent marks its parent, and the stored step holds neither the search text nor
-  the glob. Trailing blanks are dropped as ripgrep drops them (`.env ` marks), a pattern with no
+  the glob. Trailing whitespace is dropped as ripgrep 14 drops it (`.env `, `.env\r`, `*.pem\n`,
+  `.env\xa0` mark; `.env\ ` and `*.py\n` do not; `.env\` and `\r` is refused and marks; `\x1c`
+  stays), a pattern with no
   parts (`~/.`) loads, a class with no character to list falls toward marking, alternatives
   that differ only in folders are judged once, a class allows a letter in either case
   (`.e[!A-Z]v` marks) and one past the printable characters (`[ą-ż]`) is any character, a `!`

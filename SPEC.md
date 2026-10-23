@@ -442,10 +442,13 @@ R1 may say, below, covers it, and no file can leave it out). It reads the file
 no glob reads nothing by name (section 10). The glob is read as ripgrep reads one
 (`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes outside a class, a
 member inside one, a leading `!` that
-excludes, trailing blanks dropped unless escaped, as in a gitignore line),
+excludes, trailing whitespace dropped as in a gitignore line: every Unicode
+whitespace character, a line break, `\r`, a vertical tab, a form feed and a no-break
+space too, unless the glob ends in `\` and a space, which keeps all of it),
 case-folded like a rule path (a class allows a letter when it allows it in either
 case, so `.e[!A-Z]v` still reads `.env`, and a class that is not plain, with a
-member past the printable ASCII characters, a `\` or a chained range such as
+member that is a control character or past the printable ASCII characters, a `\`
+or a chained range such as
 `[a-c-e]`, is any one character: when unsure, it matches), and each brace
 alternative is judged on
 its own by its file name, its folders taken as able to sit anywhere under
@@ -474,8 +477,9 @@ reading a secret unless it leaves out every name (`!*`). So `*.py`, `*.json`,
 `test_*.py` and `.env.example` read no secret, and `!*.py` reads one. A `path`
 pattern with `/` also needs its folders to fit under `file_path`; a `path_except`
 with `/` is not used for a search. The test has its own fixed bound, a count: a
-glob longer than 512 characters, with more than 64 brace alternatives, or whose
-test would take more than 10,000 steps, a glob ripgrep would refuse, and a `glob`
+glob longer than 512 characters, with more than 64 brace alternatives, more than
+32 classes or braces nested more than 32 deep, or whose test would take more than
+10,000 steps, a glob ripgrep would refuse, and a `glob`
 that is not a string all count as reading a secret. A `file_path` that is not a
 string counts as none. The search text itself is never sent to the recorder, and
 the stored step keeps neither it nor the glob.
@@ -1050,7 +1054,9 @@ Other measures:
   no filter to ripgrep, so it is a search with no glob. Names-only searches
   ("files_with_matches", "count") never mark, so a secret could be guessed letter
   by letter through them. A glob past the search bound (section 5) marks, whatever
-  it names. ripgrep's `?` and classes match one byte, and AgentFly judges a glob by
+  it names. Past the bound on listing names against `path_except` (2,000 compares,
+  section 5) the exceptions are not used, so the search marks: `.env??.example`
+  marks, `.env?.example` does not. ripgrep's `?` and classes match one byte, and AgentFly judges a glob by
   characters: a rule name written in ASCII with a `?` or a `[!…]` and no `*` after
   it (`secret?`) is not read by `secret??`, which lists `secreté`, and a name that
   folds to ASCII (`ſecret.txt`) is not read by `??ecret.txt`. The packaged lists
