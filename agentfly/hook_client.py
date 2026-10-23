@@ -176,12 +176,12 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
         if event != "beforeShellExecution":
             out.pop("command", None)
         kept: dict[str, Any] = {}
-        if isinstance(tool_input, dict) and isinstance(tool_input.get("file_path"), str):
-            kept["file_path"] = tool_input["file_path"]
-        if isinstance(tool_input, dict) and tool_name == "grep":
+        if isinstance(tool_input, dict):
+            if isinstance(tool_input.get("file_path"), str):
+                kept["file_path"] = tool_input["file_path"]
             # A search's file-name pattern and what it returns, never its search text. A value
             # that is not a string goes as null: present, so the recorder counts it as a read.
-            for key in _SEARCH_KEEP:
+            for key in _SEARCH_KEEP if tool_name == "grep" else ():
                 if key in tool_input:
                     value: Any = tool_input[key]
                     kept[key] = value if isinstance(value, str) else None
@@ -299,11 +299,8 @@ def _node_one_liner(args: Iterable[str]) -> bool:
 
 def _script_family(name: str) -> str | None:
     """'perl' for perl, perl5.34; 'ruby' for ruby, ruby3.2; else None (`perldoc` is neither)."""
-    for family in ("perl", "ruby"):
-        rest: str = name.removeprefix(family)
-        if rest != name and not rest.strip("0123456789."):
-            return family
-    return None
+    base: str = name.rstrip("0123456789.")
+    return base if base in ("perl", "ruby") else None
 
 
 def _perl_one_liner(args: Iterable[str]) -> bool:

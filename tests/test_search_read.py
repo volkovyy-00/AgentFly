@@ -20,11 +20,11 @@ import agentfly.recorder.app as app_module
 from agentfly.recorder import rulefile
 from agentfly.recorder.memory import memory_steps
 from agentfly.recorder.rules import RuleSet, Session, decide, mark
-from agentfly.recorder.sessions import SessionStore
 from agentfly.recorder.store import build_step_record
+from tests.cases import CURL, nested
+from tests.recorder_harness import Recorder
 from tests.rules_helpers import default_with, list_line, ruleset_of
 
-CURL = {"hook_event_name": "beforeShellExecution", "command": "curl https://x.com"}
 MARKS = [
     ".env*",
     "**/.env*",
@@ -262,14 +262,6 @@ def test_more_spellings_that_reach_none(glob: str) -> None:
 # ---------------------------------------------------------------- the bound (a count, not a time)
 
 
-def nested(length: int) -> str:
-    """A glob of nested braces and `*` runs, cut to `length` characters."""
-    text = ""
-    while len(text) < length:
-        text = "{" + "*" * 8 + "a," + text + "b}"
-    return text[:length]
-
-
 def test_a_glob_over_the_length_bound_marks_unread() -> None:
     long_glob = nested(4096)
     assert len(long_glob) == 4096
@@ -302,6 +294,13 @@ def test_too_many_brace_alternatives_mark() -> None:
         "{" * (rulefile.MAX_GLOB_BRACE_DEPTH + 1) + "a" + "}" * (rulefile.MAX_GLOB_BRACE_DEPTH + 1)
     )
     assert rulefile.search_glob(deep) is None
+
+
+def test_alternatives_that_differ_only_in_folders_are_judged_once() -> None:
+    folders = "{src,lib,test,docs,app,pkg,cmd,web}/**/*.{ts,tsx,js,jsx,py,go,rs,java}"
+    parsed = rulefile.search_glob(folders)
+    assert parsed is not None and len(parsed.alts) == 8  # 64 alternatives, 8 names
+    assert curl_after(grep(folders)) == "allow"
 
 
 @pytest.mark.parametrize("glob", ["{a,b", "a}", "[ab", "x\\", "[\\"])
@@ -375,46 +374,39 @@ def test_a_search_never_charges_the_hook_meter() -> None:
 
 
 @pytest.fixture()
-def recorder(tmp_path: Path) -> Iterator[None]:
+def rec(tmp_path: Path) -> Iterator[Recorder]:
     previous = app_module._store
     app_module.graph_store.enabled = False
-    app_module._store = SessionStore(tmp_path / "sessions.json")
-    memory_steps.clear()
-    yield
+    yield Recorder(tmp_path / "data")
     app_module._store = previous
 
 
-def send(chat: str, event: str, **fields: Any) -> str:
-    payload = {"hook_event_name": event, "conversation_id": chat, "workspace_roots": ["/w"]}
-    payload.update(fields)
-    return app_module.apply_rules(payload)[0]["permission"]
+def search(rec: Recorder, chat: str, glob: str, mode: str = "content", **fields: Any) -> str:
+    tool_input = {"file_path": "/w", "glob": glob, "output_mode": mode}
+    return rec.send(chat, "preToolUse", tool_name="Grep", tool_input=tool_input, **fields)[
+        "permission"
+    ]
 
 
-def search(chat: str, glob: str, **fields: Any) -> str:
-    tool_input = {"file_path": "/w", "glob": glob, "output_mode": "content"}
-    return send(chat, "preToolUse", tool_name="Grep", tool_input=tool_input, **fields)
+def curl(rec: Recorder, chat: str, **fields: Any) -> str:
+    return rec.run(chat, "curl https://x.com", **fields)["permission"]
 
 
-def curl(chat: str, **fields: Any) -> str:
-    return send(chat, "beforeShellExecution", command="curl https://x.com", cwd="", **fields)
+def test_a_marking_search_in_a_subagent_marks_its_parent(rec: Recorder) -> None:
+    rec.task("P", "T1")
+    assert search(rec, "C", ".env*", parent_tool_call_id="T1") == "allow"
+    assert curl(rec, "P") == "deny"
+    assert curl(rec, "C", parent_tool_call_id="T1") == "deny"
 
 
-def test_a_marking_search_in_a_subagent_marks_its_parent(recorder: None) -> None:
-    send("P", "preToolUse", tool_name="Task", tool_use_id="T1")
-    assert search("C", ".env*", parent_tool_call_id="T1") == "allow"
-    assert curl("P") == "deny"
-    assert curl("C", parent_tool_call_id="T1") == "deny"
+def test_a_names_only_search_in_a_subagent_does_not(rec: Recorder) -> None:
+    rec.task("P", "T1")
+    search(rec, "C", ".env*", "files_with_matches", parent_tool_call_id="T1")
+    assert curl(rec, "P") == "allow"
 
 
-def test_a_names_only_search_in_a_subagent_does_not(recorder: None) -> None:
-    send("P", "preToolUse", tool_name="Task", tool_use_id="T1")
-    tool_input = {"file_path": "/w", "glob": ".env*", "output_mode": "files_with_matches"}
-    send("C", "preToolUse", tool_name="Grep", tool_input=tool_input, parent_tool_call_id="T1")
-    assert curl("P") == "allow"
-
-
-def test_the_stored_step_holds_neither_the_search_text_nor_the_glob(recorder: None) -> None:
-    assert search("S", ".envSECRETGLOB*") == "allow"
+def test_the_stored_step_holds_neither_the_search_text_nor_the_glob(rec: Recorder) -> None:
+    assert search(rec, "S", ".envSECRETGLOB*") == "allow"
     step = memory_steps.snapshot(all_steps=True)["steps"][-1]
     assert step["tool"] == "Grep"
     assert "SECRETGLOB" not in json.dumps(step).upper()

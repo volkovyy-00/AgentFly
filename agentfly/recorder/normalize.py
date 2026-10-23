@@ -138,11 +138,8 @@ def _node_one_liner(args: Iterable[str]) -> bool:
 
 def script_family(name: str) -> str | None:
     """'perl' for perl, perl5.34; 'ruby' for ruby, ruby3.2; else None (`perldoc` is neither)."""
-    for family in _READERS:
-        rest: str = name.removeprefix(family)
-        if rest != name and not rest.strip("0123456789."):
-            return family
-    return None
+    base: str = name.rstrip("0123456789.")
+    return base if base in ("perl", "ruby") else None
 
 
 def _perl_one_liner(args: Iterable[str]) -> bool:

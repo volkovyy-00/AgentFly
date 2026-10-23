@@ -506,20 +506,16 @@ def event_of(action: Mapping[str, Any]) -> str | None:
         return "read"
     if event == "beforeShellExecution":
         return "shell"
-    if event == "preToolUse":
-        tool: str = str(action.get("tool_name", "")).casefold()
-        if tool == "write":
-            return "write"
-        if tool == SEARCH_TOOL and _returns_lines(action):
-            return "read"
+    if event == "preToolUse" and str(action.get("tool_name", "")).casefold() == "write":
+        return "write"
+    if is_search(action) and _returns_lines(action):
+        return "read"
     return None
 
 
 def _action_path(action: Mapping[str, Any], event: str) -> str:
-    value: Any = action.get("file_path")
-    if event == "write":
-        tool_input: Any = action.get("tool_input")
-        value = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    source: Mapping[str, Any] = _tool_input(action) if event == "write" else action
+    value: Any = source.get("file_path")
     return value if isinstance(value, str) else ""
 
 
@@ -723,16 +719,22 @@ def _name_pattern(tokens: Sequence[tuple[str, str]]) -> str:
     return "".join(out)
 
 
+def _one_star(tokens: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    """The tokens with each run of `*` made one (`a**b` is `a*b`)."""
+    kept: list[tuple[str, str]] = []
+    for token in tokens:
+        if not (token[0] == "star" and kept[-1:] == [token]):
+            kept.append(token)
+    return tuple(kept)
+
+
 def _alternative(tokens: list[tuple[str, str]]) -> _Alt:
-    slash: bool = any(kind == "sep" for kind, _ in tokens)
     last: int = max((i for i, (kind, _) in enumerate(tokens) if kind == "sep"), default=-1)
+    slash: bool = last >= 0
     name: list[tuple[str, str]] = tokens[last + 1 :]
     any_name: bool = name == [("star", ""), ("star", "")] or (slash and not name)
-    kept: list[tuple[str, str]] = []
-    for token in name:  # `a**b` is `a*b`
-        if not (token[0] == "star" and kept and kept[-1][0] == "star"):
-            kept.append(token)
-    return _Alt(tuple(kept), _name_pattern(kept), any_name, slash)
+    kept: tuple[tuple[str, str], ...] = _one_star(name)
+    return _Alt(kept, _name_pattern(kept), any_name, slash)
 
 
 @lru_cache(maxsize=64)
@@ -747,48 +749,11 @@ def search_glob(text: str) -> _Glob | None:
         alternatives = _expand(_glob_tokens(folded[1:] if negated else folded))
     except _Unsure:
         return None
-    return _Glob(negated, tuple(_alternative(tokens) for tokens in alternatives))
+    # Only an alternative's name is judged: `{src,lib}/*.py` is one alternative, not two.
+    return _Glob(negated, tuple(dict.fromkeys(_alternative(tokens) for tokens in alternatives)))
 
 
-def _samples(name: str) -> tuple[str, ...]:
-    """Sample names this case-folded `fnmatch` name pattern matches: every `*` filled with
-    nothing, then with SAMPLE_LETTER; a `?` is SAMPLE_LETTER, a class one character it allows."""
-    found: list[str] = []
-    for fill in ("", SAMPLE_LETTER):
-        parts: list[str] = []
-        i: int = 0
-        while i < len(name):
-            charset = _CLASS.match(name, i) if name[i] == "[" else None
-            if charset is not None:
-                parts.append(_first_allowed(charset.group()))
-                i = charset.end()
-                continue
-            parts.append({"*": fill, "?": SAMPLE_LETTER}.get(name[i], name[i]))
-            i += 1
-        found.append("".join(parts))
-    return tuple(dict.fromkeys(s for s in found if s and fnmatch.fnmatchcase(s, name)))
-
-
-class _Searched(NamedTuple):
-    """A clause as a search reads it, worked out once (it depends on the clause only).
-
-    `names`: per `path` pattern, its file-name pattern (None: any name, a last `**`), and
-    `elements` the same as `_name_elements` reads it. `samples`: (sample, index into `names`) for
-    A, those no name-only exception matches. `excepts`: the name-only exceptions. `letters`: the
-    characters B tries for a `?` or a class. `rows` and `set_rows`: what `_can_match` costs, per
-    position of a glob's name and per character tried there."""
-
-    patterns: tuple[Pattern, ...]
-    names: tuple[str | None, ...]
-    elements: tuple[tuple[tuple[str, str], ...] | None, ...]
-    samples: tuple[tuple[str, int], ...]
-    excepts: tuple[str, ...]
-    letters: str
-    rows: int
-    set_rows: int
-
-
-def _name_elements(name: str) -> tuple[tuple[str, str], ...]:
+def _name_tokens(name: str) -> list[tuple[str, str]]:
     """A case-folded `fnmatch` name pattern as (kind, text): `lit`, `star`, `one`, `set` (a class
     as `fnmatch` reads it; a `[` that never closes is a plain character)."""
     found: list[tuple[str, str]] = []
@@ -800,10 +765,45 @@ def _name_elements(name: str) -> tuple[tuple[str, str], ...]:
             i = charset.end()
             continue
         kind: str = {"*": "star", "?": "one"}.get(name[i], "lit")
-        if not (kind == "star" and found[-1:] == [("star", "")]):
-            found.append((kind, name[i] if kind == "lit" else ""))
+        found.append((kind, name[i] if kind == "lit" else ""))
         i += 1
-    return tuple(found)
+    return found
+
+
+def _samples(name: str) -> tuple[str, ...]:
+    """Sample names this case-folded `fnmatch` name pattern matches: every `*` filled with
+    nothing, then with SAMPLE_LETTER; a `?` is SAMPLE_LETTER, a class one character it allows."""
+    tokens: list[tuple[str, str]] = _name_tokens(name)
+    fills: dict[str, str] = {"one": SAMPLE_LETTER}
+    found: list[str] = []
+    for fill in ("", SAMPLE_LETTER):
+        fills["star"] = fill
+        found.append(
+            "".join(
+                text if kind == "lit" else _first_allowed(text) if kind == "set" else fills[kind]
+                for kind, text in tokens
+            )
+        )
+    return tuple(dict.fromkeys(s for s in found if s and fnmatch.fnmatchcase(s, name)))
+
+
+class _Searched(NamedTuple):
+    """A clause as a search reads it, worked out once (it depends on the clause only).
+
+    `names`: per `path` pattern, its file-name pattern (None: any name, a last `**`), and
+    `elements` the same as tokens (`_name_tokens`, each run of `*` made one). `samples`: (sample,
+    index into `names`) for A, those no name-only exception matches. `excepts`: the name-only
+    exceptions. `letters`: the characters B tries for a `?` or a class. `rows` and `set_rows`:
+    what `_can_match` costs, per position of a glob's name and per character tried there."""
+
+    patterns: tuple[Pattern, ...]
+    names: tuple[str | None, ...]
+    elements: tuple[tuple[tuple[str, str], ...] | None, ...]
+    samples: tuple[tuple[str, int], ...]
+    excepts: tuple[str, ...]
+    letters: str
+    rows: int
+    set_rows: int
 
 
 def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _Searched:
@@ -811,7 +811,7 @@ def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _S
     for pattern in path:
         last: str = pattern.text if pattern.name_only else pattern.parts[-1]
         names.append(None if last == "**" else last)
-    elements = tuple(None if name is None else _name_elements(name) for name in names)
+    elements = tuple(None if name is None else _one_star(_name_tokens(name)) for name in names)
     excepts: tuple[str, ...] = tuple(p.text for p in path_except if p.name_only)
     samples: list[tuple[str, int]] = [
         (sample, index)
@@ -849,6 +849,14 @@ def _tries_count(widths: Sequence[int], limit: int) -> int:
     return tries
 
 
+def _listed(searched: _Searched, widths: Sequence[int]) -> int | None:
+    """What holding B's tries one by one against the patterns and exceptions costs, or None when
+    they are not listed: the clause has no exception, or the cost is over MAX_EXCEPT_WORK."""
+    against: int = len(searched.names) + len(searched.excepts)
+    cost: int = _tries_count(widths, MAX_EXCEPT_WORK) * against
+    return cost if searched.excepts and cost <= MAX_EXCEPT_WORK else None
+
+
 def search_work(searched: _Searched, glob: _Glob, start_depth: int) -> int:
     """The steps a search with this glob costs one clause at most, from the sizes alone: the
     folder test of each anchored pattern and, per alternative, A's samples, the letters each
@@ -856,16 +864,13 @@ def search_work(searched: _Searched, glob: _Glob, start_depth: int) -> int:
     exceptions when there are exceptions and the tries fit MAX_EXCEPT_WORK."""
     anchored: int = sum(1 for p in searched.patterns if not p.name_only and p.anchor)
     work: int = anchored * start_depth
-    against: int = len(searched.names) + len(searched.excepts)
     for alt in glob.alts:
         work += len(searched.samples)
         if not glob.negated and not alt.any_name:
             widths: list[int] = _widths(alt, searched.letters)
             work += sum(len(searched.letters) + _SET_WORK for k, _ in alt.tokens if k == "set")
             work += searched.rows * (len(widths) + 1) + searched.set_rows * sum(widths)
-            listed: int = _tries_count(widths, MAX_EXCEPT_WORK) * against
-            if searched.excepts and listed <= MAX_EXCEPT_WORK:
-                work += listed
+            work += _listed(searched, widths) or 0
         if work > MAX_SEARCH_WORK:
             break
     return work
@@ -936,7 +941,7 @@ def _folders_fit(pattern: Pattern, start: tuple[str, ...] | None, home: str) -> 
             return False
         if folders[index] == "**":
             return True
-        if not fnmatch.fnmatchcase(segment, folders[index]):
+        if not _part_hit(segment, folders[index]):
             return False
     return True
 
@@ -950,6 +955,10 @@ def _start_of(start: str | None, home: str) -> tuple[str, ...] | None:
     return segments if resolved.startswith("/") else None
 
 
+def _alt_takes(alt: _Alt, name: str) -> bool:
+    return alt.any_name or fnmatch.fnmatchcase(name, alt.pattern)
+
+
 def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None, home: str) -> bool:
     fits: tuple[bool, ...] = tuple(_folders_fit(p, start, home) for p in searched.patterns)
     if any(name is None and fit for name, fit in zip(searched.names, fits, strict=True)):
@@ -958,29 +967,25 @@ def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None,
     if glob.negated:
         if any(alt.slash for alt in glob.alts):
             return True  # `!tests/**` reads every file outside one folder
-        return any(
-            not any(alt.any_name or fnmatch.fnmatchcase(s, alt.pattern) for alt in glob.alts)
-            for s in samples
-        )
+        return any(not any(_alt_takes(alt, s) for alt in glob.alts) for s in samples)
     shown = [
         (name, elements)
         for name, elements, fit in zip(searched.names, searched.elements, fits, strict=True)
         if fit and name is not None and elements is not None
     ]
-    against: int = len(searched.names) + len(searched.excepts)
     for alt in glob.alts:
-        if any(alt.any_name or fnmatch.fnmatchcase(s, alt.pattern) for s in samples):
+        if any(_alt_takes(alt, s) for s in samples):
             return True
         if alt.any_name:
             continue
         choices: list[tuple[str, ...]] = _choices(alt, searched.letters)
-        hit: list[str] = [name for name, elements in shown if _can_match(elements, choices)]
-        if not hit:
+        if _listed(searched, [len(c) for c in choices]) is None:
+            # No exception, or past the bound: the exceptions are not used (toward marking).
+            if any(_can_match(elements, choices) for _, elements in shown):
+                return True
             continue
-        listed: int = _tries_count([len(c) for c in choices], MAX_EXCEPT_WORK) * against
-        if not searched.excepts or listed > MAX_EXCEPT_WORK:
-            return True  # past the bound the exceptions are not used: toward marking
-        for picked in product(*choices):
+        hit: list[str] = [name for name, elements in shown if _can_match(elements, choices)]
+        for picked in product(*choices) if hit else ():
             name: str = "".join(picked)
             if any(fnmatch.fnmatchcase(name, p) for p in hit) and not any(
                 fnmatch.fnmatchcase(name, e) for e in searched.excepts

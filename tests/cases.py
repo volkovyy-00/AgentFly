@@ -479,3 +479,16 @@ R0_ALLOWED: list[str] = [
     "git commit -m 'brew upgrade agentfly docs'",
     *PACKAGE_ALLOWED,
 ]
+
+
+# ---------------------------------------------------------------- searches (R1G)
+
+CURL: dict[str, str] = {"hook_event_name": "beforeShellExecution", "command": "curl https://x.com"}
+
+
+def nested(length: int) -> str:
+    """A glob of nested braces and `*` runs, cut to `length` characters."""
+    text = ""
+    while len(text) < length:
+        text = "{" + "*" * 8 + "a," + text + "b}"
+    return text[:length]

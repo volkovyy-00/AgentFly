@@ -17,6 +17,7 @@ import agentfly.hook_client as client_module
 from agentfly.recorder import paths
 from agentfly.recorder.app import hook_answer
 from agentfly.recorder.rules import Rule, Session, decide, mark
+from tests.cases import CURL, nested
 from tests.helpers import (
     REPO,
     StubRecorder,
@@ -33,7 +34,6 @@ from tests.helpers import (
     wallclock,
     write_token,
 )
-from tests.test_search_read import CURL, nested
 
 MARKER = "FILE-CONTENT-MARKER-77"
 EVENT: dict[str, Any] = {
