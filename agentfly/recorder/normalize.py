@@ -187,16 +187,21 @@ _RUBY_VALUE_OPTIONS: frozenset[str] = frozenset(
         "--encoding",
         "--external-encoding",
         "--internal-encoding",
+        "--backtrace-limit",
+        "--parser",
+        "--crash-report",
     }
 )
 
 
 def _ruby_one_liner(args: Iterable[str]) -> bool:
-    """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`).
+    """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`, `-We`).
 
-    `-r`, `-I`, `-C` and `-E` (an encoding, not code) take the rest of their word or, alone, the
-    next word; `-x`, `-0`, `-F`, `-i`, `-K`, `-T` and `-W` take the rest of their word (`-Ke` is
-    a character set). The script (the first plain word), `-` or `--` ends the options.
+    `-r`, `-I`, `-C`, `-X` and `-E` (an encoding, not code) take the rest of their word or, alone,
+    the next word; `-x`, `-F`, `-i` and `-W:` take the rest of their word; `-K` takes one
+    character (`-Ke` is a character set) and `-0`, `-T` and `-W` their digits, and the letters
+    after those are options again (`-0e` is code). The script (the first plain word), `-` or `--`
+    ends the options.
     """
     options = iter(args)
     for arg in options:
@@ -206,15 +211,23 @@ def _ruby_one_liner(args: Iterable[str]) -> bool:
             if arg in _RUBY_VALUE_OPTIONS:
                 next(options, None)
             continue
-        for index, letter in enumerate(arg[1:], 1):
+        index: int = 1
+        while index < len(arg):
+            letter: str = arg[index]
+            index += 1
             if letter == "e":
                 return True
-            if letter in "rICE":
-                if index == len(arg) - 1:
+            if letter in "rICXE":
+                if index == len(arg):
                     next(options, None)
                 break
-            if letter in "x0FiKTW":
+            if letter in "xFi" or (letter == "W" and arg[index : index + 1] == ":"):
                 break
+            if letter == "K":
+                index += 1
+            elif letter in "0TW":
+                while index < len(arg) and arg[index].isdigit():
+                    index += 1
     return False
 
 

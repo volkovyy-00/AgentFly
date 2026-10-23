@@ -76,6 +76,15 @@ NAMED_OUTBOUND: list[str] = [
     "ruby -r json -e 1",
     "ruby -ne 'puts $_' f",
     "ruby3.2 -e 1",
+    # ruby letters whose value is digits or one character: the letters after them are options
+    "ruby -0e 'puts 1'",
+    "ruby -00e 'puts 1'",
+    "ruby -We 'puts 1'",
+    "ruby -W2e 'puts 1'",
+    "ruby -Kue 'puts 1'",
+    "ruby -X /tmp -e 1",  # `-X` is `-C`
+    "ruby --parser prism -e 1",  # ruby 3 long options that take the next word
+    "ruby --backtrace-limit 1 -e 1",
 ]
 # R1G: perl and ruby runs that are not one-liners (a script file, a version, a check, an encoding).
 SCRIPT_NOT_INLINE: list[str] = [
@@ -92,6 +101,8 @@ SCRIPT_NOT_INLINE: list[str] = [
     "ruby -Eeuc-jp x.rb",
     "ruby -rset x.rb",
     "ruby -Cetc x.rb",
+    "ruby -W:no-deprecated x.rb",
+    "ruby -Xetc x.rb",
     "perldoc -f each",
 ]
 RECORDER_ONLY: list[str] = [

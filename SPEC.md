@@ -441,7 +441,7 @@ R1 may say, below, covers it, and no file can leave it out). It reads the file
 `file_path` names, and every name its `glob` can match; a search of a folder with
 no glob reads nothing by name (section 10). The glob is read as ripgrep reads one
 (`{a,b}`, nested ones too, `[!…]` and `[^…]`, `**`, `\` escapes, a leading `!` that
-excludes), case-folded like a rule path, and each brace alternative is judged on
+excludes, trailing blanks dropped unless escaped, as in a gitignore line), case-folded like a rule path, and each brace alternative is judged on
 its own by its file name, its folders taken as able to sit anywhere under
 `file_path` (anywhere at all with none). An alternative matches a condition's
 `path` when either:
@@ -505,8 +505,10 @@ computer is blocked. After normalisation that covers:
   **whether or not it mentions "http"**: also under a versioned name (`python3.12`,
   `perl5.34`, which macOS ships), with clustered letters (`perl -lane`,
   `ruby -ne`), perl's `-E`, and after options that take a value (perl's `-M…` and
-  `-m…`, `-I`; ruby's `-r`, `-I`, `-C`, `-E`, an encoding, and its long
-  `--enable`, `--disable`, `--dump` and the `--…encoding` options). A script file
+  `-m…`, `-I`; ruby's `-r`, `-I`, `-C`, `-X`, `-E`, an encoding, and its long
+  `--enable`, `--disable`, `--dump`, `--backtrace-limit`, `--parser`,
+  `--crash-report` and the `--…encoding` options; ruby's `-0`, `-T` and `-W`
+  take only digits and `-K` one character, so `ruby -We` is code). A script file
   (`perl x.pl`, `ruby x.rb`), `perl -c x.pl`, `perl -v` and `ruby --version` are
   not one-liners;
 - a command that cannot be parsed (an unbalanced quote, or a `<<EOF` block);

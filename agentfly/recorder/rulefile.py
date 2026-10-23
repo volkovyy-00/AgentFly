@@ -737,13 +737,21 @@ def _alternative(tokens: list[tuple[str, str]]) -> _Alt:
     return _Alt(kept, _name_pattern(kept), any_name, slash)
 
 
+def _trimmed(text: str) -> str:
+    """The glob as ripgrep reads a gitignore line: trailing spaces and tabs dropped, unless the
+    last one is escaped with `\\` (`.env ` reads `.env`)."""
+    trimmed: str = text.rstrip(" \t")
+    escapes: int = len(trimmed) - len(trimmed.rstrip("\\"))
+    return trimmed + text[len(trimmed)] if trimmed != text and escapes % 2 else trimmed
+
+
 @lru_cache(maxsize=64)
 def search_glob(text: str) -> _Glob | None:
     """A glob as a search reads it; None when it cannot be judged (then it counts as reading a
     secret): over MAX_GLOB_CHARS or MAX_GLOB_ALTERNATIVES, or a syntax ripgrep refuses."""
     if len(text) > MAX_GLOB_CHARS:
         return None
-    folded: str = text.casefold()
+    folded: str = _trimmed(text).casefold()
     negated: bool = folded.startswith("!")
     try:
         alternatives = _expand(_glob_tokens(folded[1:] if negated else folded))
@@ -809,8 +817,8 @@ class _Searched(NamedTuple):
 def _searched(path: tuple[Pattern, ...], path_except: tuple[Pattern, ...]) -> _Searched:
     names: list[str | None] = []
     for pattern in path:
-        last: str = pattern.text if pattern.name_only else pattern.parts[-1]
-        names.append(None if last == "**" else last)
+        last: str = pattern.text if pattern.name_only else (pattern.parts or ("**",))[-1]
+        names.append(None if last == "**" else last)  # `~/.` has no parts: taken as any name
     elements = tuple(None if name is None else _one_star(_name_tokens(name)) for name in names)
     excepts: tuple[str, ...] = tuple(p.text for p in path_except if p.name_only)
     samples: list[tuple[str, int]] = [
@@ -979,8 +987,9 @@ def _glob_reads(searched: _Searched, glob: _Glob, start: tuple[str, ...] | None,
         if alt.any_name:
             continue
         choices: list[tuple[str, ...]] = _choices(alt, searched.letters)
-        if _listed(searched, [len(c) for c in choices]) is None:
-            # No exception, or past the bound: the exceptions are not used (toward marking).
+        if _listed(searched, [len(c) for c in choices]) is None or not all(choices):
+            # No exception, past the bound, or a class with no character to list: the exceptions
+            # are not used (toward marking).
             if any(_can_match(elements, choices) for _, elements in shown):
                 return True
             continue

@@ -254,6 +254,28 @@ def test_more_spellings_that_reach_a_secret(glob: str) -> None:
     assert curl_after(grep(glob)) == "blocked"
 
 
+@pytest.mark.parametrize("glob", [".env ", ".env\t", "*.pem  ", ".env* \t"])
+def test_trailing_blanks_are_dropped_as_ripgrep_drops_them(glob: str) -> None:
+    # ripgrep reads a glob as a gitignore line: `.env ` is `.env` (audit, ripgrep run by hand)
+    assert curl_after(grep(glob)) == "blocked"
+
+
+def test_an_escaped_trailing_blank_stays() -> None:
+    assert rulefile.search_glob(".env\\ ") != rulefile.search_glob(".env")
+    assert curl_after(grep("x.py\\ ")) == "allow"
+
+
+def test_a_folder_pattern_with_no_parts_loads_and_reads_any_name_below() -> None:
+    rules = folder_rules("~/.")  # loaded on main; `_searched` must not fail on it
+    home = str(Path.home())
+    assert decide(grep("*.py", home), fresh(), rules)[1] == "keys"
+
+
+def test_a_class_with_no_character_to_list_falls_toward_reading() -> None:
+    # `[é]` allows no letter of R1's patterns and no printable character: no name to list
+    assert curl_after(grep(".env.[é]")) == "blocked"
+
+
 @pytest.mark.parametrize("glob", ["*.{py,ts}", "src/**/*.rs", "\\*.py", "[!.]*.md", ""])
 def test_more_spellings_that_reach_none(glob: str) -> None:
     assert curl_after(grep(glob)) == "allow"
