@@ -594,8 +594,8 @@ class _Scanner:
             if c == "\n":
                 self.i += 1
                 top: _Frame = frames[-1]
-                piping: bool = top.hub is not None and len(out.commands) == top.start
                 end_command()
+                piping: bool = top.hub is not None and len(out.commands) == top.start
                 if heredocs:
                     self.read_bodies(heredocs, closer)
                     heredocs = []

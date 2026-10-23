@@ -92,6 +92,7 @@ PIPED_NOT_INLINE: list[str] = [
     "perl -d:Trace x.pl",  # an `e` in a module name is no `-e`
     "perl -dt:Foo x.pl",
     "for f in a b; do python3 t.py < $f; done",
+    "echo x | grep y\npython3 t.py",  # the pipe ends with its line
 ]
 
 NAMED_OUTBOUND: list[str] = [

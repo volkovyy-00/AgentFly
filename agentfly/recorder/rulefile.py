@@ -38,7 +38,14 @@ from typing import Any, NamedTuple
 from agentfly.install.layout import SYSTEM
 from agentfly.recorder.clean import Walker
 from agentfly.recorder.names import hosts_in_command
-from agentfly.recorder.normalize import SUB_EMPTY, SUB_PREFIX, Parsed, base_name, normalize
+from agentfly.recorder.normalize import (
+    SUB_EMPTY,
+    SUB_PREFIX,
+    Parsed,
+    base_name,
+    normalize,
+    programs,
+)
 
 # The file the recorder reads once at start. Tests (and nothing else) point this elsewhere; it is
 # always read as `rulefile.ACTIVE_RULES`, never copied. No flag or variable moves it (D3, D25).
@@ -62,6 +69,7 @@ CLAUSE_FIELDS: tuple[str, ...] = (
     "command_class",
     "host_not_in",
     "path_scope",
+    "pipe_into",
 )
 COMMAND_CLASSES: frozenset[str] = frozenset({"outbound"})  # implemented by rules.py
 PATH_SCOPES: frozenset[str] = frozenset({"outside_workspace"})
@@ -443,6 +451,11 @@ FLOAT_STEPS: int = 45_000
 PROBES_PER_STEP: int = 4
 PROGRAM_LOOKUPS_FREE: int = 300
 PROGRAM_LOOKUP_STEPS: int = 4
+# `pipe_into` (V5c) walks the links of the line (`Parsed.links`) once a source matched: a step for
+# every LINKS_PER_STEP links and commands, charged before the walk. Measured on the author's Mac,
+# 20,000 pipes: 0.27 us a link or command walked against 0.4 us a step; the table the walks share
+# is built once a line (about 1-2 us a unit, beside the 0.3 s `normalize` takes on that line).
+LINKS_PER_STEP: int = 1
 
 
 class WorkLimit(Exception):
@@ -1369,6 +1382,44 @@ def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
     return False
 
 
+class _Flow(NamedTuple):
+    """A line's links as a look-up table (`Parsed.links`): where each node's output goes, the
+    programs of each command (`normalize.programs`, base names) and what a walk is charged."""
+
+    edges: dict[int, list[int]]
+    programs: tuple[frozenset[str], ...]
+    cost: int
+
+
+@lru_cache(maxsize=4)  # as `_simple_commands`: one line, all the clauses of a hook
+def _flow(parsed: Parsed) -> _Flow:
+    edges: dict[int, list[int]] = {}
+    for start, end in parsed.links:
+        edges.setdefault(start, []).append(end)
+    names: tuple[frozenset[str], ...] = tuple(
+        frozenset(base_name(argv[at]) for at in programs(argv)) for argv in parsed.commands
+    )
+    return _Flow(edges, names, (len(parsed.links) + len(parsed.commands)) // LINKS_PER_STEP)
+
+
+def _feeds(parsed: Parsed, sources: Iterable[int], listed: frozenset[str]) -> bool:
+    """Some command reached from a source along the links (not the source itself, unless another
+    source reaches it) runs a listed program. Each node is walked once: linear, and charged."""
+    flow: _Flow = _flow(parsed)
+    _charge(flow.cost)
+    todo: list[int] = list(sources)
+    reached: set[int] = set()
+    while todo:
+        for node in flow.edges.get(todo.pop(), ()):
+            if node in reached:
+                continue
+            reached.add(node)
+            if node >= 0 and flow.programs[node] & listed:
+                return True
+            todo.append(node)
+    return False
+
+
 @dataclass(frozen=True)
 class Clause:
     """The conditions of a `match` rule, or of the `after` / `then` table of an `after_then`.
@@ -1376,7 +1427,8 @@ class Clause:
     Every condition that is present must hold. `path` applies to a read or write's file, to what a
     search reads (`glob_reads`) and, in a shell command, to every word (and to the text after the
     last `=` and the last `@` of a word, so `--env-file=.env` and `-d@.env` count). The others
-    apply to shell commands only.
+    apply to shell commands only. `pipe_into` (a `match` only, beside `command`) asks that a command
+    the entry matched feed a listed program (`_feeds`).
     """
 
     events: tuple[str, ...]
@@ -1386,6 +1438,7 @@ class Clause:
     command_class: str = ""
     host_not_in: frozenset[str] = frozenset()
     path_scope: str = ""  # "outside_workspace", or "" for none (read and write only)
+    pipe_into: frozenset[str] = frozenset()  # program base names, case-folded
     # `command` as a look-up table, made here (a clause built by hand has one too). It follows from
     # `command`, so it is no part of the clause's identity (a clause is hashed to cache a file).
     _index: _Index = dataclasses.field(
@@ -1450,11 +1503,25 @@ class Clause:
 
     def _command_hit(self, parsed: Parsed) -> bool:
         """`command` holds; with `host_not_in` beside it, in a simple command that sends to a host
-        not listed (`_unlisted_host`): the host is judged where the entry matched."""
+        not listed (`_unlisted_host`): the host is judged where the entry matched. With
+        `pipe_into`, every such simple command is a source (`_pipe_hit`)."""
         listed: frozenset[str] = self.host_not_in
+        views: Iterator[_Simple] = self._matched(parsed)
         if listed:
-            return any(_unlisted_host(view.argv, listed) for view in self._matched(parsed))
-        return any(True for _ in self._matched(parsed))
+            views = (view for view in views if _unlisted_host(view.argv, listed))
+        if self.pipe_into:
+            return self._pipe_hit(parsed, {view.argv for view in views})
+        return any(True for _ in views)
+
+    def _pipe_hit(self, parsed: Parsed, matched: set[tuple[str, ...]]) -> bool:
+        """A matched simple command, wherever it stands in the line, feeds a listed program; text
+        that does not parse, or hides what feeds what (`Parsed.links_unknown`), counts as one."""
+        if not matched:
+            return False
+        if parsed.unparsed or parsed.links_unknown:
+            return True
+        sources = (index for index, argv in enumerate(parsed.commands) if argv in matched)
+        return _feeds(parsed, sources, self.pipe_into)
 
     def _host_hit(self, parsed: Parsed) -> bool:
         """`host_not_in` beside `command_class` only: any host of the whole line, as before."""
@@ -1702,6 +1769,14 @@ def _command_entry(where: str, raw: str, problems: _Problems) -> tuple[str, ...]
     return (base_name(words[0]), *(token for tokens in extras if tokens for token in tokens))
 
 
+def _program(where: str, raw: str, problems: _Problems) -> str | None:
+    """A `pipe_into` entry: one program name, by its base name (`/bin/sh` is `sh`)."""
+    if raw.split() != [raw] or any(c in raw for c in "*?[") or not base_name(raw):
+        problems.add(where, f"pipe_into entry {raw[:40]!r} must be one program name, no wildcard")
+        return None
+    return base_name(raw)
+
+
 def _named(
     where: str, table: dict[str, Any], field: str, lists: dict[str, tuple[str, ...]], p: _Problems
 ) -> tuple[str, ...]:
@@ -1730,9 +1805,11 @@ def _clause(
     *,
     needs_condition: bool,
     scope_ok: bool = True,
+    pipe_ok: bool = False,
 ) -> Clause | None:
     """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition.
-    `path_scope` may stand in `match` and `after` (`scope_ok`), not in `then`."""
+    `path_scope` may stand in `match` and `after` (`scope_ok`), not in `then`; `pipe_into` only in
+    `match` (`pipe_ok`)."""
     if not isinstance(table, dict):
         problems.add(where, "must be a table")
         return None
@@ -1754,6 +1831,13 @@ def _clause(
         where, _named(where, table, "command", lists, problems), _command_entry, problems
     )
     hosts = frozenset(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
+    pipe: frozenset[str] = frozenset(
+        _compiled(where, _named(where, table, "pipe_into", lists, problems), _program, problems)
+    )
+    if "pipe_into" in table and not pipe_ok:
+        problems.add(where, "'pipe_into' may stand only in a 'match' rule")
+    elif "pipe_into" in table and "command" not in table:
+        problems.add(where, "'pipe_into' needs a 'command' beside it: the programs that feed")
     command_class: Any = table.get("command_class", "")
     if "command_class" in table and not (
         isinstance(command_class, str) and command_class in COMMAND_CLASSES
@@ -1783,7 +1867,7 @@ def _clause(
         problems.add(where, f"matches every {'/'.join(events) or 'action'} action; add a condition")
     if len(problems.errors) > start:
         return None
-    return Clause(tuple(events), path, path_except, command, command_class, hosts, scope)
+    return Clause(tuple(events), path, path_except, command, command_class, hosts, scope, pipe)
 
 
 def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
@@ -1863,7 +1947,7 @@ def _rule(
     clause = after = then = None
     if kind == "match":
         condition = {k: raw[k] for k in CLAUSE_FIELDS if k in raw}
-        clause = _clause(where, condition, lists, problems, needs_condition=True)
+        clause = _clause(where, condition, lists, problems, needs_condition=True, pipe_ok=True)
     elif kind == "after_then":
         for field in ("after", "then"):
             if field not in raw:
