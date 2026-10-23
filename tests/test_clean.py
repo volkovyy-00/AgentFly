@@ -422,3 +422,26 @@ def test_an_unclosed_brace_list_is_read_in_one_pass(project_root: Path, filler: 
     started: float = time.perf_counter()
     assert clean_command("echo {" + filler * 64_000, project_root) == "echo <arg>"
     assert time.perf_counter() - started < 0.25
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # final verification: a character a backslash keeps is no operator and no word break
+        ("echo \\>& ssh h.com tok.abc", "echo <arg> & ssh h.com <arg>"),
+        ("echo \\>| ssh h.com tok.abc", "echo <arg> | ssh h.com <arg>"),
+        ("ssh h.com a\\ #b \\\nx tok.abc", "ssh h.com <arg> <arg> <arg>"),
+        # a continuation does not end a word, so `#` after it is in the word
+        ("ssh h.com a\\\n#b \\\nx tok.abc", "ssh h.com <arg> <arg> <arg>"),
+        # a comment still ends at its line, its `\` joining nothing
+        ("curl x.com #a \\\nssh h.com tok.abc", "curl x.com ; ssh h.com <arg>"),
+        # a redirection in a wrapper's options is passed over; `env -` reads no further
+        ("sudo >out -u bob curl -s x.com", "sudo <arg> -u <arg> curl -s x.com"),
+        ("env 2> err -u X curl -s x.com", "env <arg> <arg> -u <arg> curl -s x.com"),
+        ("env - curl -s x.com", "env <arg> <arg> <arg> <arg>"),
+        # a word ending in `/` names a folder, not a wrapper
+        ("sudo/ tok.abc", "sudo/ <arg>"),
+    ],
+)
+def test_final_verification_shapes(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected

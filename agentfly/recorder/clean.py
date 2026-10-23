@@ -142,14 +142,16 @@ _SINGLE: str = r"'[^']*+"
 _DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
 # A closed quoted run, or a quote that is never closed (it runs to the end).
 _QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
-# What `_split_keeping_seps` cuts on, and what it skips: a quoted run (an unclosed one runs to the
-# end, a lone backslash at the end with it), a backslash and the character it keeps in the word
-# (`\;`; `\` and a new line join two lines), and a comment (`#` where a word starts, to the end of
-# its line). C1-fix1: `&` and `|&` end a part too, and so does a new line; an `&` after `<` or
-# `>`, or before `>`, belongs to a redirection (`2>&1`, `&>f`), and `>|` is one.
-_SPLIT_SCAN = re.compile(
-    rf"""{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z)|\\.|(?<![^\s;&|()<>])#[^\n]*"""
-    r"""|\|\||\|&|&&|(?<![<>])&(?!>)|(?<!>)\||[;\n]""",
+# The pieces `_split_keeping_seps` reads a command in, one after another: a quoted run (an
+# unclosed one runs to the end, a lone backslash at the end with it), a line continuation (`\` and
+# a new line: cut, and the word goes on), a run of a word's other text with each character a
+# backslash keeps (`\;`, `\>`: never an operator), a `#`, a redirection operator holding `&` or
+# `|` (`2>&1`, `<&3`, `&>f`, `>|f`), a separator (C1-fix1: `&`, `|&` and a new line too) and a
+# word break.
+_SPLIT_TOKEN = re.compile(
+    rf"""(?P<quoted>{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
+    r"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#]|\\[^\n])++|\\\Z)|(?P<hash>\#)"""
+    r"""|(?P<redirect>[<>]&|&>|>\|)|(?P<sep>\|\||\|&|&&|[&|;\n])|(?P<blank>[ \t\r]++|[()<>])""",
     re.DOTALL,
 )
 # `shlex.split` (POSIX, no comments) cuts words on these four characters only, not on every
@@ -270,26 +272,34 @@ def _first_program(cmd: str) -> str:
 
 def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
     """Split on |, |&, &, &&, ||, ; and new lines outside quotes; return (segment,
-    following_sep). A line continuation and a comment are cut out of the segment's text; a new
-    line is saved as `;`, and one with nothing before it since the last separator is dropped."""
+    following_sep). A line continuation and a comment (`#` where a word starts, to the end of its
+    line; a continuation does not start a word) are cut out of the segment's text; a new line is
+    saved as `;`, and one with nothing before it since the last separator is dropped."""
     segments: list[tuple[str, str]] = []
     pieces: list[str] = []  # the segment's text, without its continuations and comments
-    start: int = 0
-    for found in _SPLIT_SCAN.finditer(cmd):
-        sep: str = found.group()
-        if sep[0] in "'\"" or (sep[0] == "\\" and sep != "\\\n"):
+    start: int = 0  # where the segment's text goes on
+    at: int = 0
+    word_start: bool = True  # a `#` here starts a comment
+    while (found := _SPLIT_TOKEN.match(cmd, at)) is not None:
+        kind: str | None = found.lastgroup
+        if kind == "hash" and word_start:
+            line_end: int = cmd.find("\n", at)
+            pieces.append(cmd[start:at])
+            at = start = len(cmd) if line_end < 0 else line_end
             continue
-        pieces.append(cmd[start : found.start()])
-        start = found.end()
-        if sep == "\\\n" or sep[0] == "#":
-            continue
-        text: str = "".join(pieces)
-        pieces = []
-        if sep == "\n":
-            if not text.strip(_SHELL_SPACE):
-                continue
-            sep = ";"
-        segments.append((text, sep))
+        if kind in ("join", "sep"):
+            pieces.append(cmd[start:at])
+            start = found.end()
+        if kind == "sep":
+            text: str = "".join(pieces)
+            pieces = []
+            if found.group() != "\n":
+                segments.append((text, found.group()))
+            elif text.strip(_SHELL_SPACE):
+                segments.append((text, ";"))
+        if kind != "join":
+            word_start = kind in ("redirect", "sep", "blank")
+        at = found.end()
     pieces.append(cmd[start:])
     segments.append(("".join(pieces), ""))
     return segments
@@ -479,7 +489,7 @@ def _program_index(
         elif (name := _assign_name(word)) is not None:
             out.append(f"{name}=<removed>")
             idx = _after_assignment(pairs, idx)
-        elif (wrapper := Path(word).name.lower()) in _WRAPPERS:
+        elif (wrapper := posixpath.basename(word).lower()) in _WRAPPERS:  # `sudo/` is a folder
             wrappers += 1
             if wrappers > MAX_WRAPPERS:
                 _rest_unread(pairs, idx, out)
@@ -520,11 +530,18 @@ def _after_wrapper(
 ) -> int | None:
     """Save a wrapper's options from `at` on (C1-fix1): an option in its table takes the next
     word or a glued value as `<arg>`, `--` ends them, `env` and `sudo` take `NAME=value`, and
-    `timeout` then takes its duration. Returns where its program is expected, or None when the
-    rest of the part is saved as `<arg>`."""
+    `timeout` then takes its duration; a redirection and its target are passed over. Returns where
+    its program is expected, or None when the rest of the part is saved as `<arg>` (as after an
+    option no table lists, `env -` too)."""
     values: str = _WRAPPERS[wrapper]
+    target: bool = False  # the word after a bare redirection is its target
     while at < len(pairs):
         raw, word = pairs[at]
+        if (after := _redirection_step(raw, target)) is not None:
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = after
+            at += 1
+            continue
         if _out_of_step(raw):
             _rest_unread(pairs, at, out)
             return None
@@ -532,13 +549,13 @@ def _after_wrapper(
             out.append(f"{name}=<removed>")
             at = _after_assignment(pairs, at)
             continue
-        if not _is_option(word):
+        if not _is_option(word) and word != "-":
             break
         at += 1
         if word == "--":
             out.append(word)
             break
-        if word.startswith("--") or word[1] not in values:
+        if word == "-" or word.startswith("--") or word[1] not in values:
             out.append(_classify_word(word, disk, web_tool=False))
             _rest_unread(pairs, at, out)
             return None
