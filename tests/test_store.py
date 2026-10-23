@@ -33,7 +33,7 @@ from agentfly.recorder.store import (
     neo4j_opt_in,
 )
 from tests.helpers import NEO4J_ENV, REPO, client_env, free_port, wallclock
-from tests.leak_cases import LEAKY_COMMANDS, OBSERVED_VALUE_LEAKS, SECRET
+from tests.leak_cases import LEAKY_COMMANDS, NEWLY_SAVED, OBSERVED_VALUE_LEAKS, SECRET
 
 # The owner's real login file. Collection runs under the real HOME (conftest swaps it per test).
 # Only the path is computed here: no test may read this file or open a connection with it.
@@ -515,6 +515,15 @@ def test_an_option_value_is_in_no_field_of_the_step(
     assert value.lower() not in (record.command or "").lower()  # a host is saved in lower case
     assert record.hosts == hosts
     assert record.file_path is None
+
+
+@pytest.mark.parametrize(("raw", "tool"), [(r, t) for r, _, t in NEWLY_SAVED])
+def test_a_web_tool_behind_a_wrapper_is_saved_with_its_host(
+    tmp_path: Path, raw: str, tool: str
+) -> None:
+    record: StepRecord = _shell_record(tmp_path, raw)
+    assert tool in (record.command or "").split()
+    assert "x.com" in record.hosts
 
 
 def test_a_value_that_names_a_project_file_is_the_step_file(tmp_path: Path) -> None:

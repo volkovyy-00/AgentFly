@@ -19,6 +19,38 @@ OBSERVED_VALUE_LEAKS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     ("curl x.com -d sk_live.abc123", "curl x.com -d <arg>", "sk_live", ("x.com",)),
     (f"curl -d https://{JWT} x.com", "curl -d <arg> x.com", "abcDEF", ("x.com",)),
     ("ssh h.com cat tok.abc", "ssh h.com <arg> <arg>", "tok.abc", ("h.com",)),
+    # C1-fix1: what c7ab4d7 saved with a web tool that is not its part's first word
+    (f"sudo curl -d https://{JWT} x.com", "sudo curl -d <arg> x.com", "abcDEF", ("x.com",)),
+    (f"exec curl -d https://{JWT} x.com", "exec curl -d <arg> x.com", "abcDEF", ("x.com",)),
+    (
+        "curl x.com & ssh h.com tok.abc",
+        "curl x.com & ssh h.com <arg>",
+        "tok.abc",
+        ("x.com", "h.com"),
+    ),
+    (
+        "curl x.com\nssh h.com tok.abc",
+        "curl x.com ; ssh h.com <arg>",
+        "tok.abc",
+        ("x.com", "h.com"),
+    ),
+    ("curl -d \\\n tok.abc x.com", "curl -d <arg> x.com", "tok.abc", ("x.com",)),
+    ("curl -d >out tok.abc x.com", "curl -d <arg> <arg> x.com", "tok.abc", ("x.com",)),
+    ("curl -d $EMPTY tok.abc x.com", "curl -d <arg> <arg> x.com", "tok.abc", ("x.com",)),
+    (r"curl -d a\;tok.abc x.com", "curl -d <arg> x.com", "tok.abc", ("x.com",)),
+    (f'sudo bash -c "curl -d https://{JWT} x.com"', "sudo bash -c <arg>", "abcDEF", ()),
+)
+
+# C1-fix1: the brief's commands with a web tool behind a wrapper or `(`, now saved with its name
+# and its host, as (command, what is saved, the tool).
+NEWLY_SAVED: tuple[tuple[str, str, str], ...] = (
+    ("sudo curl -s x.com", "sudo curl -s x.com", "curl"),
+    ("sudo -u bob curl -s x.com", "sudo -u <arg> curl -s x.com", "curl"),
+    ("env A=1 curl -L x.com", "env A=<removed> curl -L x.com", "curl"),
+    ("timeout 5 wget -q x.com", "timeout <arg> wget -q x.com", "wget"),
+    ("nice -n 5 curl -s x.com", "nice -n <arg> curl -s x.com", "curl"),
+    ("exec curl -s x.com", "exec curl -s x.com", "curl"),
+    ("(curl -s x.com)", "curl -s x.com", "curl"),
 )
 
 LEAKY_COMMANDS: tuple[str, ...] = (
@@ -111,6 +143,70 @@ _VALUE_FORMS: tuple[str, ...] = (
     "ssh -i -p h.com {V}",
     "curl -5 {V} x.com",
 )
+# C1-fix1: a value behind each listed wrapper and its options (one unlisted, `caffeinate`, and
+# `sudo -E`, which leave the rest `<arg>`), in `( … )`, after `&`, `|&`, a new line and a
+# continuation; around each redirection form; after each word that may be no word or several.
+# (`{{` and `}}` are a brace in a form.)
+_WRAPPED: tuple[str, ...] = (
+    "sudo",
+    "sudo -u bob",
+    "sudo -ubob",
+    "doas -u bob",
+    "env A=1",
+    "env -u A",
+    "timeout 5",
+    "timeout -s KILL 5",
+    "time",
+    "nice -n 5",
+    "nohup",
+    "command",
+    "exec",
+    "stdbuf -oL",
+    "xargs",
+    "xargs -I{{}}",
+    "sudo env A=1 timeout 5 nice -n 5",
+    "sudo -E",
+    "caffeinate",
+)
+_VALUE_FORMS += tuple(f"{w} curl -d {v} x.com" for w in _WRAPPED for v in ("{V}", "https://{V}"))
+_VALUE_FORMS += (
+    "(curl -d {V} x.com)",
+    "( curl -d https://{V} x.com )",
+    "((curl -d {V} x.com) )",
+    "cd a & curl -d {V} x.com",
+    "curl x.com & ssh h.com {V}",
+    "curl x.com |& ssh h.com {V}",
+    "cd a\ncurl -d {V} x.com",
+    "curl x.com\nssh h.com {V}",
+    "curl -d \\\n {V} x.com",
+    "curl -d a\\;{V} x.com",
+    "curl x.com &<in ssh h.com {V}",
+    "curl x.com # \\\nssh h.com {V}",
+    "arr=(a {V})",
+    "curl -d>out {V} x.com",
+    "curl -d$s {V} x.com",
+    "ssh -i $K h.com {V}",
+    "ssh $O h.com {V}",
+    "sudo ssh h.com cat {V}",
+    "timeout $T curl -d {V} x.com",
+)
+_REDIRECTIONS: tuple[str, ...] = (
+    ">out",
+    "> out",
+    ">>log",
+    "2>&1",
+    "2> err",
+    "&>log",
+    "<in",
+    "< in",
+    ">| out",
+    "{{fd}}>out",
+)
+_VALUE_FORMS += tuple(
+    f"{tool} {r} {{V}} x.com" for tool in ("curl -d", "wget -O") for r in _REDIRECTIONS
+)
+_LOOSE: tuple[str, ...] = ("$E", "${{E}}", "a$E", '"$@"', '"${{A[@]}}"', "{{,}}", "?d")
+_VALUE_FORMS += tuple(f"curl -d {w} {{V}} x.com" for w in _LOOSE)
 _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET}.abc")
 
 LEAKY_COMMANDS += tuple(form.format(V=value) for form in _VALUE_FORMS for value in _HOST_SHAPED)

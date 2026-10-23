@@ -8,7 +8,7 @@ import pytest
 
 import agentfly.recorder.clean as clean_mod
 from agentfly.recorder.clean import clean_command, command_for_storage
-from tests.leak_cases import LEAKY_COMMANDS, OBSERVED_VALUE_LEAKS, SECRET
+from tests.leak_cases import LEAKY_COMMANDS, NEWLY_SAVED, OBSERVED_VALUE_LEAKS, SECRET
 
 
 @pytest.fixture()
@@ -358,3 +358,55 @@ def test_wrappers_and_parentheses_are_stepped_over_up_to_their_bounds(project_ro
 )
 def test_words_after_the_program(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        *((raw, saved) for raw, saved, _ in NEWLY_SAVED),
+        # kept as on c7ab4d7 (the same name and hosts); `&` now ends a part and `\` with a new
+        # line joins two, so these two are saved without the `<arg>` those were saved as
+        ("curl -s x.com > out", "curl -s x.com <arg> <arg>"),
+        ("curl -s x.com 2>&1 | head", "curl -s x.com <arg> | head"),
+        ("cd a && curl -s x.com &", "cd <arg> && curl -s x.com &"),
+        (
+            'curl -s \\\n -H "Accept: x" \\\n https://api.example.com',
+            "curl -s -H <arg> api.example.com",
+        ),
+        (
+            'curl -H "Authorization: Bearer $TOKEN" https://api.example.com',
+            "curl -H <arg> api.example.com",
+        ),
+        ('scp "$FILE" deploy@prod.example.com:/srv/', "scp <arg> prod.example.com"),
+        ('rsync -av "${SRC}/" prod.example.com:/srv/', "rsync -a<arg> <arg> prod.example.com"),
+    ],
+)
+def test_the_briefs_commands_store_this_output(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+def test_a_long_line_of_parentheses_wrappers_and_parts_reads_each_word_once(
+    project_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    classify = clean_mod._classify_word
+
+    def counted(word: str, disk: clean_mod.Lookups, *, web_tool: bool) -> str:
+        calls.append(word)
+        return classify(word, disk, web_tool=web_tool)
+
+    monkeypatch.setattr(clean_mod, "_classify_word", counted)
+    part: str = "( ( sudo -u bob env A=1 timeout 5 nice -n 5 curl -d tok.abc x.com ) ) &"
+    lines: list[str] = [
+        " ".join([part] * 16),  # 304 words in 16 parts
+        "(" * 16 + " nohup" * 8 + " curl" + " -d tok.abc" * 145 + " x.com",  # 301 in one
+    ]
+    for line in lines:
+        words: int = len(line.split())
+        assert words >= 300
+        calls.clear()
+        disk = clean_mod.Lookups(project_root)
+        saved: str = clean_command(line, project_root, disk)
+        assert "tok.abc" not in saved and "x.com" in saved
+        assert len(calls) <= words
+        assert disk.left >= clean_mod.LOOKUP_STEPS - words

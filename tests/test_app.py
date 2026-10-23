@@ -534,4 +534,4 @@ def test_secrets_glued_to_options_never_reach_the_page(client: TestClient, token
         assert client.post("/hook", json=body, headers=headers).status_code == 200, index
     text: str = client.get("/api/steps?all=1").text
     assert '"steps":' in text.replace(" ", "")
-    assert SECRET not in text
+    assert SECRET.lower() not in text.lower()  # a host is saved in lower case
