@@ -91,6 +91,24 @@ _NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
     ),
 }
 _WEB_TOOLS: frozenset[str] = frozenset(_NO_VALUE)
+# C1-fix1: the programs that run the program after them, each with its short options that take a
+# value. Any other option of theirs (`sudo -E`, `env -S`) leaves the rest of the part `<arg>`.
+_WRAPPERS: dict[str, str] = {
+    "sudo": "ughpCDrtU",
+    "doas": "uC",
+    "env": "uC",
+    "timeout": "sk",
+    "time": "",
+    "nice": "n",
+    "nohup": "",
+    "command": "",
+    "exec": "",
+    "stdbuf": "ioe",
+    "xargs": "nLPsdEIa",
+}
+# The wrapper words and opening `(` stepped over in one part; past either, the rest is `<arg>`.
+MAX_WRAPPERS: int = 8
+MAX_OPEN_PARENS: int = 16
 
 # A long option name is kept only if it looks like a name; anything else may be a value.
 _LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
@@ -356,27 +374,139 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
     if not segment:
         return ""
     try:
-        tokens: list[str] = _shell_words(segment)
+        pairs: list[tuple[str, str]] = _raw_words(segment)
     except ValueError:
         return f"{_first_program(segment)} <unparsed>"
 
     out: list[str] = []
-    idx: int = 0
-    while idx < len(tokens) and (name := _assign_name(tokens[idx])) is not None:
-        out.append(f"{name}=<removed>")
-        idx += 1
-
-    if idx >= len(tokens):
+    idx: int | None = _program_index(pairs, out, disk)
+    if idx is None:
         return " ".join(out)
 
-    program: str = tokens[idx]
+    program: str = pairs[idx][1]
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
     prog_base: str = Path(program).name.lower()
+    words: list[str] = [word for _, word in pairs[idx + 1 :]]
     if prog_base in _WEB_TOOLS:
-        out.extend(_clean_web_words(tokens[idx + 1 :], prog_base, disk))
+        out.extend(_clean_web_words(words, prog_base, disk))
     else:
-        out.extend(_classify_word(word, disk, web_tool=False) for word in tokens[idx + 1 :])
+        out.extend(_classify_word(word, disk, web_tool=False) for word in words)
     return " ".join(out)
+
+
+def _program_index(pairs: list[tuple[str, str]], out: list[str], disk: Lookups) -> int | None:
+    """Save into `out` the words before the part's program (C1-fix1): opening `(` (not saved),
+    assignments, redirections with their targets, and wrappers with their options. Returns the
+    program's index (its `(` cut off in `pairs`), or None when there is none or the rest of the
+    part is saved as `<arg>`: past `MAX_OPEN_PARENS` `(` or `MAX_WRAPPERS` wrappers, after a
+    wrapper option no table lists, or where a wrapper's word may be no word or several."""
+    opened: int = 0
+    wrappers: int = 0
+    target: bool = False  # the word after a bare redirection is its target
+    idx: int | None = 0
+    while idx is not None and idx < len(pairs):
+        raw, word = pairs[idx]
+        if target:
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = False
+            idx += 1
+            continue
+        opens: int = len(raw) - len(raw.lstrip("("))
+        if opens:
+            opened += opens
+            if opened > MAX_OPEN_PARENS:
+                return _rest_unread(pairs, idx, out)
+            raw, word = raw[opens:], word[opens:]  # unquoted, so `word` starts with them too
+            pairs[idx] = (raw, word)
+            if not raw:
+                idx += 1
+                continue
+        if _REDIRECT.match(raw):
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = _REDIRECT.fullmatch(raw) is not None
+            idx += 1
+        elif (name := _assign_name(word)) is not None:
+            out.append(f"{name}=<removed>")
+            idx = _after_assignment(pairs, idx)
+        elif (wrapper := Path(word).name.lower()) in _WRAPPERS:
+            wrappers += 1
+            if wrappers > MAX_WRAPPERS:
+                return _rest_unread(pairs, idx, out)
+            out.append(word if _PROGRAM_NAME.fullmatch(word) else "<arg>")
+            idx = _after_wrapper(pairs, idx + 1, wrapper, out, disk)
+        else:
+            return idx
+    return None
+
+
+def _rest_unread(pairs: list[tuple[str, str]], at: int, out: list[str]) -> None:
+    """Save the part's words from `at` on as `<arg>`: where they cannot be read."""
+    out.extend("<arg>" for _ in range(at, len(pairs)))
+
+
+def _after_assignment(pairs: list[tuple[str, str]], at: int) -> int:
+    """The index after the assignment at `at`; an array `NAME=(…)` runs to the word that closes
+    it, or to the part's end (its `)` may have been cut as the part's)."""
+    raw: str = pairs[at][0]
+    if not raw.partition("=")[2].startswith("(") or _closes(raw):
+        return at + 1
+    for end in range(at + 1, len(pairs)):
+        if _closes(pairs[end][0]):
+            return end + 1
+    return len(pairs)
+
+
+def _closes(raw: str) -> bool:
+    """Whether a word as written ends in a `)` that no backslash keeps."""
+    body: str = raw[:-1]
+    return raw.endswith(")") and (len(body) - len(body.rstrip("\\"))) % 2 == 0
+
+
+def _after_wrapper(
+    pairs: list[tuple[str, str]], at: int, wrapper: str, out: list[str], disk: Lookups
+) -> int | None:
+    """Save a wrapper's options from `at` on (C1-fix1): an option in its table takes the next
+    word or a glued value as `<arg>`, `--` ends them, `env` and `sudo` take `NAME=value`, and
+    `timeout` then takes its duration. Returns where its program is expected, or None when the
+    rest of the part is saved as `<arg>`."""
+    values: str = _WRAPPERS[wrapper]
+    while at < len(pairs):
+        raw, word = pairs[at]
+        if _out_of_step(raw):
+            return _rest_unread(pairs, at, out)
+        if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
+            out.append(f"{name}=<removed>")
+            at = _after_assignment(pairs, at)
+            continue
+        if not _is_option(word):
+            break
+        at += 1
+        if word == "--":
+            out.append(word)
+            break
+        if word.startswith("--") or word[1] not in values:
+            out.append(_classify_word(word, disk, web_tool=False))
+            return _rest_unread(pairs, at, out)
+        if len(word) > 2:
+            out.append(f"{word[:2]}<arg>")
+            continue
+        out.append(word)
+        if (after := _wrapper_value(pairs, at, out)) is None:
+            return None
+        at = after
+    return _wrapper_value(pairs, at, out) if wrapper == "timeout" else at
+
+
+def _wrapper_value(pairs: list[tuple[str, str]], at: int, out: list[str]) -> int | None:
+    """Save the wrapper's value at `at` as `<arg>` and return the index after it; None (the rest
+    saved as `<arg>`) when the word may be no word or several, or is a redirection."""
+    if at >= len(pairs):
+        return at
+    raw: str = pairs[at][0]
+    if _out_of_step(raw) or _REDIRECT.match(raw):
+        return _rest_unread(pairs, at, out)
+    out.append("<arg>")
+    return at + 1
 
 
 def _clean_web_words(words: list[str], tool: str, disk: Lookups) -> list[str]:

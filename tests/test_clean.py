@@ -263,3 +263,53 @@ def test_a_word_out_of_step(raw: str, loose: bool) -> None:
 )
 def test_a_closing_parenthesis_is_cut(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C1-fix1: the program behind wrappers, `(`, assignments and redirections is read
+        ("sudo curl -s x.com", "sudo curl -s x.com"),
+        ("sudo -u bob curl -s x.com", "sudo -u <arg> curl -s x.com"),
+        ("sudo -ubob curl -s x.com", "sudo -u<arg> curl -s x.com"),
+        ("sudo -- curl -s x.com", "sudo -- curl -s x.com"),
+        ("/usr/bin/sudo curl -s x.com", "/usr/bin/sudo curl -s x.com"),
+        ("env A=1 curl -L x.com", "env A=<removed> curl -L x.com"),
+        ("env -u A curl -s x.com", "env -u <arg> curl -s x.com"),
+        ("timeout 5 wget -q x.com", "timeout <arg> wget -q x.com"),
+        ("timeout -s KILL 5 curl -s x.com", "timeout -s <arg> <arg> curl -s x.com"),
+        ("nice -n 5 curl -s x.com", "nice -n <arg> curl -s x.com"),
+        ("exec curl -s x.com", "exec curl -s x.com"),
+        ("stdbuf -oL curl -s x.com", "stdbuf -o<arg> curl -s x.com"),
+        ("xargs -I{} curl -d {} x.com", "xargs -I<arg> curl -d <arg> x.com"),
+        ("sudo curl -d https://tok.abc x.com", "sudo curl -d <arg> x.com"),
+        ("(curl -s x.com)", "curl -s x.com"),
+        ("( ( curl -s x.com ) )", "curl -s x.com"),
+        ("A=1 (curl -d tok.abc x.com)", "A=<removed> curl -d <arg> x.com"),
+        ("2>/dev/null curl -d tok.abc x.com", "<arg> curl -d <arg> x.com"),
+        ("> out curl -d tok.abc x.com", "<arg> <arg> curl -d <arg> x.com"),
+        ("curl x.com &<in ssh h.com tok.abc", "curl x.com & <arg> ssh h.com <arg>"),
+        ("arr=(a tok.abc)", "arr=<removed>"),
+        ("arr=(a b) curl -d tok.abc x.com", "arr=<removed> curl -d <arg> x.com"),
+        ("arr=(a\\) tok.abc)", "arr=<removed>"),
+        # an option no table lists, or a word that may be the program or not: the rest is <arg>
+        ("sudo -E curl -s x.com", "sudo -E <arg> <arg> <arg>"),
+        ("sudo $O curl -s x.com", "sudo <arg> <arg> <arg> <arg>"),
+        ("timeout $T curl -d tok.abc x.com", "timeout <arg> <arg> <arg> <arg> <arg>"),
+        ("sudo -u $U curl -s x.com", "sudo -u <arg> <arg> <arg> <arg>"),
+    ],
+)
+def test_the_program_behind_wrappers_is_read(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+def test_wrappers_and_parentheses_are_stepped_over_up_to_their_bounds(project_root: Path) -> None:
+    assert (clean_mod.MAX_WRAPPERS, clean_mod.MAX_OPEN_PARENS) == (8, 16)
+    tail: str = "curl -d tok.abc x.com"
+    assert clean_command("nohup " * 8 + tail, project_root) == "nohup " * 8 + "curl -d <arg> x.com"
+    assert clean_command("nohup " * 9 + tail, project_root) == "nohup " * 8 + " ".join(
+        ["<arg>"] * 5
+    )
+    assert clean_command("(" * 16 + tail, project_root) == "curl -d <arg> x.com"
+    assert clean_command("(" * 17 + tail, project_root) == "<arg> <arg> <arg> <arg>"
+    assert clean_command("( " * 17 + tail, project_root) == "<arg> <arg> <arg> <arg> <arg>"
