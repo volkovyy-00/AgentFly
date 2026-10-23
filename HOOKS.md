@@ -122,8 +122,9 @@ exit 0 and a warning on stderr.
 6. If the recorder is down, slow, or answers with an error: the **offline guard** (SPEC §9)
    answers. It denies outbound commands (`curl`, `wget`, `nc`, `scp`, `ssh`, `rsync` unless
    the host is local or private; `gh`, `aws`, `git push`; every inline `python -c` / `node -e` /
-   `perl -e` / `ruby -e` one-liner, as SPEC §9 says, and any other `python`/`node` command that
-   mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
+   `perl -e` / `ruby -e` one-liner, as SPEC §9 says, code piped into an interpreter or a shell
+   that names no script (`echo 'print(1)' | python3`, `echo 'curl x' | sh`; V5c), and any other
+   `python`/`node` command that mentions `http`), also when wrapped in `bash -c`, `env` or `sudo`, and any command that
    names an AgentFly folder or a `hooks.json`. The message says to run `agentfly start`. It
    allows everything else and logs the call with `offline: true`.
 

@@ -93,8 +93,9 @@ on GitHub: the lead folds them into a card.
   you may touch.
 - Run each check bare, never through a pipe (`cmd | tail` hides its failure).
 - The block decision uses in-memory state only. It never waits for a database
-  or the network. Writes to the local store (and to Neo4j, when enabled) happen
-  in the background and must never slow or break a hook response.
+  or the network, except `path_scope`'s bounded local `lstat`/`readlink` (SPEC §2). Writes to
+  the local store (and to Neo4j, when enabled) happen in the background and must never slow
+  or break a hook response.
 - Do not guess how Cursor hooks behave. Log the real input first (with file
   contents thrown away), then code against what actually arrives. Put what you
   learn in HOOKS.md "Observed on Cursor".
@@ -150,7 +151,7 @@ section 8.)
   `agentfly uninstall` has removed the registration. A 401 or 403 from the
   recorder (wrong token) and input the client cannot parse get the same guard,
   never an allow. Every inline `python -c` / `node -e` / `perl -e` / `ruby -e` is denied
-  offline.
+  offline; so is piped code.
 - Strip content before doing anything else: file contents, edit text, command output,
   `tool_input` except a file tool's path, Grep's `glob` and `output_mode` (never its `pattern`)
   and an MCP call's names, any nested `content` / `output`. The log keeps no command text. Top-level fields such as `parent_tool_call_id` pass
