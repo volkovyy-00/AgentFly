@@ -14,6 +14,7 @@ No I/O, no shell is ever run, and `normalize` never raises.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -96,7 +97,7 @@ def is_reader(name: str) -> bool:
     return name in SHELLS or name.rstrip("0123456789.") in _READERS or interpreter(name) is not None
 
 
-def _python_one_liner(args: list[str]) -> bool:
+def _python_one_liner(args: Iterable[str]) -> bool:
     """`-c` in python's own options, found letter by letter (`-Sc`, `-c1`, `-X dev -c`)."""
     options = iter(args)
     for arg in options:
@@ -118,7 +119,7 @@ def _python_one_liner(args: list[str]) -> bool:
     return False
 
 
-def _node_one_liner(args: list[str]) -> bool:
+def _node_one_liner(args: Iterable[str]) -> bool:
     """`-e`, `-p`, `--eval[=]`, `--print[=]` before node's script.
 
     Node has too many options that take a value to walk past them, so the options end at the
@@ -144,7 +145,7 @@ def script_family(name: str) -> str | None:
     return None
 
 
-def _perl_one_liner(args: list[str]) -> bool:
+def _perl_one_liner(args: Iterable[str]) -> bool:
     """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
 
     `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
@@ -177,7 +178,7 @@ _RUBY_VALUE_OPTIONS: frozenset[str] = frozenset(
 )
 
 
-def _ruby_one_liner(args: list[str]) -> bool:
+def _ruby_one_liner(args: Iterable[str]) -> bool:
     """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`).
 
     `-r`, `-I`, `-C` and `-E` (an encoding, not code) take the rest of their word or, alone, the
@@ -215,16 +216,24 @@ def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
     for index, word in enumerate(args):
         name: str = base_name(word)
         family: str | None = interpreter(name) or script_family(name)
-        rest: list[str] = args[index + 1 :]
-        if family == "python" and _python_one_liner(rest):
-            return True
-        if family == "node" and _node_one_liner(rest):
-            return True
-        if family == "perl" and _perl_one_liner(rest):
-            return True
-        if family == "ruby" and _ruby_one_liner(rest):
+        if family is not None and _ONE_LINERS[family](_after(args, index)):
             return True
     return False
+
+
+def _after(words: Sequence[str], index: int) -> Iterator[str]:
+    """The words after `index`, read one at a time and not copied: a walk stops at the script,
+    so a command of many interpreter names stays linear."""
+    return (words[at] for at in range(index + 1, len(words)))
+
+
+# Each family's option walk over the words after the interpreter's name.
+_ONE_LINERS: dict[str, Callable[[Iterable[str]], bool]] = {
+    "python": _python_one_liner,
+    "node": _node_one_liner,
+    "perl": _perl_one_liner,
+    "ruby": _ruby_one_liner,
+}
 
 
 def loose_commands(text: str) -> tuple[tuple[str, ...], ...]:

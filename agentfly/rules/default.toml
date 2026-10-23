@@ -18,7 +18,10 @@
 #
 # Conditions (all that are present must hold):
 #   event        read, write, shell (a list). `write` is the agent's Write tool only; other
-#                edit tools are not seen yet
+#                edit tools are not seen yet. `read` is the file-read tool, and also a text search
+#                (Cursor's Grep) that returns lines: it reads the file it names and every name its
+#                glob can match. A search that returns names or counts only is not an event, and
+#                a search of a folder with no glob reads nothing by name
 #   path         a list name; patterns without "/" match the file name, patterns with "/" the whole
 #                path ("**" crosses folders, "~/" is your home folder)
 #   path_except  a list name; paths matching it are left out

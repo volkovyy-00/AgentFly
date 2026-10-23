@@ -16,7 +16,7 @@ import pytest
 import agentfly.hook_client as client_module
 from agentfly.recorder import paths
 from agentfly.recorder.app import hook_answer
-from agentfly.recorder.rules import Rule
+from agentfly.recorder.rules import Rule, Session, decide, mark
 from tests.helpers import (
     REPO,
     StubRecorder,
@@ -33,6 +33,7 @@ from tests.helpers import (
     wallclock,
     write_token,
 )
+from tests.test_search_read import CURL, nested
 
 MARKER = "FILE-CONTENT-MARKER-77"
 EVENT: dict[str, Any] = {
@@ -316,7 +317,13 @@ def planted_events() -> dict[str, dict[str, Any]]:
             **common,
             "hook_event_name": "preToolUse",
             "tool_name": "Grep",
-            "tool_input": {"file_path": "/proj/src", "pattern": PLANTED},
+            "tool_input": {
+                "file_path": "/proj/src",
+                "pattern": PLANTED,
+                "glob": "*.py",
+                "output_mode": "content",
+                "context": PLANTED,
+            },
         },
         "shell tool": {
             **common,
@@ -390,7 +397,11 @@ def test_the_recorder_still_gets_what_it_needs(client: Path, isolated_home: Path
     assert shell_body["command"] == SHELL_MARKER  # the recorder gets the command ...
     assert SHELL_MARKER not in hook_log(isolated_home)  # ... and the hook log never does
     assert write["tool_input"] == {"file_path": "/proj/w.py"}
-    assert grep["tool_input"] == {"file_path": "/proj/src"}
+    assert grep["tool_input"] == {
+        "file_path": "/proj/src",
+        "glob": "*.py",
+        "output_mode": "content",
+    }
     assert "tool_input" not in mcp_tool and mcp_tool["tool_name"] == "MCP:search"
     assert mcp_event["mcp_server_name"] == "linear" and mcp_event["tool_name"] == "create_issue"
     assert not {"url", "mcp_server_url", "command", "tool_input"} & set(mcp_event)
@@ -687,3 +698,55 @@ def test_a_planted_task_text_in_a_session_event_never_leaves_the_client(
     assert body["tool_call_id"] == PARENT_CALL
     assert body["subagent_id"] == "sub-1" and body["subagent_type"] == "general-purpose"
     assert body["is_parallel_worker"] is False
+
+
+# ---------------------------------------------------------------- searches (R1G)
+
+
+def grep_event(**tool_input: Any) -> dict[str, Any]:
+    return {
+        "hook_event_name": "preToolUse",
+        "conversation_id": "g1",
+        "tool_name": "Grep",
+        "tool_input": {"pattern": PLANTED, "file_path": "/w", **tool_input},
+    }
+
+
+def sent(client: Path, home: Path, event: dict[str, Any]) -> dict[str, Any]:
+    """The body the recorder gets for this event."""
+    write_token(home)
+    with StubRecorder() as stub:
+        answer_of(run_hook(client, home, event, port=stub.port))
+    return stub.bodies[0]
+
+
+@pytest.mark.parametrize(
+    ("glob", "kept"),
+    [([PLANTED], None), ({"content": PLANTED}, None), (5, None), ("*.md", "*.md")],
+)
+def test_a_search_keeps_its_glob_as_a_string_or_null_and_never_its_text(
+    client: Path, isolated_home: Path, glob: Any, kept: Any
+) -> None:
+    body = sent(client, isolated_home, grep_event(glob=glob, output_mode=["files"]))
+    assert body["tool_input"] == {"file_path": "/w", "glob": kept, "output_mode": None}
+    assert PLANTED not in json.dumps(body) and PLANTED not in hook_log(isolated_home)
+
+
+def test_a_search_with_no_glob_sends_none(client: Path, isolated_home: Path) -> None:
+    assert sent(client, isolated_home, grep_event())["tool_input"] == {"file_path": "/w"}
+
+
+def test_other_tools_do_not_keep_a_glob(client: Path, isolated_home: Path) -> None:
+    event = {**grep_event(glob="*.env", output_mode="content"), "tool_name": "Read"}
+    assert sent(client, isolated_home, event)["tool_input"] == {"file_path": "/w"}
+
+
+@pytest.mark.parametrize("glob", ["nested", ["x"]])
+def test_a_long_or_odd_glob_sent_through_the_client_marks_the_chat(
+    client: Path, isolated_home: Path, glob: Any
+) -> None:
+    value = nested(4096) if glob == "nested" else glob
+    body = sent(client, isolated_home, grep_event(glob=value, output_mode="content"))
+    assert body["tool_input"]["glob"] == (value if isinstance(value, str) else None)
+    session = mark(body, Session(id="g1", marked=False, start_time="", next_step=1))
+    assert session.marked and decide(CURL, session)[0] == "blocked"

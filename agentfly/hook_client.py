@@ -15,6 +15,7 @@ import time
 
 TYPE_CHECKING = False  # `import typing` alone costs ~5 ms per call
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator, Sequence
     from typing import Any
 
 try:  # the C module alone is enough here, and importing `socket` costs ~12 ms at start-up
@@ -67,6 +68,8 @@ _SESSION_KEEP: tuple[str, ...] = (
     "subagent_type",
     "is_parallel_worker",
 )
+# The Grep tool's `tool_input` fields that go to the recorder beside `file_path` (not `pattern`).
+_SEARCH_KEEP: tuple[str, ...] = ("glob", "output_mode")
 _AGENT_SUFFIX: str = "Do not retry with another tool or language. Stop and tell the user."
 
 # Offline guard (SPEC section 9): a word-level copy of what agentfly/recorder/rules.py treats as
@@ -172,8 +175,18 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
     else:
         if event != "beforeShellExecution":
             out.pop("command", None)
+        kept: dict[str, Any] = {}
         if isinstance(tool_input, dict) and isinstance(tool_input.get("file_path"), str):
-            out["tool_input"] = {"file_path": tool_input["file_path"]}
+            kept["file_path"] = tool_input["file_path"]
+        if isinstance(tool_input, dict) and tool_name == "grep":
+            # A search's file-name pattern and what it returns, never its search text. A value
+            # that is not a string goes as null: present, so the recorder counts it as a read.
+            for key in _SEARCH_KEEP:
+                if key in tool_input:
+                    value: Any = tool_input[key]
+                    kept[key] = value if isinstance(value, str) else None
+        if kept:
+            out["tool_input"] = kept
     edits: Any = out.pop("edits", None)
     strip_tree(out, _STRIP_KEYS)
     if event == "afterFileEdit" and edits is not None:
@@ -245,7 +258,7 @@ def _interpreter(name: str) -> str | None:
     return None
 
 
-def _python_one_liner(args: list[str]) -> bool:
+def _python_one_liner(args: Iterable[str]) -> bool:
     """`-c` in python's own options, found letter by letter (`-Sc`, `-c1`, `-X dev -c`)."""
     options = iter(args)
     for arg in options:
@@ -267,7 +280,7 @@ def _python_one_liner(args: list[str]) -> bool:
     return False
 
 
-def _node_one_liner(args: list[str]) -> bool:
+def _node_one_liner(args: Iterable[str]) -> bool:
     """`-e`, `-p`, `--eval[=]`, `--print[=]` before node's script.
 
     Node has too many options that take a value to walk past them, so the options end at the
@@ -293,7 +306,7 @@ def _script_family(name: str) -> str | None:
     return None
 
 
-def _perl_one_liner(args: list[str]) -> bool:
+def _perl_one_liner(args: Iterable[str]) -> bool:
     """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
 
     `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
@@ -326,7 +339,7 @@ _RUBY_VALUE_OPTIONS: frozenset[str] = frozenset(
 )
 
 
-def _ruby_one_liner(args: list[str]) -> bool:
+def _ruby_one_liner(args: Iterable[str]) -> bool:
     """`-e` in ruby's own options, found letter by letter (`-ne`, `-rnet/http -e`).
 
     `-r`, `-I`, `-C` and `-E` (an encoding, not code) take the rest of their word or, alone, the
@@ -362,16 +375,24 @@ def _inline_code(argv: list[str], names: list[str]) -> bool:
     """
     for index, name in enumerate(names):
         family: str | None = _interpreter(name) or _script_family(name)
-        rest: list[str] = argv[index + 1 :]
-        if family == "python" and _python_one_liner(rest):
-            return True
-        if family == "node" and _node_one_liner(rest):
-            return True
-        if family == "perl" and _perl_one_liner(rest):
-            return True
-        if family == "ruby" and _ruby_one_liner(rest):
+        if family is not None and _ONE_LINERS[family](_after(argv, index)):
             return True
     return False
+
+
+def _after(words: Sequence[str], index: int) -> Iterator[str]:
+    """The words after `index`, read one at a time and not copied: a walk stops at the script,
+    so a command of many interpreter names stays linear."""
+    return (words[at] for at in range(index + 1, len(words)))
+
+
+# Each family's option walk over the words after the interpreter's name.
+_ONE_LINERS: dict[str, Callable[[Iterable[str]], bool]] = {
+    "python": _python_one_liner,
+    "node": _node_one_liner,
+    "perl": _perl_one_liner,
+    "ruby": _ruby_one_liner,
+}
 
 
 def _outbound_words(argv: list[str], text: str) -> bool:
