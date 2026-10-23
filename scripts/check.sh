@@ -24,13 +24,13 @@ case "$1" in
   quick)
     uv run ruff check .
     uv run ruff format --check .
-    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright
+    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml
     env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup -m "not slow"
     ;;
   full)
     uv run ruff check .
     uv run ruff format --check .
-    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright
+    env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml
     env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup
     ;;
   *)

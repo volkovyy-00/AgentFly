@@ -45,12 +45,12 @@ issue or pull request as the card and puts the gap notes in the pull request.
   `rulefile.MAX_WORK` (200 units; SPEC §5). The active file is read once, at start, and
   only if it is a plain file owned by root that group and others cannot write (D3). Add the
   hash of a changed `default.toml` to `rulefile.SHIPPED_DEFAULTS` (D28).
-- Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
-  Pyright's `env` stops it asking PyPI for a newer version. The tests run in parallel; `env` keeps
-  byte-code out (a stray `.pyc` breaks `test_nothing_is_written_next_to_the_client`). Keep the
-  flags on the command line, never in `addopts`: the live-Neo4j test starts its own `pytest`.
-  CI runs this same line, and so does `./scripts/check.sh full` (a test fails if the script and
-  this bullet differ by a word).
+- Check (run before you report a step done): `uv run ruff check . && uv run ruff format --check . && env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml && env PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -n auto --dist loadgroup`
+  Pyright's `env` stops it asking PyPI for a newer version; `-p` keeps a stray `pyrightconfig.json`
+  from replacing its config. The tests run in parallel; `env` keeps byte-code out (a stray `.pyc`
+  breaks `test_nothing_is_written_next_to_the_client`). Keep the flags on the command line, never
+  in `addopts`: the live-Neo4j test starts its own `pytest`. CI runs this same line, and so does
+  `./scripts/check.sh full` (a test fails if the script and this bullet differ by a word).
 - Quick check (while you work, in a fraction of the time): `./scripts/check.sh quick` runs ruff,
   pyright and the parallel tests without those marked `slow` (2 s or more in a parallel run;
   `tests/README.md`). It is not the Check line: run that one before you report a step done.

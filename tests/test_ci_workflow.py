@@ -567,7 +567,7 @@ def test_the_checks_notice_commands_run_out_of_order() -> None:
 # `full` is the AGENTS.md Check line (CI runs that line itself); `quick` leaves out `slow` tests.
 
 QUICK_FILTER = '-m "not slow"'
-PYRIGHT = "env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright"
+PYRIGHT = "env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml"
 # Each `.gitignore` line that is not hidden (`**/.*` covers those) and can hold a `.py` file, as the
 # pyright exclude that leaves it out: pyright does not read `.gitignore`.
 IGNORED_FOLDERS = {
@@ -605,6 +605,13 @@ def test_pyright_reads_only_the_tracked_files() -> None:
     assert shown == set(IGNORED_FOLDERS), "map a new .gitignore line to a pyright exclude"
     wanted = {"ui", ".venv", "**/.*", *IGNORED_FOLDERS.values()}
     assert set(config["exclude"]) == wanted
+
+
+def test_pyright_is_in_the_dev_group() -> None:
+    # Else the check passes where an old pyright is still installed and fails on a fresh checkout.
+    dev = tomllib.loads(read(REPO / "pyproject.toml"))["dependency-groups"]["dev"]
+    names = {re.split(r"[^\w.-]", spec, maxsplit=1)[0] for spec in dev}
+    assert "pyright" in names, dev
 
 
 def test_the_check_line_runs_pyright_after_ruff_and_before_the_tests() -> None:
@@ -651,7 +658,7 @@ echo >> "$UV_LOG"
 exit 0
 """
 RUFF_CALLS = ["run|ruff|check|.|", "run|ruff|format|--check|.|"]
-PYRIGHT_CALL = "run|pyright|"
+PYRIGHT_CALL = "run|pyright|-p|pyproject.toml|"
 PYTEST_CALL = "run|pytest|-q|-n|auto|--dist|loadgroup|"
 EXPECTED_CALLS = {
     "quick": [*RUFF_CALLS, PYRIGHT_CALL, PYTEST_CALL + "-m|not slow|"],

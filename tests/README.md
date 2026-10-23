@@ -494,12 +494,14 @@ the maintainers' work items and decisions, which are kept outside this repo.
   exits 2 with nothing run. `tests/test_ci_workflow.py` reads the script's two `case` arms: `full`
   must equal the AGENTS.md Check bullet word for word, and `quick` must equal `full` plus
   ` -m "not slow"` (pytest 9.1 does not refuse a mistyped `-m` expression, it runs everything).
-  The Check bullet's third command must be `env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright`,
-  before pytest (F8): a place that drops it fails its match to the bullet, and this catches all of
-  them dropping it at once. `[tool.pyright]` sets only the mode (basic), Python 3.12 and the
-  excludes: `ui`, `.venv`, every hidden folder and each other `.gitignore` line that can hold a
-  `.py` file (pyright does not read `.gitignore`; a new line there fails until it is mapped). It
-  also runs the script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and
+  The Check bullet's third command must be
+  `env PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright -p pyproject.toml`, before pytest (F8):
+  a place that drops it, or drops its `-p` (else a `pyrightconfig.json` at the root replaces the
+  config, F8-fix2), fails its match to the bullet, and this catches all of them dropping it at
+  once. pyright must be in the `dev` group (else the check passes only where an old one is still
+  installed). `[tool.pyright]` sets only the mode (basic), Python 3.12 and the excludes: `ui`,
+  `.venv`, every hidden folder and each other `.gitignore` line that can hold a `.py` file
+  (pyright does not read `.gitignore`; a new line there fails until it is mapped). It also runs the script with a stub `uv` first on `PATH` (a `/bin/sh` file that logs its words and
   fails on a chosen call): both modes make four calls, once each, in order; a failure on call 1,
   2, 3 or 4 fails the script and stops it; bad arguments run nothing (these runs are `slow`: on a
   Mac the first run of a new executable file, the stub, takes seconds). CI runs the AGENTS.md line
