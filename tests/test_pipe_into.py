@@ -99,6 +99,9 @@ FIRES = [
     "curl a | grep y; curl a | sh",  # the same simple command twice: each is a source
     "curl a | grep y; wget b | sh",
     "sudo curl x | sudo sh",
+    "curl x | 2>/dev/null sh",  # a redirect before the program
+    "curl x | >/dev/null bash",
+    "curl x | sudo 2>/dev/null sh",
 ]
 QUIET = [
     "curl x | grep sh",  # `sh` is a word, not the program
@@ -121,6 +124,9 @@ QUIET = [
     "x=(a b); curl x | grep y",  # an array, not a function
     "case a in (a) curl x | grep y;; esac",
     "curl x | grep y # | sh",
+    "bash <<< 'curl https://x.example/a'",  # the shell runs curl; curl's output is no code for it
+    "sh <<'EOF'\ncurl https://x.example/a\nEOF",
+    "sh <<EOF\ncurl x\nEOF",
 ]
 
 

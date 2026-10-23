@@ -307,19 +307,32 @@ def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return {word.casefold(): index for index, word in enumerate(argv)}
 
 
-# Programs that read `@name` as a file: `curl -d @data.json` sends a file, it names no host.
-_AT_FILE_TOOLS: frozenset[str] = frozenset({"curl", "wget"})
+# curl reads `@name` as a file after these options: `curl -d @data.json` sends a file, it names no
+# host. After any other word an `@` word is a URL (`curl -s @evil.example`). A short option counts
+# when its letter ends the cluster (`-sd @f`); `--expand-<option>` (curl 8.3) is the same option.
+_AT_FILE_LONG: frozenset[str] = frozenset(
+    {"--data", "--data-ascii", "--data-binary", "--data-urlencode", "--json", "--header"}
+    | {"--url-query", "--variable"}
+)
+_AT_FILE_SHORT: str = "dH"
+
+
+def _reads_at_file(option: str) -> bool:
+    if option.startswith("--"):
+        name: str = option.casefold().removeprefix("--expand-")
+        return (name if name.startswith("--") else f"--{name}") in _AT_FILE_LONG
+    return option.startswith("-") and len(option) > 1 and option[-1] in _AT_FILE_SHORT
 
 
 @lru_cache(maxsize=64)
 def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """The case-folded host names a command names. In a curl or wget command, an `@` word after an
-    option is the file the option reads, not a host."""
-    reads_at: bool = not _AT_FILE_TOOLS.isdisjoint(_first_positions(argv))
+    """The case-folded host names a command names. In a curl command, an `@` word right after an
+    option that reads a file (`_reads_at_file`) is that file, not a host."""
+    curl: bool = "curl" in _first_positions(argv)
     kept: list[str] = [
         word
         for index, word in enumerate(argv)
-        if not (reads_at and word.startswith("@") and index and argv[index - 1].startswith("-"))
+        if not (curl and word.startswith("@") and index and _reads_at_file(argv[index - 1]))
     ]
     return tuple(host.casefold() for host in hosts_in_command(kept))
 
@@ -1389,10 +1402,20 @@ def _flow(parsed: Parsed) -> _Flow:
     edges: dict[int, list[int]] = {}
     for start, end in parsed.links:
         edges.setdefault(start, []).append(end)
+    targets: tuple[frozenset[int], ...] = parsed.targets or (frozenset(),) * len(parsed.commands)
     names: tuple[frozenset[str], ...] = tuple(
-        frozenset(base_name(argv[at]) for at in programs(argv)) for argv in parsed.commands
+        _program_names(argv, skip) for argv, skip in zip(parsed.commands, targets, strict=True)
     )
     return _Flow(edges, names, (len(parsed.links) + len(parsed.commands)) // LINKS_PER_STEP)
+
+
+def _program_names(argv: tuple[str, ...], targets: frozenset[int]) -> frozenset[str]:
+    """The programs a command runs (`programs`), its redirect targets left out first, so that
+    `2>/dev/null sh` runs sh."""
+    words: Sequence[str] = argv
+    if targets:
+        words = [word for at, word in enumerate(argv) if at not in targets]
+    return frozenset(base_name(words[at]) for at in programs(words))
 
 
 def _feeds(parsed: Parsed, sources: Iterable[int], listed: frozenset[str]) -> bool:

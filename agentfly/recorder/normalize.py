@@ -82,6 +82,8 @@ class Parsed:
     loose: tuple[tuple[str, ...], ...] = ()
     # Not hashed (it is compared): a long line's links would make every cache look-up slow.
     links: tuple[tuple[int, int], ...] = field(default=(), hash=False)
+    # For each command, the positions of its redirect targets (`2>/dev/null sh`: /dev/null).
+    targets: tuple[frozenset[int], ...] = field(default=(), hash=False)
     links_unknown: bool = False
     piped_code: bool = False
 
@@ -298,10 +300,13 @@ def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
 # ---------------------------------------------------------------- programs and piped code (V5c)
 
 # Programs that run the words after them as a command: after one, every later word may be a
-# program (`sudo -u me bash`, `xargs -n1 sh`).
+# program (`sudo -u me bash`, `xargs -n1 sh`). The runners that start a tool from their own
+# environment count too (`uv run python`, `bundle exec ruby`, `arch -arm64 python3`).
 WRAPPERS: frozenset[str] = frozenset(
     {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
     | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+    | {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
+    | {"pyenv", "rbenv", "nodenv", "mise", "asdf", "npx", "pnpm", "yarn"}
 )
 # Shell words that stand before or around a command and are no program.
 _KEYWORDS: frozenset[str] = frozenset(
@@ -342,10 +347,16 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
+_NODE_SCRIPT = re.compile(r"/|\.[cm]?[jt]s$")  # a word that looks like a script, not a value
 
 
 def _is_stdin(word: str) -> bool:
-    return word in ("-", "/dev/stdin") or _DEV_FD.fullmatch(word) is not None
+    return word == "-" or _is_stdin_device(word)
+
+
+def _is_stdin_device(word: str) -> bool:
+    """`/dev/stdin` or `/dev/fd/N`: as a script or as `<`'s file, the code may be the pipe."""
+    return word == "/dev/stdin" or _DEV_FD.fullmatch(word) is not None
 
 
 def holds_substitution(word: str) -> bool:
@@ -382,9 +393,21 @@ def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     if not arg.startswith("-"):
         return _SCRIPT
     if family == "node":
-        return _STDIN if _node_code(arg) else 2 if arg in _NODE_VALUE_OPTIONS else 1
+        return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
     move: int = _STEPS[family](arg)
     return _STDIN if move == _CODE else _SCRIPT if move == _END else move
+
+
+def _node_takes_value(words: Sequence[str], at: int) -> bool:
+    """A node option that takes the next word: a known one, or a long option the walk does not
+    know when the next word does not look like a script (toward firing: in
+    `node --disable-warning X` the X is no script, and node reads its code from stdin)."""
+    arg: str = words[at]
+    if arg in _NODE_VALUE_OPTIONS:
+        return True
+    if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
+        return False
+    return _NODE_SCRIPT.search(words[at + 1]) is None
 
 
 def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:
@@ -528,6 +551,7 @@ class _Scanner:
         self.depth: int = depth
         self.subs: list[_Sub] = []  # substitutions read and not yet given to their command
         self.target: str = ""  # "<" or ">": the next word is a redirect's target
+        self.fd: str = ""  # the fd written before the next redirect (`3<`), if any
 
     # ------------------------------------------------------------ commands
 
@@ -582,7 +606,7 @@ class _Scanner:
             if added and self.target:
                 at: int = len(cmd.words) - 1
                 cmd.targets.append(at)
-                if self.target == "<":
+                if self.target == "<" and not _is_stdin_device(cmd.words[at]):
                     cmd.stdin = "sub" if cmd.words[at].startswith(SUB_PREFIX) else "file"
                 self.target = ""
 
@@ -667,6 +691,7 @@ class _Scanner:
             word: str = self.word()
             if word.isdigit() and self.i < n and s[self.i] in "<>":
                 self.subs.clear()
+                self.fd = word
                 continue  # the fd of `2>&1`
             if cmd.start:
                 if word in _CLOSERS:
@@ -704,15 +729,15 @@ class _Scanner:
             self.out.code_heredoc = True
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
         # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work.
+        # A shell runs what a herestring holds, as it runs a `-c` script: what runs there writes to
+        # the shell's output, not into the shell, so it links to nothing (`bash <<< 'curl x'`).
         texts: dict[str, None] = {}
-        read: set[str] = set()  # herestrings a shell reads: what they run feeds the shell
         for position, name in enumerate(names):
             if name in SHELLS:
                 script: str | None = shell_script(words[position + 1 :])
                 if script is not None:
                     texts[script] = None
                 texts.update(dict.fromkeys(herestrings))
-                read.update(herestrings)
             elif (
                 name == "eval"
                 and position + 1 < len(words)
@@ -720,10 +745,7 @@ class _Scanner:
             ):
                 texts[" ".join(words[position + 1 :])] = None
         for text in texts:
-            first = len(out.commands)
             self.sub_scan(text)
-            if text in read:
-                out.links += [(inner, index) for inner in range(first, len(out.commands))]
 
     def sub_scan(self, text: str) -> None:
         self.out.scans += 1
@@ -756,6 +778,8 @@ class _Scanner:
     def redirect(self, cmd: _Cmd, heredocs: list[_Heredoc]) -> None:
         s, n = self.s, self.n
         c: str = s[self.i]
+        stdin: bool = self.fd in ("", "0")  # `3<` opens fd 3: stdin stays the pipe
+        self.fd = ""
         if c in "<>" and s.startswith("(", self.i + 1):  # process substitution: a word
             self.i += 2
             cmd.words.append(self.nested("out" if c == ">" else "in"))
@@ -786,7 +810,7 @@ class _Scanner:
         while s[self.i - 1 : self.i] == "&" and self.i < n and s[self.i] in "0123456789-":
             self.i += 1  # the fd of `>&2`
             fd = True
-        self.target = "" if fd else "<" if operator in ("<", "<>") else ">"
+        self.target = "" if fd else "<" if operator in ("<", "<>") and stdin else ">"
 
     def skip_blanks(self) -> None:
         while self.i < self.n and self.s[self.i] in " \t":
@@ -850,16 +874,16 @@ class _Scanner:
             body.append(line)
             pos = n if end < 0 else end + 1
         text: str = "\n".join(body)
-        inner: list[tuple[int, int]] = []  # what runs in the body feeds the command it is for
+        # What `$(…)` or backticks in the body print feeds the command the body is for; what a
+        # shell runs from the body writes to the shell's output, and links to nothing.
+        inner: list[tuple[int, int]] = []
         if not doc.quoted:
             self.out.unquoted_heredoc = True  # D10: counts as unparseable for R1
             inner += self.expansions(text)  # the shell expands $(...) and backticks in the body
         if reader:
             self.out.code_heredoc = True  # D10: a quoted body is data unless something runs it
             if any(name in SHELLS for name in names):
-                first: int = len(self.out.commands)
                 self.sub_scan(text)
-                inner.append((first, len(self.out.commands)))
         if doc.index >= 0:
             self.out.links += [(i, doc.index) for first, last in inner for i in range(first, last)]
 
@@ -1078,6 +1102,7 @@ def normalize(text: str) -> Parsed:
         code_heredoc=out.code_heredoc,
         loose=loose,
         links=tuple(out.links),
+        targets=tuple(meta.targets for meta in out.meta),
         links_unknown=out.links_unknown,
         piped_code=piped,
     )

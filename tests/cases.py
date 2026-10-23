@@ -64,6 +64,23 @@ PIPED_CODE: list[str] = [
     "perl '-d:Foo;print 1' x.pl",
     "perl '-dt:Foo;print 1' x.pl",
     "perl '-mFoo qw(x)' x.pl",
+    # V5c final verification: a runner, a redirect of another fd, stdin as a redirect, a node
+    # option the walk does not know, a line continuation, a fed `eval` or `sh -c`
+    "echo 'import socket' | uv run python",
+    "echo 'import socket' | uv run python3 -",
+    "echo 'import socket' | arch -arm64 python3",
+    "echo 'import socket' | xcrun python3",
+    "echo 'puts 1' | bundle exec ruby",
+    "echo 'import socket' | python3 3</dev/null",
+    "echo 'import socket' | python3 < /dev/stdin",
+    "echo 'import socket' | python3 </dev/fd/0",
+    "echo 'import socket' | python3 0</dev/stdin",
+    "echo 'import socket' | python3 <&0",
+    "echo 'require(1)' | node --disable-warning ExperimentalWarning",
+    "echo 'import socket' | \\\npython3",
+    "echo 'import socket' | 2>&1 python3",
+    "echo 'import socket' | eval python3",
+    "echo 'import socket' | sh -c python3",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [
@@ -82,6 +99,10 @@ PIPED_NOT_INLINE: list[str] = [
     "cat x | bash x.sh",
     "cat x | sh -c 'wc -l'",
     "cat x | python3 < t.py",  # stdin is the file, not the pipe
+    "cat x | node --inspect app.js",  # an option the walk does not know, then a script
+    "cat x | uv run python t.py",
+    "cat x | bundle exec ruby x.rb",
+    "cat x | python3 2>/dev/null t.py",
     "python3 x.py | grep sh",
     "echo bash | xargs echo",
     "python3",  # nothing is piped in
