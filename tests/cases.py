@@ -86,6 +86,12 @@ SCRIPT_NOT_INLINE: list[str] = [
     "perl -c x.pl",
     "ruby -E UTF-8 x.rb",
     "ruby -Ke x.rb",  # `-K` takes a character set
+    # an `e` inside an option's value is not `-e`
+    "perl -MExtUtils::Command x.pl",
+    "perl -Ilib/e x.pl",
+    "ruby -Eeuc-jp x.rb",
+    "ruby -rset x.rb",
+    "ruby -Cetc x.rb",
     "perldoc -f each",
 ]
 RECORDER_ONLY: list[str] = [
