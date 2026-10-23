@@ -119,21 +119,37 @@ def _python_one_liner(args: Iterable[str]) -> bool:
     return False
 
 
-def _node_one_liner(args: Iterable[str]) -> bool:
-    """`-e`, `-p`, `--eval[=]`, `--print[=]` before node's script.
+def _node_stop(arg: str) -> bool:
+    """`--` or a word that names a script file: node's options end there."""
+    return arg == "--" or arg.endswith((".js", ".mjs", ".cjs", ".ts"))
+
+
+def _node_code(arg: str) -> bool:
+    """`-e`, `-p` (alone or clustered), `--eval[=]`, `--print[=]`."""
+    if arg.startswith(("--eval", "--print")):
+        return True
+    letters: str = arg[1:]
+    return (
+        arg.startswith("-")
+        and not arg.startswith("--")
+        and letters.isalpha()
+        and ("e" in letters or "p" in letters)
+    )
+
+
+def _node_one_liners(args: Sequence[str]) -> list[bool]:
+    """For every position i, is there inline code before node's script in `args[i:]`?
 
     Node has too many options that take a value to walk past them, so the options end at the
-    first word that names a script file or at `--`.
+    first word that names a script file or at `--`, and a `-e`, `-p`, `--eval` or `--print`
+    before that is code. Worked out once for the whole command, from the right, so each word is
+    looked at once however many `node` words it has (a walk from each one read the rest again).
     """
-    for arg in args:
-        if arg == "--" or arg.endswith((".js", ".mjs", ".cjs", ".ts")):
-            return False
-        if arg.startswith(("--eval", "--print")):
-            return True
-        if arg.startswith("-") and not arg.startswith("--") and arg[1:].isalpha():
-            if "e" in arg[1:] or "p" in arg[1:]:
-                return True
-    return False
+    found: list[bool] = [False] * (len(args) + 1)
+    for at in range(len(args) - 1, -1, -1):
+        arg: str = args[at]
+        found[at] = False if _node_stop(arg) else _node_code(arg) or found[at + 1]
+    return found
 
 
 def script_family(name: str) -> str | None:
@@ -210,10 +226,15 @@ def has_inline_code(argv: tuple[str, ...] | list[str]) -> bool:
     or of `python3 -m pytest -c cfg` is not taken for it.
     """
     args: list[str] = list(argv)
+    node: list[bool] | None = None  # `_node_one_liners`, made at the first `node`
     for index, word in enumerate(args):
         name: str = base_name(word)
         family: str | None = interpreter(name) or script_family(name)
-        if family is not None and _ONE_LINERS[family](_after(args, index)):
+        if family == "node":
+            node = node or _node_one_liners(args)
+            if node[index + 1]:
+                return True
+        elif family is not None and _ONE_LINERS[family](_after(args, index)):
             return True
     return False
 
@@ -224,10 +245,9 @@ def _after(words: Sequence[str], index: int) -> Iterator[str]:
     return (words[at] for at in range(index + 1, len(words)))
 
 
-# Each family's option walk over the words after the interpreter's name.
+# Each family's option walk over the words after the interpreter's name (node: `_node_one_liners`).
 _ONE_LINERS: dict[str, Callable[[Iterable[str]], bool]] = {
     "python": _python_one_liner,
-    "node": _node_one_liner,
     "perl": _perl_one_liner,
     "ruby": _ruby_one_liner,
 }
