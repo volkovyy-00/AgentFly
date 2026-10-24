@@ -13,11 +13,12 @@ from typing import Any
 import pytest
 
 import agentfly.hook_client as guard
-from agentfly.recorder.rules import is_outbound_send
+from agentfly.recorder.rules import Session, decide, is_outbound_send, mark
 from tests.cases import (
     GUARD_PATHS,
     NAMED_OUTBOUND,
     PACKAGE_ALLOWED,
+    PIPED_CODE,
     PIPED_NOT_INLINE,
     RECORDER_ONLY,
     SCRIPT_NOT_INLINE,
@@ -310,6 +311,123 @@ def test_the_piped_code_checks_read_big_text_in_linear_time(unit: str) -> None:
     size = 256 * 1024
     short, long = fastest([unit * (n // len(unit)) for n in (size // 8, size)], 5)
     assert long < 16 * short, f"8 times the text took {long / short:.1f} times as long"
+
+
+# F18: a fed shell's `-c` script, read offline as the recorder reads it (its own separators and
+# `exec`): the three lines observed allowed on 93341d8, then each not-inline line in `sh -c`
+OBSERVED_SCRIPTS = [
+    "echo 'import socket' | sh -c 'cd /tmp && python3'",
+    "echo 'import socket' | bash -c 'true; python3'",
+    "echo 'import socket' | sh -c 'exec python3'",
+]
+SCRIPT_TABLE = OBSERVED_SCRIPTS + [f"sh -c {shlex.quote(line)}" for line in PIPED_NOT_INLINE]
+
+
+def blocked_after_a_mark(command: str) -> bool:
+    session = Session(id="f18", marked=True, start_time="2026-10-25T00:00:00+00:00", next_step=1)
+    action = {"hook_event_name": "beforeShellExecution", "command": command}
+    return decide(action, mark(action, session))[0] == "blocked"
+
+
+def test_a_fed_shells_script_is_read_offline_as_the_recorder_reads_it() -> None:
+    denied = {c: guard.offline_answer(c)[0]["permission"] == "deny" for c in SCRIPT_TABLE}
+    assert denied == {c: blocked_after_a_mark(c) for c in SCRIPT_TABLE}
+    assert all(denied[c] for c in OBSERVED_SCRIPTS)
+    assert set(denied.values()) == {True, False}  # the table holds both answers
+
+
+@wallclock
+def test_the_quoted_rereads_cover_the_text_about_once() -> None:
+    # F18: fed shell stages whose `|` the shell reads as text (`\|`), then one long quoted word
+    # (its `;` ends the last stage's plain reading). Each stage read again to its end would read
+    # the word once a stage (quadratic in bytes: measured 35 times for 8 times the text); the
+    # read is skipped for a stage inside the last one. CPU time, as the test above.
+    def shape(stages: int, size: int) -> str:
+        return "cat x | sh -c 'a' " + "\\| sh x.sh " * stages + "';" + "a" * size + "'"
+
+    long_text = shape(96, 256 * 1024)
+    assert guard.offline_answer(long_text)[0] == {"permission": "allow"}
+    short, long = fastest([shape(12, 32 * 1024), long_text], 5)
+    assert long < 16 * short, f"8 times the text took {long / short:.1f} times as long"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat x | python3 t.py" + " a" * 50,  # a stage
+        "cat x | sh -c 'true" + " a" * 50 + "'",  # a script
+        "cat x | sh -c \"sh -c 'true" + " a" * 50 + "'\"",  # a script in a script
+    ],
+)
+def test_past_the_word_count_a_fed_stage_counts_as_piped_code(
+    command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F18: what the piped-code check reads in all is counted; at the count all is read, past it
+    # the text is denied unread
+    assert guard._PIPED_WORDS == 20_000
+    spent: list[int] = []
+    spend = guard._Count.spend
+
+    def counted(self: guard._Count, words: int) -> bool:
+        spent.append(words)
+        return spend(self, words)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(guard._Count, "spend", counted)
+        assert guard.offline_answer(command)[0] == {"permission": "allow"}
+    assert sum(spent) > 50
+    monkeypatch.setattr(guard, "_PIPED_WORDS", sum(spent))
+    assert guard.offline_answer(command)[0] == {"permission": "allow"}
+    monkeypatch.setattr(guard, "_PIPED_WORDS", sum(spent) - 1)
+    assert guard.offline_answer(command)[1] == "outbound"
+
+
+def test_the_huge_c_shape_is_denied_in_at_most_the_word_count_of_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F18: each `-c` was read again as a stage (348,000 nested reads, 4.2 s); now the stage's
+    # words are counted before its walk
+    text = "echo x | sh" + " -c" * 348_000 + "; echo 'import socket' | python3"
+    steps: list[None] = []
+    step = guard._stdin_step
+
+    def counted(family: str, words: Any, at: int) -> int:
+        steps.append(None)
+        return step(family, words, at)
+
+    monkeypatch.setattr(guard, "_stdin_step", counted)
+    assert guard.guard_reason(text) == "outbound"
+    assert len(steps) <= guard._PIPED_WORDS
+
+
+def cut_off(line: str) -> list[bytes]:
+    """A payload holding the command, cut short at three points after it."""
+    raw = json.dumps(
+        {
+            "hook_event_name": "beforeShellExecution",
+            "command": line,
+            "conversation_id": "c1",
+            "cwd": "/Users/me/project",
+        }
+    ).encode()
+    return [raw[: raw.index(b'"conversation_id"')], raw[: raw.index(b'"cwd"') + 3], raw[:-3]]
+
+
+def test_piped_code_in_a_cut_off_payload_is_denied() -> None:
+    # F18: JSON's `", "…` after the command read as a script name allowed 47 of these lines
+    for line in PIPED_CODE:
+        for raw in cut_off(line):
+            assert guard.guard_raw(raw)[0]["permission"] == "deny", raw
+    for line in PIPED_NOT_INLINE:
+        for raw in cut_off(line):
+            assert guard.guard_raw(raw)[0] == {"permission": "allow"}, raw
+
+
+def test_a_cut_off_payload_with_piped_code_is_denied_by_the_client(
+    client: Path, isolated_home: Path
+) -> None:
+    raw = b'{"command": "echo 1 | node", "conversation_id": "c1", "cwd": "/p'
+    assert answer_of(run_hook(client, isolated_home, raw, port=free_port()))["permission"] == "deny"
 
 
 def test_an_unparseable_command_is_denied_only_if_its_raw_text_names_a_tool() -> None:

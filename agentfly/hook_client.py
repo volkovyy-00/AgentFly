@@ -478,7 +478,7 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
 )
 _DEV_FD: str = r"/dev/fd/\d+"
 _NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
-# A shell's `-c` script is read as a stage of its own, this many levels deep at most; deeper, it
+# A fed shell's `-c` script is read as a command line, this many levels deep at most; deeper, it
 # counts as reading code from the pipe.
 _SCRIPT_DEPTH: int = 4
 _STDIN: int = -1
@@ -506,6 +506,21 @@ _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file
 # Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
 # rule does): each costs a walk in Python.
 _PIPE_STAGES: int = 1000
+# F18: the words the piped-code check reads in all: each fed stage's words and one more, each
+# stage read again with quotes kept whole, and the commands of each `-c` script. They are counted
+# right after the C-speed split, before any walk in Python; past the count the text counts as
+# piped code. A quoted word may be 1 MiB long, so the count alone does not bound the bytes read
+# again: a stage that starts inside the last such read is not read again (`_fed_stages_read`).
+_PIPED_WORDS: int = 20_000
+# A stage read again with quotes kept whole: its text up to the first `_CUT` outside quotes and
+# backslashes (an unclosed quote is read as a character).
+_QUOTED_STAGE: str = (
+    r"""(?s)(?:[^;&|\n)'"\\>\s]++|'[^']*+'|"(?:[^"\\]++|\\.)*+"|\\.|['"\\]"""
+    r"""|[^\S\n](?!#)|>(?!\()|(?<=[<>])&|&(?=>))*+"""
+)
+# A word's pieces the shell does not expand (a backslash's character, a single-quoted run): what is
+# left (`\1`: plain text and double-quoted runs) may hold a `$(` or a backtick.
+_UNEXPANDED: str = r"""(?s)\\.|'[^']*'|("(?:[^"\\]|\\.)*")"""
 # The guard's patterns are kept as text and compiled on first use (`re` keeps them): the client
 # starts on every hook, and the guard runs only when the recorder does not answer.
 
@@ -559,9 +574,10 @@ def _is_stdin_device(word: str) -> bool:
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
 
 
-def _stdin_step(family: str, words: Sequence[str], at: int, depth: int) -> int:
+def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
-    `-c` script is read as a stage (the recorder reads it as a command line)."""
+    `-c` reads the pipe when its script holds a substitution (`bash -c "$(cat)"`); what the script
+    runs is read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
     if _is_stdin(arg):
         return _STDIN
@@ -573,11 +589,7 @@ def _stdin_step(family: str, words: Sequence[str], at: int, depth: int) -> int:
         if arg.startswith("--"):
             return 2 if arg in _SHELL_VALUE_OPTIONS else 1
         if "c" in arg[1:]:
-            if at + 1 >= len(words):
-                return _SCRIPT
-            script: str = words[at + 1]
-            fed: bool = _SUB in script or _stage_reads_stdin(script, depth + 1)
-            return _STDIN if fed else _SCRIPT
+            return _STDIN if at + 1 < len(words) and _SUB in words[at + 1] else _SCRIPT
         if "s" in arg[1:]:
             return _STDIN
         return 2 if ("o" in arg[1:] or "O" in arg[1:]) else 1
@@ -599,7 +611,7 @@ def _node_takes_value(words: Sequence[str], at: int) -> bool:
     return re.compile(_NODE_SCRIPT).search(words[at + 1]) is None
 
 
-def _reads_stdin(words: Sequence[str], depth: int) -> bool:
+def _reads_stdin(words: Sequence[str]) -> bool:
     """`normalize.reads_stdin`: an interpreter or a shell at a program position that names no
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
@@ -615,7 +627,7 @@ def _reads_stdin(words: Sequence[str], depth: int) -> bool:
         if family not in tables:
             found: list[bool] = [True] * (len(words) + 2)
             for index in range(len(words) - 1, -1, -1):
-                move: int = _stdin_step(family, words, index, depth)
+                move: int = _stdin_step(family, words, index)
                 found[index] = move == _STDIN or (move > 0 and found[index + move])
             tables[family] = found
         if tables[family][at + 1]:
@@ -623,17 +635,29 @@ def _reads_stdin(words: Sequence[str], depth: int) -> bool:
     return False
 
 
-def _stage_reads_stdin(stage: str, depth: int = 0) -> bool:
+class _Count:
+    """The words the piped-code check may still read (`_PIPED_WORDS`)."""
+
+    def __init__(self) -> None:
+        self.left: int = _PIPED_WORDS
+
+    def spend(self, words: int) -> bool:
+        """Count `words` more; True once past the count (the text then counts as piped code)."""
+        self.left -= words
+        return self.left < 0
+
+
+def _stage_reads_stdin(stage: str, count: _Count) -> bool:
     """One command of a pipe, as raw text: its redirects dropped (stdin from a file names the
     script; from `<(`, a herestring, a heredoc, `/dev/stdin` or another fd it is code; `3<` is not
-    stdin), then the stdin walk."""
-    if depth > _SCRIPT_DEPTH:
-        return True
+    stdin), then the stdin walk. Its words are counted before the walk."""
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
     stage = re.compile(_DUPLICATE).sub(" ", stage)
     argv: list[str] = []
     found: list[str] = words(stage)
+    if count.spend(len(found) + 1):
+        return True
     redirect_word: re.Pattern[str] = re.compile(_REDIRECT)
     index: int = 0
     while index < len(found):
@@ -651,25 +675,104 @@ def _stage_reads_stdin(stage: str, depth: int = 0) -> bool:
             continue
         if _SUB not in target and not _is_stdin_device(target):
             return False  # `python3 < x.py`
-    return _reads_stdin(argv, depth)
+    return _reads_stdin(argv)
+
+
+def _fed_stage_reads(
+    text: str, start: int, end: int, count: _Count, depth: int, read_to: int
+) -> tuple[bool, int]:
+    """Whether the fed stage `text[start:end]` (cut at `_CUT`) reads code from the pipe: its stdin
+    walk, then the stage read again with quotes kept whole (`_scripts_read`), unless it starts
+    before `read_to`, where the last such read ended: its `|` sits in a quoted word that read
+    took whole. Returns that and where the reads have now reached, so they cover the text once."""
+    if _stage_reads_stdin(text[start:end], count):
+        return True, read_to
+    if start < read_to:
+        return False, read_to
+    return _scripts_read(text, start, count, depth)
+
+
+def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[bool, int]:
+    """The stage at `start` read as the recorder reads it, quotes kept whole, to its first `_CUT`
+    outside quotes: whether a shell in it (any word; a versioned name too) runs a `-c` script that
+    reads the pipe, and where the stage ends. A script reads it when it holds a `$(` or backtick
+    the shell expands (`normalize._shell_stdin_step`), or when a command of it does: each is fed,
+    as the recorder feeds every command of a fed shell's script (`_line_reads`)."""
+    stage: re.Match[str] | None = re.compile(_QUOTED_STAGE).match(text, start)
+    end: int = stage.end() if stage else start
+    raw: list[str] = re.compile(_QUOTED_WORD).findall(text, start, end)
+    if count.spend(len(raw)):
+        return True, end
+    argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in raw]
+    scripts: dict[str, None] = {}
+    table: list[int | None] = []  # `_script_indexes(argv)`, at the first shell
+    for at, word in enumerate(argv):
+        if word.split("/")[-1].lower().rstrip("0123456789.") not in _SHELLS:
+            continue
+        table = table or _script_indexes(argv)
+        if (script := table[at + 1]) is None:
+            continue
+        expanded: str = re.compile(_UNEXPANDED).sub(r"\1", raw[script])
+        if "$(" in expanded or "`" in expanded:
+            return True, end
+        scripts[argv[script]] = None
+    return any(_line_reads(script, count, depth + 1) for script in scripts), end
+
+
+def _script_indexes(argv: Sequence[str]) -> list[int | None]:
+    """`normalize.script_indexes`: for each index (and the two past the end), the index of the
+    `-c` script a shell's option walk finds from there, or None; worked out from the right once."""
+    found: list[int | None] = [None] * (len(argv) + 2)
+    for index in range(len(argv) - 1, -1, -1):
+        arg: str = argv[index]
+        if arg == "--" or not arg.startswith(("-", "+")):
+            continue
+        if arg.startswith("--"):
+            found[index] = found[index + (2 if arg in _SHELL_VALUE_OPTIONS else 1)]
+        elif "c" in arg[1:]:
+            found[index] = index + 1 if index + 1 < len(argv) else None
+        else:
+            found[index] = found[index + (2 if ("o" in arg[1:] or "O" in arg[1:]) else 1)]
+    return found
+
+
+def _line_reads(script: str, count: _Count, depth: int) -> bool:
+    """A `-c` script read as a command line: each of its commands (cut at `_CUT`) a fed stage.
+    Past _SCRIPT_DEPTH scripts deep it counts as reading the pipe."""
+    if depth > _SCRIPT_DEPTH:
+        return True
+    start: int = 0
+    read_to: int = 0
+    for found in re.compile(_CUT).finditer(script):
+        reads, read_to = _fed_stage_reads(script, start, found.start(), count, depth, read_to)
+        if reads:
+            return True
+        start = found.end()
+    return _fed_stage_reads(script, start, len(script), count, depth, read_to)[0]
 
 
 def _piped_code(text: str) -> bool:
     """Code piped into an interpreter or a shell that names no script (SPEC section 9): the
     command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
-    `< <(` (`python3 < <(cat x)`). Stages with no interpreter or shell name are skipped in C
-    (`_FED_STAGES`); past _PIPE_STAGES of either kind the text counts as piped code."""
+    `< <(` (`python3 < <(cat x)`), and a fed shell's `-c` script read as a command line (F18:
+    `… | sh -c 'cd /tmp && python3'`). Stages with no interpreter or shell name are skipped in C
+    (`_FED_STAGES`); past _PIPE_STAGES of either kind, or past _PIPED_WORDS words read, the text
+    counts as piped code."""
     text = text.replace("\\\n", " ")  # a line continuation: `| \` and a newline go on
     cut: re.Pattern[str] = re.compile(_CUT)
-    count: int = 0
+    count: _Count = _Count()
+    stages: int = 0
     for source in _FED_STAGES:
+        read_to: int = 0
         for fed in re.compile(source).finditer(text):
-            count += 1
-            if count > _PIPE_STAGES:
+            stages += 1
+            if stages > _PIPE_STAGES:
                 return True
             start: int = fed.start("start")
             end: re.Match[str] | None = cut.search(text, start)
-            if _stage_reads_stdin(text[start : end.start() if end else len(text)]):
+            stop: int = end.start() if end else len(text)
+            reads, read_to = _fed_stage_reads(text, start, stop, count, 0, read_to)
+            if reads:
                 return True
     if "<(" not in text:
         return False
@@ -678,7 +781,7 @@ def _piped_code(text: str) -> bool:
         if number >= _PIPE_STAGES:
             return True
         start = max(after, *(text.rfind(c, after, sub.start()) + 1 for c in _OWNER_START))
-        if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB):
+        if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB, count):
             return True
         after = sub.end()
     return False
@@ -948,12 +1051,27 @@ def now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _json_strings(text: str) -> str:
+    """Raw hook text with its JSON strings read (`\\\\`, `\\"`, `\\n`, `\\t`, `\\r`, `\\/`) and
+    each bare `"` a new line, at C speed: a cut-off payload's command then ends where its string
+    does (`"echo 1 | node", "cwd"` names no script `,`). A `\\u` escape is left as written."""
+    text = text.replace("\\\\", "\x01").replace('\\"', "\x02").replace('"', "\n")
+    for escape, plain in (("\\n", "\n"), ("\\t", "\t"), ("\\r", "\r"), ("\\/", "/")):
+        text = text.replace(escape, plain)
+    return text.replace("\x02", '"').replace("\x01", "\\")
+
+
 def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
-    """The offline guard on input that could not be read as a hook payload."""
+    """The offline guard on input that could not be read as a hook payload: on its raw text, and
+    piped code on that text with its JSON strings read too (`_json_strings`)."""
     if len(raw) > _MAX_GUARD_TEXT:  # a tool name may sit at either end of a cut-off payload
         half: int = _MAX_GUARD_TEXT // 2
         raw = raw[:half] + b" " + raw[-half:]
-    return offline_answer(raw.decode("utf-8", "replace"))
+    text: str = raw.decode("utf-8", "replace")
+    answer, reason = offline_answer(text)
+    if reason is None and _piped_code(_json_strings(text)):
+        return deny_answer("outbound"), "outbound"
+    return answer, reason
 
 
 def unreadable(raw: bytes) -> dict[str, str]:
