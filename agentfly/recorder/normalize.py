@@ -783,12 +783,12 @@ class _Scanner:
         evaled: bool = False
         for position, name in enumerate(names):
             if name in SHELLS:
-                first: bool = not scripts
-                if first:
+                first_shell: bool = not scripts
+                if first_shell:
                     scripts = script_indexes(words)
                 if (script := scripts[position + 1]) is not None:
                     texts[words[script]] = None
-                if first:
+                if first_shell:
                     texts.update(dict.fromkeys(herestrings))
             elif name == "eval":
                 if not evaled and position + 1 < len(words):
