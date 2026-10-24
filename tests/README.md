@@ -85,6 +85,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   one-liner and guard-path commands are denied with "agentfly start"; `ls`,
   `curl localhost:8000/health` and private addresses are allowed. The perl and ruby one-liners of
   `tests/cases.py` are denied, bare and wrapped, and its `SCRIPT_NOT_INLINE` runs are allowed.
+  V5c: `PIPED_CODE` (code piped into an interpreter or a shell, `< <(…)`, `>(…)`, `/dev/stdin`,
+  a fed `bash -c "$(cat)"`, quoted perl module values) is denied and `PIPED_NOT_INLINE` allowed;
+  pipes that feed no code (`cat x | xargs grep -l pattern`) are allowed; a quoted `|` counts as a
+  pipe offline but not in the recorder (`grep -E 'node|python'`; owner 2026-10-23: accepted);
+  past 1,000 stages or 20,000 quoted words the text is denied; the piped-code checks read big
+  text in linear time (CPU time, best of five, an 8x step against a 16x limit).
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -127,7 +133,13 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `perl -I lib -e`, `perl5.34 -e`, `ruby -e`, `ruby --disable gems -e`, `ruby -rnet/http -e`,
   `ruby -r json -e`, R1G; not `perl x.pl`, `ruby x.rb`, `perl -v`, `ruby --version`,
   `perl -c x.pl`, `ruby -E UTF-8 x.rb`); guard paths and R0 commands denied
-  unmarked, bare, wrapped and unparseable. Subagent mark (`tests/test_subagent_mark.py`):
+  unmarked, bare, wrapped and unparseable. V5c: `PIPED_CODE` is outbound after a mark, bare and
+  wrapped, and `PIPED_NOT_INLINE` (`git diff | python3 tool.py`, `python3 -m json.tool`,
+  `python3 < x.py`, `perl -MFoo=a,b x.pl`, `ps aux | grep python3`, `| xargs grep -l node`,
+  `| sudo grep python`) is allowed (a wrapper with an option, or `parallel`, keeps every later
+  word a program; runners, fd redirects, `<&0`, a line continuation after `|`); groups nested
+  past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes),
+  and so does a line of many heredocs (`c<<A;` 8,000 times). Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
@@ -342,7 +354,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   and 3,000 random runs of options, values and interpreter names, in the recorder and the offline
   guard; 20,000 words of `node`, `perl`, `ruby`, `python3`, `-/ruby`, `-I/perl`, `perl -I` and
   more make at most one table a family, over the whole command, and at most four steps a word
-  (counted, not timed), with and without code at the end.
+  (counted, not timed), with and without code at the end. The perl reference walk counts a `-M`,
+  `-m`, `-d:` or `-dt:` value that is not a module name as code (V5c).
 - Searches (`tests/test_search_read.py`, R1G): with R1 from `default.toml` a curl is blocked after a
   Grep of `/w/.env` or `/w/repo/secret.key`, or over `/w` or no folder with each glob the brief
   lists (`.env*`, `*`, `{a,.env}`, `.e[^x]v`, `!*.py`, `.en?.local`, `credential?.py`,
@@ -376,6 +389,52 @@ the maintainers' work items and decisions, which are kept outside this repo.
 - Shipped defaults (`tests/test_rules_shipped.py`, D28): `SHIPPED_DEFAULTS` ends with the hash of
   `default.toml`, has no duplicates, and equals the hashes of the earlier files kept in
   `tests/fixtures/shipped_defaults/` plus the current one; every earlier file still loads.
+- Flags in `command` (`tests/test_command_flags.py`, V5c): `example.toml`'s own rule 5 fires on
+  `curl -sd @f host`,
+  `-d@f`, `--data=x`, `--data-binary @f`, `--form a=b`, `--json x`, `wget --post-file=f` and the
+  getopt abbreviations, and is quiet on `curl -s`, `-fsSL`, `wget -T 5` and `curl -d @f localhost`;
+  a cluster entry is each of its letters in any order, case-sensitive (`-4d`, `-#d` hold `-d`);
+  long flags are case-folded and `--x*` is a prefix; other words stay whole words; a `*` only ends
+  a long flag; no word can spell a flag token; a prefix entry charges each long flag it reads,
+  stops at the first it finds, and past the budget gives the limit rule; `host_not_in` beside
+  `command` judges the matched commands (no host or a `$` counts as another host), beside
+  `command_class` the whole line.
+- `path_scope` (`tests/test_path_scope.py`, V5c): on real temporary folders, rule 8 fires on a
+  write outside every root, through a link inside a root, on `root/../x`, on a relative path with
+  no roots and past 32 roots; quiet inside a root, on a new file in a new folder, and on
+  `/private/tmp/w/f` under `/tmp/w`; a root reached through a link, any root of several, an
+  unusable root or one that resolves to `/`, `~`/`$HOME` in a path; a trigger sets on a read
+  outside; a search with no `file_path` is outside; out of steps, too many hops, a path over the
+  word limit, a link loop and a file where a folder should be count as outside; a missing folder
+  cancelled by `..` still follows the next link; a path outside as text makes no look-up; one hook
+  spends one budget (the step record makes its `Lookups` on shell hooks only, where no scope
+  runs); `rules check` refuses a scope beside a shell
+  event, in `then` and in R1; a scope alone is a condition; `WORK_SCOPE` is pinned; inline tests
+  send `roots` as `workspace_roots` (at most 64 strings, may be empty).
+- `pipe_into` (`tests/test_pipe_into.py`, V5c): rule 14's criteria and more forms fire (`|&`,
+  wrappers, groups, loops, `case`, a newline or a comment after `|`, `>(…)`, herestrings, heredoc
+  bodies, the same command twice, every word after a wrapper: `curl x | xargs grep -l sh`);
+  `curl x | grep sh`, `curl x; sh`, `sh -c 'curl x'`, a wait loop
+  and a commented `| sh` stay quiet; a function, `coproc`, an unmatched bracket, groups nested too
+  deep or text that does not parse fire once a source matched, and stay quiet with no source;
+  `host_not_in` beside it judges each source; the walk is charged to the hook (`WorkLimit`) and
+  runs only when a source matched; field errors; entries are base names, case-folded; it costs no
+  units and `LINKS_PER_STEP` is pinned; past `MAX_LINKS` a line's links count as unknown.
+- Example rules (`tests/test_rules_example.py`, V5c): `rules check` and `rules test` pass on
+  `example.toml` and `default.toml` through the CLI; the example holds R1, the ten and
+  `npm-publish-after-env` in order, its bundled rules equal the default's, it fits `MAX_WORK`,
+  uses each new field, loads as the active file under D27 and is never named by the installer;
+  `rules check` refuses `path_scope` beside a shell event; the default's header and
+  `Layout.rules` say `init -g` replaces an unedited copy (L21).
+- Bypass forms (`tests/test_rule_bypass.py`, V5c): every rule of `example.toml` but R0 against
+  each form that applies (`tests.cases.wrapped`, `$(…)`, backticks, `<(…)`, `c''url`, upper case,
+  a full path; flag cluster, attached, `=`, long prefix; paths relative, `./`, `..`, `//`, `$HOME`,
+  upper case), on the trigger and on the follow-up of an `after_then` rule, through the real
+  `mark` and the rule's own `check`; two near misses a rule stay quiet; every cell of the grid is
+  a case or has a reason. Ids read `<rule>-<form>`; `uv run python -m tests.test_rule_bypass`
+  prints the table. R1 after a `.env` read and the offline guard agree on piped code after a
+  wrapper (`PIPED_AFTER_WRAPPER`, owner 2026-10-23: `| xargs grep -l node` allowed,
+  `| xargs -0 grep -l sh` denied).
 - Severities and triggers (`tests/test_severities.py`, `tests/test_after_then.py`,
   `tests/test_session_triggers.py`, `tests/test_npm_publish_entry.py`): the strictest rule wins in
   every file order; a warn on a shell command answers `ask` with the text in both messages, a warn

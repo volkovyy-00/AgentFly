@@ -10,17 +10,22 @@ from agentfly.cli.rules_check import add_file_argument, choose_file, load
 from agentfly.recorder import rulefile
 
 
-def action_for(event: str, value: str) -> dict[str, object]:
-    """The hook payload a test step stands for."""
+def action_for(event: str, value: str, roots: tuple[str, ...] = ()) -> dict[str, object]:
+    """The hook payload a test step stands for; a test's `roots` go as `workspace_roots`."""
+    action: dict[str, object]
     if event == "read":
-        return {"hook_event_name": "beforeReadFile", "file_path": value}
-    if event == "write":
-        return {
+        action = {"hook_event_name": "beforeReadFile", "file_path": value}
+    elif event == "write":
+        action = {
             "hook_event_name": "preToolUse",
             "tool_name": "Write",
             "tool_input": {"file_path": value},
         }
-    return {"hook_event_name": "beforeShellExecution", "command": value}
+    else:
+        action = {"hook_event_name": "beforeShellExecution", "command": value}
+    if roots:
+        action["workspace_roots"] = list(roots)
+    return action
 
 
 def run_tests(loaded: rulefile.RuleFile, path: Path) -> tuple[int, list[str]]:
@@ -42,7 +47,7 @@ def run_tests(loaded: rulefile.RuleFile, path: Path) -> tuple[int, list[str]]:
             session = rules.Session(id="test", marked=False, start_time="test", next_step=1)
             action: dict[str, object] = {}
             for event, value in test.steps:
-                action = action_for(event, value)
+                action = action_for(event, value, test.roots)
                 session = rules.mark(action, session, ruleset)
             winner = rules.winning_rule(action, session, ruleset)
             got: str = "allow" if winner is None else winner.severity

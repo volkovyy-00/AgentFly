@@ -350,7 +350,7 @@ REFUSED: list[tuple[str, str, str]] = [
     ),
     (
         "wildcard in a command pattern",
-        doc(MATCH, lists='[lists]\ncmds = ["curl --data*"]\n'),
+        doc(MATCH, lists='[lists]\ncmds = ["curl --da*ta"]\n'),  # `--data*` is a prefix (V5c)
         "wildcard",
     ),
     ("event-only match", doc(MATCH.replace('command = "cmds"\n', "")), "every"),
@@ -649,7 +649,8 @@ def test_host_not_in_is_true_when_some_host_is_outside_the_list() -> None:
     assert clause.matches(shell("curl https://x.example/a"), {})
     assert clause.matches(shell("curl http://localhost/a https://x.example"), {})
     assert not clause.matches(shell("curl http://localhost:8000/health"), {})
-    assert not clause.matches(shell("curl --silent"), {})
+    # V5c (owner 2026-10-23): a matched command that names no host counts as another host
+    assert clause.matches(shell("curl --silent"), {})
 
 
 def test_a_command_class_is_answered_by_the_engine_that_supplies_it() -> None:

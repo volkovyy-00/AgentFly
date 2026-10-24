@@ -29,8 +29,9 @@ class Layout:
 
     @property
     def rules(self) -> Path:
-        """The active rules file (D3): root's, written by `init -g` once, and readable by the user
-        (mode 0644, or 0640 in a group the user is in)."""
+        """The active rules file (D3): root's, and readable by the user (mode 0644, or 0640 in a
+        group the user is in). `init -g` replaces an unedited copy with the newest default; change
+        any byte to keep yours (D28)."""
         return self.system_root / "rules.toml"
 
     @property

@@ -24,7 +24,7 @@ import re
 import stat
 import sys
 import tomllib
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -36,8 +36,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
 from agentfly.install.layout import SYSTEM
+from agentfly.recorder.clean import Walker, home_expanded
 from agentfly.recorder.names import hosts_in_command
-from agentfly.recorder.normalize import Parsed, base_name, normalize
+from agentfly.recorder.normalize import (
+    Parsed,
+    base_name,
+    holds_substitution,
+    normalize,
+    programs,
+)
 
 # The file the recorder reads once at start. Tests (and nothing else) point this elsewhere; it is
 # always read as `rulefile.ACTIVE_RULES`, never copied. No flag or variable moves it (D3, D25).
@@ -60,12 +67,15 @@ CLAUSE_FIELDS: tuple[str, ...] = (
     "command",
     "command_class",
     "host_not_in",
+    "path_scope",
+    "pipe_into",
 )
 COMMAND_CLASSES: frozenset[str] = frozenset({"outbound"})  # implemented by rules.py
+PATH_SCOPES: frozenset[str] = frozenset({"outside_workspace"})
 
 _RULE_FIELDS: frozenset[str] = frozenset({"id", "kind", "severity", "message", "test"})
 _TOP_FIELDS: frozenset[str] = frozenset({"schema", "lists", "rule"})
-_TEST_FIELDS: frozenset[str] = frozenset({"steps", "expect"})
+_TEST_FIELDS: frozenset[str] = frozenset({"steps", "expect", "roots"})
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _FIELDS_OF: dict[str, frozenset[str]] = {
     "match": _RULE_FIELDS | set(CLAUSE_FIELDS),
@@ -90,6 +100,11 @@ WORK_SLASH: int = 4  # a pattern with "/" is a walk through the path's folders .
 WORK_STAR: int = 12  # ... and each "**" (an unanchored pattern has one more) multiplies it
 WORK_PARTS_FREE: int = 4  # WORK_SLASH covers a walk of this many folders and a file name ...
 WORK_PART: int = 1  # ... each part past them is a step more for every position reached
+# `path_scope` (V5c) asks the file system, but one hook's walker answers a path once for all the
+# clauses (`clean.Walker`), within its own budget of LOOKUP_STEPS calls; what a clause adds is the
+# look-up of that answer. Measured on the author's Mac: a whole budget of `lstat` calls takes about
+# 25 ms, once per hook; a clause after the first about 2 us.
+WORK_SCOPE: int = 2
 WORK_ERROR: str = "asks for too much matching work per hook"
 MAX_PATTERN_CHARS: int = 200
 MAX_STARS: int = 8
@@ -97,6 +112,7 @@ MAX_MESSAGE_CHARS: int = 500
 MAX_TESTS: int = 50
 MAX_STEPS: int = 20
 MAX_STEP_CHARS: int = 2000
+MAX_TEST_ROOTS: int = 64  # `roots` of an inline test (what it sends as `workspace_roots`)
 MAX_SUMMARY_CHARS: int = 300
 
 CommandClass = Callable[[Parsed], bool]
@@ -250,10 +266,7 @@ def _glob(pattern: Sequence[str], segments: Sequence[str], blocks: _Blocks | Non
 def _resolved(path: str, home: str) -> str:
     """A path as the shell would hand it on: a leading `~`, `$HOME` or `${HOME}` is the home
     folder, and `..` and `//` are folded (the text only; no link is followed)."""
-    for prefix in ("~", "$HOME", "${HOME}"):
-        if path == prefix or path.startswith(prefix + "/"):
-            path = home + path[len(prefix) :]
-            break
+    path = home_expanded(path, home)
     return posixpath.normpath(path) if ".." in path or "//" in path else path
 
 
@@ -294,10 +307,44 @@ def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return {word.casefold(): index for index, word in enumerate(argv)}
 
 
+# curl reads `@name` as a file after these options: `curl -d @data.json` sends a file, it names no
+# host. After any other word an `@` word is a URL (`curl -s @evil.example`). A short option counts
+# when its letter ends the cluster (`-sd @f`); `--expand-<option>` (curl 8.3) is the same option.
+_AT_FILE_LONG: frozenset[str] = frozenset(
+    {"--data", "--data-ascii", "--data-binary", "--data-urlencode", "--json", "--header"}
+    | {"--url-query", "--variable"}
+)
+_AT_FILE_SHORT: str = "dH"
+
+
+def _reads_at_file(option: str) -> bool:
+    if option.startswith("--"):
+        name: str = option.casefold().removeprefix("--expand-")
+        return (name if name.startswith("--") else f"--{name}") in _AT_FILE_LONG
+    return option.startswith("-") and len(option) > 1 and option[-1] in _AT_FILE_SHORT
+
+
 @lru_cache(maxsize=64)
 def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """The case-folded host names a command names."""
-    return tuple(host.casefold() for host in hosts_in_command(argv))
+    """The case-folded host names a command names. In a curl command, an `@` word right after an
+    option that reads a file (`_reads_at_file`) is that file, not a host."""
+    curl: bool = "curl" in _first_positions(argv)
+    kept: list[str] = [
+        word
+        for index, word in enumerate(argv)
+        if not (curl and word.startswith("@") and index and _reads_at_file(argv[index - 1]))
+    ]
+    return tuple(host.casefold() for host in hosts_in_command(kept))
+
+
+def _unlisted_host(argv: tuple[str, ...], listed: frozenset[str]) -> bool:
+    """Does this simple command send to a host that is not listed? One that names no host, or
+    holds a variable or a substitution (`"$URL"`, `$(cat url)`) where a host may be, counts as
+    yes (toward firing, owner 2026-10-23)."""
+    hosts: tuple[str, ...] = _hosts_of(argv)
+    if not hosts or any("$" in w or holds_substitution(w) for w in argv):
+        return True
+    return any(host not in listed for host in hosts)
 
 
 @lru_cache(maxsize=_WORD_MEMO)
@@ -413,6 +460,11 @@ FLOAT_STEPS: int = 45_000
 PROBES_PER_STEP: int = 4
 PROGRAM_LOOKUPS_FREE: int = 300
 PROGRAM_LOOKUP_STEPS: int = 4
+# `pipe_into` (V5c) walks the links of the line (`Parsed.links`) once a source matched: a step for
+# every LINKS_PER_STEP links and commands, charged before the walk. Measured on the author's Mac,
+# 20,000 pipes: 0.27 us a link or command walked against 0.4 us a step; the table the walks share
+# is built once a line (about 1-2 us a unit, beside the 0.3 s `normalize` takes on that line).
+LINKS_PER_STEP: int = 1
 
 
 class WorkLimit(Exception):
@@ -423,10 +475,13 @@ class WorkLimit(Exception):
 @dataclass
 class Meter:
     """One hook's budget of steps (floating patterns and command lists), and the rules it left
-    unfinished (in order, once)."""
+    unfinished (in order, once). `disk` is the hook's walker for `path_scope`: its look-ups have
+    a budget of their own (`clean.LOOKUP_STEPS`), and a path or root it cannot resolve in that
+    budget counts as outside, so it never makes a rule unfinished."""
 
     left: int
     unfinished: list[str] = dataclasses.field(default_factory=list)
+    disk: Walker = dataclasses.field(default_factory=Walker)
 
     def note(self, rule_id: str) -> None:
         if rule_id not in self.unfinished:
@@ -513,10 +568,22 @@ def event_of(action: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _action_path(action: Mapping[str, Any], event: str) -> str:
-    source: Mapping[str, Any] = _tool_input(action) if event == "write" else action
+def _action_path(action: Mapping[str, Any]) -> str:
+    """The `file_path` a read names, or a tool's (the Write tool, a search) in its input."""
+    tool: bool = action.get("hook_event_name") == "preToolUse"
+    source: Mapping[str, Any] = _tool_input(action) if tool else action
     value: Any = source.get("file_path")
     return value if isinstance(value, str) else ""
+
+
+def _outside_workspace(action: Mapping[str, Any], home: str) -> bool:
+    """`path_scope = "outside_workspace"`: the file a read or write names, or the folder or file a
+    search names (none: outside), is under none of the event's `workspace_roots` (`Walker`). The
+    hook's walker answers, or one of its own when no meter runs (a test, `rules test`)."""
+    path: str = _action_path(action)
+    meter: Meter | None = _METER.get()
+    walker: Walker = meter.disk if meter is not None else Walker()
+    return not walker.inside_any(action.get("workspace_roots"), path, home)
 
 
 # ---------------------------------------------------------------- searches (R1G)
@@ -1095,41 +1162,87 @@ def glob_reads(searched: _Searched, raw: Any, start: str | None, home: str) -> b
     return _glob_reads(searched, glob, segments, home)
 
 
+# A flag of a command entry (V5c, SPEC section 5): a word of `-` and ASCII letters is each letter
+# as a short flag, case-sensitive (`-sd` is `-s` and `-d`); `--name` is a long flag, case-folded,
+# and a trailing `*` makes it a prefix (`--data*`). A flag is stored as a token no shell word can
+# spell, FLAG then the flag (`\0-d`, `\0--data*`), so it is one more key of the index. Every other
+# word of an entry is a whole word, as before.
+FLAG: str = "\x00"
+_SHORT_ENTRY = re.compile(r"-[A-Za-z]+")
+_LONG_ENTRY = re.compile(r"--[A-Za-z0-9][A-Za-z0-9_-]*\*?")
+# What a word of a command gives as short flags: the letters, digits and `#` it starts with
+# (`-sd@f`, `-4d`, `-#d` hold `-d`; `-o/tmp/d` holds only `-o`).
+_FLAG_RUN = re.compile(r"[A-Za-z0-9#]*")
+
+
+def _flag_tokens(word: str) -> tuple[str, ...]:
+    """The flags one word of a command holds, as tokens: `--name[=value]` its long name
+    (case-folded), `-…` each character of its leading run. Linear in the word."""
+    if word.startswith("--"):
+        name: str = word[2:].partition("=")[0]
+        return (f"{FLAG}--{name.casefold()}",) if name else ()
+    if word.startswith("-"):
+        run = _FLAG_RUN.match(word, 1)
+        return tuple(f"{FLAG}-{c}" for c in dict.fromkeys(run.group())) if run is not None else ()
+    return ()
+
+
+def _is_prefix(extra: str) -> bool:
+    return extra.startswith(FLAG) and extra.endswith("*")
+
+
+class _Entry(NamedTuple):
+    """What an entry needs past its key: whole words and exact flags, each after the program, and
+    long-flag prefixes (without the `*`), each the start of a long flag after the program."""
+
+    words: tuple[str, ...]
+    prefixes: tuple[str, ...]
+
+
 class _Bucket(NamedTuple):
-    """The entries under one key: their other extra words, and what reading them all costs (spec
-    §4.2): a step an entry and one a word, charged before the bucket is walked."""
+    """The entries under one key: what else each needs, and what reading them all costs (spec
+    §4.2): a step an entry and one a word or prefix, charged before the bucket is walked. A prefix
+    then costs a step for each long flag of the command it reads."""
 
     weight: int
-    rests: tuple[tuple[str, ...], ...]
+    rests: tuple[_Entry, ...]
 
 
 # A clause's command list as the clause looks it up (spec §4.7): program -> key -> the bucket of
-# entries under it. The key of an entry is its rarest extra word among that program's entries (the
-# first of them on a tie), or None for an entry with no extra word.
+# entries under it. The key of an entry is its rarest whole word or exact flag among that program's
+# entries (the first of them on a tie), or None for an entry with only prefixes. A program with an
+# entry of no extra word at all fires on the program alone: its keys are `{None: _ALONE}`.
 _Keys = dict[str | None, _Bucket]
 _Index = dict[str, _Keys]
+_ALONE: _Bucket = _Bucket(0, (_Entry((), ()),))
 
 
-def _bucket(rests: list[tuple[str, ...]]) -> _Bucket:
-    kept: tuple[tuple[str, ...], ...] = tuple(dict.fromkeys(rests))
-    return _Bucket(sum(1 + len(rest) for rest in kept), kept)
+def _bucket(rests: list[_Entry]) -> _Bucket:
+    kept: tuple[_Entry, ...] = tuple(dict.fromkeys(rests))
+    return _Bucket(sum(1 + len(rest.words) + len(rest.prefixes) for rest in kept), kept)
 
 
 def _command_index(command: tuple[tuple[str, ...], ...]) -> _Index:
     """Index a command list. Identical entries are kept once. An entry waits under its rarest word,
     so it is looked at only in a command that has that word: entries that share a program and a
     first word (`cat w a0` ... `cat w a199`) are keyed apart. What is stored under a key is the
-    entry's other extra words; the key word itself is known to hold by then."""
+    entry's other extra words and its prefixes; the key word itself is known to hold by then."""
     entries: dict[str, list[tuple[str, ...]]] = {}
     for program, *extras in dict.fromkeys(command):
         entries.setdefault(program, []).append(tuple(extras))
     index: _Index = {}
     for program, listed in entries.items():
-        held: Counter[str] = Counter(word for extras in listed for word in set(extras))
-        keyed: dict[str | None, list[tuple[str, ...]]] = {}
-        for extras in listed:
-            key: str | None = min(extras, key=held.__getitem__) if extras else None
-            keyed.setdefault(key, []).append(tuple(word for word in extras if word != key))
+        if () in listed:
+            index[program] = {None: _ALONE}
+            continue
+        exact: list[tuple[str, ...]] = [tuple(w for w in e if not _is_prefix(w)) for e in listed]
+        held: Counter[str] = Counter(word for words in exact for word in set(words))
+        keyed: dict[str | None, list[_Entry]] = {}
+        for extras, words in zip(listed, exact, strict=True):
+            key: str | None = min(words, key=held.__getitem__) if words else None
+            prefixes: tuple[str, ...] = tuple(w[:-1] for w in extras if _is_prefix(w))
+            rest: tuple[str, ...] = tuple(word for word in words if word != key)
+            keyed.setdefault(key, []).append(_Entry(rest, prefixes))
         index[program] = {key: _bucket(rests) for key, rests in keyed.items()}
     return index
 
@@ -1155,21 +1268,36 @@ def _entry_follows(last: Mapping[str, int], at: int, extras: tuple[str, ...]) ->
 
 class _Simple(NamedTuple):
     """One simple command as the command lists read it (read only): where each program first
-    stands, where each case-folded word last stands, and those words ordered by where they last
-    stand with the positions. The words after position p are the tail from
-    `bisect_right(positions, p)`, so how many there are is one search, not a scan."""
+    stands, where each case-folded word and each flag token (`_flag_tokens`) last stands, and those
+    ordered by where they last stand with the positions. The words after position p are the tail
+    from `bisect_right(positions, p)`, so how many there are is one search, not a scan. `longs`
+    is the long-flag tokens, sorted, for prefixes; `argv` the command itself."""
 
     first: dict[str, int]
     last: dict[str, int]
     words: tuple[str, ...]
     positions: tuple[int, ...]
+    longs: tuple[str, ...] = ()
+    argv: tuple[str, ...] = ()
 
 
 def _simple_view(argv: tuple[str, ...]) -> _Simple:
     last: dict[str, int] = _last_positions(argv)
+    flags: dict[str, int] = {}
+    for index, word in enumerate(argv):
+        for token in _flag_tokens(word):
+            flags[token] = index
+    if flags:
+        last = {**last, **flags}  # a copy: `_last_positions` is shared
     ordered: list[str] = sorted(last, key=last.__getitem__)
+    longs: tuple[str, ...] = tuple(sorted(t for t in flags if t.startswith(f"{FLAG}--")))
     return _Simple(
-        _first_positions(argv), last, tuple(ordered), tuple(last[word] for word in ordered)
+        _first_positions(argv),
+        last,
+        tuple(ordered),
+        tuple(last[word] for word in ordered),
+        longs,
+        argv,
     )
 
 
@@ -1211,31 +1339,100 @@ def _charge_program_walk(listed: int, parsed: Parsed) -> None:
         _charge(PROGRAM_LOOKUP_STEPS * over)
 
 
-def _bucket_hit(bucket: _Bucket, last: Mapping[str, int], at: int) -> bool:
+def _prefix_follows(view: _Simple, at: int, prefix: str) -> bool:
+    """Some long flag after position `at` starts with `prefix`. The long flags of the command with
+    that start are read in order, a step each, until one stands after `at`."""
+    longs: tuple[str, ...] = view.longs
+    index: int = bisect_left(longs, prefix)
+    while index < len(longs) and longs[index].startswith(prefix):
+        _charge(1)
+        if view.last[longs[index]] > at:
+            return True
+        index += 1
+    return False
+
+
+def _bucket_hit(bucket: _Bucket, view: _Simple, at: int) -> bool:
     _charge(bucket.weight)
-    return any(_entry_follows(last, at, rest) for rest in bucket.rests)
+    return any(
+        _entry_follows(view.last, at, rest.words)
+        and all(_prefix_follows(view, at, prefix) for prefix in rest.prefixes)
+        for rest in bucket.rests
+    )
 
 
 def _program_hit(keys: _Keys, view: _Simple, at: int) -> bool:
-    """One listed program, first standing at `at` in a simple command: some entry holds. Of the
-    program's keys and the distinct words after `at`, the smaller side is walked; the probes and
-    each bucket walked are charged (spec §4.2)."""
-    if None in keys:  # an entry with no extra word fires on the program alone
+    """One listed program, first standing at `at` in a simple command: some entry holds. Entries
+    with only prefixes are read first; then, of the program's keys and the distinct words after
+    `at`, the smaller side is walked; the probes and each bucket walked are charged (spec §4.2)."""
+    loose: _Bucket | None = keys.get(None)
+    if loose is _ALONE:  # an entry with no extra word fires on the program alone
         return True
+    if loose is not None and _bucket_hit(loose, view, at):
+        return True
+    keyed: int = len(keys) - (loose is not None)
     last: dict[str, int] = view.last
-    if len(keys) > 1:  # one key is looked up at once; more are weighed against the words after
+    if keyed > 1:  # one key is looked up at once; more are weighed against the words after
         start: int = bisect_right(view.positions, at)
-        if len(view.words) - start < len(keys):
+        if len(view.words) - start < keyed:
             _probe(len(view.words) - start)
             for word in view.words[start:]:
                 bucket = keys.get(word)
-                if bucket is not None and _bucket_hit(bucket, last, at):
+                if bucket is not None and _bucket_hit(bucket, view, at):
                     return True
             return False
-    _probe(len(keys))
+    _probe(keyed)
     for key, bucket in keys.items():
-        if key is not None and last.get(key, -1) > at and _bucket_hit(bucket, last, at):
+        if key is not None and last.get(key, -1) > at and _bucket_hit(bucket, view, at):
             return True
+    return False
+
+
+class _Flow(NamedTuple):
+    """A line's links as a look-up table (`Parsed.links`): where each node's output goes, the
+    programs of each command (`normalize.programs`, base names) and what a walk is charged."""
+
+    edges: dict[int, list[int]]
+    programs: tuple[frozenset[str], ...]
+    cost: int
+
+
+@lru_cache(maxsize=4)  # as `_simple_commands`: one line, all the clauses of a hook
+def _flow(parsed: Parsed) -> _Flow:
+    edges: dict[int, list[int]] = {}
+    for start, end in parsed.links:
+        edges.setdefault(start, []).append(end)
+    targets: tuple[frozenset[int], ...] = parsed.targets or (frozenset(),) * len(parsed.commands)
+    names: tuple[frozenset[str], ...] = tuple(
+        _program_names(argv, skip) for argv, skip in zip(parsed.commands, targets, strict=True)
+    )
+    return _Flow(edges, names, (len(parsed.links) + len(parsed.commands)) // LINKS_PER_STEP)
+
+
+def _program_names(argv: tuple[str, ...], targets: frozenset[int]) -> frozenset[str]:
+    """The programs a command runs (`programs`), its redirect targets left out first, so that
+    `2>/dev/null sh` runs sh."""
+    words: Sequence[str] = argv
+    if targets:
+        words = [word for at, word in enumerate(argv) if at not in targets]
+    return frozenset(base_name(words[at]) for at in programs(words))
+
+
+def _feeds(parsed: Parsed, sources: Iterable[int], listed: frozenset[str]) -> bool:
+    """Some command reached from a source along the links (not the source itself, unless another
+    source reaches it) runs a listed program. Each node is walked once: linear, and charged."""
+    flow: _Flow = _flow(parsed)
+    _charge(flow.cost)
+    todo: list[int] = list(sources)
+    reached: set[int] = set()
+    while todo:
+        for node in flow.edges.get(todo.pop(), ()):
+            if node in reached:
+                continue
+            reached.add(node)
+            if node >= 0 and flow.programs[node] & listed:
+                return True
+            todo.append(node)
     return False
 
 
@@ -1246,7 +1443,8 @@ class Clause:
     Every condition that is present must hold. `path` applies to a read or write's file, to what a
     search reads (`glob_reads`) and, in a shell command, to every word (and to the text after the
     last `=` and the last `@` of a word, so `--env-file=.env` and `-d@.env` count). The others
-    apply to shell commands only.
+    apply to shell commands only. `pipe_into` (a `match` only, beside `command`) asks that a command
+    the entry matched feed a listed program (`_feeds`).
     """
 
     events: tuple[str, ...]
@@ -1255,6 +1453,8 @@ class Clause:
     command: tuple[tuple[str, ...], ...] = ()  # program, then extra whole words; case-folded
     command_class: str = ""
     host_not_in: frozenset[str] = frozenset()
+    path_scope: str = ""  # "outside_workspace", or "" for none (read and write only)
+    pipe_into: frozenset[str] = frozenset()  # program base names, case-folded
     # `command` as a look-up table, made here (a clause built by hand has one too). It follows from
     # `command`, so it is no part of the clause's identity (a clause is hashed to cache a file).
     _index: _Index = dataclasses.field(
@@ -1288,33 +1488,58 @@ class Clause:
         home: str = os.path.expanduser("~")  # once for the clause, not for each pattern test
         return any(self._path_hit(candidate, home) for candidate in distinct_candidates(parsed))
 
-    def _command_hit(self, parsed: Parsed) -> bool:
-        """Some word is the program (by base name, so wrappers do not hide it) and the later
-        words include every extra word, in any order.
+    def _view_hit(self, view: _Simple) -> bool:
+        """Some word of this simple command is a listed program (by base name, so wrappers do
+        not hide it) and the later words hold every extra word and flag of an entry, in any
+        order.
 
         Only the first word that is the program needs a look: what follows a later one is a
-        part of what follows the first. So a simple command is read once, however often it
-        repeats the program or stands in the line, and its views are built once for the hook
-        (this runs on the event loop, under the hook client's 0.5 s wait). `_index` says which
-        entries to look at.
-        """
+        part of what follows the first. `_index` says which entries to look at."""
         listed: _Index = self._index
-        _charge_program_walk(len(listed), parsed)
-        for view in _simple_commands(parsed):
-            first: dict[str, int] = view.first
-            if len(listed) <= len(first):  # walk the smaller side, look up the other
-                for program, keys in listed.items():
-                    at: int | None = first.get(program)
-                    if at is not None and _program_hit(keys, view, at):
-                        return True
-            else:
-                for program, at in first.items():
-                    found: _Keys | None = listed.get(program)
-                    if found is not None and _program_hit(found, view, at):
-                        return True
+        first: dict[str, int] = view.first
+        if len(listed) <= len(first):  # walk the smaller side, look up the other
+            for program, keys in listed.items():
+                at: int | None = first.get(program)
+                if at is not None and _program_hit(keys, view, at):
+                    return True
+        else:
+            for program, at in first.items():
+                found: _Keys | None = listed.get(program)
+                if found is not None and _program_hit(found, view, at):
+                    return True
         return False
 
+    def _matched(self, parsed: Parsed) -> Iterator[_Simple]:
+        """The simple commands an entry of `command` holds in, in order and lazily (a caller that
+        needs one stops at the first). A simple command is read once, however often it repeats
+        the program or stands in the line, and its views are built once for the hook (this runs
+        on the event loop, under the hook client's 0.5 s wait)."""
+        _charge_program_walk(len(self._index), parsed)
+        return (view for view in _simple_commands(parsed) if self._view_hit(view))
+
+    def _command_hit(self, parsed: Parsed) -> bool:
+        """`command` holds; with `host_not_in` beside it, in a simple command that sends to a host
+        not listed (`_unlisted_host`): the host is judged where the entry matched. With
+        `pipe_into`, every such simple command is a source (`_pipe_hit`)."""
+        listed: frozenset[str] = self.host_not_in
+        views: Iterator[_Simple] = self._matched(parsed)
+        if listed:
+            views = (view for view in views if _unlisted_host(view.argv, listed))
+        if self.pipe_into and not (parsed.unparsed or parsed.links_unknown):
+            return self._pipe_hit(parsed, {view.argv for view in views})
+        # With `pipe_into`, text that does not parse, or hides what feeds what
+        # (`Parsed.links_unknown`), counts as feeding a listed program once a command matched.
+        return any(True for _ in views)
+
+    def _pipe_hit(self, parsed: Parsed, matched: set[tuple[str, ...]]) -> bool:
+        """A matched simple command, wherever it stands in the line, feeds a listed program."""
+        if not matched:
+            return False
+        sources = (index for index, argv in enumerate(parsed.commands) if argv in matched)
+        return _feeds(parsed, sources, self.pipe_into)
+
     def _host_hit(self, parsed: Parsed) -> bool:
+        """`host_not_in` beside `command_class` only: any host of the whole line, as before."""
         return any(
             host not in self.host_not_in
             for argv in parsed.all_commands()
@@ -1326,12 +1551,15 @@ class Clause:
         if event is None or event not in self.events:
             return False
         if event != "shell":
-            if not self.path:
-                return True
             home: str = os.path.expanduser("~")
-            if event == "read" and is_search(action):
-                return self._search_hit(action, home)
-            return self._path_hit(_action_path(action, event), home)
+            if self.path:  # the path first: it asks no disk
+                if event == "read" and is_search(action):
+                    hit: bool = self._search_hit(action, home)
+                else:
+                    hit = self._path_hit(_action_path(action), home)
+                if not hit:
+                    return False
+            return not self.path_scope or _outside_workspace(action, home)
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
@@ -1339,7 +1567,7 @@ class Clause:
         return (
             (not self.path or self._words_hit(parsed))
             and (not self.command or self._command_hit(parsed))
-            and (not self.host_not_in or self._host_hit(parsed))
+            and (not self.host_not_in or bool(self.command) or self._host_hit(parsed))
             and (not self.command_class or classes[self.command_class](parsed))
         )
 
@@ -1355,13 +1583,16 @@ def pattern_work(pattern: Pattern) -> int:
 
 def clause_work(clause: Clause | None) -> int:
     """What a clause costs per hook: a fixed part and its path patterns, which are tried on every
-    word. A command is read once for all its clauses (where each program first, and each word
-    last, stands; the host names), so an entry is a look-up and a long list of them costs
-    nothing worth counting (measured: 198 rules of 200 entries on the command's own program
-    take 31-35 ms for the whole hook, as the default alone does)."""
-    if clause is None or not (clause.path or clause.path_except):
+    word, and WORK_SCOPE for a `path_scope`. A command is read once for all its clauses (where
+    each program first, and each word last, stands; the host names), so an entry is a look-up and
+    a long list of them costs nothing worth counting (measured: 198 rules of 200 entries on the
+    command's own program take 31-35 ms for the whole hook, as the default alone does)."""
+    if clause is None:
         return 0
-    return WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
+    work: int = WORK_SCOPE if clause.path_scope else 0
+    if clause.path or clause.path_except:
+        work += WORK_CLAUSE + sum(pattern_work(p) for p in (*clause.path, *clause.path_except))
+    return work
 
 
 def rule_work(spec: RuleSpec) -> int:
@@ -1382,6 +1613,7 @@ def file_work(specs: Sequence[RuleSpec]) -> int:
 class InlineTest:
     steps: tuple[tuple[str, str], ...]  # (event, value), in order
     expect: str  # what the last step gets: block, warn, highlight or allow
+    roots: tuple[str, ...] = ()  # sent with every step as `workspace_roots` (none: not sent)
 
 
 @dataclass(frozen=True)
@@ -1523,15 +1755,41 @@ def _every_path(pattern: Pattern) -> bool:
     return pattern.parts == ("**",) or (not pattern.anchor and not pattern.parts)
 
 
+def _entry_word(word: str) -> tuple[str, ...] | None:
+    """One word of a command entry after the program, as what it stands for: a short-flag cluster
+    each of its letters, a long flag its token (`FLAG`), any other word itself, case-folded; None
+    for a wildcard anywhere else."""
+    if _SHORT_ENTRY.fullmatch(word):
+        return tuple(dict.fromkeys(f"{FLAG}-{letter}" for letter in word[1:]))
+    if _LONG_ENTRY.fullmatch(word):
+        return (FLAG + word.casefold(),)
+    if any(c in word for c in "*?["):
+        return None
+    return (word.casefold(),)
+
+
 def _command_entry(where: str, raw: str, problems: _Problems) -> tuple[str, ...] | None:
-    words: list[str] = raw.casefold().split()
+    words: list[str] = raw.split()
     if not words or len(raw) > MAX_PATTERN_CHARS:
         problems.add(where, f"command pattern {raw[:40]!r} needs a program name")
-    elif any(c in raw for c in "*?["):
-        problems.add(where, f"command pattern {raw!r}: wildcards are not supported yet")
-    else:
-        return (base_name(words[0]), *words[1:])
-    return None
+        return None
+    extras: list[tuple[str, ...] | None] = [_entry_word(word) for word in words[1:]]
+    if any(c in words[0] for c in "*?[") or None in extras:
+        problems.add(
+            where,
+            f"command pattern {raw!r}: a wildcard may only be a '*' at the end of a long flag "
+            "('--data*'); a short flag ('-d') already matches '-sd', '-d@file' and '-dX'",
+        )
+        return None
+    return (base_name(words[0]), *(token for tokens in extras if tokens for token in tokens))
+
+
+def _program(where: str, raw: str, problems: _Problems) -> str | None:
+    """A `pipe_into` entry: one program name, by its base name (`/bin/sh` is `sh`)."""
+    if raw.split() != [raw] or any(c in raw for c in "*?[") or not base_name(raw):
+        problems.add(where, f"pipe_into entry {raw[:40]!r} must be one program name, no wildcard")
+        return None
+    return base_name(raw)
 
 
 def _named(
@@ -1561,8 +1819,12 @@ def _clause(
     problems: _Problems,
     *,
     needs_condition: bool,
+    scope_ok: bool = True,
+    pipe_ok: bool = False,
 ) -> Clause | None:
-    """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition."""
+    """One clause. `then` may be event-only (a lockdown); `match` and `after` need a condition.
+    `path_scope` may stand in `match` and `after` (`scope_ok`), not in `then`; `pipe_into` only in
+    `match` (`pipe_ok`)."""
     if not isinstance(table, dict):
         problems.add(where, "must be a table")
         return None
@@ -1584,6 +1846,13 @@ def _clause(
         where, _named(where, table, "command", lists, problems), _command_entry, problems
     )
     hosts = frozenset(e.casefold() for e in _named(where, table, "host_not_in", lists, problems))
+    pipe: frozenset[str] = frozenset(
+        _compiled(where, _named(where, table, "pipe_into", lists, problems), _program, problems)
+    )
+    if "pipe_into" in table and not pipe_ok:
+        problems.add(where, "'pipe_into' may stand only in a 'match' rule")
+    elif "pipe_into" in table and "command" not in table:
+        problems.add(where, "'pipe_into' needs a 'command' beside it: the programs that feed")
     command_class: Any = table.get("command_class", "")
     if "command_class" in table and not (
         isinstance(command_class, str) and command_class in COMMAND_CLASSES
@@ -1592,6 +1861,15 @@ def _clause(
             where, f"command_class {command_class!r} is not one of {sorted(COMMAND_CLASSES)}"
         )
         command_class = ""
+    scope: Any = table.get("path_scope", "")
+    if "path_scope" in table:
+        if not (isinstance(scope, str) and scope in PATH_SCOPES):
+            problems.add(where, f"path_scope {scope!r} is not one of {sorted(PATH_SCOPES)}")
+        elif not scope_ok:
+            problems.add(where, "'path_scope' may stand in 'match' and 'after', not in 'then'")
+        elif events and not set(events) <= {"read", "write"}:
+            problems.add(where, '\'path_scope\' needs event = ["read"], ["write"] or both')
+        scope = scope if isinstance(scope, str) else ""
     if path_except and not path:
         problems.add(where, "'path_except' needs a 'path'")
     if hosts and not (command or command_class):
@@ -1600,11 +1878,11 @@ def _clause(
         problems.add(where, "'host_not_in' needs a 'command' or a 'command_class' beside it")
     if (command or hosts or command_class) and events and events != ["shell"]:
         problems.add(where, "'command', 'command_class' and 'host_not_in' need event = [\"shell\"]")
-    if needs_condition and not (path or command or hosts or command_class):
+    if needs_condition and not (path or command or hosts or command_class or scope):
         problems.add(where, f"matches every {'/'.join(events) or 'action'} action; add a condition")
     if len(problems.errors) > start:
         return None
-    return Clause(tuple(events), path, path_except, command, command_class, hosts)
+    return Clause(tuple(events), path, path_except, command, command_class, hosts, scope, pipe)
 
 
 def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
@@ -1633,8 +1911,15 @@ def _tests(where: str, raw: Any, problems: _Problems) -> tuple[InlineTest, ...]:
                 parsed.append((event, value.strip()))
         if steps is None:
             problems.add(label, f"'steps' must be 1 to {MAX_STEPS} strings")
-        elif len(parsed) == len(steps) and expect in EXPECTS:
-            found.append(InlineTest(tuple(parsed), expect))
+        roots: Any = item.get("roots", [])
+        if not (
+            isinstance(roots, list)
+            and len(roots) <= MAX_TEST_ROOTS
+            and all(isinstance(r, str) and len(r) <= MAX_STEP_CHARS for r in roots)
+        ):
+            problems.add(label, f"'roots' must be at most {MAX_TEST_ROOTS} folder paths (strings)")
+        elif steps is not None and len(parsed) == len(steps) and expect in EXPECTS:
+            found.append(InlineTest(tuple(parsed), expect, tuple(roots)))
     return tuple(found)
 
 
@@ -1677,7 +1962,7 @@ def _rule(
     clause = after = then = None
     if kind == "match":
         condition = {k: raw[k] for k in CLAUSE_FIELDS if k in raw}
-        clause = _clause(where, condition, lists, problems, needs_condition=True)
+        clause = _clause(where, condition, lists, problems, needs_condition=True, pipe_ok=True)
     elif kind == "after_then":
         for field in ("after", "then"):
             if field not in raw:
@@ -1685,7 +1970,9 @@ def _rule(
         if "after" in raw:
             after = _clause(f"{where} after", raw["after"], lists, problems, needs_condition=True)
         if "then" in raw:
-            then = _clause(f"{where} then", raw["then"], lists, problems, needs_condition=False)
+            then = _clause(
+                f"{where} then", raw["then"], lists, problems, needs_condition=False, scope_ok=False
+            )
     for pattern in _patterns_of((clause, after, then), "path_except"):
         if floating(pattern):  # spec §4.6: it would walk every word of every command
             problems.add(where, f"exception {pattern.text!r} {FLOATING_EXCEPTION}")
@@ -1935,11 +2222,21 @@ def _coverage_problems(after: Clause) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _conditions(clause: Clause) -> set[str]:
+    """The conditions a clause sets besides its events: an allow-list check of R1 (D27) then
+    refuses a field added later without being told of it."""
+    return {
+        field.name
+        for field in dataclasses.fields(clause)
+        if field.init and field.name != "events" and getattr(clause, field.name)
+    }
+
+
 def _then_problem(then: Clause) -> bool:
     return (
         then.events != ("shell",)
         or then.command_class != "outbound"
-        or bool(then.path or then.path_except or then.command or then.host_not_in)
+        or _conditions(then) != {"command_class"}
     )
 
 
@@ -1958,7 +2255,7 @@ def _minimum_problems(specs: Sequence[RuleSpec]) -> list[str]:
     if r1.severity != "block":
         problems.append(f'{where}: severity must stay "block" (it is {r1.severity!r}) (D27)')
     after: Clause = r1.after
-    if after.command or after.command_class or after.host_not_in:
+    if not _conditions(after) <= {"path", "path_except"}:
         problems.append(f"{where}: its 'after' may hold only event, path and path_except (D27)")
     if not {"read", "shell"} <= set(after.events):
         problems.append(f"{where}: its 'after' must fire on both read and shell (D27)")
@@ -2018,6 +2315,7 @@ SHIPPED_DEFAULTS: tuple[str, ...] = (
     "50872ebe24b5cf25fb580523f2f541cd9a1dd0c92629d3accb5f86a873c93912",  # V5b, audit fixes
     "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
     "6cd80b9824295273e33c2dd9a0d4aac82c6ddf2c90b1e894977b942132178c82",  # R1G, a search is a read
+    "fe87aa40b73a59c97b4bc9b9922a71cd85f84f7a245d62b8cf8495d21cf1a6bf",  # V5c, header: new fields
 )
 
 

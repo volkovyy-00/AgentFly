@@ -133,6 +133,10 @@ LOOKUP_STEPS: int = 4_000
 # walked as well (a target of 1,023 characters holds as many parts, and a word may cross 32).
 MAX_LINK_HOPS: int = 32
 LINK_PARTS: int = 64
+# `path_scope` (V5c): an event's `workspace_roots` past this many are not read; the path then
+# counts as outside. Cursor sends one root a folder of the workspace, and its count is the agent's
+# to steer (a `.code-workspace` file), so the walk over them is bounded by this and by the steps.
+MAX_ROOTS: int = 32
 
 # The scans below read a command in C-speed regular expressions where the old loops read one
 # character at a time in Python (V5b-fix2 §4.5); their answers are the same, character for
@@ -792,11 +796,166 @@ def _folded(text: str) -> str:
     return posixpath.normpath("/" + text.lstrip("/"))  # normpath keeps a leading `//`
 
 
+def home_expanded(path: str, home: str) -> str:
+    """A leading `~`, `$HOME` or `${HOME}` is the home folder (rules' paths and `path_scope`)."""
+    for prefix in ("~", "$HOME", "${HOME}"):
+        if path == prefix or path.startswith(prefix + "/"):
+            return home + path[len(prefix) :]
+    return path
+
+
 class _OverBudget(Exception):
     """The hook's look-ups are used up; the word being walked is not looked up."""
 
 
-class Lookups:
+def _joined(here: str, rest: list[str]) -> str:
+    return f"{here.rstrip('/')}/{'/'.join(rest)}" if rest else here
+
+
+class Walker:
+    """A budget of file-system look-ups (`lstat`, `readlink`) and what they learned, for one hook.
+
+    `_walk` resolves a path one part at a time from a folder: each call is a step of the budget,
+    a link is followed by its target's parts, and folders seen to be no link are not asked again.
+    The step record's command words (`Lookups`) and a rule's `path_scope` (`inside_any`) each walk
+    with one. Never the network, never `Path.resolve()`: a step count bounds the work.
+    """
+
+    def __init__(self, steps: int | None = None) -> None:
+        self.left: int = LOOKUP_STEPS if steps is None else steps  # read now: a test lowers it
+        self._plain: set[str] = set()  # paths seen to be no link (so every part above is a folder)
+        self._links: dict[str, str] = {}
+        self._roots: dict[str, str | None] = {}  # a root as sent -> resolved (`_resolved_root`)
+        self._inside: dict[tuple[tuple[str, ...], str, str], bool] = {}
+
+    def _spend(self, steps: int) -> None:
+        if self.left < steps:
+            raise _OverBudget
+        self.left -= steps
+
+    def _walk(self, start: str, parts: list[str], *, missing_text: bool = False) -> str | None:
+        """The physical path `parts` lead to from `start`, or None when a call fails or there are
+        too many links. Raises `_OverBudget` when the calls do not fit.
+
+        A missing part ends the walk with None, unless `missing_text`: then it and the parts after
+        it are joined as text with `..` folded. A `..` that cancels every missing part brings the
+        walk back to a folder that exists, and it goes on from there (`new/../link/f` follows
+        `link`)."""
+        here: str = start
+        pending: list[str] = parts[::-1]
+        hops: int = 0
+        while pending:
+            name: str = pending.pop()
+            if name in ("", "."):
+                continue
+            if name == "..":
+                here = posixpath.dirname(here)
+                continue
+            path: str = f"{here}{name}" if here.endswith("/") else f"{here}/{name}"
+            if path in self._plain:
+                here = path
+                continue
+            target: str | None = self._links.get(path)
+            if target is None:
+                self._spend(1)
+                try:
+                    if not stat.S_ISLNK(os.lstat(path).st_mode):
+                        self._plain.add(path)
+                        here = path
+                        continue
+                    self._spend(1)
+                    target = os.readlink(path)
+                except FileNotFoundError:
+                    if not missing_text:
+                        return None
+                    missing: list[str] = [name]
+                    while pending and missing:
+                        part: str = pending.pop()
+                        if part == "..":
+                            missing.pop()
+                        elif part not in ("", "."):
+                            missing.append(part)
+                    if missing:
+                        return _joined(here, missing)
+                    continue  # back in `here`, which exists: walk the rest
+                except (OSError, ValueError):
+                    return None
+                self._links[path] = target
+            hops += 1
+            if hops > MAX_LINK_HOPS:
+                return None
+            self._spend(1 + len(target) // LINK_PARTS)  # the target's parts are walked too
+            if target.startswith("/"):
+                here = "/"
+            pending.extend(target.split("/")[::-1])
+        return here
+
+    def _resolved_root(self, root: str) -> str | None:
+        """A root resolved by the walk, missing parts as text (a test root such as `/work/app`
+        need not exist); None when it cannot be (an error, too many links, no steps left)."""
+        if root not in self._roots:
+            try:
+                self._roots[root] = self._walk("/", root.split("/"), missing_text=True)
+            except _OverBudget:
+                self._roots[root] = None
+        return self._roots[root]
+
+    def inside_any(self, roots: object, path: str, home: str) -> bool:
+        """Is `path` inside one of `roots` (an event's `workspace_roots`)? Every doubt is outside.
+
+        Outside with no disk call: more than MAX_ROOTS roots, none usable (an absolute string of
+        at most MAX_PATH_WORD characters that is not `/` as text or resolved), no path, a path
+        over MAX_PATH_WORD, a relative path when the first root is not usable, or a path whose
+        text (`~` and `$HOME` read as `home`, relative joined to the first root, `..` folded) is
+        under no root as sent or as resolved. Otherwise the path is walked as sent and, if it
+        holds `..`, as folded text too (a tool may fold it before the system does); it is inside
+        only when every walk ends inside a resolved root, letter for letter."""
+        if not isinstance(roots, list) or len(roots) > MAX_ROOTS or not path:
+            return False
+        sent: tuple[str, ...] = tuple(r if isinstance(r, str) else "" for r in roots)
+        key: tuple[tuple[str, ...], str, str] = (sent, path, home)
+        if key not in self._inside:
+            self._inside[key] = self._judge(sent, path, home)
+        return self._inside[key]
+
+    def _usable(self, root: str) -> tuple[str, str] | None:
+        """A root as folded text and as resolved, or None when it is not usable."""
+        if not root.startswith("/") or len(root) > MAX_PATH_WORD or _folded(root) == "/":
+            return None
+        resolved: str | None = self._resolved_root(root)
+        return None if resolved is None or resolved == "/" else (_folded(root), resolved)
+
+    def _judge(self, sent: tuple[str, ...], path: str, home: str) -> bool:
+        path = home_expanded(path, home)
+        if not path.startswith("/"):
+            if not sent or self._usable(sent[0]) is None:
+                return False
+            path = f"{sent[0]}/{path}"
+        if len(path) > MAX_PATH_WORD:
+            return False
+        usable: list[tuple[str, str]] = [u for r in sent if (u := self._usable(r)) is not None]
+        folded: str = _folded(path)
+        if not any(
+            contained_relative(folded, text) is not None
+            or contained_relative(folded, resolved) is not None
+            for text, resolved in usable
+        ):
+            return False  # outside as text: never looked up
+        forms: list[str] = [path, folded] if ".." in path.split("/") else [path]
+        try:
+            ends: list[str | None] = [
+                self._walk("/", form.split("/"), missing_text=True) for form in forms
+            ]
+        except _OverBudget:
+            return False
+        return all(
+            end is not None
+            and any(contained_relative(end, resolved) is not None for _, resolved in usable)
+            for end in ends
+        )
+
+
+class Lookups(Walker):
     """The file-system look-ups of one hook's command words (V5d). One per hook, shared by the
     cleaner and the step record, so the words of a command spend one budget between them.
 
@@ -812,14 +971,12 @@ class Lookups:
     """
 
     def __init__(self, project_root: Path, steps: int | None = None) -> None:
-        self.left: int = LOOKUP_STEPS if steps is None else steps  # read now: a test lowers it
+        super().__init__(steps)
         self._project_root: Path = project_root
         # The root as typed names a place by its text only if no `..` can climb out of a link.
         typed: bool = project_root.is_absolute() and ".." not in project_root.parts
         self._sent: str | None = str(project_root) if typed else None
         self._answers: dict[str, str | None] = {}
-        self._plain: set[str] = set()  # paths seen to be no link (so every part above is a folder)
-        self._links: dict[str, str] = {}
 
     def project_relative(self, word: str) -> str | None:
         """The word as a path inside the project when it names an existing file there, else None.
@@ -877,50 +1034,6 @@ class Lookups:
             start, rest = head or "/", leaf
         end: str | None = self._walk(start, rest.split("/"))
         return None if end is None else contained_relative(end, root)
-
-    def _spend(self, steps: int) -> None:
-        if self.left < steps:
-            raise _OverBudget
-        self.left -= steps
-
-    def _walk(self, start: str, parts: list[str]) -> str | None:
-        """The physical path `parts` lead to from `start`, or None when a part is missing or a
-        call fails or there are too many links. Raises `_OverBudget` when the calls do not fit."""
-        here: str = start
-        pending: list[str] = parts[::-1]
-        hops: int = 0
-        while pending:
-            name: str = pending.pop()
-            if name in ("", "."):
-                continue
-            if name == "..":
-                here = posixpath.dirname(here)
-                continue
-            path: str = f"{here}{name}" if here.endswith("/") else f"{here}/{name}"
-            if path in self._plain:
-                here = path
-                continue
-            target: str | None = self._links.get(path)
-            if target is None:
-                self._spend(1)
-                try:
-                    if not stat.S_ISLNK(os.lstat(path).st_mode):
-                        self._plain.add(path)
-                        here = path
-                        continue
-                    self._spend(1)
-                    target = os.readlink(path)
-                except (OSError, ValueError):
-                    return None
-                self._links[path] = target
-            hops += 1
-            if hops > MAX_LINK_HOPS:
-                return None
-            self._spend(1 + len(target) // LINK_PARTS)  # the target's parts are walked too
-            if target.startswith("/"):
-                here = "/"
-            pending.extend(target.split("/")[::-1])
-        return here
 
 
 def _project_relative(word: str, project_root: Path) -> str | None:
