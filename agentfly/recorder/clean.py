@@ -137,6 +137,12 @@ LINK_PARTS: int = 64
 # counts as outside. Cursor sends one root a folder of the workspace, and its count is the agent's
 # to steer (a `.code-workspace` file), so the walk over them is bounded by this and by the steps.
 MAX_ROOTS: int = 32
+# F18: what one command may cost the split below. Past MAX_PARTS parts the rest is not read, and
+# past MAX_PIECES pieces (words' runs, quoted runs, blanks, operators) the part in progress ends at
+# its last word break; the saved command then ends in `<unparsed>`. Since C1-fix1 each new line and
+# `&` ends a part, and the loop reads one piece at a time in Python.
+MAX_PARTS: int = 1_000
+MAX_PIECES: int = 20_000
 
 # The scans below read a command in C-speed regular expressions where the old loops read one
 # character at a time in Python (V5b-fix2 §4.5); their answers are the same, character for
@@ -208,16 +214,18 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>"
 
-    parts: list[tuple[str, str]] | None = _split_keeping_seps(stripped)
-    if parts is None:
+    split: tuple[list[tuple[str, str]], bool] | None = _split_keeping_seps(stripped)
+    if split is None:
         return f"{_first_program(stripped)} <unparsed>"
+    parts, cut = split
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
     cleaned_bits: list[str] = []
     for text, sep in parts:
         cleaned_bits.append(_clean_segment(text.strip(), disk))
         if sep:
             cleaned_bits.append(f" {sep} ")
-    return "".join(cleaned_bits).strip()
+    cleaned: str = "".join(cleaned_bits).strip()
+    return f"{cleaned} <unparsed>".lstrip() if cut else cleaned  # where the unread rest was
 
 
 def _needs_unparsed(cmd: str) -> bool:
@@ -280,20 +288,30 @@ def _first_program(cmd: str) -> str:
     return "cmd"
 
 
-def _split_keeping_seps(cmd: str) -> list[tuple[str, str]] | None:
+def _split_keeping_seps(cmd: str) -> tuple[list[tuple[str, str]], bool] | None:
     """Split on |, |&, &, &&, ||, ; and new lines outside quotes; return (segment,
-    following_sep). A line continuation and a comment (`#` where a word starts, to the end of its
-    line; a continuation does not start a word) are cut out of the segment's text; a new line is
-    saved as `;`, and one with nothing before it since the last separator is dropped. None when an
-    unquoted `${` is not closed in its word: the shell reads its spaces and separators as part of
-    the word (`${X:-a b}`), which this splitting does not."""
+    following_sep) pairs and whether the command was cut (F18): past `MAX_PARTS` parts the rest is
+    not read, and past `MAX_PIECES` pieces the part in progress ends at its last word break (a
+    space or a separator), so a word cut between its pieces (`x.com'/p'`) is dropped whole. A line
+    continuation and a comment (`#` where a word starts, to the end of its line; a continuation
+    does not start a word) are cut out of the segment's text; a new line is saved as `;`, and one
+    with nothing before it since the last separator is dropped. None when an unquoted `${` is not
+    closed in its word: the shell reads its spaces and separators as part of the word
+    (`${X:-a b}`), which this splitting does not."""
     segments: list[tuple[str, str]] = []
     pieces: list[str] = []  # the segment's text, without its continuations and comments
     start: int = 0  # where the segment's text goes on
     at: int = 0
     word_start: bool = True  # a `#` here starts a comment
     braces: int = 0  # the word's unquoted `${` not yet closed
+    read: int = 0  # the pieces read
+    kept: tuple[int, int, int] = (0, 0, 0)  # at the last word break: len(pieces), start, at
     while (found := _SPLIT_TOKEN.match(cmd, at)) is not None:
+        read += 1
+        if read > MAX_PIECES or len(segments) >= MAX_PARTS:
+            count, begin, end = kept
+            segments.append(("".join(pieces[:count]) + cmd[begin:end], ""))
+            return segments, True
         kind: str | None = found.lastgroup
         if kind == "text" and (braces or "${" in found.group()):
             braces = _open_braces(found.group(), braces)
@@ -303,6 +321,7 @@ def _split_keeping_seps(cmd: str) -> list[tuple[str, str]] | None:
             line_end: int = cmd.find("\n", at)
             pieces.append(cmd[start:at])
             at = start = len(cmd) if line_end < 0 else line_end
+            kept = (len(pieces), start, at)
             continue
         if kind in ("join", "sep"):
             pieces.append(cmd[start:at])
@@ -317,11 +336,13 @@ def _split_keeping_seps(cmd: str) -> list[tuple[str, str]] | None:
         if kind != "join":
             word_start = kind in ("redirect", "sep", "blank")
         at = found.end()
+        if kind == "sep" or (kind == "blank" and found.group()[0] in _SHELL_SPACE):
+            kept = (len(pieces), start, at)  # the words split on spaces only, not on `(` or `>`
     if braces:
         return None
     pieces.append(cmd[start:])
     segments.append(("".join(pieces), ""))
-    return segments
+    return segments, False
 
 
 def _open_braces(text: str, braces: int) -> int:
