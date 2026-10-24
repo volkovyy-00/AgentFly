@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 
@@ -312,12 +313,26 @@ def _script_family(name: str) -> str | None:
     return base if base in ("perl", "ruby") else None
 
 
+# What `-M`, `-m`, `-d:` and `-dt:` may name in perl and still be a module (`Foo::Bar`, `-strict`,
+# `Foo=a,b`); anything else is code perl runs (`-MIO::Socket;print 1`), V5c.
+PERL_MODULE: str = "(?a)" r"-?[A-Za-z_]\w*(?:::\w+)*(?:=[\w:]+(?:,[\w:]+)*)?"
+
+
+def _perl_value(arg: str, index: int) -> str | None:
+    """The module a `-d:` or `-dt:` at `index` names, else None."""
+    for lead in (":", "t:"):
+        if arg.startswith(lead, index + 1):
+            return arg[index + 1 + len(lead) :]
+    return None
+
+
 def _perl_step(arg: str) -> int:
     """`-e` or `-E` in perl's own options, found letter by letter (`-lane`, `-MIO::Socket -e`).
 
-    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), `-I` the rest or,
-    alone, the next word; a long option (`--version`) takes nothing. The script (the first plain
-    word), `-` or `--` ends the options.
+    `-M` and `-m` take the rest of their word (`-MIO::Socket` holds an `e`), as do `-d:` and
+    `-dt:`, and that rest is code unless it is a module name (`PERL_MODULE`); `-I` takes the rest
+    or, alone, the next word; a long option (`--version`) takes nothing. The script (the first
+    plain word), `-` or `--` ends the options.
     """
     if arg in ("-", "--") or not arg.startswith("-"):
         return _END
@@ -326,8 +341,13 @@ def _perl_step(arg: str) -> int:
     for index, letter in enumerate(arg[1:], 1):
         if letter in "eE":
             return _CODE
-        if letter in "MmI":
-            return 2 if letter == "I" and index == len(arg) - 1 else 1
+        if letter in "Mm":
+            return 1 if re.compile(PERL_MODULE).fullmatch(arg[index + 1 :]) else _CODE
+        if letter == "I":
+            return 2 if index == len(arg) - 1 else 1
+        value: str | None = _perl_value(arg, index) if letter == "d" else None
+        if value is not None:
+            return 1 if re.compile(PERL_MODULE).fullmatch(value) else _CODE
     return 1
 
 
@@ -433,6 +453,278 @@ def _outbound_words(argv: list[str], text: str) -> bool:
     return False
 
 
+# ---- piped code (V5c): the stdin walk of agentfly/recorder/normalize.py, at word level
+
+_SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
+_RUNNERS: frozenset[str] = frozenset(  # `normalize.RUNNERS`
+    {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
+    | {"pyenv", "rbenv", "nodenv", "mise", "asdf", "npx", "pnpm", "yarn"}
+)
+_RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
+_WRAPPERS: frozenset[str] = _RUNNERS | frozenset(  # `normalize.WRAPPERS`, and `eval` (the
+    {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}  # recorder
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "eval"}  # reads its words
+)  # again as a command)
+_DURATION: str = r"\d+(?:\.\d+)?[smhd]?"
+_KEYWORDS: frozenset[str] = frozenset(
+    {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac"}
+)
+_HEADS: frozenset[str] = frozenset({"for", "select", "case"})
+_ASSIGNMENT: str = r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?="
+_NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
+    {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
+    | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
+)
+_DEV_FD: str = r"/dev/fd/\d+"
+_NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
+# A shell's `-c` script is read as a stage of its own, this many levels deep at most; deeper, it
+# counts as reading code from the pipe.
+_SCRIPT_DEPTH: int = 4
+_STDIN: int = -1
+_SCRIPT: int = 0
+_SUB: str = "\x00"  # stands for a `$(`, a backtick, `<(` or `>(` in a stage's words
+# A stage that may read piped code: a single `|` (`|&` too, never `||`) or `>(`, what may lead the
+# command (blanks, a comment, `(`, `{`, `!`), then its text up to the first name of an interpreter
+# or a shell in it. A stage ends where the next begins (`_CUT`); runs of characters that neither
+# end it nor start a name are taken whole and never given back, so a try that finds no name fails
+# at the stage's end, and the text is read about once, in C, however many stages it has. Each
+# pattern starts with its operator, so `re` jumps from one to the next: measured, 1 MiB of `a | `
+# costs about 150 ms (the rest of the guard about 250 ms), text with no `|` almost nothing.
+_NAMES: str = r"(?i:python|node|perl|ruby|sh)"
+_STAGE_TO_NAME: str = (
+    r"(?:\s|[({!]|#[^\n]*)*+(?P<start>)"
+    rf"(?:[^;&|\n)>\s#pnrsPNRS]++|\s(?!#)|>(?!\()|&(?=>)|(?<=[<>])&|#|(?!{_NAMES})[pnrsPNRS])*+"
+    rf"{_NAMES}"
+)
+_FED_STAGES: tuple[str, ...] = (r"(?<!\|)\|(?!\|)&?" + _STAGE_TO_NAME, r">\(" + _STAGE_TO_NAME)
+_CUT: str = r";|(?<![<>])&(?!>)|\||\n|\)|\s#|>\("
+_STDIN_SUB: str = r"<[ \t]*<\("  # `python3 < <(cat x)`
+_OWNER_START: str = ";|&\n(){}`'\""
+_REDIRECT: str = r"(\d*)(<<<|<<-?|<>|<|>>|>)(.*)"
+_DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file, no word
+# Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
+# rule does): each costs a walk in Python.
+_PIPE_STAGES: int = 1000
+# The guard's patterns are kept as text and compiled on first use (`re` keeps them): the client
+# starts on every hook, and the guard runs only when the recorder does not answer.
+
+
+def _programs(argv: Sequence[str]) -> range | tuple[int, ...]:
+    """`normalize.programs(narrow=True)`: the first word after assignments and keywords; after a
+    wrapper, the program plainly next to it, down the chain, or every word if an option or
+    `parallel` comes first."""
+    assignment: re.Pattern[str] = re.compile(_ASSIGNMENT)
+    for index, word in enumerate(argv):
+        if word in _KEYWORDS or assignment.match(word):
+            continue
+        if word in _HEADS:
+            return ()
+        if word.split("/")[-1].lower() not in _WRAPPERS:
+            return (index,)
+        return _chain(argv, index, assignment)
+    return ()
+
+
+def _chain(argv: Sequence[str], at: int, assignment: re.Pattern[str]) -> range | tuple[int, ...]:
+    """`normalize._chain`."""
+    found: list[int] = [at]
+    while (name := argv[at].split("/")[-1].lower()) in _WRAPPERS:
+        if name == "parallel":
+            return range(found[0], len(argv))
+        at += 1
+        duration: bool = at < len(argv) and re.compile(_DURATION).fullmatch(argv[at]) is not None
+        if name in ("timeout", "gtimeout") and duration:
+            at += 1
+        while at < len(argv) and (
+            (name in _RUNNERS and argv[at] in _RUNNER_VERBS)
+            or (name in ("env", "sudo") and assignment.match(argv[at]))
+        ):
+            at += 1
+        if at >= len(argv):
+            break
+        if argv[at].startswith("-"):
+            return range(found[0], len(argv))
+        found.append(at)
+    return tuple(found)
+
+
+def _is_stdin(word: str) -> bool:
+    return word == "-" or _is_stdin_device(word)
+
+
+def _is_stdin_device(word: str) -> bool:
+    if word == "/dev/stdin":
+        return True
+    return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
+
+
+def _stdin_step(family: str, words: Sequence[str], at: int, depth: int) -> int:
+    """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
+    `-c` script is read as a stage (the recorder reads it as a command line)."""
+    arg: str = words[at]
+    if _is_stdin(arg):
+        return _STDIN
+    if arg == "--":
+        return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
+    if family == "shell":
+        if not arg.startswith(("-", "+")):
+            return _SCRIPT
+        if arg.startswith("--"):
+            return 2 if arg in _SHELL_VALUE_OPTIONS else 1
+        if "c" in arg[1:]:
+            if at + 1 >= len(words):
+                return _SCRIPT
+            script: str = words[at + 1]
+            fed: bool = _SUB in script or _stage_reads_stdin(script, depth + 1)
+            return _STDIN if fed else _SCRIPT
+        if "s" in arg[1:]:
+            return _STDIN
+        return 2 if ("o" in arg[1:] or "O" in arg[1:]) else 1
+    if not arg.startswith("-"):
+        return _SCRIPT
+    if family == "node":
+        return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
+    move: int = _STEPS[family](arg)
+    return _STDIN if move == _CODE else _SCRIPT if move == _END else move
+
+
+def _node_takes_value(words: Sequence[str], at: int) -> bool:
+    """`normalize._node_takes_value`."""
+    arg: str = words[at]
+    if arg in _NODE_VALUE_OPTIONS:
+        return True
+    if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
+        return False
+    return re.compile(_NODE_SCRIPT).search(words[at + 1]) is None
+
+
+def _reads_stdin(words: Sequence[str], depth: int) -> bool:
+    """`normalize.reads_stdin`: an interpreter or a shell at a program position that names no
+    script, worked out from the right once per family (linear)."""
+    tables: dict[str, list[bool]] = {}
+    for at in _programs(words):
+        name: str = words[at].split("/")[-1].lower()
+        family: str | None = (
+            ("shell" if name.rstrip("0123456789.") in _SHELLS else None)
+            or _interpreter(name)
+            or _script_family(name)
+        )
+        if family is None:
+            continue
+        if family not in tables:
+            found: list[bool] = [True] * (len(words) + 2)
+            for index in range(len(words) - 1, -1, -1):
+                move: int = _stdin_step(family, words, index, depth)
+                found[index] = move == _STDIN or (move > 0 and found[index + move])
+            tables[family] = found
+        if tables[family][at + 1]:
+            return True
+    return False
+
+
+def _stage_reads_stdin(stage: str, depth: int = 0) -> bool:
+    """One command of a pipe, as raw text: its redirects dropped (stdin from a file names the
+    script; from `<(`, a herestring, a heredoc, `/dev/stdin` or another fd it is code; `3<` is not
+    stdin), then the stdin walk."""
+    if depth > _SCRIPT_DEPTH:
+        return True
+    for start in ("$(", "`", "<(", ">("):
+        stage = stage.replace(start, f" {_SUB} ")
+    stage = re.compile(_DUPLICATE).sub(" ", stage)
+    argv: list[str] = []
+    found: list[str] = words(stage)
+    redirect_word: re.Pattern[str] = re.compile(_REDIRECT)
+    index: int = 0
+    while index < len(found):
+        redirect: re.Match[str] | None = redirect_word.fullmatch(found[index])
+        if redirect is None:
+            argv.append(found[index])
+            index += 1
+            continue
+        fd, operator, target = redirect.groups()
+        if not target:
+            index += 1
+            target = found[index] if index < len(found) else ""
+        index += 1
+        if operator not in ("<", "<>") or fd not in ("", "0") or target.startswith("&"):
+            continue
+        if _SUB not in target and not _is_stdin_device(target):
+            return False  # `python3 < x.py`
+    return _reads_stdin(argv, depth)
+
+
+def _piped_code(text: str) -> bool:
+    """Code piped into an interpreter or a shell that names no script (SPEC section 9): the
+    command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
+    `< <(` (`python3 < <(cat x)`). Stages with no interpreter or shell name are skipped in C
+    (`_FED_STAGES`); past _PIPE_STAGES of either kind the text counts as piped code."""
+    text = text.replace("\\\n", " ")  # a line continuation: `| \` and a newline go on
+    cut: re.Pattern[str] = re.compile(_CUT)
+    count: int = 0
+    for source in _FED_STAGES:
+        for fed in re.compile(source).finditer(text):
+            count += 1
+            if count > _PIPE_STAGES:
+                return True
+            start: int = fed.start("start")
+            end: re.Match[str] | None = cut.search(text, start)
+            if _stage_reads_stdin(text[start : end.start() if end else len(text)]):
+                return True
+    if "<(" not in text:
+        return False
+    after: int = 0  # where the last `< <(` ended: an owner starts no earlier
+    for number, sub in enumerate(re.compile(_STDIN_SUB).finditer(text)):
+        if number >= _PIPE_STAGES:
+            return True
+        start = max(after, *(text.rfind(c, after, sub.start()) + 1 for c in _OWNER_START))
+        if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB):
+            return True
+        after = sub.end()
+    return False
+
+
+# A perl module value with a `;` or a space in it is quoted (`perl '-MIO::Socket;print 1' x.pl`),
+# which `words` splits: these words keep a quoted part whole. A word that still holds a space is
+# a quoted command (`bash -c '...'`) and is read again, at most _QUOTED_DEPTH times.
+_QUOTED_WORD: str = r"""(?s)(?:[^\s'"\\;|&()<>`]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+"""
+_QUOTED_PART: str = r"(?s)\\(.)|'([^']*)'|" + r'"((?:[^"\\]|\\.)*)"'
+_QUOTED_DEPTH: int = 4
+_QUOTED_WORDS: int = 20_000  # past this many quote-aware words in all, the text counts as code
+
+
+def _unquoted(word: str) -> str:
+    """The word with its quotes and backslashes taken off, as the shell would."""
+    return re.compile(_QUOTED_PART).sub(lambda m: "".join(g or "" for g in m.groups()), word)
+
+
+def _quoted_one_liner(text: str) -> bool:
+    """A perl one-liner hidden in a quoted module value, read with quotes kept whole. Each pass
+    reads at most the text once, and a word only comes back while it holds a space; past
+    _QUOTED_WORDS words the text counts as one."""
+    lists: list[str] = [text]
+    quoted: re.Pattern[str] = re.compile(_QUOTED_WORD)
+    space: re.Pattern[str] = re.compile(r"\s")  # what `str.isspace` takes, without a loop a letter
+    read: int = 0
+    for _ in range(_QUOTED_DEPTH):
+        again: list[str] = []
+        for chunk in lists:
+            found: list[str] = quoted.findall(chunk)
+            read += len(found)
+            if read > _QUOTED_WORDS:
+                return True
+            argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in found]
+            names: list[str] = [a.split("/")[-1].lower() for a in argv]
+            perls: list[int] = [i for i, name in enumerate(names) if _script_family(name) == "perl"]
+            if perls:
+                table: list[bool] = _one_liner_table(argv, _perl_step)
+                if any(table[i + 1] for i in perls):
+                    return True
+            again += [word for word in argv if space.search(word)]
+        lists = again
+    return False
+
+
 def guard_reason(text: str) -> str | None:
     """'guard_path', 'outbound' or None. Wrapped commands are found by scanning every word."""
     folded: str = text.casefold()
@@ -445,7 +737,10 @@ def guard_reason(text: str) -> str | None:
         plain += " " + " ".join(os.path.normpath(w) for w in plain.split() if "/.." in w)
     if any(path in plain for path in _GUARD_PATHS):
         return "guard_path"
-    return "outbound" if _outbound_words(words(text), folded) else None
+    if _outbound_words(words(text), folded) or _piped_code(text):
+        return "outbound"
+    quotes: bool = any(q in text for q in "'\"\\")
+    return "outbound" if quotes and "perl" in folded and _quoted_one_liner(text) else None
 
 
 # What a file tool names: `tool_input` of `preToolUse`, `file_path` and attachments of

@@ -1,7 +1,9 @@
 # AgentFly rules (schema 1). `agentfly init -g` copies this file to
-# /Library/Application Support/AgentFly/rules.toml once; after that the copy is yours: edit it with
-# sudo, then restart the recorder (`agentfly stop`, `agentfly start`). R0, which protects AgentFly
-# itself, is built into the program and cannot be listed here.
+# /Library/Application Support/AgentFly/rules.toml. `init -g` replaces an unedited copy with the
+# newest default; change any byte to keep yours. Edit it with sudo, then restart the recorder
+# (`agentfly stop`, `agentfly start`). R0, which protects AgentFly itself, is built into the
+# program and cannot be listed here. More rules to copy from: example.toml, next to this file in
+# the package (it is never installed).
 #
 # Check your edits first:  agentfly rules check   and   agentfly rules test
 #
@@ -26,10 +28,19 @@
 #                path ("**" crosses folders, "~/" is your home folder)
 #   path_except  a list name; paths matching it are left out
 #   command      a list name; "npm publish" = the program npm with the word publish among its
-#                arguments, found through sudo, env, bash -c, $(...) and so on
+#                arguments, found through sudo, env, bash -c, $(...) and so on. A flag is found in
+#                every form: "-d" matches -d, -sd, -d@file and -dX (letters are case-sensitive),
+#                "--data" matches --data and --data=X, and "--data*" also --data-binary
 #   command_class  "outbound": any command that sends data off this computer (built in)
-#   host_not_in  a list name; the command names a host that is not in it (with command or command_class)
+#   host_not_in  a list name; the command names a host that is not in it (with command or
+#                command_class). Beside command, a matched command that names no host, or holds a
+#                $variable or $(...), counts as naming one that is not in the list
+#   path_scope   "outside_workspace" (read and write only): the file is outside every folder open
+#                in the workspace, links followed
+#   pipe_into    a list name (match rules, beside command): a command that command matched feeds
+#                one of these programs, through a pipe, $(...), <(...) or a heredoc
 # Shell commands: a path condition looks at every word of the command, also the value after "=" or "@".
+# An inline test may give the workspace folders for path_scope: roots = ["/work/app"].
 
 schema = 1
 

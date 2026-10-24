@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import random
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -430,6 +431,33 @@ def test_repeated_wrappers_do_not_multiply_the_work(
     assert len(parsed.commands) < 10_000
     short, long = fastest([unit * (times // 4) + tail, text], rounds)
     assert long < limit * short, f"4 times the text took {long / short:.1f} times as long"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda n: "(" * n + "a" + "|a)" * n,  # each pipe would link every command of its group
+        lambda n: "{ " * n + "a" + "; } | a" * n,
+        lambda n: "if a; then " * n + "a" + "; fi | a" * n,
+    ],
+    ids=["paren", "brace", "if"],
+)
+def test_nested_groups_do_not_make_the_links_quadratic(shape: Callable[[int], str]) -> None:
+    # V5c: past MAX_DEPTH groups the links are unknown, and no more are kept: every command then
+    # counts as fed, so the edges would add nothing.
+    parsed = normalize.__wrapped__(shape(2000))
+    assert parsed.links_unknown and len(parsed.links) < 40 * len(parsed.commands)
+    short, long = fastest([shape(500), shape(2000)], rounds=5)
+    assert long < 8 * short, f"4 times the groups took {long / short:.1f} times as long"
+
+
+def test_many_heredocs_on_one_line_stay_linear() -> None:
+    # V5c: each command marks only its own heredocs, the last ones listed (16,000 took 5 s when
+    # every command looked at every heredoc of the line).
+    parsed = normalize.__wrapped__("c<<A;" * 4000)
+    assert len(parsed.commands) == 4000
+    short, long = fastest(["c<<A;" * 2000, "c<<A;" * 8000], rounds=5)
+    assert long < 8 * short, f"4 times the heredocs took {long / short:.1f} times as long"
 
 
 def test_the_first_eval_covers_the_later_ones() -> None:

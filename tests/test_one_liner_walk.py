@@ -60,7 +60,8 @@ def old_node(args: Iterable[str]) -> bool:
 
 
 def old_perl(args: Iterable[str]) -> bool:
-    """`normalize._perl_one_liner` as at 0b92b4f, with a long option skipped (`--version`)."""
+    """`normalize._perl_one_liner` as at 0b92b4f, with a long option skipped (`--version`), and
+    (V5c) a `-M`, `-m`, `-d:` or `-dt:` value that is no module name counted as code."""
     options = iter(args)
     for arg in options:
         if arg in ("-", "--") or not arg.startswith("-"):
@@ -70,10 +71,16 @@ def old_perl(args: Iterable[str]) -> bool:
         for index, letter in enumerate(arg[1:], 1):
             if letter in "eE":
                 return True
-            if letter in "MmI":
-                if letter == "I" and index == len(arg) - 1:
-                    next(options, None)
-                break
+            rest = arg[index + 1 :]
+            if letter == "d" and rest.startswith((":", "t:")):
+                rest = rest.split(":", 1)[1]
+            elif letter not in "MmI":
+                continue
+            if letter != "I" and not normalize.PERL_MODULE.fullmatch(rest):
+                return True
+            if letter == "I" and index == len(arg) - 1:
+                next(options, None)
+            break
     return False
 
 
@@ -119,6 +126,7 @@ OPTION_WORDS = [
     "--", "-", "--eval", "--eval=x", "--print", "--version", "--disable", "--parser", "--dump",
     "--check-hash-based-pycs", "--enable=gems", "app.js", "x.ts", "--eval.js", "--print=x.ts",
     "x.pl", "x.rb", "lib", "dev", "x", "perl", "ruby", "node", "python3", "-/ruby",
+    "-MIO::Socket;1", "-MFoo=a,b", "-M-strict", "-d:Foo", "-dt:Foo", "-d:F;1", "-mFoo qw(x)", "-dx",
 ]  # fmt: skip
 
 
