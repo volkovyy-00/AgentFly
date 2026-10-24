@@ -11,6 +11,8 @@ from functools import cached_property
 from pathlib import Path
 from urllib.parse import urlparse
 
+from agentfly.recorder.normalize import SHELLS
+
 # On by default. Set CLEAN_COMMANDS=0|false|no|off to store raw commands (unsafe).
 CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not in {
     "0",
@@ -19,7 +21,96 @@ CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not
     "off",
 }
 
-_WEB_TOOLS: frozenset[str] = frozenset({"curl", "wget", "nc", "scp", "ssh", "rsync"})
+# C1: per web tool, the short option letters and the long option names that take no value, each
+# from the tool's own manual: curl 8.7.1 (`curl --help all`), GNU Wget 1.25.0 (the gnu.org
+# manual), OpenSSH 9.9 (`man ssh`, `man scp`), rsync 3.5.1 (the samba.org manual) and OpenBSD
+# nc(1). Any other option takes a value, so the word after it is never saved as a website.
+_NO_VALUE: dict[str, tuple[str, frozenset[str]]] = {
+    "curl": (
+        "#012346:BGIJLMNORSVZafgijklnpqsv",
+        frozenset(
+            """anyauth append basic ca-native cert-status compressed compressed-ssh create-dirs
+            crlf digest disable disable-eprt disable-epsv disallow-username-in-url
+            doh-cert-status doh-insecure fail fail-early fail-with-body false-start form-escape
+            ftp-create-dirs ftp-pasv ftp-pret ftp-skip-pasv-ip ftp-ssl-ccc ftp-ssl-control get
+            globoff haproxy-protocol head http0.9 http1.0 http1.1 http2 http2-prior-knowledge
+            http3 http3-only ignore-content-length include insecure ipv4 ipv6
+            junk-session-cookies list-only location location-trusted mail-rcpt-allowfails
+            manual metalink negotiate netrc netrc-optional next no-alpn no-buffer no-clobber
+            no-keepalive no-npn no-progress-meter no-sessionid ntlm ntlm-wb parallel
+            parallel-immediate path-as-is post301 post302 post303 progress-bar proxy-anyauth
+            proxy-basic proxy-ca-native proxy-digest proxy-http2 proxy-insecure proxy-negotiate
+            proxy-ntlm proxy-ssl-allow-beast proxy-ssl-auto-client-cert proxy-tlsv1 proxytunnel
+            raw remote-header-name remote-name remote-name-all remote-time remove-on-error
+            retry-all-errors retry-connrefused sasl-ir show-error silent socks5-basic
+            socks5-gssapi socks5-gssapi-nec ssl ssl-allow-beast ssl-auto-client-cert
+            ssl-no-revoke ssl-reqd ssl-revoke-best-effort sslv2 sslv3 styled-output
+            suppress-connect-headers tcp-fastopen tcp-nodelay tftp-no-options tlsv1 tlsv1.0
+            tlsv1.1 tlsv1.2 tlsv1.3 tr-encoding trace-ids trace-time use-ascii verbose version
+            xattr""".split()
+        ),
+    ),
+    "wget": (
+        "46EFHKLNSVbcdhkmpqrvx",
+        frozenset(
+            """version help background debug quiet verbose no-verbose keep-badhash
+            metalink-over-http xattr force-html no-clobber no-netrc continue show-progress
+            timestamping no-if-modified-since no-use-server-timestamps server-response spider
+            random-wait no-proxy no-dns-cache inet4-only inet6-only retry-connrefused
+            ask-password no-iri unlink no-directories force-directories no-host-directories
+            protocol-directories adjust-extension no-http-keep-alive no-cache no-cookies
+            keep-session-cookies ignore-length save-headers content-disposition
+            content-on-error trust-server-names auth-no-challenge retry-on-host-error
+            https-only no-check-certificate no-hsts warc-cdx no-warc-compression
+            no-warc-digests no-warc-keep-log no-remove-listing no-glob no-passive-ftp
+            preserve-permissions retr-symlinks ftps-implicit no-ftps-resume-ssl
+            ftps-clear-data-connection ftps-fallback-to-ftp recursive delete-after
+            convert-links convert-file-only backup-converted mirror page-requisites
+            strict-comments follow-ftp ignore-case span-hosts relative no-parent""".split()
+        ),
+    ),
+    "nc": ("46cDdFhklNnrStUuvz", frozenset()),
+    "scp": ("346ABCOpqRrsTv", frozenset()),
+    "ssh": ("46AaCfGgKkMNnqsTtVvXxYy", frozenset()),
+    "rsync": (
+        "0468ACDEFHIJKLNOPRSUVWXabcdghiklmnopqrstuvxyz",
+        frozenset(
+            """verbose quiet no-motd checksum archive recursive inc-recursive i-r
+            no-inc-recursive no-i-r relative no-implied-dirs backup update inplace append
+            append-verify dirs old-dirs old-d mkpath links copy-links copy-unsafe-links
+            safe-links insecure-links munge-links copy-dirlinks keep-dirlinks hard-links perms
+            executability acls xattrs owner group devices copy-devices write-devices specials
+            drop-D times atimes open-noatime crtimes omit-dir-times omit-link-times super
+            fake-super sparse preallocate dry-run whole-file no-whole-file no-W
+            one-file-system existing ignore-non-existing ignore-existing remove-source-files
+            del delete delete-before delete-during delete-delay delete-after delete-excluded
+            ignore-missing-args delete-missing-args ignore-errors force partial delay-updates
+            prune-empty-dirs numeric-ids ignore-times size-only fuzzy compress cvs-exclude
+            from0 old-args secluded-args trust-sender blocking-io stats 8-bit-output
+            human-readable progress itemize-changes list-only fsync ipv4 ipv6 version
+            help""".split()
+        ),
+    ),
+}
+_WEB_TOOLS: frozenset[str] = frozenset(_NO_VALUE)
+# C1-fix1: the programs that run the program after them, each with its short options that take a
+# value. Any other option of theirs (`sudo -E`, `env -S`) leaves the rest of the part `<arg>`.
+_WRAPPERS: dict[str, str] = {
+    "sudo": "ughpCDrtU",
+    "doas": "uC",
+    "env": "uC",
+    "timeout": "sk",
+    "time": "",
+    "nice": "n",
+    "nohup": "",
+    "command": "",
+    "exec": "",
+    "stdbuf": "ioe",
+    "xargs": "nLPsdEIa",
+}
+# The wrapper words and opening `(` stepped over in one part; past either, the rest is `<arg>`.
+MAX_WRAPPERS: int = 8
+MAX_OPEN_PARENS: int = 16
 
 # A long option name is kept only if it looks like a name; anything else may be a value.
 _LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
@@ -55,9 +146,20 @@ _SINGLE: str = r"'[^']*+"
 _DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
 # A closed quoted run, or a quote that is never closed (it runs to the end).
 _QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
-# What `_split_keeping_seps` cuts on, and the quoted runs it skips (an unclosed one runs to the
-# end, a lone backslash at the end with it).
-_SPLIT_SCAN = re.compile(rf"""{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z)|\|\||&&|[|;]""", re.DOTALL)
+# The pieces `_split_keeping_seps` reads a command in, one after another: a quoted run (an
+# unclosed one runs to the end, a lone backslash at the end with it), a line continuation (`\` and
+# a new line: cut, and the word goes on), a run of a word's other text with each character a
+# backslash keeps (`\;`, `\>`: never an operator), a `#`, a redirection operator holding `&` or
+# `|` (`2>&1`, `<&3`, `&>f`, `>|f`), a separator (C1-fix1: `&`, `|&` and a new line too) and a
+# word break.
+# A word's `${`, `}` and the characters a backslash keeps (`\${` opens nothing).
+_BRACE_SCAN = re.compile(r"\\.|\$\{|\}")
+_SPLIT_TOKEN = re.compile(
+    rf"""(?P<quoted>{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
+    r"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#]|\\[^\n])++|\\\Z)|(?P<hash>\#)"""
+    r"""|(?P<redirect>[<>]&|&>|>\|)|(?P<sep>\|\||\|&|&&|[&|;\n])|(?P<blank>[ \t\r]++|[()<>])""",
+    re.DOTALL,
+)
 # `shlex.split` (POSIX, no comments) cuts words on these four characters only, not on every
 # character `str.split` calls a space.
 _SHELL_SPACE: str = " \t\r\n"
@@ -73,6 +175,16 @@ _WORD_PIECE = re.compile(
 )
 # In double quotes a backslash goes only before `"` and before another backslash.
 _DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
+# C1-fix1: a redirection at a word's start as written (`>f`, `2>&1`, `&>f`, `<f`, `{fd}>f`); when
+# it is the whole word (`>`, `2>`, `{fd}>`) the next word is its target.
+_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)(?!\()")
+# In a word's unquoted text, what may make it no word or several: a `$` (a variable may be empty
+# or hold spaces), a glob character (it may match a file named `-d`), a `<` or `>` after the
+# word's start (the shell cuts the word there), a process substitution (`<(cmd)`, whose words may
+# run on) and a brace list or range (`{,}` is no word). The
+# brace part never steps back (possessive, and its first run stops at the first `,` or `..`), so
+# an unclosed `{,,,…` is read in one pass.
+_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\A[<>]\(|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -96,8 +208,10 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>"
 
+    parts: list[tuple[str, str]] | None = _split_keeping_seps(stripped)
+    if parts is None:
+        return f"{_first_program(stripped)} <unparsed>"
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
-    parts: list[tuple[str, str]] = _split_keeping_seps(stripped)
     cleaned_bits: list[str] = []
     for text, sep in parts:
         cleaned_bits.append(_clean_segment(text.strip(), disk))
@@ -107,7 +221,8 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
 
 
 def _needs_unparsed(cmd: str) -> bool:
-    if "`" in cmd or "$(" in cmd or "<<" in cmd:
+    # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not
+    if "`" in cmd or "$(" in cmd or "<<" in cmd or "\r" in cmd:
         return True
     return not _quotes_balanced(cmd)
 
@@ -165,34 +280,117 @@ def _first_program(cmd: str) -> str:
     return "cmd"
 
 
-def _split_keeping_seps(cmd: str) -> list[tuple[str, str]]:
-    """Split on |, &&, ||, ; outside quotes; return (segment, following_sep)."""
+def _split_keeping_seps(cmd: str) -> list[tuple[str, str]] | None:
+    """Split on |, |&, &, &&, ||, ; and new lines outside quotes; return (segment,
+    following_sep). A line continuation and a comment (`#` where a word starts, to the end of its
+    line; a continuation does not start a word) are cut out of the segment's text; a new line is
+    saved as `;`, and one with nothing before it since the last separator is dropped. None when an
+    unquoted `${` is not closed in its word: the shell reads its spaces and separators as part of
+    the word (`${X:-a b}`), which this splitting does not."""
     segments: list[tuple[str, str]] = []
-    start: int = 0
-    for found in _SPLIT_SCAN.finditer(cmd):
-        sep: str = found.group()
-        if sep[0] in "'\"":
+    pieces: list[str] = []  # the segment's text, without its continuations and comments
+    start: int = 0  # where the segment's text goes on
+    at: int = 0
+    word_start: bool = True  # a `#` here starts a comment
+    braces: int = 0  # the word's unquoted `${` not yet closed
+    while (found := _SPLIT_TOKEN.match(cmd, at)) is not None:
+        kind: str | None = found.lastgroup
+        if kind == "text" and (braces or "${" in found.group()):
+            braces = _open_braces(found.group(), braces)
+        elif braces and kind in ("redirect", "sep", "blank"):
+            return None
+        if kind == "hash" and word_start:
+            line_end: int = cmd.find("\n", at)
+            pieces.append(cmd[start:at])
+            at = start = len(cmd) if line_end < 0 else line_end
             continue
-        segments.append((cmd[start : found.start()], sep))
-        start = found.end()
-    segments.append((cmd[start:], ""))
+        if kind in ("join", "sep"):
+            pieces.append(cmd[start:at])
+            start = found.end()
+        if kind == "sep":
+            text: str = "".join(pieces)
+            pieces = []
+            if found.group() != "\n":
+                segments.append((text, found.group()))
+            elif text.strip(_SHELL_SPACE):
+                segments.append((text, ";"))
+        if kind != "join":
+            word_start = kind in ("redirect", "sep", "blank")
+        at = found.end()
+    if braces:
+        return None
+    pieces.append(cmd[start:])
+    segments.append(("".join(pieces), ""))
     return segments
+
+
+def _open_braces(text: str, braces: int) -> int:
+    """The unquoted `${` still open after a run of a word's text, `braces` open before it."""
+    for found in _BRACE_SCAN.finditer(text):
+        if found.group() == "${":
+            braces += 1
+        elif found.group() == "}" and braces:
+            braces -= 1
+    return braces
 
 
 def _shell_words(segment: str) -> list[str]:
     """`shlex.split(segment)`, the same words. A segment that is not whole words (an unclosed
     quote, a backslash at the end) goes to `shlex.split`, which raises `ValueError` as before."""
+    return [word for _, word in _raw_words(segment)]
+
+
+def _raw_words(segment: str) -> list[tuple[str, str]]:
+    """`_shell_words`, each word with its text as written: the quoting says what the shell does
+    with it (a redirection, a `$`)."""
     if not _has_quoting(segment):
-        return _PLAIN_WORD.findall(segment)
-    words: list[str] = []
+        return [(word, word) for word in _PLAIN_WORD.findall(segment)]
+    pairs: list[tuple[str, str]] = []
     at: int = len(segment) - len(segment.lstrip(_SHELL_SPACE))
     while at < len(segment):
         found = _SHELL_WORD.match(segment, at)
         if found is None:
-            return shlex.split(segment)
-        words.append(_unquote(found.group(1)))
+            return [(word, word) for word in shlex.split(segment)]
+        pairs.append((found.group(1), _unquote(found.group(1))))
         at = found.end()
-    return words
+    return pairs
+
+
+def _out_of_step(raw: str) -> bool:
+    """Whether a word as written may stand for no word or several, so that the words after it
+    may not be the ones they look like (C1-fix1): an unquoted `$`, glob character, brace list or
+    `<`/`>` after its start, or a double-quoted `"$@"` or `"${X[@]}"`. A quoted `"$X"` is one
+    word. A redirection is no word, whatever its target holds."""
+    if _REDIRECT.match(raw):
+        return False
+    if not _has_quoting(raw):
+        return _LOOSE_TEXT.search(raw) is not None
+    plain: list[str] = []  # the unquoted text, each quoted or escaped piece one `_`
+    for piece in _WORD_PIECE.finditer(raw):
+        if piece.lastindex == 4:
+            plain.append(piece.group(4))
+            continue
+        quoted: str = piece.group(piece.lastindex or 0)
+        if piece.lastindex == 3 and (
+            "$@" in quoted or "${@" in quoted or ("[@]" in quoted and "$" in quoted)
+        ):
+            return True
+        plain.append("_")
+    return _LOOSE_TEXT.search("".join(plain)) is not None
+
+
+def _without_closing(segment: str) -> str:
+    """The segment without the `)` that close it, glued to its last word or alone (`x.com)`,
+    `x.com ) )`); an escaped `\\)` stays."""
+    kept: str = segment.rstrip(_SHELL_SPACE + ")")
+    if _ends_in_escape(kept):
+        kept = segment[: len(kept) + 1]  # the backslash keeps the character after it
+    return kept
+
+
+def _ends_in_escape(text: str) -> bool:
+    """Whether `text` ends in a backslash that keeps the character after it (an odd run)."""
+    return (len(text) - len(text.rstrip("\\"))) % 2 == 1
 
 
 def cleaned_words(command: str) -> list[str]:
@@ -222,34 +420,266 @@ def _unquote(word: str) -> str:
 
 
 def _clean_segment(segment: str, disk: Lookups) -> str:
+    segment = _without_closing(segment)
     if not segment:
         return ""
     try:
-        tokens: list[str] = _shell_words(segment)
+        pairs: list[tuple[str, str]] = _raw_words(segment)
     except ValueError:
         return f"{_first_program(segment)} <unparsed>"
 
     out: list[str] = []
-    idx: int = 0
-    while idx < len(tokens) and (name := _assign_name(tokens[idx])) is not None:
-        out.append(f"{name}=<removed>")
-        idx += 1
-
-    if idx >= len(tokens):
+    found: tuple[int, str, str] | None = _program_index(pairs, out, disk)
+    if found is None:
         return " ".join(out)
 
-    program: str = tokens[idx]
+    idx, raw, program = found
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
-    prog_base: str = Path(program).name.lower()
-    web_tool: bool = prog_base in _WEB_TOOLS
-    idx += 1
-
-    while idx < len(tokens):
-        word: str = tokens[idx]
-        out.append(_classify_word(word, disk, web_tool=web_tool))
-        idx += 1
-
+    prog_base: str = posixpath.basename(program).lower()
+    rest: list[tuple[str, str]] = pairs[idx + 1 :]
+    if prog_base in _WEB_TOOLS:
+        out.extend(_clean_web_words(rest, prog_base, disk))
+    elif prog_base == "eval":
+        _rest_unread(rest, 0, out)
+    else:
+        # a shell's words from its `-c` on are a script and its arguments: never read
+        end: int = _script_start(rest) if prog_base in SHELLS else len(rest)
+        out.extend(_clean_other_words(rest[:end], disk, loose=_out_of_step(raw)))
+        _rest_unread(rest, end, out)
     return " ".join(out)
+
+
+def _script_start(pairs: list[tuple[str, str]]) -> int:
+    """The index after a shell's short option holding `c` (`-c`, `-lc`), or the end."""
+    for at, (_, word) in enumerate(pairs):
+        if word.startswith("-") and not word.startswith("--") and "c" in word:
+            return at + 1
+    return len(pairs)
+
+
+def _redirection_step(raw: str, target: bool) -> bool | None:
+    """None when the word is neither a redirection nor the target of a bare one just before it
+    (`target`); else whether the word after it is its target (`>`, `2>`, `{fd}>` alone)."""
+    if target:
+        return False
+    if _REDIRECT.match(raw):
+        return _REDIRECT.fullmatch(raw) is not None
+    return None
+
+
+def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bool) -> list[str]:
+    """The words of a program that is no web tool, read as any program's (C1-fix1 backstop): a
+    word with `://` right after an option, or after a word that may be no word or several
+    (`loose`), is that one's value, `<arg>`. Redirections and their targets are passed over."""
+    out: list[str] = []
+    target: bool = False  # the word after a bare redirection is its target
+    for raw, word in pairs:
+        if (after := _redirection_step(raw, target)) is not None:
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = after
+            continue
+        if loose and "://" in word:
+            out.append("<arg>")
+        else:
+            out.append(_classify_word(word, disk, web_tool=False))
+        loose = (_is_option(word) and word != "--") or _out_of_step(raw)
+    return out
+
+
+def _program_index(
+    pairs: list[tuple[str, str]], out: list[str], disk: Lookups
+) -> tuple[int, str, str] | None:
+    """Save into `out` the words before the part's program (C1-fix1): opening `(` (not saved),
+    assignments, redirections with their targets, and wrappers with their options. Returns the
+    program's index and its word as written and as read, its `(` cut off; or None when there is
+    none or the rest of the part is saved as `<arg>`: past `MAX_OPEN_PARENS` `(` or
+    `MAX_WRAPPERS` wrappers, after a wrapper option no table lists, or where a wrapper's word may
+    be no word or several."""
+    opened: int = 0
+    wrappers: int = 0
+    target: bool = False  # the word after a bare redirection is its target
+    idx: int = 0
+    while idx < len(pairs):
+        raw, word = pairs[idx]
+        opens: int = 0 if target else len(raw) - len(raw.lstrip("("))
+        if opens:
+            opened += opens
+            if opened > MAX_OPEN_PARENS:
+                _rest_unread(pairs, idx, out)
+                return None
+            raw, word = raw[opens:], word[opens:]  # unquoted, so `word` starts with them too
+            if not raw:
+                idx += 1
+                continue
+        if (after := _redirection_step(raw, target)) is not None:
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = after
+            idx += 1
+        elif (name := _assign_name(word)) is not None:
+            out.append(f"{name}=<removed>")
+            idx = _after_assignment(pairs, idx)
+        elif (wrapper := posixpath.basename(word).lower()) in _WRAPPERS:  # `sudo/` is a folder
+            wrappers += 1
+            if wrappers > MAX_WRAPPERS:
+                _rest_unread(pairs, idx, out)
+                return None
+            out.append(word if _PROGRAM_NAME.fullmatch(word) else "<arg>")
+            if (next_idx := _after_wrapper(pairs, idx + 1, wrapper, out, disk)) is None:
+                return None
+            idx = next_idx
+        else:
+            return idx, raw, word
+    return None
+
+
+def _rest_unread(pairs: list[tuple[str, str]], at: int, out: list[str]) -> None:
+    """Save the part's words from `at` on as `<arg>`: where they cannot be read."""
+    out.extend("<arg>" for _ in range(at, len(pairs)))
+
+
+def _after_assignment(pairs: list[tuple[str, str]], at: int) -> int:
+    """The index after the assignment at `at`; an array `NAME=(…)` runs to the word that closes
+    it, or to the part's end (its `)` may have been cut as the part's)."""
+    raw: str = pairs[at][0]
+    if not raw.partition("=")[2].startswith("(") or _closes(raw):
+        return at + 1
+    for end in range(at + 1, len(pairs)):
+        if _closes(pairs[end][0]):
+            return end + 1
+    return len(pairs)
+
+
+def _closes(raw: str) -> bool:
+    """Whether a word as written ends in a `)` that no backslash keeps."""
+    return raw.endswith(")") and not _ends_in_escape(raw[:-1])
+
+
+def _after_wrapper(
+    pairs: list[tuple[str, str]], at: int, wrapper: str, out: list[str], disk: Lookups
+) -> int | None:
+    """Save a wrapper's options from `at` on (C1-fix1): an option in its table takes the next
+    word or a glued value as `<arg>`, `--` ends them, `env` and `sudo` take `NAME=value`, and
+    `timeout` then takes its duration; a redirection and its target are passed over. Returns where
+    its program is expected, or None when the rest of the part is saved as `<arg>` (as after an
+    option no table lists, `env -` too)."""
+    values: str = _WRAPPERS[wrapper]
+    target: bool = False  # the word after a bare redirection is its target
+    while at < len(pairs):
+        raw, word = pairs[at]
+        if (after := _redirection_step(raw, target)) is not None:
+            out.append(_classify_word(word, disk, web_tool=False))
+            target = after
+            at += 1
+            continue
+        if _out_of_step(raw):
+            _rest_unread(pairs, at, out)
+            return None
+        if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
+            out.append(f"{name}=<removed>")
+            at = _after_assignment(pairs, at)
+            continue
+        if not _is_option(word) and word != "-":
+            break
+        at += 1
+        if word == "--":
+            out.append(word)
+            break
+        if word == "-" or word.startswith("--") or word[1] not in values:
+            out.append(_classify_word(word, disk, web_tool=False))
+            _rest_unread(pairs, at, out)
+            return None
+        if len(word) > 2:
+            out.append(f"{word[:2]}<arg>")
+            continue
+        out.append(word)
+        if (after := _wrapper_value(pairs, at, out)) is None:
+            return None
+        at = after
+    return _wrapper_value(pairs, at, out) if wrapper == "timeout" else at
+
+
+def _wrapper_value(pairs: list[tuple[str, str]], at: int, out: list[str]) -> int | None:
+    """Save the wrapper's value at `at` as `<arg>` and return the index after it; None (the rest
+    saved as `<arg>`) when the word may be no word or several, or is a redirection."""
+    if at >= len(pairs):
+        return at
+    raw: str = pairs[at][0]
+    if _out_of_step(raw) or _REDIRECT.match(raw):
+        _rest_unread(pairs, at, out)
+        return None
+    out.append("<arg>")
+    return at + 1
+
+
+def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> list[str]:
+    """A web tool's words (C1): the word after an option that takes a value is that value, and
+    every word after ssh's destination is its remote command; neither is ever a website. Where
+    the reading may be a word out of step it falls toward `<arg>`: an option where a value was
+    expected is saved as that value and its own value comes next, and the word after an option
+    that may already hold its value (`-p22`) may be ssh's destination. C1-fix1: a redirection
+    and its target use up no value; the word after one that may be no word or several is a
+    value, and for ssh that word and the rest are its command (it may hold the destination)."""
+    out: list[str] = []
+    value_next: bool = False
+    may_be_whole: bool = False  # the option before this value may already hold its own value
+    options_ended: bool = False
+    remote: bool = False
+    target: bool = False  # the word after a bare redirection is its target
+    for raw, word in pairs:
+        loose: bool = not remote and _out_of_step(raw)
+        if remote or (loose and tool == "ssh"):
+            out.append("<arg>")
+            remote = True
+            continue
+        if (after := _redirection_step(raw, target)) is not None:
+            out.append(_classify_word(word, disk, web_tool=True))
+            target = after
+            continue
+        if value_next:
+            out.append(disk.project_relative(word) or "<arg>")
+            if _is_option(word) and word != "--":
+                # the tool may have read it as the value it stands in place of, so the word
+                # after it may be no value at all (ssh's destination)
+                value_next = _takes_value(word, tool)
+                may_be_whole = True
+            else:
+                value_next = False
+                remote = may_be_whole and tool == "ssh"
+        else:
+            out.append(_classify_word(word, disk, web_tool=True))
+            if options_ended or not _is_option(word):
+                remote = tool == "ssh"  # the first word that is no option is ssh's destination
+            else:
+                options_ended = word == "--"
+                value_next = not options_ended and _takes_value(word, tool)
+                may_be_whole = _may_hold_value(word, tool)
+        if loose:  # after the option's own reading: `-d$s` still waits for a value
+            value_next = may_be_whole = True
+    return out
+
+
+def _is_option(word: str) -> bool:
+    """`-x`, `-xyz`, `--name`, `--name=v` and `--`; a lone `-` is a word (standard input)."""
+    return word.startswith("-") and word != "-"
+
+
+def _takes_value(option: str, tool: str) -> bool:
+    """Whether the word after `option` (`-x`, `-xyz`, `--name`, `--name=v`) is its value. A
+    cluster is judged by its last letter, and an option the tool's table lacks takes a value."""
+    short, long = _NO_VALUE[tool]
+    if option.startswith("--"):
+        return "=" not in option and option[2:] not in long
+    return option[-1] not in short
+
+
+def _may_hold_value(option: str, tool: str) -> bool:
+    """Whether `option` may carry its own value, so that the word after it is no value: a long
+    option, or a cluster with a letter before its last that is not listed as taking none (the
+    tool reads the rest of the word as that letter's value). Only ssh asks: its destination."""
+    if tool != "ssh":
+        return False
+    short, _ = _NO_VALUE[tool]
+    return option.startswith("--") or bool(option[1:-1].strip(short))  # strip: C speed
 
 
 def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
@@ -261,7 +691,7 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
         if not _LONG_OPTION_NAME.fullmatch(name):
             return "<arg>"
         return f"--{name}=<arg>" if "=" in word else word
-    if word.startswith("-") and word != "-":
+    if _is_option(word):
         # -pX and -la look alike, so a cluster keeps only its first letter.
         return word if len(word) == 2 else f"{word[:2]}<arg>"
 

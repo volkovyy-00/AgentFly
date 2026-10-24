@@ -20,6 +20,53 @@ the maintainers' work items and decisions, which are kept outside this repo.
   options, long options, URL credentials, env-prefix and `export`):
   `mysql -pX db` is saved as `mysql -p<arg> <arg>`, and a flag cluster keeps only
   its first letter (`ls -la` is `ls -l<arg>`). `tests/leak_cases.py` lists them.
+  For the six web tools (`tests/test_clean.py`, `tests/test_store.py`, C1) the word after an
+  option is its value and never a website, also with `://`: `curl -d token.abc host.com` is
+  `curl -d <arg> host.com`, `ssh h.com cat tok.abc` is `ssh h.com <arg> <arg>`, and the value
+  is in neither the step's command, hosts nor file; `leak_cases.py` holds each option form of
+  each tool (short, cluster, attached, long, `=`, after the destination) with a dotted value
+  and a token. A cluster is judged by its last letter (`curl -sd token.abc x.com` is
+  `curl -s<arg> <arg> x.com`, `curl -uuser:pw https://h.com` is `curl -u<arg> <arg>`), `--`
+  ends the options, an unlisted option takes a value (`curl --some-new-option x.com` is
+  `curl --some-new-option <arg>`), an option where a value was expected is that value and its
+  own value comes next (`curl -XPOST -d tok.abc x.com`), the word after an ssh option that may
+  hold its value is the destination (`ssh -p2222 h.com tok.abc` is `ssh -p<arg> <arg> <arg>`),
+  the leak checks of `test_clean.py`, `test_store.py` and `tests/test_app.py` ignore case (a
+  host is saved in lower case), a value naming a project file
+  keeps its path (`curl -T .env x.com`), and the d62ea42 outputs of the brief's list are pinned. A 300-word
+  curl line of `-d` pairs costs one look-up a value, ssh's remote command none; each tool's
+  table holds option characters and names only.
+  C1-fix1 (`test_clean.py`, `test_store.py`): a part also ends at `&`, `|&` and a new line (saved
+  as `;`), `2>&1` and `&>f` stay words, `\⏎` joins lines, `\;` stays in its word
+  (`find . -exec rm {} \;` is one part), a comment is cut, and a closing `)` is cut
+  (`curl x.com\)` keeps its `\)`). The program behind `(`, assignments (`arr=(a b)` too),
+  redirections and the listed wrappers is read with their value options (`sudo -u <arg> curl -s
+  x.com`, `timeout -s <arg> <arg> curl …`, `xargs -I<arg> curl …`); `sudo -E`, a loose word in
+  a wrapper's options and a redirection in its value slot leave the rest `<arg>`; 8 wrappers and
+  16 `(` are read, a 9th or 17th leaves the rest `<arg>`. `_out_of_step` says which words may be
+  no word or several (`$E`, `${E}`, `a$E`, `$'x'`, `"$@"`, `"${A[@]}"`, `-d>s`, globs, `{,}`,
+  `{a..b}`) and which are one (`"$X"`, `"${SRC}/"`, `{}`, `-I{}`, a redirection). After a web
+  tool a redirection uses up no value and a loose word makes the next a value (for ssh, it and
+  the rest are its command); `bash -c`, `sh -lc` and `eval` save `<arg>` from there; any other
+  program's `://` word after an option or a loose word is `<arg>` (`tool --url <arg>`), a
+  positional one keeps its website. `leak_cases.py` adds the observed c7ab4d7 leaks (also in the
+  step's command, hosts and file) and, with a dotted value and a token, `-d {V}` and
+  `-d https://{V}` behind each wrapper form, `caffeinate`, `sudo -E` and a chain, in `( … )`,
+  after `&`, `|&`, `&<`, a new line, a continuation and a comment, `a\;{V}`, each redirection
+  form between an option and its value for curl and wget, and each loose form. The brief's
+  newly saved commands keep the tool's name and `x.com` as a host, its kept commands their
+  name and hosts (two strings change: `cd <arg> && curl -s x.com &`, and the continuation line
+  `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 301-word part behind 16
+  `(` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
+  Final verification and lenses (`test_final_verification_shapes`, `test_lens_shapes`,
+  `test_each_wrapper_value_option_takes_the_next_word`, `test_an_unclosed_brace_list_is_read_in_one_pass`
+  `@wallclock`): a character a backslash keeps is no operator or word break (`echo \>& ssh …`),
+  a `#` after a continuation is in its word, a redirection inside a wrapper's options is passed
+  over, `env -` and `sudo -s`/`-i`, `env -S`/`-i` leave the rest `<arg>`, `sudo/` is no wrapper,
+  `time`, `command`, `doas`, `nohup` and `xargs` are stepped over, every value letter of the
+  brief's wrapper lists takes the next word, an unclosed `${` in a word (`${X:-a b}`) and a `\r`
+  make the command `<unparsed>`, `<(x)` is a loose word (not a redirection), and a 64,000-comma
+  `{` word is read in well under 0.25 s; `leak_cases.py` holds each of these shapes with a value.
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`
   (`tests/test_app.py`); HEAD on an API route is 405; `/docs`, `/redoc` and
   `/openapi.json` are 404.
