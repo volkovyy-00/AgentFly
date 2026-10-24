@@ -510,7 +510,7 @@ _PIPE_STAGES: int = 1000
 # stage read again with quotes kept whole, and the commands of each `-c` script. They are counted
 # right after the C-speed split, before any walk in Python; past the count the text counts as
 # piped code. A quoted word may be 1 MiB long, so the count alone does not bound the bytes read
-# again: a stage that starts inside the last such read is not read again (`_fed_stages_read`).
+# again: a stage that starts inside the last such read is not read again (`_fed_stage_reads`).
 _PIPED_WORDS: int = 20_000
 # A stage read again with quotes kept whole: its text up to the first `_CUT` outside quotes and
 # backslashes (an unclosed quote is read as a character).
@@ -520,7 +520,7 @@ _QUOTED_STAGE: str = (
 )
 # A word's pieces the shell does not expand (a backslash's character, a single-quoted run): what is
 # left (`\1`: plain text and double-quoted runs) may hold a `$(` or a backtick.
-_UNEXPANDED: str = r"""(?s)\\.|'[^']*'|("(?:[^"\\]|\\.)*")"""
+_UNEXPANDED: str = r"""(?s)\\.|'[^']*+'|("(?:[^"\\]++|\\.)*+")"""
 # The guard's patterns are kept as text and compiled on first use (`re` keeps them): the client
 # starts on every hook, and the guard runs only when the recorder does not answer.
 
@@ -704,18 +704,19 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
     if count.spend(len(raw)):
         return True, end
     argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in raw]
-    scripts: dict[str, None] = {}
+    found: dict[int, None] = {}  # each script once, however many shells find it
     table: list[int | None] = []  # `_script_indexes(argv)`, at the first shell
     for at, word in enumerate(argv):
         if word.split("/")[-1].lower().rstrip("0123456789.") not in _SHELLS:
             continue
         table = table or _script_indexes(argv)
-        if (script := table[at + 1]) is None:
-            continue
+        if (script := table[at + 1]) is not None:
+            found[script] = None
+    for script in found:
         expanded: str = re.compile(_UNEXPANDED).sub(r"\1", raw[script])
         if "$(" in expanded or "`" in expanded:
             return True, end
-        scripts[argv[script]] = None
+    scripts: dict[str, None] = dict.fromkeys(argv[script] for script in found)
     return any(_line_reads(script, count, depth + 1) for script in scripts), end
 
 
@@ -790,8 +791,8 @@ def _piped_code(text: str) -> bool:
 # A perl module value with a `;` or a space in it is quoted (`perl '-MIO::Socket;print 1' x.pl`),
 # which `words` splits: these words keep a quoted part whole. A word that still holds a space is
 # a quoted command (`bash -c '...'`) and is read again, at most _QUOTED_DEPTH times.
-_QUOTED_WORD: str = r"""(?s)(?:[^\s'"\\;|&()<>`]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+"""
-_QUOTED_PART: str = r"(?s)\\(.)|'([^']*)'|" + r'"((?:[^"\\]|\\.)*)"'
+_QUOTED_WORD: str = r"""(?s)(?:[^\s'"\\;|&()<>`]++|\\.|'[^']*+'|"(?:[^"\\]++|\\.)*+")++"""
+_QUOTED_PART: str = r"(?s)\\(.)|'([^']*+)'|" + r'"((?:[^"\\]++|\\.)*+)"'
 _QUOTED_DEPTH: int = 4
 _QUOTED_WORDS: int = 20_000  # past this many quote-aware words in all, the text counts as code
 

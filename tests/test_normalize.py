@@ -149,12 +149,11 @@ def test_a_quoted_sentence_is_not_reparsed() -> None:
     ],
 )
 def test_the_script_table_is_the_walk_from_each_index(args: list[str]) -> None:
-    # F18: worked out from the right once, the same answer as walking from each index
+    # F18: worked out from the right once, the same answer as `shell_script`'s walk from each index
     table = script_indexes(args)
     for start in range(len(args) + 1):
         found = table[start]
-        assert (None if found is None else args[found]) == shell_script(args, start)
-        assert shell_script(args[start:]) == shell_script(args, start)
+        assert (None if found is None else args[found]) == shell_script(args[start:])
 
 
 def test_shell_script_walks_the_shell_options() -> None:

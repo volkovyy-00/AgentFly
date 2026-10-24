@@ -1108,15 +1108,25 @@ def placeholder(inner: list[tuple[str, ...]]) -> str:
     return SUB_PREFIX + ",".join(names) + "@" if names else SUB_EMPTY
 
 
-def shell_script(args: Sequence[str], start: int = 0) -> str | None:
-    """The `-c` string among a shell's arguments (`args` from `start` on), walking past its
-    options; None if none.
+def shell_script(args: list[str]) -> str | None:
+    """The `-c` string among a shell's arguments, walking past its options; None if none.
 
     `-lc`, `-ec`, `-c` end the walk at the script. `-o name`, `-O name`, `--rcfile f` take a value.
     The first plain word is a script file, so the options end there.
     """
-    found: int | None = script_indexes(args)[start]
-    return None if found is None else args[found]
+    index: int = 0
+    while index < len(args):
+        arg: str = args[index]
+        if arg == "--" or not arg.startswith(("-", "+")):
+            return None
+        if arg.startswith("--"):
+            index += 2 if arg in _SHELL_VALUE_OPTIONS else 1
+            continue
+        letters: str = arg[1:]
+        if "c" in letters:
+            return args[index + 1] if index + 1 < len(args) else None
+        index += 2 if ("o" in letters or "O" in letters) else 1
+    return None
 
 
 def script_indexes(args: Sequence[str]) -> list[int | None]:

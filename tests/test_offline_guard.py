@@ -351,6 +351,18 @@ def test_the_quoted_rereads_cover_the_text_about_once() -> None:
     assert long < 16 * short, f"8 times the text took {long / short:.1f} times as long"
 
 
+def test_a_script_many_shells_share_is_read_once() -> None:
+    # F18: in `sh -o sh -o … sh -c X` every shell word finds the same script; it is read once,
+    # not once a shell word (100 shells on 1 MiB took 13 s). The `$` keeps the script from
+    # being passed over as one with nothing the shell expands.
+    def shape(shells: int) -> str:
+        return "echo x | " + "sh -o " * shells + 'sh -c "$' + "a" * 64 * 1024 + '"'
+
+    assert guard.offline_answer(shape(64))[0] == {"permission": "allow"}
+    few, many = fastest([shape(4), shape(64)], 5)
+    assert many < 4 * few, f"16 times the shells took {many / few:.1f} times as long"
+
+
 @pytest.mark.parametrize(
     "command",
     [
