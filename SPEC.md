@@ -281,7 +281,10 @@ even a secret packed into a web address. So we keep almost nothing:
    backticks, an inline text block such as `<<EOF`, a carriage return, or an
    unquoted `${` whose `}` is not in the same word, as in `${X:-a b}`), keep only
    the program name and the word `<unparsed>`. Ordinary balanced quotes are fine and are
-   handled by the steps above.
+   handled by the steps above. A long command is read up to its first 1,000 parts and
+   20,000 pieces (runs of a word's text, quoted runs, spaces and operators; F18): the rest
+   is not read and is saved as `<unparsed>` (`ls ; ls ; … ; <unparsed>`), and a word the
+   cut falls inside is dropped whole.
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,
    keep only the last two parts (like `evil.com`).
@@ -290,7 +293,9 @@ even a secret packed into a web address. So we keep almost nothing:
 
 Cleaning is on by default. The cleaner is as strict as above even where the
 rule check (section 5) treats a command more kindly, for example a quoted
-heredoc. Test case: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
+heredoc. A shell step's file and websites are read from the first 1,000 words of
+the cleaned command (F18); past them a secret read still marks the step's file
+sensitive, by the rule check's own test. Test case: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
 is saved as `curl -H <arg> x.com`.
 
 **Important, from the Cursor docs:** the `beforeReadFile` input contains the
@@ -1036,11 +1041,13 @@ token is never treated as an allow.
   `perl -e` / `ruby -e` one-liner (whatever it contains; the forms section 5
   lists), code piped into an interpreter or a shell (`echo 'print(1)' | python3`,
   `echo 'curl x' | sh`, `python3 < <(cat x)`, `| xargs -0 grep -l sh`, but not
-  `| xargs grep -l node`; section 5, V5c),
+  `| xargs grep -l node`; section 5, V5c), where a fed shell's `-c` script is read
+  as a command line, with its own separators and `exec`, every command of it fed
+  (`… | sh -c 'cd /tmp && python3'`, `… | sh -c 'exec python3'`; F18),
   and the same commands wrapped in `bash -c`, `env` or `sudo`. A line of more
-  than 1,000 pipe stages, or more than 20,000 quoted words when it names `perl`,
-  is denied unread. Sending to your own computer (`localhost`, private
-  addresses) is allowed;
+  than 1,000 pipe stages, of more than 20,000 words in its fed stages and their
+  scripts, or of more than 20,000 quoted words when it names `perl`, is denied
+  unread. Sending to your own computer (`localhost`, private addresses) is allowed;
 - it **denies** commands that touch AgentFly's guard paths (R0), and any Read, Write
   or Edit (every file tool, `StrReplace` and `Delete` included) whose target is a
   guard path: the `file_path` of a read, an attachment or a tool's input, with case,
@@ -1049,7 +1056,9 @@ token is never treated as an allow.
   nothing for an allow with a message (S1), so the visible signals are the
   health strip and the log, not a message in the chat;
 - a command it cannot parse is denied only if its raw text names one of those
-  tools;
+  tools; input it cannot read at all (a cut-off payload) is read as raw text, and
+  for piped code also with its JSON strings decoded, so `{"command": "echo 1 |
+  node", "cwd": …` cut short is denied (F18);
 - every deny message tells you to run `agentfly start`.
 
 The guard is a simpler, word-level copy of the real normalisation, tested against
@@ -1249,13 +1258,19 @@ Other measures:
   `ls | bash -c "wc -l $(pwd)"`, a fed shell whose `-c` script holds a
   substitution. The offline guard reads each pipe stage with a regular
   expression, which costs about 150 ms more per MiB of text made of pipes; past
-  its caps (section 9) it denies. It reads a quoted `|` as a pipe on purpose (to
+  its caps (section 9) it denies. It reads each fed stage again with quotes kept
+  whole for its shells' `-c` scripts (F18), any word that names a shell (a
+  versioned `bash5.2` too), so `… | bash5.2 -c 'true; python3'` is denied offline
+  though the recorder allows it. It reads a quoted `|` as a pipe on purpose (to
   see into `bash -c '…'`), so `ps aux | grep -E 'node|python'` is denied offline,
   though the recorder allows it (owner 2026-10-23: accepted).
 - What piped code does not see, after a mark and offline: `source /dev/stdin`
   and `eval "$(cat)"` fed by a pipe (`source` and `eval` are not in section 5's
-  list; rule 14 lists them as shells), and, offline only, a compound command
-  after the `|` (`| if true; then python3; fi`), which the recorder sees.
+  list; rule 14 lists them as shells), and, offline only, what the recorder sees:
+  a compound command after the `|` (`| if true; then python3; fi`, `| { cd /tmp;
+  sh -c python3; }`), a fed `eval` whose words hold separators (`| eval 'cd /tmp
+  && python3'`), and a stage whose interpreter or shell comes after a quoted
+  separator (`| env 'A=;' sh -c python3`).
 - The command cleaner (section 4) keeps less than a secret, not nothing. An
   option's value equal to an existing workspace file's name is saved as that path
   (a secret would have to be a file's name, which AgentFly saves anyway, owner
@@ -1266,8 +1281,10 @@ Other measures:
   one with a space in it after no option (`tool "https://a.b x"` keeps `a.b x`).
   A header the agent splits into words (`-H X-Token: abc.def`) leaves
   `abc.def` as a website, which curl itself also contacts. The hosts saved for a
-  step are read from the kept words, so a kept file name (`.env`, `.`) or a dotted
-  program name (`python3.12`) is counted as a host too. A web tool behind a
+  step are read from the first 1,000 kept words (F18), so a kept file name (`.env`,
+  `.`) or a dotted program name (`python3.12`) is counted as a host too, and a
+  website later in a long command is not; such a command is saved cut, ending in
+  `<unparsed>` (section 4). A web tool behind a
   wrapper that rule 2 does not list (`caffeinate curl …`), behind `{`, `!`, `if`
   or `while`, or in a process substitution (`<(curl …)`) is read as any
   program's words: a `://` word after an option is `<arg>`, a positional one

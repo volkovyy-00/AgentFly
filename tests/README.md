@@ -58,6 +58,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   name and hosts (two strings change: `cd <arg> && curl -s x.com &`, and the continuation line
   `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 301-word part behind 16
   `(` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
+  F18 (`test_clean.py`): with `MAX_PARTS` or `MAX_PIECES` lowered, a command past the count is
+  saved ending in `<unparsed>` with no later website or project file, a word the cut falls inside
+  (`x.com'/p'`, `x.co\⏎m`, `"x".com`) is dropped whole, and at exactly the count all is read; the
+  real counts (1,000 and 20,000) are pinned. (`test_store.py`): a step reads at most
+  `MAX_RECORD_WORDS` (1,000, pinned) cleaned words, so a late host or `.env` is not the step's and
+  `is_sensitive` is asked at most that often; the secret flag then comes from `reads_secret`.
   Final verification and lenses (`test_final_verification_shapes`, `test_lens_shapes`,
   `test_each_wrapper_value_option_takes_the_next_word`, `test_an_unclosed_brace_list_is_read_in_one_pass`
   `@wallclock`): a character a backslash keeps is no operator or word break (`echo \>& ssh …`),
@@ -91,6 +97,15 @@ the maintainers' work items and decisions, which are kept outside this repo.
   pipe offline but not in the recorder (`grep -E 'node|python'`; owner 2026-10-23: accepted);
   past 1,000 stages or 20,000 quoted words the text is denied; the piped-code checks read big
   text in linear time (CPU time, best of five, an 8x step against a 16x limit).
+  F18: a fed shell's `-c` script is read as the recorder reads it: the three lines observed
+  allowed (`… | sh -c 'cd /tmp && python3'`, `bash -c 'true; python3'`, `sh -c 'exec python3'`)
+  and each `PIPED_NOT_INLINE` line in `sh -c` (`shlex.quote`) get the recorder's answer after a
+  mark, and both answers occur; a stage inside the last quote-aware read is not read again
+  (escaped `\|` stages and a long quoted word, 8x the text against a 16x limit); the words the
+  check reads are counted (`_PIPED_WORDS`, 20,000, pinned): at the count a stage, a script and a
+  script in a script are read, one less denies; the 1 MiB `sh -c -c …` shape is denied within
+  `_PIPED_WORDS` walk steps; each `PIPED_CODE` line in a payload cut short at three points is
+  denied by `guard_raw` and no `PIPED_NOT_INLINE` line is, and one is denied by the real client.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -139,7 +154,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `| sudo grep python`) is allowed (a wrapper with an option, or `parallel`, keeps every later
   word a program; runners, fd redirects, `<&0`, a line continuation after `|`); groups nested
   past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes),
-  and so does a line of many heredocs (`c<<A;` 8,000 times). Subagent mark (`tests/test_subagent_mark.py`):
+  and so does a line of many heredocs (`c<<A;` 8,000 times). F18: `script_indexes` equals
+  `shell_script`'s walk from every index; 20,000 `bash`, `sh` or `eval` words, `bash <<< a` 8,000
+  times and `sh -o` 4,000 times parse in linear time. Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
@@ -410,7 +427,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   spends one budget (the step record makes its `Lookups` on shell hooks only, where no scope
   runs); `rules check` refuses a scope beside a shell
   event, in `then` and in R1; a scope alone is a condition; `WORK_SCOPE` is pinned; inline tests
-  send `roots` as `workspace_roots` (at most 64 strings, may be empty).
+  send `roots` as `workspace_roots` (at most 64 strings, may be empty). F18: under
+  `example.toml`'s rule 8 with roots `[a, b]` and `a/x` a link to `/etc`, a Write to the
+  relative `x/hosts` fires (it is joined to the first root); with the roots swapped it does not.
 - `pipe_into` (`tests/test_pipe_into.py`, V5c): rule 14's criteria and more forms fire (`|&`,
   wrappers, groups, loops, `case`, a newline or a comment after `|`, `>(…)`, herestrings, heredoc
   bodies, the same command twice, every word after a wrapper: `curl x | xargs grep -l sh`);
