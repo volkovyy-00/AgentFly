@@ -517,6 +517,9 @@ class _Meta:
     stdin: str
 
 
+_NO_META: _Meta = _Meta(frozenset(), "")  # most commands: one shared, it is frozen
+
+
 @dataclass
 class _Frame:
     """A list of commands being read: the whole text, a substitution's, or a group's (`(`, `{`,
@@ -755,7 +758,9 @@ class _Scanner:
         index: int = len(out.commands)
         words, herestrings = cmd.words, cmd.herestrings
         out.commands.append(tuple(words))
-        out.meta.append(_Meta(frozenset(cmd.targets), cmd.stdin))
+        out.meta.append(
+            _Meta(frozenset(cmd.targets), cmd.stdin) if cmd.targets or cmd.stdin else _NO_META
+        )
         if cmd.stdin == "sub":
             out.fed.add(index)
         for kind, first, last in cmd.subs:
@@ -766,26 +771,28 @@ class _Scanner:
                 else:
                     out.link(((inner, index),))
         names: list[str] = [base_name(w) for w in words]
-        reader: bool = any(is_reader(name) for name in names)
-        if herestrings and reader:
+        if herestrings and any(is_reader(name) for name in names):
             self.out.code_heredoc = True
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
-        # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work.
+        # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work, nor
+        # may each word walk a copy of the words after it (F18).
         # A shell runs what a herestring holds, as it runs a `-c` script: what runs there writes to
         # the shell's output, not into the shell, so it links to nothing (`bash <<< 'curl x'`).
         texts: dict[str, None] = {}
+        shell: bool = False  # the herestrings are added at the first shell
+        evaled: bool = False
         for position, name in enumerate(names):
             if name in SHELLS:
-                script: str | None = shell_script(words[position + 1 :])
+                script: str | None = shell_script(words, position + 1)
                 if script is not None:
                     texts[script] = None
-                texts.update(dict.fromkeys(herestrings))
-            elif (
-                name == "eval"
-                and position + 1 < len(words)
-                and not any(n == "eval" for n in names[:position])
-            ):
-                texts[" ".join(words[position + 1 :])] = None
+                if not shell:
+                    texts.update(dict.fromkeys(herestrings))
+                shell = True
+            elif name == "eval":
+                if not evaled and position + 1 < len(words):
+                    texts[" ".join(words[position + 1 :])] = None
+                evaled = True
         for text in texts:
             self.sub_scan(text)
 
@@ -1100,13 +1107,14 @@ def placeholder(inner: list[tuple[str, ...]]) -> str:
     return SUB_PREFIX + ",".join(names) + "@" if names else SUB_EMPTY
 
 
-def shell_script(args: list[str]) -> str | None:
-    """The `-c` string among a shell's arguments, walking past its options; None if none.
+def shell_script(args: list[str], start: int = 0) -> str | None:
+    """The `-c` string among a shell's arguments (`args` from `start` on), walking past its
+    options; None if none.
 
     `-lc`, `-ec`, `-c` end the walk at the script. `-o name`, `-O name`, `--rcfile f` take a value.
     The first plain word is a script file, so the options end there.
     """
-    index: int = 0
+    index: int = start
     while index < len(args):
         arg: str = args[index]
         if arg == "--" or not arg.startswith(("-", "+")):
