@@ -130,6 +130,21 @@ def test_rule8_fires_past_max_roots(tree: Path) -> None:
     assert fires(write(inside, [str(tree / "w"), *filler, "/nowhere/x"]))  # 33: outside
 
 
+def test_rule8_joins_a_relative_path_to_the_first_root(tmp_path: Path) -> None:
+    # F18: example.toml's rule 8 with roots [a, b]: `x/hosts` is `a/x/hosts`, which leads to
+    # /etc; joined to `b` (where `x` is a folder) it would stay inside
+    example = rulefile.load_bytes(rulefile.default_path().with_name("example.toml").read_bytes())
+    rule8 = next(s.clause for s in example.rules if s.id == "s08-write-outside-workspace")
+    assert rule8 is not None
+    base = tmp_path.resolve()
+    (base / "a").mkdir()
+    (base / "a" / "x").symlink_to("/etc")
+    (base / "b" / "x").mkdir(parents=True)
+    roots = [str(base / "a"), str(base / "b")]
+    assert rule8.matches(write("x/hosts", roots), rules_mod.CLASSES)
+    assert not rule8.matches(write("x/hosts", roots[::-1]), rules_mod.CLASSES)
+
+
 def test_rule8_is_quiet_on_a_write_inside_a_root(tree: Path) -> None:
     roots = [str(tree / "w")]
     assert not fires(write(str(tree / "w" / "src" / "app.py"), roots))
