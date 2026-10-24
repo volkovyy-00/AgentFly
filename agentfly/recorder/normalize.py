@@ -779,16 +779,17 @@ class _Scanner:
         # A shell runs what a herestring holds, as it runs a `-c` script: what runs there writes to
         # the shell's output, not into the shell, so it links to nothing (`bash <<< 'curl x'`).
         texts: dict[str, None] = {}
-        shell: bool = False  # the herestrings are added at the first shell
+        scripts: list[int | None] = []  # `script_indexes(words)`, at the first shell
         evaled: bool = False
         for position, name in enumerate(names):
             if name in SHELLS:
-                script: str | None = shell_script(words, position + 1)
-                if script is not None:
-                    texts[script] = None
-                if not shell:
+                first: bool = not scripts
+                if first:
+                    scripts = script_indexes(words)
+                if (script := scripts[position + 1]) is not None:
+                    texts[words[script]] = None
+                if first:
                     texts.update(dict.fromkeys(herestrings))
-                shell = True
             elif name == "eval":
                 if not evaled and position + 1 < len(words):
                     texts[" ".join(words[position + 1 :])] = None
@@ -1107,26 +1108,34 @@ def placeholder(inner: list[tuple[str, ...]]) -> str:
     return SUB_PREFIX + ",".join(names) + "@" if names else SUB_EMPTY
 
 
-def shell_script(args: list[str], start: int = 0) -> str | None:
+def shell_script(args: Sequence[str], start: int = 0) -> str | None:
     """The `-c` string among a shell's arguments (`args` from `start` on), walking past its
     options; None if none.
 
     `-lc`, `-ec`, `-c` end the walk at the script. `-o name`, `-O name`, `--rcfile f` take a value.
     The first plain word is a script file, so the options end there.
     """
-    index: int = start
-    while index < len(args):
+    found: int | None = script_indexes(args)[start]
+    return None if found is None else args[found]
+
+
+def script_indexes(args: Sequence[str]) -> list[int | None]:
+    """For each index of `args` (and the two past its end), the index of the script the walk of
+    `shell_script` finds from there, or None. Worked out from the right in one pass (F18): a
+    shell word at every other index (`sh -o sh -o …`) then costs no walk of its own."""
+    found: list[int | None] = [None] * (len(args) + 2)
+    for index in range(len(args) - 1, -1, -1):
         arg: str = args[index]
         if arg == "--" or not arg.startswith(("-", "+")):
-            return None
-        if arg.startswith("--"):
-            index += 2 if arg in _SHELL_VALUE_OPTIONS else 1
-            continue
+            continue  # a plain word is a script file: no `-c` script
         letters: str = arg[1:]
-        if "c" in letters:
-            return args[index + 1] if index + 1 < len(args) else None
-        index += 2 if ("o" in letters or "O" in letters) else 1
-    return None
+        if arg.startswith("--"):
+            found[index] = found[index + (2 if arg in _SHELL_VALUE_OPTIONS else 1)]
+        elif "c" in letters:
+            found[index] = index + 1 if index + 1 < len(args) else None
+        else:
+            found[index] = found[index + (2 if ("o" in letters or "O" in letters) else 1)]
+    return found
 
 
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request

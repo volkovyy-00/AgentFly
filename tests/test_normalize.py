@@ -10,7 +10,14 @@ from typing import Any
 
 import pytest
 
-from agentfly.recorder.normalize import MAX_DEPTH, MAX_SCANS, _Scanner, normalize, shell_script
+from agentfly.recorder.normalize import (
+    MAX_DEPTH,
+    MAX_SCANS,
+    _Scanner,
+    normalize,
+    script_indexes,
+    shell_script,
+)
 from agentfly.recorder.rules import parsed_is_outbound
 from tests.cases import (
     HEREDOC_COMMIT,
@@ -129,6 +136,25 @@ def test_a_quoted_sentence_is_not_reparsed() -> None:
     assert words_of("git commit -m 'fix curl docs'") == ["git", "commit", "-m", "fix curl docs"]
     assert words_of('echo "curl is a tool"') == ["echo", "curl is a tool"]
     assert words_of("bash script.sh 'curl x'") == ["bash", "script.sh", "curl x"]  # a file, not -c
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-c", "x"],
+        ["-o", "pipefail", "-c", "x", "sh", "-lc", "y"],
+        ["sh", "-o", "sh", "-o", "sh", "-c"],
+        ["--rcfile", "f", "+o", "h", "-ec", "x", "--", "-c", "y"],
+        ["-x", "--init-file", "-c", "-c", "z", "script.sh", "-c", "w"],
+    ],
+)
+def test_the_script_table_is_the_walk_from_each_index(args: list[str]) -> None:
+    # F18: worked out from the right once, the same answer as walking from each index
+    table = script_indexes(args)
+    for start in range(len(args) + 1):
+        found = table[start]
+        assert (None if found is None else args[found]) == shell_script(args, start)
+        assert shell_script(args[start:]) == shell_script(args, start)
 
 
 def test_shell_script_walks_the_shell_options() -> None:
@@ -403,6 +429,7 @@ WRAPPERS = [
     pytest.param("bash ", 20_000, "-c 'curl x'", 3, 8, 3, id="bash-20000", marks=pytest.mark.slow),
     pytest.param("sh ", 20_000, "-c 'curl x'", 3, 8, 3, id="sh-20000", marks=pytest.mark.slow),
     pytest.param("bash <<< a ", 8_000, "", 3, 8, 3, id="bash-herestring-8000"),
+    pytest.param("sh -o ", 4_000, "", 3, 8, 3, id="sh-o-4000"),  # each shell walked to the end
     pytest.param(
         "eval ", 20_000, "curl x", MAX_DEPTH + 1, 8, 3, id="eval-20000", marks=pytest.mark.slow
     ),
