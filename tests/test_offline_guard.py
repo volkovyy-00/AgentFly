@@ -499,7 +499,7 @@ FED_FORMS = ("plain", "after a quoted pipe", "nested", "after 2>&1", "after 2>/d
 
 
 def fed_scripts(line: str) -> dict[str, str]:
-    """F18-fix1: a one-line command as a fed shell's `-c` script, in each shape of the audit."""
+    """F18-fix1: a command as a fed shell's `-c` script, in each shape of the audit."""
     script = shlex.quote(line)
     return dict(
         zip(
@@ -516,8 +516,8 @@ def fed_scripts(line: str) -> dict[str, str]:
     )
 
 
-# Main 93341d8's guard on `fed_scripts`, recorded once: it denied every form of each one-line
-# PIPED_CODE line, and a PIPED_NOT_INLINE line only nested, but for these
+# Main 93341d8's guard on `fed_scripts`, recorded once: it denied every form of each PIPED_CODE
+# line, and a PIPED_NOT_INLINE line only nested, but for these
 MAIN_FED_NOT_INLINE: dict[str, tuple[str, ...]] = {
     **dict.fromkeys(
         [
@@ -540,10 +540,8 @@ MAIN_FED_NOT_INLINE: dict[str, tuple[str, ...]] = {
 
 def test_the_case_lines_as_fed_scripts_are_denied_wherever_main_denied_them() -> None:
     assert set(MAIN_FED_NOT_INLINE) <= set(PIPED_NOT_INLINE)
-    denied_on_main = [(line, FED_FORMS) for line in PIPED_CODE if "\n" not in line] + [
-        (line, MAIN_FED_NOT_INLINE.get(line, ("nested",)))
-        for line in PIPED_NOT_INLINE
-        if "\n" not in line
+    denied_on_main = [(line, FED_FORMS) for line in PIPED_CODE] + [
+        (line, MAIN_FED_NOT_INLINE.get(line, ("nested",))) for line in PIPED_NOT_INLINE
     ]
     missed = [
         (name, line)

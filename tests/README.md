@@ -112,7 +112,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   and one is denied by the real client. F18-fix1: the audit's fed `-c` lines that main 93341d8
   denies and 7e5a4f9 allowed (after a quoted `|`, in escaped double quotes, after a redirect, and
   a script's first word) are denied bare and in every `wrapped` form, one test per case; each
-  one-line `PIPED_CODE` and `PIPED_NOT_INLINE` line as a fed `-c` script in five forms (plain,
+  `PIPED_CODE` and `PIPED_NOT_INLINE` line as a fed `-c` script in five forms (plain,
   after a quoted `|`, nested in escaped quotes, after `2>&1`, after `2>/dev/null`) is denied
   wherever main denied it (main's answers recorded once in the test).
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
