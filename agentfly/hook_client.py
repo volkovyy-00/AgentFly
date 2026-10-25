@@ -478,8 +478,8 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
 )
 _DEV_FD: str = r"/dev/fd/\d+"
 _NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
-# A fed shell's `-c` script is read as a command line, this many levels deep at most; deeper, it
-# counts as reading code from the pipe.
+# A fed shell's `-c` script is read as a word (a stage) and as a command line, this many levels
+# deep at most; deeper, it counts as reading code from the pipe.
 _SCRIPT_DEPTH: int = 4
 _STDIN: int = -1
 _SCRIPT: int = 0
@@ -506,11 +506,12 @@ _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file
 # Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
 # rule does): each costs a walk in Python.
 _PIPE_STAGES: int = 1000
-# F18: the words the piped-code check reads in all: each fed stage's words and one more, each
-# stage read again with quotes kept whole, and the commands of each `-c` script. They are counted
-# right after the C-speed split, before any walk in Python; past the count the text counts as
-# piped code. A quoted word may be 1 MiB long, so the count alone does not bound the bytes read
-# again: a stage that starts inside the last such read is not read again (`_fed_stage_reads`).
+# F18: the words the piped-code check reads in all: each fed stage's words and one more (a `-c`
+# word read as a stage too), each stage read again with quotes kept whole, and the commands of
+# each `-c` script. They are counted right after the C-speed split, before any walk in Python;
+# past the count the text counts as piped code. A quoted word may be 1 MiB long, so the count
+# alone does not bound the bytes read again: a stage that starts inside the last such read is not
+# read again (`_fed_stage_reads`).
 _PIPED_WORDS: int = 20_000
 # A stage read again with quotes kept whole: its text up to the first `_CUT` outside quotes and
 # backslashes (an unclosed quote is read as a character).
@@ -574,10 +575,11 @@ def _is_stdin_device(word: str) -> bool:
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
 
 
-def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
+def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth: int) -> int:
     """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
-    `-c` reads the pipe when its script holds a substitution (`bash -c "$(cat)"`); what the script
-    runs is read from the stage's text, quotes kept whole (`_scripts_read`)."""
+    `-c` reads the pipe when its script holds a substitution (`bash -c "$(cat)"`) or its word,
+    read as a stage, does (main's read: it covers what the quote-aware read skips or misreads);
+    what the script runs is also read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
     if _is_stdin(arg):
         return _STDIN
@@ -589,7 +591,11 @@ def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
         if arg.startswith("--"):
             return 2 if arg in _SHELL_VALUE_OPTIONS else 1
         if "c" in arg[1:]:
-            return _STDIN if at + 1 < len(words) and _SUB in words[at + 1] else _SCRIPT
+            if at + 1 >= len(words):
+                return _SCRIPT
+            script: str = words[at + 1]
+            fed: bool = _SUB in script or _stage_reads_stdin(script, count, depth + 1)
+            return _STDIN if fed else _SCRIPT
         if "s" in arg[1:]:
             return _STDIN
         return 2 if ("o" in arg[1:] or "O" in arg[1:]) else 1
@@ -611,7 +617,7 @@ def _node_takes_value(words: Sequence[str], at: int) -> bool:
     return re.compile(_NODE_SCRIPT).search(words[at + 1]) is None
 
 
-def _reads_stdin(words: Sequence[str]) -> bool:
+def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
     """`normalize.reads_stdin`: an interpreter or a shell at a program position that names no
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
@@ -627,7 +633,7 @@ def _reads_stdin(words: Sequence[str]) -> bool:
         if family not in tables:
             found: list[bool] = [True] * (len(words) + 2)
             for index in range(len(words) - 1, -1, -1):
-                move: int = _stdin_step(family, words, index)
+                move: int = _stdin_step(family, words, index, count, depth)
                 found[index] = move == _STDIN or (move > 0 and found[index + move])
             tables[family] = found
         if tables[family][at + 1]:
@@ -647,10 +653,12 @@ class _Count:
         return self.left < 0
 
 
-def _stage_reads_stdin(stage: str, count: _Count) -> bool:
+def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
     """One command of a pipe, as raw text: its redirects dropped (stdin from a file names the
     script; from `<(`, a herestring, a heredoc, `/dev/stdin` or another fd it is code; `3<` is not
     stdin), then the stdin walk. Its words are counted before the walk."""
+    if depth > _SCRIPT_DEPTH:
+        return True
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
     stage = re.compile(_DUPLICATE).sub(" ", stage)
@@ -675,7 +683,7 @@ def _stage_reads_stdin(stage: str, count: _Count) -> bool:
             continue
         if _SUB not in target and not _is_stdin_device(target):
             return False  # `python3 < x.py`
-    return _reads_stdin(argv)
+    return _reads_stdin(argv, count, depth)
 
 
 def _fed_stage_reads(
@@ -684,8 +692,9 @@ def _fed_stage_reads(
     """Whether the fed stage `text[start:end]` (cut at `_CUT`) reads code from the pipe: its stdin
     walk, then the stage read again with quotes kept whole (`_scripts_read`), unless it starts
     before `read_to`, where the last such read ended: its `|` sits in a quoted word that read
-    took whole. Returns that and where the reads have now reached, so they cover the text once."""
-    if _stage_reads_stdin(text[start:end], count):
+    took whole (its `-c` word is still read by the stdin walk). Returns that and where the reads
+    have now reached, so they cover the text once."""
+    if _stage_reads_stdin(text[start:end], count, depth):
         return True, read_to
     if start < read_to:
         return False, read_to
@@ -775,8 +784,9 @@ def _piped_code(text: str) -> bool:
             reads, read_to = _fed_stage_reads(text, start, stop, count, 0, read_to)
             if reads:
                 return True
+    # A `-c` word read past the count answers only for its place in a walk: the count spent decides
     if "<(" not in text:
-        return False
+        return count.left < 0
     after: int = 0  # where the last `< <(` ended: an owner starts no earlier
     for number, sub in enumerate(re.compile(_STDIN_SUB).finditer(text)):
         if number >= _PIPE_STAGES:
@@ -785,7 +795,7 @@ def _piped_code(text: str) -> bool:
         if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB, count):
             return True
         after = sub.end()
-    return False
+    return count.left < 0
 
 
 # A perl module value with a `;` or a space in it is quoted (`perl '-MIO::Socket;print 1' x.pl`),

@@ -368,7 +368,12 @@ def test_a_script_many_shells_share_is_read_once() -> None:
     [
         "cat x | python3 t.py" + " a" * 50,  # a stage
         "cat x | sh -c 'true" + " a" * 50 + "'",  # a script
-        "cat x | sh -c \"sh -c 'true" + " a" * 50 + "'\"",  # a script in a script
+        "cat x | sh -c \"true; sh -c 'true" + " a" * 50 + "'\"",  # a script in a script
+        # F18-fix1: the last read is a `-c` word, of a stage the quoted read already took whole
+        # and of a `< <(` stage; each walk names a script (`x.sh`), so only the count spent says
+        # deny
+        "echo 'x | sh y' | sh x.sh -c 'a" + " a" * 50 + "'",
+        "sh x.sh -c a" + " a" * 50 + " < <(cat x)",
     ],
 )
 def test_past_the_word_count_a_fed_stage_counts_as_piped_code(
@@ -403,13 +408,150 @@ def test_the_huge_c_shape_is_denied_in_at_most_the_word_count_of_steps(
     steps: list[None] = []
     step = guard._stdin_step
 
-    def counted(family: str, words: Any, at: int) -> int:
+    def counted(family: str, words: Any, at: int, *rest: Any) -> int:
         steps.append(None)
-        return step(family, words, at)
+        return step(family, words, at, *rest)
 
     monkeypatch.setattr(guard, "_stdin_step", counted)
     assert guard.guard_reason(text) == "outbound"
     assert len(steps) <= guard._PIPED_WORDS
+
+
+# F18-fix1: fed `-c` scripts F18's audit found allowed on 7e5a4f9 and denied by main 93341d8
+# (probe files of the audit in brackets). Main reads a `-c` script's word as a stage as well as
+# the script as a command line; each line is denied bare and in every `wrapped` form, as on main.
+def allowed_forms(line: str) -> list[str]:
+    return [form for form in [line, *wrapped(line)] if guard.offline_answer(form)[1] != "outbound"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "echo '| sh' 'x' | sh -c 'python3'",  # [p7]
+        "echo 'print(1) # x | sh y' | sh -c 'python3'",  # [p8]
+        "echo 'x | sh y' | sh -c 'python3'",  # [p8, p11]
+        "echo 'x | sh y' | bash -c 'python3'",
+        "echo 'x | node y' | sh -c 'python3'",
+        "echo 'x | python3 y' | sh -c 'node'",
+        "ls  # pipe it | sh -n, it's fine\necho 'import socket' | sh -c 'python3'",  # [p11]
+        "cat <<EOF\na | sh x '\nEOF\necho 'import socket' | sh -c 'python3'",
+        "echo \"x | sh y'\" | sh -c 'python3'",
+    ],
+)
+def test_a_fed_c_script_after_a_quoted_pipe_is_denied_as_on_main(line: str) -> None:
+    # the quoted read of the stage at the first `| sh` takes the real stage in whole
+    assert allowed_forms(line) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'true | bash -c "dash -c \\"env python3\\""',  # [p4]
+        'echo \'import socket\' | bash -c "sh -c \\"exec python3\\""',  # [p6]
+        'echo \'import socket\' | bash -c "sh -c \\"env python3\\""',
+        'echo \'import socket\' | bash -c "sh -c \\"X=1 python3\\""',
+    ],
+)
+def test_a_fed_c_script_in_escaped_double_quotes_is_denied_as_on_main(line: str) -> None:
+    assert allowed_forms(line) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "echo 'import socket' | sh 2>/dev/null -c python3",  # [p12]
+        "echo 'import socket' | sh 2>/dev/null -c 'python3'",
+        "echo 'import socket' | sh >/dev/null -c 'python3'",
+        "echo 'import socket' | sh > out -c 'python3'",
+        "echo 'import socket' | sh 2>&1 -c 'python3'",  # [p12, p13]
+        "echo 'import socket' | sh 2>/dev/null -c 'python3 -'",
+        "echo 'import socket' | sh 2>&1 -c python3",  # [p13]
+        "echo 'import socket' | sh >&2 -c 'python3'",
+        "echo 'import socket' | bash 1>&2 -c 'python3 -'",
+        "echo 'import socket' | sh -x 2>&1 -c 'python3'",
+        "echo 'import socket' | sh &>/dev/null -c 'python3'",
+    ],
+)
+def test_a_fed_c_script_after_a_redirect_is_denied_as_on_main(line: str) -> None:
+    assert allowed_forms(line) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # [p3] the recorder allows it (the script names its file): main reads the script's first
+        # word alone, an over-deny kept so the guard stays at main's answers (SPEC section 10)
+        "echo 'import socket' | sh -c 'python3 x.py'",
+        # [p10] python3 reads the text `<(` gives the shell; the recorder does not read a `-c`
+        # script fed by `< <(`
+        "sh -c python3 < <(echo 'import socket')",
+    ],
+)
+def test_a_fed_c_scripts_word_is_read_as_on_main(line: str) -> None:
+    assert allowed_forms(line) == []
+
+
+def double_quoted(text: str) -> str:
+    return '"' + "".join("\\" + c if c in '\\"$`' else c for c in text) + '"'
+
+
+FED_FORMS = ("plain", "after a quoted pipe", "nested", "after 2>&1", "after 2>/dev/null")
+
+
+def fed_scripts(line: str) -> dict[str, str]:
+    """F18-fix1: a one-line command as a fed shell's `-c` script, in each shape of the audit."""
+    script = shlex.quote(line)
+    return dict(
+        zip(
+            FED_FORMS,
+            [
+                f"cat x | sh -c {script}",
+                f"echo 'x | sh y' | sh -c {script}",
+                f"cat x | bash -c {double_quoted('sh -c ' + double_quoted(line))}",
+                f"cat x | sh 2>&1 -c {script}",
+                f"cat x | sh 2>/dev/null -c {script}",
+            ],
+            strict=True,
+        )
+    )
+
+
+# Main 93341d8's guard on `fed_scripts`, recorded once: it denied every form of each one-line
+# PIPED_CODE line, and a PIPED_NOT_INLINE line only nested, but for these
+MAIN_FED_NOT_INLINE: dict[str, tuple[str, ...]] = {
+    **dict.fromkeys(
+        [
+            "perl -MFoo x.pl",
+            "perl -MFoo=a,b x.pl",
+            "python3 x.py | grep sh",
+            "python3",
+            "python3 -",
+            "perl -MFoo::Bar=a,b:c x.pl",
+            "perl -M-warnings x.pl",
+            "perl -d:NYTProf x.pl",
+            "perl -d:Trace x.pl",
+            "perl -dt:Foo x.pl",
+        ],
+        FED_FORMS,
+    ),
+    "python3 < x.py": (),
+}
+
+
+def test_the_case_lines_as_fed_scripts_are_denied_wherever_main_denied_them() -> None:
+    assert set(MAIN_FED_NOT_INLINE) <= set(PIPED_NOT_INLINE)
+    denied_on_main = [(line, FED_FORMS) for line in PIPED_CODE if "\n" not in line] + [
+        (line, MAIN_FED_NOT_INLINE.get(line, ("nested",)))
+        for line in PIPED_NOT_INLINE
+        if "\n" not in line
+    ]
+    missed = [
+        (name, line)
+        for line, names in denied_on_main
+        for name, form in fed_scripts(line).items()
+        if name in names and guard.offline_answer(form)[1] != "outbound"
+    ]
+    assert missed == []
 
 
 def cut_off(line: str) -> list[bytes]:

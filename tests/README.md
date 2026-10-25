@@ -101,13 +101,20 @@ the maintainers' work items and decisions, which are kept outside this repo.
   allowed (`… | sh -c 'cd /tmp && python3'`, `bash -c 'true; python3'`, `sh -c 'exec python3'`)
   and each `PIPED_NOT_INLINE` line in `sh -c` (`shlex.quote`) get the recorder's answer after a
   mark, and both answers occur; a stage inside the last quote-aware read is not read again
-  (escaped `\|` stages and a long quoted word, 8x the text against a 16x limit); a script many
-  shells find (`sh -o sh -o … sh -c "$a…"`) is read once (16x the shells against a 4x limit);
-  the words the check reads are counted (`_PIPED_WORDS`, 20,000, pinned): at the count a stage,
-  a script and a script in a script are read, one less denies; the 1 MiB `sh -c -c …` shape is
-  denied within `_PIPED_WORDS` walk steps; each `PIPED_CODE` line in a payload cut short at three
-  points is denied by `guard_raw` and no `PIPED_NOT_INLINE` line is, and one is denied by the real
-  client.
+  (escaped `\|` stages and a long quoted word, 8x the text against a 16x limit), though its `-c`
+  word is still read as on main; a script many shells find (`sh -o sh -o … sh -c "$a…"`) is read
+  once (16x the shells against a 4x limit); the words the check reads are counted
+  (`_PIPED_WORDS`, 20,000, pinned): at the count a stage, a script, a script in a script and two
+  stages whose last read is a `-c` word their walk passes over (inside a quoted read; before
+  `< <(`) are read, one less denies (the count spent decides at the end); the 1 MiB
+  `sh -c -c …` shape is denied within `_PIPED_WORDS` walk steps; each `PIPED_CODE` line in a
+  payload cut short at three points is denied by `guard_raw` and no `PIPED_NOT_INLINE` line is,
+  and one is denied by the real client. F18-fix1: the audit's fed `-c` lines that main 93341d8
+  denies and 7e5a4f9 allowed (after a quoted `|`, in escaped double quotes, after a redirect, and
+  a script's first word) are denied bare and in every `wrapped` form, one test per case; each
+  one-line `PIPED_CODE` and `PIPED_NOT_INLINE` line as a fed `-c` script in five forms (plain,
+  after a quoted `|`, nested in escaped quotes, after `2>&1`, after `2>/dev/null`) is denied
+  wherever main denied it (main's answers recorded once in the test).
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
