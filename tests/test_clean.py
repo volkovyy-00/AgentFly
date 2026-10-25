@@ -494,3 +494,43 @@ def test_each_wrapper_value_option_takes_the_next_word(project_root: Path) -> No
             raw: str = f"{wrapper} -{letter} v{duration} curl -s x.com"
             expected: str = f"{wrapper} -{letter} <arg>{saved_duration} curl -s x.com"
             assert clean_command(raw, project_root) == expected, raw
+
+
+def test_a_command_past_the_parts_count_ends_in_unparsed(
+    project_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F18: past MAX_PARTS parts the rest is not read, so nothing after the cut is saved
+    monkeypatch.setattr(clean_mod, "MAX_PARTS", 3)
+    assert clean_command("ls; ls\nls", project_root) == "ls ; ls ; ls"  # at the count: all read
+    late: str = "curl x.com README.md"
+    assert clean_command(f"ls; ls\nls\n{late}", project_root) == "ls ; ls ; ls ; <unparsed>"
+    assert clean_command(f"ls & ls | ls && {late}", project_root) == "ls & ls | ls && <unparsed>"
+
+
+@pytest.mark.parametrize(
+    ("raw", "pieces", "expected"),
+    [
+        ("curl x.com README.md", 5, "curl x.com README.md"),  # at the count: all read
+        ("curl x.com README.md", 4, "curl x.com <unparsed>"),
+        ("curl x.com README.md", 2, "curl <unparsed>"),
+        ("curl x.com", 0, "<unparsed>"),
+        # a word cut between its pieces is dropped whole, never saved in part
+        ("curl README.md x.com'/p'", 5, "curl README.md <unparsed>"),
+        ("curl README.md x.co\\\nm", 6, "curl README.md <unparsed>"),
+        ('curl README.md "x".com', 5, "curl README.md <unparsed>"),
+    ],
+)
+def test_a_command_past_the_pieces_count_ends_at_a_word_break(
+    project_root: Path, monkeypatch: pytest.MonkeyPatch, raw: str, pieces: int, expected: str
+) -> None:
+    # F18: past MAX_PIECES pieces the part in progress ends at its last word break
+    monkeypatch.setattr(clean_mod, "MAX_PIECES", pieces)
+    assert clean_command(raw, project_root) == expected
+
+
+def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
+    assert (clean_mod.MAX_PARTS, clean_mod.MAX_PIECES) == (1_000, 20_000)
+    saved: str = clean_command("ls\n" * 1_000 + "curl x.com README.md", project_root)
+    assert saved == "ls ; " * 1_000 + "<unparsed>"
+    saved = clean_command("cat " + "a " * 9_999 + "README.md x.com", project_root)
+    assert saved == "cat" + " <arg>" * 9_999 + " <unparsed>"  # 20,000 pieces, then the cut

@@ -34,6 +34,9 @@ logger = logging.getLogger("agentfly")
 
 _LABELS: tuple[LiteralString, ...] = ("Session", "Step", "File", "Command", "Host", "Rule")
 _QUEUE_MAX: int = 256
+# F18: the words of the cleaned command a step reads for its file and websites. Past them nothing
+# is read; the step's secret flag then falls to the rule engine's own test (`reads_secret`).
+MAX_RECORD_WORDS: int = 1_000
 _SENTINEL: object = object()
 
 
@@ -420,7 +423,7 @@ def build_step_record(
         command = clean_command(raw_cmd, root, lookups)
         if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
-        tokens: list[str] = cleaned_words(command)  # split once
+        tokens: list[str] = cleaned_words(command)[:MAX_RECORD_WORDS]  # split once
         hosts = hosts_from_cleaned(tokens)
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in tokens:

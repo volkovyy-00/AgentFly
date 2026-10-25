@@ -10,7 +10,14 @@ from typing import Any
 
 import pytest
 
-from agentfly.recorder.normalize import MAX_DEPTH, MAX_SCANS, _Scanner, normalize, shell_script
+from agentfly.recorder.normalize import (
+    MAX_DEPTH,
+    MAX_SCANS,
+    _Scanner,
+    normalize,
+    script_indexes,
+    shell_script,
+)
 from agentfly.recorder.rules import parsed_is_outbound
 from tests.cases import (
     HEREDOC_COMMIT,
@@ -129,6 +136,24 @@ def test_a_quoted_sentence_is_not_reparsed() -> None:
     assert words_of("git commit -m 'fix curl docs'") == ["git", "commit", "-m", "fix curl docs"]
     assert words_of('echo "curl is a tool"') == ["echo", "curl is a tool"]
     assert words_of("bash script.sh 'curl x'") == ["bash", "script.sh", "curl x"]  # a file, not -c
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-c", "x"],
+        ["-o", "pipefail", "-c", "x", "sh", "-lc", "y"],
+        ["sh", "-o", "sh", "-o", "sh", "-c"],
+        ["--rcfile", "f", "+o", "h", "-ec", "x", "--", "-c", "y"],
+        ["-x", "--init-file", "-c", "-c", "z", "script.sh", "-c", "w"],
+    ],
+)
+def test_the_script_table_is_the_walk_from_each_index(args: list[str]) -> None:
+    # F18: worked out from the right once, the same answer as `shell_script`'s walk from each index
+    table = script_indexes(args)
+    for start in range(len(args) + 1):
+        found = table[start]
+        assert (None if found is None else args[found]) == shell_script(args[start:])
 
 
 def test_shell_script_walks_the_shell_options() -> None:
@@ -386,9 +411,10 @@ SCAN_LIMIT = 256  # nested scans in one command: pinned here, held by `normalize
 # `eval` chain stops at the depth limit (17 scans), `bash -c` and backticks at the scan limit. A
 # quarter-length command is 4 times cheaper when the work is linear and 16 when it is quadratic;
 # the limit sits between, higher for the `eval` chains: dearer than linear while shorter than the
-# depth limit (7 times for x 40), and by the `names[:index]` copy `finish_command` makes for each
-# `eval` (7 times for x 3000). The short commands take under 2 ms: many rounds, or the best of
-# them is still noise.
+# depth limit (7 times for x 40). The short commands take under 2 ms: many rounds, or the best of
+# them is still noise. F18: 20,000 shell or `eval` words, each of which once walked its own copy
+# of the words after it, and a shell word with a herestring each (quadratic: 15 times for a
+# quarter).
 WRAPPERS = [
     pytest.param("eval ", 40, "curl x", MAX_DEPTH + 1, 14, 60, id="eval-40"),
     # about 0.3 s a parse and five parses a side: over the 2 s line of `slow` (tests/README.md)
@@ -399,6 +425,13 @@ WRAPPERS = [
     pytest.param("bash ", 200, "<<< 'bash bash <<< ls'", 4, 8, 60, id="bash-200"),
     pytest.param("bash -c 'a'; ", 2000, "", SCAN_LIMIT + 1, 8, 9, id="bash-c-2000"),
     pytest.param("echo `a` ", 1000, "", SCAN_LIMIT + 1, 8, 15, id="backtick-1000"),
+    pytest.param("bash ", 20_000, "-c 'curl x'", 3, 8, 3, id="bash-20000", marks=pytest.mark.slow),
+    pytest.param("sh ", 20_000, "-c 'curl x'", 3, 8, 3, id="sh-20000", marks=pytest.mark.slow),
+    pytest.param("bash <<< a ", 8_000, "", 3, 8, 3, id="bash-herestring-8000"),
+    pytest.param("sh -o ", 4_000, "", 3, 8, 3, id="sh-o-4000"),  # each shell walked to the end
+    pytest.param(
+        "eval ", 20_000, "curl x", MAX_DEPTH + 1, 8, 3, id="eval-20000", marks=pytest.mark.slow
+    ),
 ]
 
 

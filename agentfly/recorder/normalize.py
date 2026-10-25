@@ -517,6 +517,9 @@ class _Meta:
     stdin: str
 
 
+_NO_META: _Meta = _Meta(frozenset(), "")  # most commands: one shared, it is frozen
+
+
 @dataclass
 class _Frame:
     """A list of commands being read: the whole text, a substitution's, or a group's (`(`, `{`,
@@ -755,7 +758,9 @@ class _Scanner:
         index: int = len(out.commands)
         words, herestrings = cmd.words, cmd.herestrings
         out.commands.append(tuple(words))
-        out.meta.append(_Meta(frozenset(cmd.targets), cmd.stdin))
+        out.meta.append(
+            _Meta(frozenset(cmd.targets), cmd.stdin) if cmd.targets or cmd.stdin else _NO_META
+        )
         if cmd.stdin == "sub":
             out.fed.add(index)
         for kind, first, last in cmd.subs:
@@ -766,26 +771,29 @@ class _Scanner:
                 else:
                     out.link(((inner, index),))
         names: list[str] = [base_name(w) for w in words]
-        reader: bool = any(is_reader(name) for name in names)
-        if herestrings and reader:
+        if herestrings and any(is_reader(name) for name in names):
             self.out.code_heredoc = True
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
-        # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work.
+        # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work, nor
+        # may each word walk a copy of the words after it (F18).
         # A shell runs what a herestring holds, as it runs a `-c` script: what runs there writes to
         # the shell's output, not into the shell, so it links to nothing (`bash <<< 'curl x'`).
         texts: dict[str, None] = {}
+        scripts: list[int | None] = []  # `script_indexes(words)`, at the first shell
+        evaled: bool = False
         for position, name in enumerate(names):
             if name in SHELLS:
-                script: str | None = shell_script(words[position + 1 :])
-                if script is not None:
-                    texts[script] = None
-                texts.update(dict.fromkeys(herestrings))
-            elif (
-                name == "eval"
-                and position + 1 < len(words)
-                and not any(n == "eval" for n in names[:position])
-            ):
-                texts[" ".join(words[position + 1 :])] = None
+                first_shell: bool = not scripts
+                if first_shell:
+                    scripts = script_indexes(words)
+                if (script := scripts[position + 1]) is not None:
+                    texts[words[script]] = None
+                if first_shell:
+                    texts.update(dict.fromkeys(herestrings))
+            elif name == "eval":
+                if not evaled and position + 1 < len(words):
+                    texts[" ".join(words[position + 1 :])] = None
+                evaled = True
         for text in texts:
             self.sub_scan(text)
 
@@ -1119,6 +1127,25 @@ def shell_script(args: list[str]) -> str | None:
             return args[index + 1] if index + 1 < len(args) else None
         index += 2 if ("o" in letters or "O" in letters) else 1
     return None
+
+
+def script_indexes(args: Sequence[str]) -> list[int | None]:
+    """For each index of `args` (and the two past its end), the index of the script the walk of
+    `shell_script` finds from there, or None. Worked out from the right in one pass (F18): a
+    shell word at every other index (`sh -o sh -o …`) then costs no walk of its own."""
+    found: list[int | None] = [None] * (len(args) + 2)
+    for index in range(len(args) - 1, -1, -1):
+        arg: str = args[index]
+        if arg == "--" or not arg.startswith(("-", "+")):
+            continue  # a plain word is a script file: no `-c` script
+        letters: str = arg[1:]
+        if arg.startswith("--"):
+            found[index] = found[index + (2 if arg in _SHELL_VALUE_OPTIONS else 1)]
+        elif "c" in letters:
+            found[index] = index + 1 if index + 1 < len(args) else None
+        else:
+            found[index] = found[index + (2 if ("o" in letters or "O" in letters) else 1)]
+    return found
 
 
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
