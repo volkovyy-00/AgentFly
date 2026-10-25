@@ -374,6 +374,8 @@ def test_a_script_many_shells_share_is_read_once() -> None:
         # deny
         "echo 'x | sh y' | sh x.sh -c 'a" + " a" * 50 + "'",
         "sh x.sh -c a" + " a" * 50 + " < <(cat x)",
+        # F18-fix2: the quotes and backslashes a stage's quoted read takes off count too
+        'cat x | sh -c "true' + ' \\"a\\"' * 50 + '"',
     ],
 )
 def test_past_the_word_count_a_fed_stage_counts_as_piped_code(
@@ -573,6 +575,15 @@ def test_piped_code_in_a_cut_off_payload_is_denied() -> None:
     for line in PIPED_NOT_INLINE:
         for raw in cut_off(line):
             assert guard.guard_raw(raw)[0] == {"permission": "allow"}, raw
+
+
+def test_the_quotes_and_backslashes_read_again_are_counted() -> None:
+    # F18-fix2: about 1 MiB of escaped quotes in a fed `-c` script took `guard_raw` 1.87 s (main
+    # 93341d8: 0.22 s), unquoting them one at a time; each quote and backslash of a stage read
+    # again with quotes kept whole now counts toward `_PIPED_WORDS`, so past it the text is denied
+    command = 'echo x | sh -c "' + '\\"' * guard._PIPED_WORDS + '"'
+    assert guard.offline_answer(command)[1] == "outbound"
+    assert all(guard.guard_raw(raw)[1] == "outbound" for raw in cut_off(command))
 
 
 def test_a_cut_off_payload_with_piped_code_is_denied_by_the_client(

@@ -507,7 +507,8 @@ _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file
 # rule does): each costs a walk in Python.
 _PIPE_STAGES: int = 1000
 # F18: the words the piped-code check reads in all: each fed stage's words and one more (a `-c`
-# word read as a stage too), each stage read again with quotes kept whole, and the commands of
+# word read as a stage too), each stage read again with quotes kept whole (its words, and each
+# quote and backslash in it: each a piece taken off in Python, F18-fix2), and the commands of
 # each `-c` script. They are counted right after the C-speed split, before any walk in Python;
 # past the count the text counts as piped code. A quoted word may be 1 MiB long, so the count
 # alone does not bound the bytes read again: a stage that starts inside the last such read is not
@@ -710,7 +711,9 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
     stage: re.Match[str] | None = re.compile(_QUOTED_STAGE).match(text, start)
     end: int = stage.end() if stage else start
     raw: list[str] = re.compile(_QUOTED_WORD).findall(text, start, end)
-    if count.spend(len(raw)):
+    # each piece `_unquoted` or `_UNEXPANDED` takes off holds a quote or a backslash (F18-fix2)
+    pieces: int = sum(text.count(c, start, end) for c in "'\"\\")
+    if count.spend(len(raw) + pieces):
         return True, end
     argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in raw]
     found: dict[int, None] = {}  # each script once, however many shells find it

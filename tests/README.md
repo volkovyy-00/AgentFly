@@ -104,9 +104,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (escaped `\|` stages and a long quoted word, 8x the text against a 16x limit), though its `-c`
   word is still read as on main; a script many shells find (`sh -o sh -o … sh -c "$a…"`) is read
   once (16x the shells against a 4x limit); the words the check reads are counted
-  (`_PIPED_WORDS`, 20,000, pinned): at the count a stage, a script, a script in a script and two
+  (`_PIPED_WORDS`, 20,000, pinned): at the count a stage, a script, a script in a script, two
   stages whose last read is a `-c` word their walk passes over (inside a quoted read; before
-  `< <(`) are read, one less denies (the count spent decides at the end); the 1 MiB
+  `< <(`) and a script of escaped quotes are read, one less denies (the count spent decides at
+  the end); the 1 MiB
   `sh -c -c …` shape is denied within `_PIPED_WORDS` walk steps; each `PIPED_CODE` line in a
   payload cut short at three points is denied by `guard_raw` and no `PIPED_NOT_INLINE` line is,
   and one is denied by the real client. F18-fix1: the audit's fed `-c` lines that main 93341d8
@@ -114,7 +115,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   a script's first word) are denied bare and in every `wrapped` form, one test per case; each
   `PIPED_CODE` and `PIPED_NOT_INLINE` line as a fed `-c` script in five forms (plain,
   after a quoted `|`, nested in escaped quotes, after `2>&1`, after `2>/dev/null`) is denied
-  wherever main denied it (main's answers recorded once in the test).
+  wherever main denied it (main's answers recorded once in the test). F18-fix2: each quote and
+  backslash a quote-aware read takes off counts toward `_PIPED_WORDS`, so a fed `-c` script of
+  `_PIPED_WORDS` escaped quotes is denied, as a command and as each cut-off payload.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
