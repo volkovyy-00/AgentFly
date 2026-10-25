@@ -586,6 +586,40 @@ def test_the_quotes_and_backslashes_read_again_are_counted() -> None:
     assert all(guard.guard_raw(raw)[1] == "outbound" for raw in cut_off(command))
 
 
+def nested_scripts(filler: str, depth: int = 3) -> str:
+    script = "true " + filler
+    for _ in range(depth):
+        script = "true; sh -c " + shlex.quote(script)
+    return "cat x | sh -c " + shlex.quote(script)
+
+
+def test_past_the_reread_budget_a_fed_script_counts_as_piped_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F18-fix3: a nested `-c` script is read again once per depth, whatever it holds (1 MiB of `>`
+    # three deep took the client 1.05 s offline, main 93341d8 0.15 s). The bytes every quote-aware
+    # re-read of one command takes share one budget: past it the text is denied unread, and at it
+    # all is read
+    assert guard._REREAD_BYTES == 512 * 1024
+    assert guard.offline_answer(nested_scripts(">" * guard._REREAD_BYTES))[1] == "outbound"
+    command = nested_scripts(">" * 100)
+    read: list[int] = []
+    reread = guard._Count.reread
+
+    def counted(self: guard._Count, size: int) -> bool:
+        read.append(size)
+        return reread(self, size)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(guard._Count, "reread", counted)
+        assert guard.offline_answer(command)[0] == {"permission": "allow"}
+    assert len(read) > 4  # the stage and each depth's script
+    monkeypatch.setattr(guard, "_REREAD_BYTES", sum(read))
+    assert guard.offline_answer(command)[0] == {"permission": "allow"}
+    monkeypatch.setattr(guard, "_REREAD_BYTES", sum(read) - 1)
+    assert guard.offline_answer(command)[1] == "outbound"
+
+
 def test_a_cut_off_payload_with_piped_code_is_denied_by_the_client(
     client: Path, isolated_home: Path
 ) -> None:
