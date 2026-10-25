@@ -514,6 +514,11 @@ _PIPE_STAGES: int = 1000
 # alone does not bound the bytes read again: a stage that starts inside the last such read is not
 # read again (`_fed_stage_reads`).
 _PIPED_WORDS: int = 20_000
+# F18-fix3: the bytes the quote-aware re-reads of one command take in all, whatever the text holds:
+# each stage read again with quotes kept whole and each `-c` script read as a command line. Each
+# is more passes in C over its text, and a nest of scripts is read once per depth; past this many
+# bytes the text counts as piped code. F18's 256 KiB quoted word is read in about 263 KiB.
+_REREAD_BYTES: int = 512 * 1024
 # A stage read again with quotes kept whole: its text up to the first `_CUT` outside quotes and
 # backslashes (an unclosed quote is read as a character).
 _QUOTED_STAGE: str = (
@@ -643,15 +648,22 @@ def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
 
 
 class _Count:
-    """The words the piped-code check may still read (`_PIPED_WORDS`)."""
+    """The words the piped-code check may still read (`_PIPED_WORDS`) and the bytes its
+    quote-aware re-reads may still take (`_REREAD_BYTES`)."""
 
     def __init__(self) -> None:
         self.left: int = _PIPED_WORDS
+        self.bytes_left: int = _REREAD_BYTES
 
     def spend(self, words: int) -> bool:
         """Count `words` more; True once past the count (the text then counts as piped code)."""
         self.left -= words
         return self.left < 0
+
+    def reread(self, size: int) -> bool:
+        """Count `size` more bytes read again; True once past the budget (piped code too)."""
+        self.bytes_left -= size
+        return self.bytes_left < 0
 
 
 def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
@@ -710,6 +722,8 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
     as the recorder feeds every command of a fed shell's script (`_line_reads`)."""
     stage: re.Match[str] | None = re.compile(_QUOTED_STAGE).match(text, start)
     end: int = stage.end() if stage else start
+    if count.reread(end - start):
+        return True, end
     raw: list[str] = re.compile(_QUOTED_WORD).findall(text, start, end)
     # each piece `_unquoted` or `_UNEXPANDED` takes off holds a quote or a backslash (F18-fix2)
     pieces: int = sum(text.count(c, start, end) for c in "'\"\\")
@@ -751,8 +765,8 @@ def _script_indexes(argv: Sequence[str]) -> list[int | None]:
 
 def _line_reads(script: str, count: _Count, depth: int) -> bool:
     """A `-c` script read as a command line: each of its commands (cut at `_CUT`) a fed stage.
-    Past _SCRIPT_DEPTH scripts deep it counts as reading the pipe."""
-    if depth > _SCRIPT_DEPTH:
+    Past _SCRIPT_DEPTH scripts deep, or past the re-read budget, it counts as reading the pipe."""
+    if depth > _SCRIPT_DEPTH or count.reread(len(script)):
         return True
     start: int = 0
     read_to: int = 0

@@ -117,7 +117,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   after a quoted `|`, nested in escaped quotes, after `2>&1`, after `2>/dev/null`) is denied
   wherever main denied it (main's answers recorded once in the test). F18-fix2: each quote and
   backslash a quote-aware read takes off counts toward `_PIPED_WORDS`, so a fed `-c` script of
-  `_PIPED_WORDS` escaped quotes is denied, as a command and as each cut-off payload.
+  `_PIPED_WORDS` escaped quotes is denied, as a command and as each cut-off payload. F18-fix3:
+  the bytes every quote-aware re-read of one command takes share one budget (`_REREAD_BYTES`,
+  512 KiB, pinned): a nest of quote-free `-c` scripts that size is denied, and a small nest is
+  read and allowed at the budget, one byte less denies.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
