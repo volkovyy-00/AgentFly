@@ -508,7 +508,8 @@ _STAGE_TO_NAME: str = (
 )
 _FED_STAGES: tuple[str, ...] = (r"(?<!\|)\|(?!\|)&?" + _STAGE_TO_NAME, r">\(" + _STAGE_TO_NAME)
 _CUT: str = r";|(?<![<>])&(?!>)|\||\n|\)|\s#|>\("
-_STDIN_SUB: str = r"<[ \t]*<\("  # `python3 < <(cat x)`
+# `python3 < <(cat x)`, `0< <(`, `<> <(`; an fd is a number that stands alone before the `<` (P1)
+_STDIN_SUB: str = r"(?:(?<![^\s;&|(){}])(\d+))?<>?[ \t]*<\("
 _OWNER_START: str = ";|&\n(){}`'\""
 _REDIRECT: str = r"(\d*)(<<<|<<-?|<>|<|>>|>)(.*)"
 _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file, no word
@@ -940,6 +941,8 @@ def _piped_code(text: str, walk: bool = True) -> bool:
     for number, sub in enumerate(re.compile(_STDIN_SUB).finditer(text)):
         if number >= _PIPE_STAGES:
             return True
+        if sub.group(1) not in (None, "0"):  # `3< <(…)` feeds fd 3, not stdin
+            continue
         start = max(after, *(text.rfind(c, after, sub.start()) + 1 for c in _OWNER_START))
         if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB, count):
             return True

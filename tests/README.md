@@ -128,8 +128,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (`$'…'` is a quote), `<(…)` as the script, the option walk (below); a stage with a quote, a
   `$(…)` or a backtick is also walked with its words whole (`python3 -X "a b"`,
   `node -r "$(echo a)"`), its redirects' fds and targets left out, also when a shell's `-c`
-  script is looked for (`sh 2>&1 -c '…'`), but not on a cut-off payload's raw JSON text; the
-  read-once shape's script is `echo $a…`.
+  script is looked for (`sh 2>&1 -c '…'`), but not on a cut-off payload's raw JSON text;
+  `0< <(…)` and `<> <(…)` feed stdin and `3< <(…)` does not (a number glued to a word is no fd);
+  the read-once shape's script is `echo $a…`.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;

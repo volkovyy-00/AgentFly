@@ -57,6 +57,10 @@ PIPED_CODE: list[str] = [
     "cat x | node -r esm",  # an option that takes a value
     "cat x |& python3",
     "python3 < <(cat x)",
+    "python3 0< <(cat x)",  # P1 fix 7 (F): fd 0 is stdin, as is `<>`
+    "sudo python3 0< <(cat x)",
+    "python3 <> <(cat x)",
+    "node --stack-size=1000< <(cat x)",  # a number glued to a word is no fd
     'echo hi | bash -c "$(cat)"',
     "echo hi | bash -c `cat`",
     "cat x > >(python3)",
@@ -170,6 +174,8 @@ PIPED_NOT_INLINE: list[str] = [
     "echo bash | xargs echo",
     "python3",  # nothing is piped in
     "python3 -",
+    "python3 3< <(cat x)",  # P1 fix 7: fd 3 is not stdin, and nothing else feeds it
+    "python3 10< <(cat x)",
     "perl -MFoo::Bar=a,b:c x.pl",
     "perl -M-warnings x.pl",
     "perl -d:NYTProf x.pl",
