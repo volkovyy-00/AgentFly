@@ -16,6 +16,7 @@ from agentfly.recorder.normalize import (
     _is_stdin_device,
     _Scanner,
     normalize,
+    programs,
     script_indexes,
     shell_script,
 )
@@ -368,6 +369,24 @@ def test_the_parse_cap_answers_an_over_long_command_fast(text: str) -> None:
     start = time.monotonic()
     assert normalize.__wrapped__(text).unparsed
     assert time.monotonic() - start < 1.0
+
+
+# P1 fix 4 (B): a `timeout` value that is no plain duration (`1e3`, `infinity`) is not taken for
+# the program; every later word counts as one, so the interpreter after it is reached.
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["timeout", "1e3", "python3"], (0, 1, 2)),
+        (["timeout", "infinity", "python3"], (0, 1, 2)),
+        (["timeout", "5", "python3"], (0, 2)),  # a plain duration is skipped, as before
+        (["timeout", "5s", "grep", "x"], (0, 2)),
+        (["timeout"], (0,)),
+    ],
+)
+def test_timeout_with_a_value_that_is_no_duration_keeps_every_later_word(
+    argv: list[str], expected: tuple[int, ...]
+) -> None:
+    assert programs(argv, narrow=True) == expected
 
 
 # P1 fix 2 (D/F4): a stdin device spelled with `//` or `/./` is still the device.

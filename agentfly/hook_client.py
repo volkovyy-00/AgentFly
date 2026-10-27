@@ -557,8 +557,9 @@ def _chain(argv: Sequence[str], at: int, assignment: re.Pattern[str]) -> range |
         if name == "parallel":
             return range(found[0], len(argv))
         at += 1
-        duration: bool = at < len(argv) and re.compile(_DURATION).fullmatch(argv[at]) is not None
-        if name in ("timeout", "gtimeout") and duration:
+        if name in ("timeout", "gtimeout") and at < len(argv):
+            if re.compile(_DURATION).fullmatch(argv[at]) is None:  # `1e3`, `infinity`
+                return range(found[0], len(argv))
             at += 1
         while at < len(argv) and (
             (name in _RUNNERS and argv[at] in _RUNNER_VERBS)

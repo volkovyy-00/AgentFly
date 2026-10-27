@@ -336,8 +336,9 @@ def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
 
     `narrow` (piped code; owner 2026-10-23): a wrapper whose next word is plainly a program adds
     only that word, and so on down the chain; `env` and `sudo` assignments, `timeout`'s duration
-    and a runner's verb (`uv run`) are skipped. An option there, or `parallel`, keeps every word.
-    So `xargs grep -l node` has two (`xargs`, `grep`), `xargs -0 grep -l sh` all."""
+    and a runner's verb (`uv run`) are skipped. An option there, a `timeout` value that is no plain
+    duration (`1e3`, `infinity`; P1), or `parallel`, keeps every word. So `xargs grep -l node` has
+    two (`xargs`, `grep`), `xargs -0 grep -l sh` all."""
     for index, word in enumerate(argv):
         if word in _KEYWORDS or _ASSIGNMENT.match(word):
             continue
@@ -356,7 +357,9 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
         if name == "parallel":
             return tuple(range(found[0], len(argv)))
         at += 1
-        if name in ("timeout", "gtimeout") and at < len(argv) and _DURATION.fullmatch(argv[at]):
+        if name in ("timeout", "gtimeout") and at < len(argv):
+            if not _DURATION.fullmatch(argv[at]):  # `1e3`, `infinity`: what the value is, and
+                return tuple(range(found[0], len(argv)))  # so where the program is, is unknown
             at += 1
         while at < len(argv) and (
             (name in RUNNERS and argv[at] in RUNNER_VERBS)

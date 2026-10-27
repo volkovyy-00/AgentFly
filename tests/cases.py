@@ -106,6 +106,9 @@ PIPED_CODE: list[str] = [
     "cat x | tcsh",
     "cat x | csh5.2",  # a versioned name too
     "cat x | script -q /dev/null python3",
+    # P1 fix 4 (B): `timeout` with a value that is no plain duration: every later word is a program
+    "cat x | timeout 1e3 python3",
+    "cat x | timeout infinity python3",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [

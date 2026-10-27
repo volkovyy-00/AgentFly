@@ -260,6 +260,23 @@ def test_the_guard_cap_answers_an_over_long_command_fast(text: str) -> None:
     assert time.monotonic() - start < 1.0
 
 
+# P1 fix 4 (B): the guard's program walk matches `normalize.programs(narrow=True)` on `timeout`.
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["timeout", "1e3", "python3"], (0, 1, 2)),
+        (["timeout", "infinity", "python3"], (0, 1, 2)),
+        (["timeout", "5", "python3"], (0, 2)),
+        (["timeout", "5s", "grep", "x"], (0, 2)),
+        (["timeout"], (0,)),
+    ],
+)
+def test_timeout_with_a_value_that_is_no_duration_keeps_every_later_word(
+    argv: list[str], expected: tuple[int, ...]
+) -> None:
+    assert tuple(guard._programs(argv)) == expected
+
+
 # P1 fix 2 (D/F4): the guard folds `//` and `/./` in a stdin device, as the recorder does.
 @pytest.mark.parametrize(
     "word",
