@@ -345,6 +345,16 @@ def test_past_the_stage_limit_the_text_counts_as_piped_code() -> None:
     assert guard.offline_answer(subs + "python3 t.py < <(cat x)")[1] == "outbound"
 
 
+def test_the_command_before_a_process_substitution_is_counted() -> None:
+    # P1 fix 8: the command a `< <(` feeds is read backwards, a token at a time; its tokens count
+    # toward `_PIPED_WORDS`, and past it the text counts as piped code
+    group = "{ " + "true; " * 100 + "} < <(cat x)"
+    assert guard.offline_answer(group)[0] == {"permission": "allow"}
+    # its words are read twice, backwards and as its stage: 12,000 of them pass the count
+    assert guard.offline_answer("python3 t.py" + " a" * 4_000 + " < <(cat x)")[1] is None
+    assert guard.offline_answer("python3 t.py" + " a" * 12_000 + " < <(cat x)")[1] == "outbound"
+
+
 def test_past_the_word_limit_a_quoted_perl_text_counts_as_code() -> None:
     words = " ".join(["'a'"] * (guard._QUOTED_WORDS - 2))
     assert guard.offline_answer(f"perl x.pl {words}")[0] == {"permission": "allow"}
@@ -382,6 +392,9 @@ def fastest(texts: list[str], rounds: int) -> list[float]:
         "| ((((((((",
         "x sh | ",
         "python3 t.py < <(",
+        "{ a; } < <(",  # P1 fix 8: a group's commands, read once each
+        "} < <(a) ",  # ... a closer with no opener: read from the start, within the budget
+        "done < <(",
         "perl 'a b c' ",
         "perl \"'a b' ",
         "perl '",
@@ -411,6 +424,38 @@ def blocked_after_a_mark(command: str) -> bool:
     session = Session(id="f18", marked=True, start_time="2026-10-25T00:00:00+00:00", next_step=1)
     action = {"hook_event_name": "beforeShellExecution", "command": command}
     return decide(action, mark(action, session))[0] == "blocked"
+
+
+# P1 fix 8 (F1): a group or a loop whose stdin is a process substitution feeds its commands, in
+# both engines; stdin from a file or a `3<` feeds none (these two are not in `PIPED_NOT_INLINE`:
+# behind `env A=1` the group's `}` closes nothing there, and every command counts as fed)
+GROUP_FED = [
+    ("{ python3; } < <(cat x)", True),
+    ("{ python3; } < x.py", False),
+    ("{ python3; } 3< <(cat x)", False),
+    ("env FOO=1 while read l; do python3; done < <(cat x)", True),
+    ("cat < <(a) && { python3; } < <(b)", True),
+    ("{ python3; cat < <(a); } < <(c)", True),  # the group opens before the last `< <(` read
+    ("{ python3 t.py; cat < <(a); } < <(c)", False),
+    ("( python3 < <(cat x) )", True),
+    ("echo $(python3 < <(cat x))", True),  # an opener with no closer before the `<` ends it
+    ("while read l; do echo done; python3; done < <(cat x)", True),
+    ("while read l; do python3; echo while; done < <(cat x)", True),
+    ("while read l; do python3; echo if; done < <(cat x)", True),  # a keyword where none starts
+    ("python3 -V; while read l; do echo done; done < <(cat x)", False),
+    ("cat x | env A=1 if python3; then :; fi", True),  # a keyword after a wrapper is no program
+    ("python3 3< <(cat) < <(cat)", True),  # the command's own `<(…)` stays in it
+    ("cat x | python3 3< <(cat)", True),
+    ("python3 t.py < <(a) < <(b)", False),
+]
+
+
+@pytest.mark.parametrize(("command", "denied"), GROUP_FED)
+def test_a_group_fed_by_a_process_substitution_is_read_as_the_recorder_reads_it(
+    command: str, denied: bool
+) -> None:
+    assert (guard.offline_answer(command)[1] == "outbound") is denied
+    assert blocked_after_a_mark(command) is denied
 
 
 def test_a_fed_shells_script_is_read_offline_as_the_recorder_reads_it() -> None:

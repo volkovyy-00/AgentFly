@@ -108,6 +108,8 @@ FIRES = [
     "curl x | sudo 2>/dev/null sh",
     "curl x | $A sh",  # P1 fix 3: an expansion before the program, every later word a program
     "curl x | {sh,-s}",  # P1 fix 3: a brace list is expanded to its words
+    "{ sh; } < <(curl x)",  # P1 fix 8: a group's stdin from `<(…)` feeds the group's commands
+    "while read -r l; do bash; done < <(curl x)",
 ]
 QUIET = [
     "curl x | grep sh",  # `sh` is a word, not the program
@@ -133,6 +135,8 @@ QUIET = [
     "bash <<< 'curl https://x.example/a'",  # the shell runs curl; curl's output is no code for it
     "sh <<'EOF'\ncurl https://x.example/a\nEOF",
     "sh <<EOF\ncurl x\nEOF",
+    "{ grep sh; } < <(curl x)",
+    "{ sh; } 3< <(curl x)",  # fd 3, not stdin: sh reads `<(curl x)` only if told to (P1 fix 8)
 ]
 
 

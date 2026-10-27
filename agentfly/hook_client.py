@@ -479,11 +479,35 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
 _DEV_FD: str = r"/dev/fd/\d+"
-_NODE_FLAGS: frozenset[str] = frozenset(  # `normalize._NODE_FLAGS`
-    {"--inspect", "--inspect-brk", "--inspect-wait", "--watch", "--test", "--check"}
-    | {"--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--throw-deprecation"}
-    | {"--pending-deprecation", "--enable-source-maps", "--preserve-symlinks", "--expose-gc"}
-    | {"--abort-on-uncaught-exception", "--experimental-vm-modules", "--jitless"}
+_NODE_FLAGS: frozenset[str] = frozenset(  # `normalize._NODE_FLAGS` (`node --help`, v22.22.2)
+    """
+    --abort-on-uncaught-exception --allow-addons --allow-child-process --allow-wasi
+    --allow-worker --build-snapshot --check --completion-bash --cpu-prof --disable-sigusr1
+    --disable-wasm-trap-handler --disallow-code-generation-from-strings
+    --enable-etw-stack-walking --enable-fips --enable-network-family-autoselection
+    --enable-source-maps --entry-url --experimental-addon-modules
+    --experimental-async-context-frame --experimental-default-config-file
+    --experimental-eventsource --experimental-import-meta-resolve
+    --experimental-inspector-network-resource --experimental-network-inspection
+    --experimental-permission --experimental-print-required-tla --experimental-test-coverage
+    --experimental-test-module-mocks --experimental-transform-types
+    --experimental-vm-modules --experimental-webstorage --experimental-worker-inspection
+    --expose-gc --force-context-aware --force-fips
+    --force-node-api-uncaught-exceptions-policy --frozen-intrinsics --heap-prof --help
+    --huge-max-old-generation-size --insecure-http-parser --inspect --inspect-brk
+    --inspect-wait --interactive --interpreted-frames-native-stack --jitless
+    --node-memory-debug --openssl-legacy-provider --openssl-shared-config
+    --pending-deprecation --permission --preserve-symlinks --preserve-symlinks-main --prof
+    --prof-process --report-compact --report-exclude-env --report-exclude-network
+    --report-on-fatalerror --report-on-signal --report-uncaught-exception --test
+    --test-force-exit --test-only --test-update-snapshots --throw-deprecation --tls-max-v1.2
+    --tls-max-v1.3 --tls-min-v1.0 --tls-min-v1.1 --tls-min-v1.2 --tls-min-v1.3
+    --trace-atomics-wait --trace-deprecation --trace-env --trace-env-js-stack
+    --trace-env-native-stack --trace-exit --trace-promises --trace-sigint --trace-sync-io
+    --trace-tls --trace-uncaught --trace-warnings --track-heap-objects --use-bundled-ca
+    --use-env-proxy --use-openssl-ca --use-system-ca --v8-options --version --watch
+    --watch-preserve-output --zero-fill-buffers
+    """.split()
 )
 _NODE_SCRIPT: str = r"\.[cm]?[jt]s$"
 # A fed shell's `-c` script is read as a word (a stage) and as a command line, this many levels
@@ -510,7 +534,13 @@ _FED_STAGES: tuple[str, ...] = (r"(?<!\|)\|(?!\|)&?" + _STAGE_TO_NAME, r">\(" + 
 _CUT: str = r";|(?<![<>])&(?!>)|\||\n|\)|\s#|>\("
 # `python3 < <(cat x)`, `0< <(`, `<> <(`; an fd is a number that stands alone before the `<` (P1)
 _STDIN_SUB: str = r"(?:(?<![^\s;&|(){}])(\d+))?<>?[ \t]*<\("
-_OWNER_START: str = ";|&\n(){}`'\""
+# What the command before a `< <(` is made of, read backwards (P1, F1): separators, brackets and
+# quotes one at a time, words whole. A bracket always pairs (`$(…)`, `<(…)` and `${…}` too); a
+# keyword pairs where a command starts.
+_OWNER_TOKEN: str = r"""[;&|\n]+|[{}()'"`]|[^\s;&|(){}<>'"`]+"""
+_GROUP_OPENERS: frozenset[str] = frozenset({"if", "case", "while", "until", "for", "select"})
+_GROUP_CLOSERS: frozenset[str] = frozenset({"fi", "esac", "done"})
+_COMMAND_STARTERS: frozenset[str] = frozenset({"do", "then", "else", "elif", "!", "time"})
 _REDIRECT: str = r"(\d*)(<<<|<<-?|<>|<|>>|>)(.*)"
 _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file, no word
 # Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
@@ -576,7 +606,7 @@ def _chain(argv: Sequence[str], at: int, assignment: re.Pattern[str]) -> range |
             at += 1
         if at >= len(argv):
             break
-        if argv[at].startswith("-"):
+        if argv[at].startswith("-") or argv[at] in _KEYWORDS:  # `env A=1 { python3; }` (P1)
             return range(found[0], len(argv))
         found.append(at)
     return tuple(found)
@@ -718,6 +748,10 @@ def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
     stdin), then the stdin walk. Its words are counted before the walk."""
     if depth > _SCRIPT_DEPTH:
         return True
+    # P1: a `<(…)` or `>(…)` is one word no one can read, its text left out to its `)` or to the
+    # stage's end, where `_CUT` cut it (in `python3 3< <(cat)` no `cat` is the script); never
+    # quoted, unlike a `$(…)`, whose quoted `)` may have cut the stage before the words after it
+    stage = re.compile(_SUB_RUN).sub(f" {_SUB} ", stage)
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
     # P1: a `$` is the program or script no one can read (`$F` stays one word, `\x00F`); `$'…'`
@@ -813,6 +847,7 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
 # P1 (E): what may stand between two quote-aware words: a redirect (`2>`, `<`, `>>`, `<<<`, `&>`,
 # `>&`), and a `$(…)` or backtick run inside a word.
 _GAP_REDIRECT: str = r"[ \t]*(&?)(<<<|<<-?|<>|>>|<|>)(&?)[ \t]*"
+_SUB_RUN: str = r"[<>]\((?:[^()]++|\([^()]*+\))*+(?:\)|\Z)"  # one level of `(…)` inside
 _SUBSTITUTION: str = r"\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`"
 
 
@@ -910,6 +945,35 @@ def _line_reads(script: str, count: _Count, depth: int) -> bool:
     return _fed_stage_reads(script, start, len(script), count, depth, read_to)[0]
 
 
+def _owner_start(text: str, lo: int, end: int, count: _Count) -> tuple[int, bool] | None:
+    """Where the command that a `< <(` at `end` feeds starts, no earlier than `lo`: read backwards
+    to a separator or a quote, a bracket or keyword pair passed over whole, so a group
+    (`{ python3; }`, `( … )`, `while …; done`) or a substitution (`3< <(cat)`) stays in it; an
+    opener with no closer after it (`( python3 < <(cat) )`) ends it too. And whether it ends in a
+    closer (its commands are then read one by one). A group that opens before `lo` (the last
+    `< <(` read) is read from the text's start (toward deny; the re-read budget bounds it). None
+    past the count."""
+    tokens: list[re.Match[str]] = list(re.compile(_OWNER_TOKEN).finditer(text, lo, end))
+    if count.spend(len(tokens)):
+        return None
+    depth: int = 0
+    closed: bool = False
+    for at in range(len(tokens) - 1, -1, -1):
+        word: str = tokens[at].group()
+        before: str = tokens[at - 1].group() if at else ";"
+        starts: bool = before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS | _GROUP_OPENERS
+        if word in (")", "}") or (starts and word in _GROUP_CLOSERS):
+            closed = closed or at == len(tokens) - 1
+            depth += 1
+        elif word in ("(", "{") or (starts and word in _GROUP_OPENERS):
+            if depth == 0:
+                return tokens[at].end(), closed
+            depth -= 1
+        elif depth == 0 and word[0] in ";&|\n'\"`":
+            return tokens[at].end(), closed
+    return (0, True) if depth and closed else (lo, closed)
+
+
 def _piped_code(text: str, walk: bool = True) -> bool:
     """Code piped into an interpreter or a shell that names no script (SPEC section 9): the
     command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
@@ -943,8 +1007,16 @@ def _piped_code(text: str, walk: bool = True) -> bool:
             return True
         if sub.group(1) not in (None, "0"):  # `3< <(…)` feeds fd 3, not stdin
             continue
-        start = max(after, *(text.rfind(c, after, sub.start()) + 1 for c in _OWNER_START))
-        if _stage_reads_stdin(text[start : sub.start()] + " < " + _SUB, count):
+        found: tuple[int, bool] | None = _owner_start(text, after, sub.start(), count)
+        if found is None:
+            return True
+        owner: str = text[found[0] : sub.start()]
+        if found[1]:
+            # P1 (F1): a group's stdin (`{ python3; } < <(…)`, `while …; done < <(…)`, also after
+            # `env A=1`): each command of it is read as fed (`python3 3< <(cat)` is one)
+            if _line_reads(owner, count, 0):
+                return True
+        elif _stage_reads_stdin(owner + " < " + _SUB, count):
             return True
         after = sub.end()
     return count.left < 0

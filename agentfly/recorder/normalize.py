@@ -373,7 +373,7 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
             at += 1
         if at >= len(argv):
             break
-        if argv[at].startswith("-"):
+        if argv[at].startswith("-") or argv[at] in _KEYWORDS:  # `env A=1 { python3; }` (P1)
             return tuple(range(found[0], len(argv)))
         found.append(at)
     return tuple(found)
@@ -443,13 +443,39 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
-# Node options that never take a value (and every `--no-…`): a plain word after one is the script
-# (P1, G: `node --no-warnings server`).
+# Node's own options that take no value, and every `--no-…`: a plain word after one is the script
+# (P1, G: `node --no-warnings server`). From `node --help` (v22.22.2): each listed with no `=…`, or
+# with an optional `[=…]` (`--inspect`). V8's options (`--trace-gc`) are not listed: after one,
+# the next word counts as its value (toward firing).
 _NODE_FLAGS: frozenset[str] = frozenset(
-    {"--inspect", "--inspect-brk", "--inspect-wait", "--watch", "--test", "--check"}
-    | {"--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--throw-deprecation"}
-    | {"--pending-deprecation", "--enable-source-maps", "--preserve-symlinks", "--expose-gc"}
-    | {"--abort-on-uncaught-exception", "--experimental-vm-modules", "--jitless"}
+    """
+    --abort-on-uncaught-exception --allow-addons --allow-child-process --allow-wasi
+    --allow-worker --build-snapshot --check --completion-bash --cpu-prof --disable-sigusr1
+    --disable-wasm-trap-handler --disallow-code-generation-from-strings
+    --enable-etw-stack-walking --enable-fips --enable-network-family-autoselection
+    --enable-source-maps --entry-url --experimental-addon-modules
+    --experimental-async-context-frame --experimental-default-config-file
+    --experimental-eventsource --experimental-import-meta-resolve
+    --experimental-inspector-network-resource --experimental-network-inspection
+    --experimental-permission --experimental-print-required-tla --experimental-test-coverage
+    --experimental-test-module-mocks --experimental-transform-types
+    --experimental-vm-modules --experimental-webstorage --experimental-worker-inspection
+    --expose-gc --force-context-aware --force-fips
+    --force-node-api-uncaught-exceptions-policy --frozen-intrinsics --heap-prof --help
+    --huge-max-old-generation-size --insecure-http-parser --inspect --inspect-brk
+    --inspect-wait --interactive --interpreted-frames-native-stack --jitless
+    --node-memory-debug --openssl-legacy-provider --openssl-shared-config
+    --pending-deprecation --permission --preserve-symlinks --preserve-symlinks-main --prof
+    --prof-process --report-compact --report-exclude-env --report-exclude-network
+    --report-on-fatalerror --report-on-signal --report-uncaught-exception --test
+    --test-force-exit --test-only --test-update-snapshots --throw-deprecation --tls-max-v1.2
+    --tls-max-v1.3 --tls-min-v1.0 --tls-min-v1.1 --tls-min-v1.2 --tls-min-v1.3
+    --trace-atomics-wait --trace-deprecation --trace-env --trace-env-js-stack
+    --trace-env-native-stack --trace-exit --trace-promises --trace-sigint --trace-sync-io
+    --trace-tls --trace-uncaught --trace-warnings --track-heap-objects --use-bundled-ca
+    --use-env-proxy --use-openssl-ca --use-system-ca --v8-options --version --watch
+    --watch-preserve-output --zero-fill-buffers
+    """.split()
 )
 _NODE_SCRIPT = re.compile(r"\.[cm]?[jt]s$")  # a word that names a script file
 
@@ -641,7 +667,8 @@ class _Cmd:
     """The simple command being read. `targets`: positions of words that are redirect targets;
     `stdin`: "file" or "sub" when stdin is redirected (`< f`, `< <(…)`); `subs`: the
     substitutions in its words and herestrings; `start`: no program word yet (only keywords such
-    as `then` or `!`)."""
+    as `then` or `!`); `group`: the first command of the group it closes (`}`, `done`, a
+    subshell's `)`), whose commands its stdin redirect feeds (P1, F1)."""
 
     words: list[str] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
@@ -649,6 +676,7 @@ class _Cmd:
     stdin: str = ""
     subs: list[_Sub] = field(default_factory=list)
     start: bool = True
+    group: int | None = None
 
 
 @dataclass(frozen=True)
@@ -664,12 +692,14 @@ _NO_META: _Meta = _Meta(frozenset(), "")  # most commands: one shared, it is fro
 class _Frame:
     """A list of commands being read: the whole text, a substitution's, or a group's (`(`, `{`,
     or the keyword that opened it). `start` is the first command of the part being read, `hub` the
-    pipe that feeds it; `pattern`: a `case` that is reading a pattern, where `)` ends it."""
+    pipe that feeds it; `pattern`: a `case` that is reading a pattern, where `)` ends it; `first`:
+    the group's first command."""
 
     kind: str
     start: int
     hub: int | None = None
     pattern: bool = False
+    first: int = 0
 
 
 # Group words at the start of a command, what closes each, and the words after which the next one
@@ -776,11 +806,14 @@ class _Scanner:
         def open_group(kind: str) -> None:
             if len(frames) > MAX_DEPTH:
                 out.links_unknown = True
-            frames.append(_Frame(kind, len(out.commands), pattern=kind == "case"))
+            first: int = len(out.commands)
+            frames.append(_Frame(kind, first, pattern=kind == "case", first=first))
 
         def close_group(word: str) -> None:
             if len(frames) > 1 and _OPENERS.get(frames[-1].kind) == word:
-                end_part(frames.pop())
+                frame: _Frame = frames.pop()
+                end_part(frame)
+                cmd.group = frame.first  # `{ python3; } < <(cat x)` (P1, F1)
             else:
                 out.links_unknown = True  # a closer that closes nothing
 
@@ -864,6 +897,7 @@ class _Scanner:
                 top = frames[-1]
                 if top.kind == "(":
                     end_part(frames.pop())
+                    cmd.group = top.first  # `( python3 ) < <(cat x)` (P1, F1)
                 elif top.kind == "case" and top.pattern:
                     top.pattern = False  # the end of a pattern
                 elif closer == ")":
@@ -914,6 +948,15 @@ class _Scanner:
         )
         if cmd.stdin == "sub":
             out.fed.add(index)
+            if cmd.group is not None:  # a group's stdin: every command of it reads it (P1, F1)
+                hub: int = out.hub()
+                out.link(
+                    (inner, hub)
+                    for kind, first, last in cmd.subs
+                    if kind != "out"
+                    for inner in range(first, last)
+                )
+                out.feed(hub, cmd.group)
         for kind, first, last in cmd.subs:
             for inner in range(first, last):
                 if kind == "out":  # `>(…)` reads what the command writes

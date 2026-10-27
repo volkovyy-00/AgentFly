@@ -155,6 +155,12 @@ PIPED_CODE: list[str] = [
     # P1 (F18 review): a backslash inside the program's name
     "cat x | p\\ython3",
     "cat x | b\\ash",
+    # P1 fix 8 (F1): a group or a loop whose stdin is a process substitution feeds its commands
+    "{ python3; } < <(cat x)",
+    "while read l; do python3; done < <(cat x)",
+    "( python3 ) < <(cat x)",
+    "if true; then python3; fi < <(cat x)",
+    "{ cd /tmp; { sh; }; } 0< <(cat x)",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [
@@ -182,6 +188,8 @@ PIPED_NOT_INLINE: list[str] = [
     "python3",  # nothing is piped in
     "python3 -",
     "cat x | p\\ython3 t.py",
+    "while read l; do echo $l; done < <(cat x)",  # P1 fix 8: what the group runs names a script
+    "{ python3 t.py; } < <(cat x)",
     "python3 3< <(cat x)",  # P1 fix 7: fd 3 is not stdin, and nothing else feeds it
     "python3 10< <(cat x)",
     "perl -MFoo::Bar=a,b:c x.pl",
@@ -219,6 +227,8 @@ PIPED_NOT_INLINE: list[str] = [
     "cat x | node --no-warnings server.js",
     "cat x | node --trace-warnings server",
     "cat x | node --inspect bin/www",
+    "cat x | node --trace-sync-io server",  # any of node's own on/off options (`node --help`)
+    "cat x | node --frozen-intrinsics server",
     "cat x | python3 t.py -i",  # `-i` after the script is the script's
     "cat x | python3 -mjson.tool",
     "cat x | zsh --emulate sh script.zsh",
