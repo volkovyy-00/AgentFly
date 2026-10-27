@@ -277,6 +277,34 @@ def test_timeout_with_a_value_that_is_no_duration_keeps_every_later_word(
     assert tuple(guard._programs(argv)) == expected
 
 
+# P1 fix 3 (B, F5) and fix 6 (F3): the guard reads a `$` word, `$(…)`, a backtick or `<(` at a
+# program or script position as the recorder does; a stage with a `$` or backtick is read at all.
+@pytest.mark.parametrize(
+    ("stage", "fed"),
+    [
+        ("$SH", True),
+        ("${SH}", True),
+        ("$X", True),
+        ("$(echo python3)", True),
+        ("`echo python3`", True),
+        ("$A python3 t.py", True),
+        ("python3 $F", True),
+        ("python3 <(cat)", True),
+        ("python3 < $F", True),
+        ("python3 t.py $F", False),
+        ("grep $PAT", False),
+        ("awk '{print $1}'", False),
+    ],
+)
+def test_an_unreadable_program_or_script_reads_stdin(stage: str, fed: bool) -> None:
+    assert guard._stage_reads_stdin(stage, guard._Count()) is fed
+
+
+def test_a_stage_with_only_a_dollar_word_is_read() -> None:
+    assert guard._piped_code("echo 1 | $X")
+    assert not guard._piped_code("echo 1 | grep $X")
+
+
 # P1 fix 2 (D/F4): the guard folds `//` and `/./` in a stdin device, as the recorder does.
 @pytest.mark.parametrize(
     "word",
@@ -404,9 +432,10 @@ def test_the_quoted_rereads_cover_the_text_about_once() -> None:
 def test_a_script_many_shells_share_is_read_once() -> None:
     # F18: in `sh -o sh -o … sh -c X` every shell word finds the same script; it is read once,
     # not once a shell word (100 shells on 1 MiB took 13 s). The `$` keeps the script from
-    # being passed over as one with nothing the shell expands.
+    # being passed over as one with nothing the shell expands; `echo` runs it (P1: a script that
+    # is only `$a…` runs a program no one can read, and is denied).
     def shape(shells: int) -> str:
-        return "echo x | " + "sh -o " * shells + 'sh -c "$' + "a" * 64 * 1024 + '"'
+        return "echo x | " + "sh -o " * shells + 'sh -c "echo $' + "a" * 64 * 1024 + '"'
 
     assert guard.offline_answer(shape(64))[0] == {"permission": "allow"}
     few, many = fastest([shape(4), shape(64)], 5)

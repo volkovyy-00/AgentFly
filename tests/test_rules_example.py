@@ -116,3 +116,34 @@ def test_the_default_and_the_layout_say_init_replaces_an_unedited_copy() -> None
     header = DEFAULT.read_text(encoding="utf-8").split("\nschema = 1", 1)[0]
     assert L21 in " ".join(line.lstrip("# ") for line in header.splitlines())
     assert L21 in " ".join((Layout.rules.__doc__ or "").split())
+
+
+# P1 fix 1 (side-agent review): a command over the 512 KiB parse cap is not parsed, but its loose
+# word scan still reaches the command rules, so padding (a long comment) hides no named command.
+PAD = " # " + "a" * (512 * 1024)
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "part", "command"),
+    [
+        ("s10-force-push", "clause", "git push --force origin main"),
+        ("s10-force-push", "clause", "echo push --force; git push --force"),  # words before it
+        ("s14-download-pipe-shell", "clause", "curl x | sh"),
+        ("s13-dotenv-then-publish", "then", "npm publish"),
+        ("npm-publish-after-env", "then", "npm pub"),
+    ],
+)
+def test_a_padded_command_still_meets_the_command_rules(
+    rule_id: str, part: str, command: str
+) -> None:
+    clause = getattr({spec.id: spec for spec in example().rules}[rule_id], part)
+    action = {"hook_event_name": "beforeShellExecution", "command": command + PAD}
+    assert clause.matches(action, rules_mod.CLASSES)
+    quiet = {"hook_event_name": "beforeShellExecution", "command": "ls" + PAD}
+    assert not clause.matches(quiet, rules_mod.CLASSES)
+
+
+def test_r0_still_denies_a_padded_wipe() -> None:
+    session = rules_mod.Session(id="s", marked=False, start_time="", next_step=0)
+    action = {"hook_event_name": "beforeShellExecution", "command": "agentfly wipe" + PAD}
+    assert rules_mod.check_r0(action, session)

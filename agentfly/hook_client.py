@@ -485,18 +485,19 @@ _NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
 _SCRIPT_DEPTH: int = 4
 _STDIN: int = -1
 _SCRIPT: int = 0
-_SUB: str = "\x00"  # stands for a `$(`, a backtick, `<(` or `>(` in a stage's words
+_SUB: str = "\x00"  # stands for a `$(`, a backtick, `<(`, `>(` or a `$` in a stage's words
 # A stage that may read piped code: a single `|` (`|&` too, never `||`) or `>(`, what may lead the
 # command (blanks, a comment, `(`, `{`, `!`), then its text up to the first name of an interpreter
-# or a shell in it. A stage ends where the next begins (`_CUT`); runs of characters that neither
-# end it nor start a name are taken whole and never given back, so a try that finds no name fails
-# at the stage's end, and the text is read about once, in C, however many stages it has. Each
+# or a shell in it, or its first `$` or backtick (a program or script that cannot be read, P1). A
+# stage ends where the next begins (`_CUT`); runs of characters that neither end it nor start a
+# name are taken whole and never given back, so a try that finds no name fails at the stage's end,
+# and the text is read about once, in C, however many stages it has. Each
 # pattern starts with its operator, so `re` jumps from one to the next: measured, 1 MiB of `a | `
 # costs about 150 ms (the rest of the guard about 250 ms), text with no `|` almost nothing.
-_NAMES: str = r"(?i:python|node|perl|ruby|sh)"
+_NAMES: str = r"(?:(?i:python|node|perl|ruby|sh)|[$`])"
 _STAGE_TO_NAME: str = (
     r"(?:\s|[({!]|#[^\n]*)*+(?P<start>)"
-    rf"(?:[^;&|\n)>\s#pnrsPNRS]++|\s(?!#)|>(?!\()|&(?=>)|(?<=[<>])&|#|(?!{_NAMES})[pnrsPNRS])*+"
+    rf"(?:[^;&|\n)>\s#pnrsPNRS$`]++|\s(?!#)|>(?!\()|&(?=>)|(?<=[<>])&|#|(?!{_NAMES})[pnrsPNRS])*+"
     rf"{_NAMES}"
 )
 _FED_STAGES: tuple[str, ...] = (r"(?<!\|)\|(?!\|)&?" + _STAGE_TO_NAME, r">\(" + _STAGE_TO_NAME)
@@ -595,7 +596,7 @@ def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth
     read as a stage, does (main's read: it covers what the quote-aware read skips or misreads);
     what the script runs is also read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
-    if _is_stdin(arg):
+    if _is_stdin(arg) or _SUB in arg:  # `$F`, `<(cat)`: the script may be the pipe (P1)
         return _STDIN
     if arg == "--":
         return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
@@ -636,6 +637,8 @@ def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
     for at in _programs(words):
+        if _SUB in words[at]:  # `$SH`, `$(echo python3)`: it may be an interpreter (P1)
+            return True
         name: str = words[at].split("/")[-1].lower()
         family: str | None = (
             ("shell" if name.rstrip("0123456789.") in _SHELLS else None)
@@ -682,6 +685,9 @@ def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
         return True
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
+    # P1: a `$` is the program or script no one can read (`$F` stays one word, `\x00F`); `$'…'`
+    # is a quote, as the recorder reads it
+    stage = stage.replace("$'", "'").replace("${", _SUB).replace("$", _SUB)
     stage = re.compile(_DUPLICATE).sub(" ", stage)
     argv: list[str] = []
     found: list[str] = words(stage)

