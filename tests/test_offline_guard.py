@@ -662,6 +662,23 @@ def test_piped_code_in_a_cut_off_payload_is_denied() -> None:
             assert guard.guard_raw(raw)[0] == {"permission": "allow"}, raw
 
 
+def test_wrapped_case_lines_in_a_cut_off_payload_are_read_as_commands() -> None:
+    # P1 (F18 merge review): a cut-off payload's JSON strings are read as the command text is,
+    # so `bash -c 'perl '"'"'-MIO::Socket;print 1'"'"' x.pl'` is denied there too (its raw text
+    # holds JSON's `\\"`); a fed `sh -c` line the command check allows stays allowed
+    missed = [
+        form
+        for line in PIPED_CODE
+        for form in wrapped(line)
+        for raw in cut_off(form)
+        if guard.guard_raw(raw)[0]["permission"] != "deny"
+    ]
+    assert missed == []
+    for line in PIPED_NOT_INLINE:
+        for raw in cut_off(f"sh -c {shlex.quote(line)}"):
+            assert guard.guard_raw(raw)[0] == {"permission": "allow"}, raw
+
+
 def test_the_quotes_and_backslashes_read_again_are_counted() -> None:
     # F18-fix2: about 1 MiB of escaped quotes in a fed `-c` script took `guard_raw` 1.87 s (main
     # 93341d8: 0.22 s), unquoting them one at a time; each quote and backslash of a stage read

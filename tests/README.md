@@ -130,7 +130,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `node -r "$(echo a)"`), its redirects' fds and targets left out, also when a shell's `-c`
   script is looked for (`sh 2>&1 -c '…'`), but not on a cut-off payload's raw JSON text;
   `0< <(…)` and `<> <(…)` feed stdin and `3< <(…)` does not (a number glued to a word is no fd);
-  the read-once shape's script is `echo $a…`.
+  a backslash in a name is read as the shell reads it (`p\ython3`, `c\url`; a written-out `\n`
+  still splits words); a cut-off payload's JSON strings are read as a command's text is, so each
+  `PIPED_CODE` line in every `wrapped` form is denied there (the perl `-M` lines in `bash -c`)
+  and each `PIPED_NOT_INLINE` line in `sh -c` is allowed; the read-once shape's script is
+  `echo $a…`.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;

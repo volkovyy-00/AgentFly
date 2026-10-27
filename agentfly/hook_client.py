@@ -1001,10 +1001,20 @@ def guard_reason(text: str) -> str | None:
     return _scan_reason(text)
 
 
+# A backslash before a name's letter, digit, `_`, `.`, `-` or `/` is dropped, as the shell drops it
+# outside single quotes (`p\ython3`, `c\url`); inside them it stays, and is dropped too (toward
+# deny). `\\`, `\|`, `\;`, `\"` and `\'` keep theirs: they decide how the text splits. So do a
+# written-out `\n`, `\r` and `\t`, which `words` reads as JSON's (`ls\ncurl` names curl).
+_NAME_ESCAPE: str = r"\\((?![nrt])[\w.\-/])"
+
+
 def _scan_reason(text: str, raw: bool = False) -> str | None:
     """'guard_path', 'outbound' or None for already-size-bounded text: the fold-and-scan that both
     a command (`guard_reason`, with its 512 KiB cap on top) and a cut-off payload (`guard_raw`,
-    bounded by `_MAX_GUARD_TEXT`, `raw`: JSON text, read without the quote-aware walk) share."""
+    bounded by `_MAX_GUARD_TEXT`) share. Command text has its names read as the shell reads them
+    (`_NAME_ESCAPE`, P1); `raw` JSON text is read as it is, without the quote-aware walk."""
+    if not raw:
+        text = re.compile(_NAME_ESCAPE).sub(r"\1", text)
     folded: str = text.casefold()
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
@@ -1237,17 +1247,16 @@ def _json_strings(text: str) -> str:
 
 
 def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
-    """The offline guard on input that could not be read as a hook payload: on its raw text, and
-    piped code on that text with its JSON strings read too (`_json_strings`)."""
+    """The offline guard on input that could not be read as a hook payload: on its raw text, then
+    on that text with its JSON strings read (`_json_strings`), as a command's text is (P1: a perl
+    `-M` line in `bash -c '…'`, whose raw text holds JSON's `\\"`; `p\\ython3`)."""
     if len(raw) > _MAX_GUARD_TEXT:  # a tool name may sit at either end of a cut-off payload
         half: int = _MAX_GUARD_TEXT // 2
         raw = raw[:half] + b" " + raw[-half:]
     text: str = raw.decode("utf-8", "replace")
     # `_scan_reason`, not `guard_reason`: the 512 KiB command cap is for a command the hook was
     # given, not for this raw scan, which is already bounded by `_MAX_GUARD_TEXT` (SPEC section 9).
-    reason: str | None = _scan_reason(text, raw=True)
-    if reason is None and _piped_code(_json_strings(text)):
-        reason = "outbound"
+    reason: str | None = _scan_reason(text, raw=True) or _scan_reason(_json_strings(text))
     answer: dict[str, str] = {"permission": "allow"} if reason is None else deny_answer(reason)
     return answer, reason
 
