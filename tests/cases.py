@@ -373,9 +373,24 @@ RECORDER_ONLY: list[str] = [
     # V5c: piped code the offline guard does not see (its stage ends at the `;`)
     "cat x | if true; then python3; fi",
     "cat x | while read -r l; do sh; done",
+    # P1: a heredoc or herestring on a group's closer feeds the group's commands, as `< <(…)` does
+    "{ python3; } <<'EOF'\nprint(1)\nEOF",
+    "while read l; do python3; done <<'EOF'\nprint(1)\nEOF",
+    "( node ) <<'EOF'\nconsole.log(1)\nEOF",
+    "{ bash; } <<'EOF'\nls\nEOF",
+    "{ python3; } <<< 'print(1)'",
+    "( python3 ) <<< 'print(1)'",
+    "{ { cd /tmp; python3; }; } <<< 'print(1)'",
+    "{ echo $(python3); } <<< 'print(1)'",  # a substitution in the group reads the group's stdin
 ]
 MARKED_ALLOWED: list[str] = [
     "ls",
+    "{ cat; } <<'EOF'\nx\nEOF",  # P1: a group fed by a heredoc that runs no shell or interpreter
+    "while read l; do echo $l; done <<< 'a b'",
+    "python3 t.py; { cat; } <<< x",  # P1: only the group's own commands read its herestring
+    "{ cat; } <<< x; python3 t.py",
+    "{ cat; } <<'EOF'; python3 t.py\nx\nEOF",  # the body is read after `python3 t.py`
+    "{ cat; } <<'EOF'; python3 t.py; { cat; } <<< y\nx\nEOF",  # and after a later group's look
     "bash -c 'ls'",
     "sh -c 'echo hi'",
     "bash -o pipefail -c 'ls -l'",

@@ -16,6 +16,7 @@ No I/O, no shell is ever run, and `normalize` never raises.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -655,6 +656,7 @@ class _Heredoc:
     strip_tabs: bool
     owner: list[str]  # the words of the simple command that owns the redirect
     index: int = -1  # that command's index, once it is made
+    group: tuple[int, int] | None = None  # the commands of the group the owner closes (P1)
 
 
 # A substitution as the scanner meets it: "in" (its output goes into the command it stands in) or
@@ -668,7 +670,7 @@ class _Cmd:
     `stdin`: "file" or "sub" when stdin is redirected (`< f`, `< <(…)`); `subs`: the
     substitutions in its words and herestrings; `start`: no program word yet (only keywords such
     as `then` or `!`); `group`: the first command of the group it closes (`}`, `done`, a
-    subshell's `)`), whose commands its stdin redirect feeds (P1, F1)."""
+    subshell's `)`), whose commands its stdin redirect, heredoc or herestring feeds (P1, F1)."""
 
     words: list[str] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
@@ -720,6 +722,11 @@ _STARTERS: frozenset[str] = frozenset(
 _HIDERS: frozenset[str] = frozenset({"function", "coproc"})  # what runs, and where, is unseen
 
 
+def _any_within(indexes: list[int], first: int, last: int) -> bool:
+    at: int = bisect_left(indexes, first)
+    return at < len(indexes) and indexes[at] < last
+
+
 class _Out:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -732,6 +739,22 @@ class _Out:
         self.hubs: int = 0
         self.fed: set[int] = set()  # commands that read a pipe (or `>(…)`, or `< <(…)`)
         self.links_unknown: bool = False
+        self.looked: int = 0  # commands before this one are listed in `readers` and `shells`
+        self.readers: list[int] = []  # commands with a shell or interpreter word, in order
+        self.shells: list[int] = []  # commands with a shell word, in order
+
+    def holds(self, first: int, last: int) -> tuple[bool, bool]:
+        """Whether a command from `first` up to `last` has a shell or interpreter word, and
+        whether one has a shell word. Each command is looked at once, however many groups ask
+        (P1: a heredoc or herestring on a group's closer)."""
+        for index in range(self.looked, last):
+            names: list[str] = [base_name(w) for w in self.commands[index]]
+            if any(is_reader(name) for name in names):
+                self.readers.append(index)
+                if any(name in SHELLS for name in names):
+                    self.shells.append(index)
+        self.looked = max(self.looked, last)
+        return _any_within(self.readers, first, last), _any_within(self.shells, first, last)
 
     def hub(self) -> int:
         self.hubs += 1
@@ -788,6 +811,8 @@ class _Scanner:
                         break
                     doc.index = len(out.commands)
                 self.finish_command(cmd)
+            else:
+                self.group_herestrings(cmd, len(out.commands))  # `( python3 ) <<< 'x'` (P1)
             cmd = _Cmd()
             self.target = ""
 
@@ -967,6 +992,7 @@ class _Scanner:
         names: list[str] = [base_name(w) for w in words]
         if herestrings and any(is_reader(name) for name in names):
             self.out.code_heredoc = True
+        self.group_herestrings(cmd, index)
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
         # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work, nor
         # may each word walk a copy of the words after it (F18).
@@ -995,6 +1021,18 @@ class _Scanner:
                 evaled = True
         for text in texts:
             self.sub_scan(text)
+
+    def group_herestrings(self, cmd: _Cmd, last: int) -> None:
+        """A herestring on a group's closer feeds the group's commands, up to `last`: code when
+        one is a shell or an interpreter, and a script to read when one is a shell (P1)."""
+        if cmd.group is None or not cmd.herestrings:
+            return
+        reads, shell = self.out.holds(cmd.group, last)
+        if reads:
+            self.out.code_heredoc = True
+        if shell:
+            for text in dict.fromkeys(cmd.herestrings):
+                self.sub_scan(text)
 
     def sub_scan(self, text: str) -> None:
         self.out.scans += 1
@@ -1048,7 +1086,10 @@ class _Scanner:
             if not delimiter:
                 self.out.unparsed = True
                 return
-            heredocs.append(_Heredoc(delimiter, quoted, strip, cmd.words))
+            group: tuple[int, int] | None = (
+                None if cmd.group is None else (cmd.group, len(self.out.commands))
+            )
+            heredocs.append(_Heredoc(delimiter, quoted, strip, cmd.words, group=group))
             return
         first: int = self.i
         self.i += 1  # `>`, `>>`, `>&`, `<&`, `&>`, `>|`, `<>`: the target stays a word
@@ -1100,6 +1141,10 @@ class _Scanner:
         s, n = self.s, self.n
         names: list[str] = [base_name(w) for w in doc.owner]
         reader: bool = any(is_reader(name) for name in names)
+        shell: bool = any(name in SHELLS for name in names)
+        if doc.group is not None:  # `{ python3; } <<'EOF'` (P1)
+            reads, shells = self.out.holds(*doc.group)
+            reader, shell = reader or reads, shell or shells
         pos: int = self.i
         body: list[str] = []
         while True:
@@ -1131,7 +1176,7 @@ class _Scanner:
             inner += self.expansions(text)  # the shell expands $(...) and backticks in the body
         if reader:
             self.out.code_heredoc = True  # D10: a quoted body is data unless something runs it
-            if any(name in SHELLS for name in names):
+            if shell:
                 self.sub_scan(text)
         if doc.index >= 0:
             self.out.link((i, doc.index) for first, last in inner for i in range(first, last))

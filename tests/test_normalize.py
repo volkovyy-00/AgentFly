@@ -631,6 +631,27 @@ def test_many_heredocs_on_one_line_stay_linear() -> None:
     assert long < 8 * short, f"4 times the heredocs took {long / short:.1f} times as long"
 
 
+def test_groups_fed_by_a_herestring_stay_linear() -> None:
+    # P1: each closer asks whether its group holds a shell or an interpreter. Every command is
+    # looked at once, however many groups hold it: n groups nested around n commands would be
+    # quadratic if each closer looked at its whole group.
+    def shape(n: int) -> str:
+        return "{ " * n + "a; " * n + "} <<< x; " * n
+
+    assert not normalize.__wrapped__(shape(2000)).code_heredoc
+    short, long = fastest([shape(500), shape(2000)], rounds=5)
+    assert long < 8 * short, f"4 times the groups took {long / short:.1f} times as long"
+
+
+def test_a_shell_group_runs_its_heredoc_or_herestring() -> None:
+    # P1: what a group's closer feeds a shell in the group is scanned as the shell's script.
+    assert ("curl", "x") in normalize("{ bash; } <<'EOF'\ncurl x\nEOF").commands
+    assert ("curl", "x") in normalize("( sh ) <<< 'curl x'").commands
+    assert ("curl", "x") in normalize("{ cd /tmp; { sh; }; } <<< 'curl x'").commands
+    assert ("curl", "x") not in normalize("{ cat; } <<'EOF'\ncurl x\nEOF").commands
+    assert ("curl", "x") not in normalize("{ python3; } <<< 'curl x'").commands
+
+
 def test_the_first_eval_covers_the_later_ones() -> None:
     assert ("curl", "x") in normalize("eval eval eval curl x").commands
     assert ("curl", "x") in normalize("bash bash -c 'curl x'").commands

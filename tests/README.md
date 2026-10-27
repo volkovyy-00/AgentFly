@@ -206,7 +206,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `-m code` fed by a pipe is inline code (`-mjson.tool`, `t.py -i`, `-Wignore` are not); a group,
   subshell or loop whose stdin is `< <(…)` feeds its body (`{ python3; } < <(cat x)`,
   `while read l; do python3; done < <(cat x)`; `{ python3 t.py; }` and a loop that only echoes
-  stay allowed), also after `env A=1`. A command
+  stay allowed), also after `env A=1`; a heredoc or herestring on a group's closer is code when
+  the group holds a shell or an interpreter (`RECORDER_ONLY`: `{ python3; } <<'EOF'`,
+  `( python3 ) <<< …`, a `$(python3)` in the group), a shell's script when it holds a shell
+  (`{ bash; } <<'EOF'` reads `curl x` in the body), and data otherwise (`{ cat; } <<< x`, a
+  reader before or after the group); each command is looked at once (`{ ` n times around n
+  commands, each closer with a herestring, stays linear). A command
   over `MAX_PARSE` (128 KiB) is unparsed and read only as a bag of its distinct words (the
   first and last `_BAG_WORDS`), listed twice, in under a second (2 MiB of newlines, `a(`,
   `sh -c -c`, distinct words); one just under is parsed as before. Subagent mark
