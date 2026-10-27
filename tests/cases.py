@@ -125,6 +125,22 @@ PIPED_CODE: list[str] = [
     "cat x | python3 $D/0",
     "cat x | python3 < $D/stdin",
     "cat x | $HOME/bin/python3",
+    # P1 fix 5 (C, E, owner 2026-10-24): the option walk. An unknown node option takes the next
+    # word unless it names a script file; zsh's `--emulate` takes a value; `-i` or `-m code`
+    # reads the pipe as code; a quoted value or a `$(…)` is one word (E: the guard read them split)
+    "cat x | node --disable-warning a/b",
+    "cat x | node --redirect-warnings /tmp/w",
+    "cat x | zsh --emulate sh",
+    "cat x | python3 -m code",
+    "cat x | python3 -mcode",
+    "cat x | python3 -Im code",
+    "cat x | python3 -i t.py",
+    "cat x | python3 -Bi t.py",
+    'cat x | python3 -X "a b"',
+    'cat x | node -r "$(echo a)"',
+    "cat x | node -r $(echo a)",
+    'cat x | python3 -X "a b" "$F"',  # the guard's quote-aware walk reads `$F` as the recorder
+    'cat x | sh -o "a b" -c <(cat)',  # ... and `<(…)` as a word, here `-c`'s script
     # P1 fix 6 (F3): `<(…)` as the script
     "cat x | python3 <(cat)",
     "cat x | bash <(cat)",
@@ -184,6 +200,22 @@ PIPED_NOT_INLINE: list[str] = [
     "cat x | awk '{print $1}'",
     'cat x | grep "$PAT"',
     "cat x | python3 $'t.py'",  # `$'…'` is a quote, not an expansion
+    # P1 fix 5 (G): a boolean option before a script; options and redirects the walk passes
+    "cat x | node --no-warnings server",
+    "cat x | node --no-warnings server.js",
+    "cat x | node --trace-warnings server",
+    "cat x | node --inspect bin/www",
+    "cat x | python3 t.py -i",  # `-i` after the script is the script's
+    "cat x | python3 -mjson.tool",
+    "cat x | zsh --emulate sh script.zsh",
+    "cat x | bash --norc script.sh",
+    'cat x | python3 -X "a b" t.py',
+    'cat x | node -r "$(echo a)" app.js',
+    'cat x | python3 > "$OUT" t.py',
+    "cat x | python3 -Wignore t.py",  # `-W`'s value is no `-i`
+    "cat x | python3 --version t.py",  # a long option is no cluster of letters: no `-i` in it
+    'cat x | python3 -X "a b" -W `echo x` t.py',  # a backtick run is one word, `-W`'s value
+    'cat x | python3 -X "a b" < t.py',  # stdin is the file, not the pipe
     # ... and a `$` word whose last part is a plain name is a file or a program by that name
     "cat x | python3 $HOME/t.py",
     'cat x | python3 "$HOME/t.py"',

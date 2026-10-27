@@ -41,7 +41,8 @@ SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh", "csh", "
 # A quoted heredoc is literal data unless one of these reads it (D10, narrowed 2026-10-16).
 _READERS: frozenset[str] = frozenset({"ruby", "perl"})
 _INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
-_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
+# bash's long options are flags but these two; zsh's `--emulate sh` takes one too (P1)
+_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file", "--emulate"})
 
 _DQ_RUN = re.compile(r'[^"\\$`]+')  # plain text inside double quotes
 _BT_RUN = re.compile(r"[^`\\]+")  # plain text inside backticks
@@ -442,7 +443,15 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
-_NODE_SCRIPT = re.compile(r"/|\.[cm]?[jt]s$")  # a word that looks like a script, not a value
+# Node options that never take a value (and every `--no-…`): a plain word after one is the script
+# (P1, G: `node --no-warnings server`).
+_NODE_FLAGS: frozenset[str] = frozenset(
+    {"--inspect", "--inspect-brk", "--inspect-wait", "--watch", "--test", "--check"}
+    | {"--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--throw-deprecation"}
+    | {"--pending-deprecation", "--enable-source-maps", "--preserve-symlinks", "--expose-gc"}
+    | {"--abort-on-uncaught-exception", "--experimental-vm-modules", "--jitless"}
+)
+_NODE_SCRIPT = re.compile(r"\.[cm]?[jt]s$")  # a word that names a script file
 
 
 def _is_stdin(word: str) -> bool:
@@ -517,20 +526,42 @@ def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
         return _SCRIPT
     if family == "node":
         return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
+    if family == "python" and _python_reads_code(words, at):
+        return _STDIN
     move: int = _STEPS[family](arg)
     return _STDIN if move == _CODE else _SCRIPT if move == _END else move
 
 
 def _node_takes_value(words: Sequence[str], at: int) -> bool:
     """A node option that takes the next word: a known one, or a long option the walk does not
-    know when the next word does not look like a script (toward firing: in
-    `node --disable-warning X` the X is no script, and node reads its code from stdin)."""
+    know (no flag of `_NODE_FLAGS`, no `--no-…`) when the next word names no script file (toward
+    firing: in `node --disable-warning X` or `--disable-warning a/b` the value is no script, and
+    node reads its code from stdin; P1, C)."""
     arg: str = words[at]
     if arg in _NODE_VALUE_OPTIONS:
         return True
     if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
         return False
+    if arg in _NODE_FLAGS or arg.startswith("--no-"):
+        return False
     return _NODE_SCRIPT.search(words[at + 1]) is None
+
+
+def _python_reads_code(words: Sequence[str], at: int) -> bool:
+    """Fed by a pipe, python runs it as code after `-i` (it reads stdin once the script ends) and
+    with `-m code` (the console), owner 2026-10-24. Letter by letter, as `_python_step`."""
+    arg: str = words[at]
+    if arg.startswith("--"):
+        return False
+    for index, letter in enumerate(arg[1:], 1):
+        if letter == "i":
+            return True
+        if letter == "m":
+            module: str = arg[index + 1 :] or (words[at + 1] if at + 1 < len(words) else "")
+            return module == "code"
+        if letter in "cWXQ":  # code, or a value: `_python_step` answers
+            return False
+    return False
 
 
 def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:

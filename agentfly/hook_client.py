@@ -458,7 +458,7 @@ def _outbound_words(argv: list[str], text: str) -> bool:
 # ---- piped code (V5c): the stdin walk of agentfly/recorder/normalize.py, at word level
 
 _SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"})
-_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
+_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file", "--emulate"})
 _RUNNERS: frozenset[str] = frozenset(  # `normalize.RUNNERS`
     {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
     | {"pyenv", "rbenv", "nodenv", "mise", "asdf", "npx", "pnpm", "yarn"}
@@ -479,7 +479,13 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
 _DEV_FD: str = r"/dev/fd/\d+"
-_NODE_SCRIPT: str = r"/|\.[cm]?[jt]s$"
+_NODE_FLAGS: frozenset[str] = frozenset(  # `normalize._NODE_FLAGS`
+    {"--inspect", "--inspect-brk", "--inspect-wait", "--watch", "--test", "--check"}
+    | {"--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--throw-deprecation"}
+    | {"--pending-deprecation", "--enable-source-maps", "--preserve-symlinks", "--expose-gc"}
+    | {"--abort-on-uncaught-exception", "--experimental-vm-modules", "--jitless"}
+)
+_NODE_SCRIPT: str = r"\.[cm]?[jt]s$"
 # A fed shell's `-c` script is read as a word (a stage) and as a command line, this many levels
 # deep at most; deeper, it counts as reading code from the pipe.
 _SCRIPT_DEPTH: int = 4
@@ -600,8 +606,8 @@ def _unreadable_file(word: str) -> bool:
 
 def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth: int) -> int:
     """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
-    `-c` reads the pipe when its script holds a substitution (`bash -c "$(cat)"`) or its word,
-    read as a stage, does (main's read: it covers what the quote-aware read skips or misreads);
+    `-c` reads the pipe when its script's word, read as a stage, does (`bash -c "$(cat)"`: a
+    program no one can read; main's read: it covers what the quote-aware read skips or misreads);
     what the script runs is also read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
     if _is_stdin(arg) or _unreadable_file(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
@@ -617,8 +623,7 @@ def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth
             if at + 1 >= len(words):
                 return _SCRIPT
             script: str = words[at + 1]
-            fed: bool = _SUB in script or _stage_reads_stdin(script, count, depth + 1)
-            return _STDIN if fed else _SCRIPT
+            return _STDIN if _stage_reads_stdin(script, count, depth + 1) else _SCRIPT
         if "s" in arg[1:]:
             return _STDIN
         return 2 if ("o" in arg[1:] or "O" in arg[1:]) else 1
@@ -626,6 +631,8 @@ def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth
         return _SCRIPT
     if family == "node":
         return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
+    if family == "python" and _python_reads_code(words, at):
+        return _STDIN
     move: int = _STEPS[family](arg)
     return _STDIN if move == _CODE else _SCRIPT if move == _END else move
 
@@ -637,7 +644,25 @@ def _node_takes_value(words: Sequence[str], at: int) -> bool:
         return True
     if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
         return False
+    if arg in _NODE_FLAGS or arg.startswith("--no-"):
+        return False
     return re.compile(_NODE_SCRIPT).search(words[at + 1]) is None
+
+
+def _python_reads_code(words: Sequence[str], at: int) -> bool:
+    """`normalize._python_reads_code`: `-i`, or `-m code`, fed by a pipe (owner 2026-10-24)."""
+    arg: str = words[at]
+    if arg.startswith("--"):
+        return False
+    for index, letter in enumerate(arg[1:], 1):
+        if letter == "i":
+            return True
+        if letter == "m":
+            module: str = arg[index + 1 :] or (words[at + 1] if at + 1 < len(words) else "")
+            return module == "code"
+        if letter in "cWXQ":
+            return False
+    return False
 
 
 def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
@@ -670,9 +695,10 @@ class _Count:
     """The words the piped-code check may still read (`_PIPED_WORDS`) and the bytes its
     quote-aware re-reads may still take (`_REREAD_BYTES`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, walk: bool = True) -> None:
         self.left: int = _PIPED_WORDS
         self.bytes_left: int = _REREAD_BYTES
+        self.walk: bool = walk  # P1: whether a stage's quote-aware words get the stdin walk
 
     def spend(self, words: int) -> bool:
         """Count `words` more; True once past the count (the text then counts as piped code)."""
@@ -746,26 +772,109 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
     end: int = stage.end() if stage else start
     if count.reread(end - start):
         return True, end
-    raw: list[str] = re.compile(_QUOTED_WORD).findall(text, start, end)
+    # P1 (E): a stage with a quote, a `$(` or a backtick is also walked for its stdin, its words
+    # read whole (`_walk_argv`); the same words, so the count is the same
+    walked: bool = count.walk and any(text.find(c, start, end) >= 0 for c in ("'", '"', "`", "$("))
+    matches: list[re.Match[str]] = []
+    redirects: dict[int, bool] = {}
+    if walked:
+        matches = list(re.compile(_QUOTED_WORD).finditer(text, start, end))
+        raw: list[str] = [match.group() for match in matches]
+        redirects = _redirects(text, start, matches)
+    else:
+        raw = re.compile(_QUOTED_WORD).findall(text, start, end)
     # each piece `_unquoted` or `_UNEXPANDED` takes off holds a quote or a backslash (F18-fix2)
     pieces: int = sum(text.count(c, start, end) for c in "'\"\\")
     if count.spend(len(raw) + pieces):
         return True, end
+    if walked and (words := _walk_argv(text, start, matches, redirects)) is not None:
+        if _reads_stdin(words, count, depth):
+            return True, end
     argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in raw]
+    # P1 (E): a shell's options are read with its redirects left out (`sh 2>&1 -c '…'`)
+    kept: list[int] = [at for at in range(len(argv)) if at not in redirects]
     found: dict[int, None] = {}  # each script once, however many shells find it
-    table: list[int | None] = []  # `_script_indexes(argv)`, at the first shell
-    for at, word in enumerate(argv):
-        if word.split("/")[-1].lower().rstrip("0123456789.") not in _SHELLS:
+    table: list[int | None] = []  # `_script_indexes` of the kept words, at the first shell
+    for at, index in enumerate(kept):
+        if argv[index].split("/")[-1].lower().rstrip("0123456789.") not in _SHELLS:
             continue
-        table = table or _script_indexes(argv)
+        table = table or _script_indexes([argv[i] for i in kept])
         if (script := table[at + 1]) is not None:
-            found[script] = None
+            found[kept[script]] = None
     for script in found:
         expanded: str = re.compile(_UNEXPANDED).sub(r"\1", raw[script])
         if "$(" in expanded or "`" in expanded:
             return True, end
     scripts: dict[str, None] = dict.fromkeys(argv[script] for script in found)
     return any(_line_reads(script, count, depth + 1) for script in scripts), end
+
+
+# P1 (E): what may stand between two quote-aware words: a redirect (`2>`, `<`, `>>`, `<<<`, `&>`,
+# `>&`), and a `$(…)` or backtick run inside a word.
+_GAP_REDIRECT: str = r"[ \t]*(&?)(<<<|<<-?|<>|>>|<|>)(&?)[ \t]*"
+_SUBSTITUTION: str = r"\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`"
+
+
+def _walk_word(raw: str) -> str:
+    """A quote-aware word as the stdin walk reads it: unquoted, and, when the shell expands
+    something in it, each `$(…)`, backtick run and `$` made `_SUB` (`$'…'` is a quote)."""
+    raw = raw.replace("$'", "'")
+    word: str = _unquoted(raw) if any(q in raw for q in "'\"\\") else raw
+    expanded: str = re.compile(_UNEXPANDED).sub(r"\1", raw)
+    if "$" not in expanded and "`" not in expanded:
+        return word
+    return re.compile(_SUBSTITUTION).sub(_SUB, word).replace("$", _SUB).replace("`", _SUB)
+
+
+def _redirects(text: str, start: int, found: Sequence[re.Match[str]]) -> dict[int, bool]:
+    """Which of a stage's quote-aware words are a redirect's fd or target: True for the target of
+    stdin's (`<`, `0<`, `<>`), False for the rest (`2>&1`: the `2` and the `1`)."""
+    redirect: re.Pattern[str] = re.compile(_GAP_REDIRECT)
+    out: dict[int, bool] = {}
+    previous: int = start
+    for index, match in enumerate(found):
+        gap: str = text[previous : match.start()]
+        previous = match.end()
+        if (op := redirect.fullmatch(gap)) is None:
+            continue
+        fd: str = ""
+        if index and gap[:1] in ("<", ">") and found[index - 1].group().isdigit():  # `2>`
+            fd = found[index - 1].group()
+            out[index - 1] = False
+        before, name, after = op.groups()
+        out[index] = name in ("<", "<>") and fd in ("", "0") and not (before or after)
+    return out
+
+
+def _walk_argv(
+    text: str, start: int, found: Sequence[re.Match[str]], redirects: dict[int, bool]
+) -> list[str] | None:
+    """A stage's quote-aware words as the recorder's stdin walk sees them, or None when stdin comes
+    from a file (`< x.py`): a redirect's fd and target (`_redirects`) are left out (`< $F`,
+    `< /dev/stdin` keep stdin the pipe); a backtick run is one word no one can read; an unquoted
+    `$(`, `<(` or `>(` runs to the stage's end (it ends at the `)`), so the walk stops there."""
+    argv: list[str] = []
+    previous: int = start
+    in_backticks: bool = False
+    for index, match in enumerate(found):
+        gap: str = text[previous : match.start()]
+        previous = match.end()
+        if "`" in gap and gap.count("`") % 2:
+            in_backticks = not in_backticks
+            if in_backticks:
+                argv.append(_SUB)
+        if in_backticks:
+            continue
+        if "(" in gap:  # inside a substitution from here on
+            if "<(" in gap or ">(" in gap:
+                argv.append(_SUB)
+            return argv
+        word: str = _walk_word(match.group())
+        if index not in redirects:
+            argv.append(word)
+        elif redirects[index] and not (_is_stdin_device(word) or _unreadable_file(word)):
+            return None  # `python3 < x.py`
+    return argv
 
 
 def _script_indexes(argv: Sequence[str]) -> list[int | None]:
@@ -800,16 +909,17 @@ def _line_reads(script: str, count: _Count, depth: int) -> bool:
     return _fed_stage_reads(script, start, len(script), count, depth, read_to)[0]
 
 
-def _piped_code(text: str) -> bool:
+def _piped_code(text: str, walk: bool = True) -> bool:
     """Code piped into an interpreter or a shell that names no script (SPEC section 9): the
     command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
     `< <(` (`python3 < <(cat x)`), and a fed shell's `-c` script read as a command line (F18:
     `… | sh -c 'cd /tmp && python3'`). Stages with no interpreter or shell name are skipped in C
     (`_FED_STAGES`); past _PIPE_STAGES of either kind, or past _PIPED_WORDS words read, the text
-    counts as piped code."""
+    counts as piped code. `walk=False` skips the quote-aware stdin walk (`_scripts_read`), for raw
+    JSON text, whose `\\"` is no shell quote (`guard_raw`)."""
     text = text.replace("\\\n", " ")  # a line continuation: `| \` and a newline go on
     cut: re.Pattern[str] = re.compile(_CUT)
-    count: _Count = _Count()
+    count: _Count = _Count(walk)
     stages: int = 0
     for source in _FED_STAGES:
         read_to: int = 0
@@ -888,10 +998,10 @@ def guard_reason(text: str) -> str | None:
     return _scan_reason(text)
 
 
-def _scan_reason(text: str) -> str | None:
+def _scan_reason(text: str, raw: bool = False) -> str | None:
     """'guard_path', 'outbound' or None for already-size-bounded text: the fold-and-scan that both
     a command (`guard_reason`, with its 512 KiB cap on top) and a cut-off payload (`guard_raw`,
-    bounded by `_MAX_GUARD_TEXT`) share."""
+    bounded by `_MAX_GUARD_TEXT`, `raw`: JSON text, read without the quote-aware walk) share."""
     folded: str = text.casefold()
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
@@ -902,7 +1012,7 @@ def _scan_reason(text: str) -> str | None:
         plain += " " + " ".join(os.path.normpath(w) for w in plain.split() if "/.." in w)
     if any(path in plain for path in _GUARD_PATHS):
         return "guard_path"
-    if _outbound_words(words(text), folded) or _piped_code(text):
+    if _outbound_words(words(text), folded) or _piped_code(text, walk=not raw):
         return "outbound"
     quotes: bool = any(q in text for q in "'\"\\")
     return "outbound" if quotes and "perl" in folded and _quoted_one_liner(text) else None
@@ -1132,7 +1242,7 @@ def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
     text: str = raw.decode("utf-8", "replace")
     # `_scan_reason`, not `guard_reason`: the 512 KiB command cap is for a command the hook was
     # given, not for this raw scan, which is already bounded by `_MAX_GUARD_TEXT` (SPEC section 9).
-    reason: str | None = _scan_reason(text)
+    reason: str | None = _scan_reason(text, raw=True)
     if reason is None and _piped_code(_json_strings(text)):
         reason = "outbound"
     answer: dict[str, str] = {"permission": "allow"} if reason is None else deny_answer(reason)

