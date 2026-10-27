@@ -575,21 +575,20 @@ def _node_takes_value(words: Sequence[str], at: int) -> bool:
     return _NODE_SCRIPT.search(words[at + 1]) is None
 
 
+# The first of these letters in a python option word decides `_python_reads_code`.
+_PYTHON_DECIDES: re.Pattern[str] = re.compile(r"[imcWXQ]")
+
+
 def _python_reads_code(words: Sequence[str], at: int) -> bool:
     """Fed by a pipe, python runs it as code after `-i` (it reads stdin once the script ends) and
     with `-m code` (the console), owner 2026-10-24. Letter by letter, as `_python_step`."""
     arg: str = words[at]
-    if arg.startswith("--"):
+    if arg.startswith("--") or (letter := _PYTHON_DECIDES.search(arg, 1)) is None:
         return False
-    for index, letter in enumerate(arg[1:], 1):
-        if letter == "i":
-            return True
-        if letter == "m":
-            module: str = arg[index + 1 :] or (words[at + 1] if at + 1 < len(words) else "")
-            return module == "code"
-        if letter in "cWXQ":  # code, or a value: `_python_step` answers
-            return False
-    return False
+    if letter.group() == "m":
+        module: str = arg[letter.end() :] or (words[at + 1] if at + 1 < len(words) else "")
+        return module == "code"
+    return letter.group() == "i"  # `c`, `W`, `X`, `Q`: code, or a value: `_python_step` answers
 
 
 def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:

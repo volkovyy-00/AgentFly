@@ -8,6 +8,7 @@ payload text. If the recorder does not answer, the offline guard (SPEC section 9
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import time
 
 TYPE_CHECKING = False  # `import typing` alone costs ~5 ms per call
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import Any
 
 try:  # the C module alone is enough here, and importing `socket` costs ~12 ms at start-up
@@ -479,6 +480,7 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
 _DEV_FD: str = r"/dev/fd/\d+"
+_PYTHON_DECIDES: str = r"[imcWXQ]"  # `normalize._PYTHON_DECIDES`
 _NODE_FLAGS: frozenset[str] = frozenset(  # `normalize._NODE_FLAGS` (`node --help`, v22.22.2)
     """
     --abort-on-uncaught-exception --allow-addons --allow-child-process --allow-wasi
@@ -540,7 +542,9 @@ _STDIN_SUB: str = r"(?:(?<![^\s;&|(){}])(\d+))?<>?[ \t]*<\("
 _OWNER_TOKEN: str = r"""[;&|\n]+|[{}()'"`]|[^\s;&|(){}<>'"`]+"""
 _GROUP_OPENERS: frozenset[str] = frozenset({"if", "case", "while", "until", "for", "select"})
 _GROUP_CLOSERS: frozenset[str] = frozenset({"fi", "esac", "done"})
-_COMMAND_STARTERS: frozenset[str] = frozenset({"do", "then", "else", "elif", "!", "time"})
+_COMMAND_STARTERS: frozenset[str] = (
+    frozenset({"do", "then", "else", "elif", "!", "time"}) | _GROUP_OPENERS
+)
 _REDIRECT: str = r"(\d*)(<<<|<<-?|<>|<|>>|>)(.*)"
 _DUPLICATE: str = r"(?:(?<!\S)\d+)?[<>]&[\d-]+"  # `2>&1`, `<&0`, `<&-`: no file, no word
 # Past this many stages or `< <(`, the guard denies without reading more (as the recorder's limit
@@ -683,17 +687,12 @@ def _node_takes_value(words: Sequence[str], at: int) -> bool:
 def _python_reads_code(words: Sequence[str], at: int) -> bool:
     """`normalize._python_reads_code`: `-i`, or `-m code`, fed by a pipe (owner 2026-10-24)."""
     arg: str = words[at]
-    if arg.startswith("--"):
+    if arg.startswith("--") or (letter := re.compile(_PYTHON_DECIDES).search(arg, 1)) is None:
         return False
-    for index, letter in enumerate(arg[1:], 1):
-        if letter == "i":
-            return True
-        if letter == "m":
-            module: str = arg[index + 1 :] or (words[at + 1] if at + 1 < len(words) else "")
-            return module == "code"
-        if letter in "cWXQ":
-            return False
-    return False
+    if letter.group() == "m":
+        module: str = arg[letter.end() :] or (words[at + 1] if at + 1 < len(words) else "")
+        return module == "code"
+    return letter.group() == "i"
 
 
 def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
@@ -701,9 +700,10 @@ def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
     for at in _programs(words):
-        if _SUB in words[at].split("/")[-1]:  # `$SH`, `$(echo python3)`: an interpreter? (P1)
+        base: str = words[at].rpartition("/")[2]
+        if _SUB in base:  # `$SH`, `$(echo python3)`: an interpreter? (P1)
             return True
-        name: str = words[at].split("/")[-1].lower()
+        name: str = base.lower()
         family: str | None = (
             ("shell" if name.rstrip("0123456789.") in _SHELLS else None)
             or _interpreter(name)
@@ -811,18 +811,21 @@ def _scripts_read(text: str, start: int, count: _Count, depth: int) -> tuple[boo
     # read whole (`_walk_argv`); the same words, so the count is the same
     walked: bool = count.walk and any(text.find(c, start, end) >= 0 for c in ("'", '"', "`", "$("))
     matches: list[re.Match[str]] = []
+    gaps: list[str] = []  # the text before each word, after the one before it
     redirects: dict[int, bool] = {}
     if walked:
         matches = list(re.compile(_QUOTED_WORD).finditer(text, start, end))
         raw: list[str] = [match.group() for match in matches]
-        redirects = _redirects(text, start, matches)
+        ends: list[int] = [start, *(match.end() for match in matches)]
+        gaps = [text[before : match.start()] for before, match in zip(ends, matches, strict=False)]
+        redirects = _redirects(gaps, matches)
     else:
         raw = re.compile(_QUOTED_WORD).findall(text, start, end)
     # each piece `_unquoted` or `_UNEXPANDED` takes off holds a quote or a backslash (F18-fix2)
     pieces: int = sum(text.count(c, start, end) for c in "'\"\\")
     if count.spend(len(raw) + pieces):
         return True, end
-    if walked and (words := _walk_argv(text, start, matches, redirects)) is not None:
+    if walked and (words := _walk_argv(gaps, matches, redirects)) is not None:
         if _reads_stdin(words, count, depth):
             return True, end
     argv: list[str] = [_unquoted(w) if any(q in w for q in "'\"\\") else w for w in raw]
@@ -862,15 +865,12 @@ def _walk_word(raw: str) -> str:
     return re.compile(_SUBSTITUTION).sub(_SUB, word).replace("$", _SUB).replace("`", _SUB)
 
 
-def _redirects(text: str, start: int, found: Sequence[re.Match[str]]) -> dict[int, bool]:
+def _redirects(gaps: Sequence[str], found: Sequence[re.Match[str]]) -> dict[int, bool]:
     """Which of a stage's quote-aware words are a redirect's fd or target: True for the target of
     stdin's (`<`, `0<`, `<>`), False for the rest (`2>&1`: the `2` and the `1`)."""
     redirect: re.Pattern[str] = re.compile(_GAP_REDIRECT)
     out: dict[int, bool] = {}
-    previous: int = start
-    for index, match in enumerate(found):
-        gap: str = text[previous : match.start()]
-        previous = match.end()
+    for index, gap in enumerate(gaps):
         if (op := redirect.fullmatch(gap)) is None:
             continue
         fd: str = ""
@@ -883,18 +883,15 @@ def _redirects(text: str, start: int, found: Sequence[re.Match[str]]) -> dict[in
 
 
 def _walk_argv(
-    text: str, start: int, found: Sequence[re.Match[str]], redirects: dict[int, bool]
+    gaps: Sequence[str], found: Sequence[re.Match[str]], redirects: dict[int, bool]
 ) -> list[str] | None:
     """A stage's quote-aware words as the recorder's stdin walk sees them, or None when stdin comes
     from a file (`< x.py`): a redirect's fd and target (`_redirects`) are left out (`< $F`,
     `< /dev/stdin` keep stdin the pipe); a backtick run is one word no one can read; an unquoted
     `$(`, `<(` or `>(` runs to the stage's end (it ends at the `)`), so the walk stops there."""
     argv: list[str] = []
-    previous: int = start
     in_backticks: bool = False
-    for index, match in enumerate(found):
-        gap: str = text[previous : match.start()]
-        previous = match.end()
+    for index, (gap, match) in enumerate(zip(gaps, found, strict=True)):
         if "`" in gap and gap.count("`") % 2:
             in_backticks = not in_backticks
             if in_backticks:
@@ -953,7 +950,9 @@ def _owner_start(text: str, lo: int, end: int, count: _Count) -> tuple[int, bool
     closer (its commands are then read one by one). A group that opens before `lo` (the last
     `< <(` read) is read from the text's start (toward deny; the re-read budget bounds it). None
     past the count."""
-    tokens: list[re.Match[str]] = list(re.compile(_OWNER_TOKEN).finditer(text, lo, end))
+    found: Iterator[re.Match[str]] = re.compile(_OWNER_TOKEN).finditer(text, lo, end)
+    # one token past what the count allows is enough to know it is past (no list of the rest)
+    tokens: list[re.Match[str]] = list(itertools.islice(found, max(count.left, 0) + 1))
     if count.spend(len(tokens)):
         return None
     depth: int = 0
@@ -961,7 +960,7 @@ def _owner_start(text: str, lo: int, end: int, count: _Count) -> tuple[int, bool
     for at in range(len(tokens) - 1, -1, -1):
         word: str = tokens[at].group()
         before: str = tokens[at - 1].group() if at else ";"
-        starts: bool = before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS | _GROUP_OPENERS
+        starts: bool = before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS
         if word in (")", "}") or (starts and word in _GROUP_CLOSERS):
             closed = closed or at == len(tokens) - 1
             depth += 1
