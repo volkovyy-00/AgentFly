@@ -294,6 +294,12 @@ def test_timeout_with_a_value_that_is_no_duration_keeps_every_later_word(
         ("python3 t.py $F", False),
         ("grep $PAT", False),
         ("awk '{print $1}'", False),
+        ("python3 $D/stdin", True),
+        ("python3 $D/0", True),
+        ("python3 < $D/stdin", True),
+        ("python3 $HOME/t.py", False),
+        ("python3 < $DIR/in.txt", False),
+        ("$HOME/bin/tool", False),
     ],
 )
 def test_an_unreadable_program_or_script_reads_stdin(stage: str, fed: bool) -> None:

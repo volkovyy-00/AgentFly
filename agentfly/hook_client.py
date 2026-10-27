@@ -590,13 +590,21 @@ def _is_stdin_device(word: str) -> bool:
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
 
 
+def _unreadable_file(word: str) -> bool:
+    """`normalize.unreadable_file`: `$F`, `<(cat)`, `$D/stdin`, `$D/0`; not `$HOME/t.py`."""
+    if _SUB not in word:
+        return False
+    name: str = word.rpartition("/")[2]
+    return _SUB in name or name in ("", "stdin") or name.isdigit()
+
+
 def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth: int) -> int:
     """`normalize._stdin_step`: _STDIN, _SCRIPT, or how many words the walk moves on. A shell's
     `-c` reads the pipe when its script holds a substitution (`bash -c "$(cat)"`) or its word,
     read as a stage, does (main's read: it covers what the quote-aware read skips or misreads);
     what the script runs is also read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
-    if _is_stdin(arg) or _SUB in arg:  # `$F`, `<(cat)`: the script may be the pipe (P1)
+    if _is_stdin(arg) or _unreadable_file(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
         return _STDIN
     if arg == "--":
         return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
@@ -637,7 +645,7 @@ def _reads_stdin(words: Sequence[str], count: _Count, depth: int) -> bool:
     script, worked out from the right once per family (linear)."""
     tables: dict[str, list[bool]] = {}
     for at in _programs(words):
-        if _SUB in words[at]:  # `$SH`, `$(echo python3)`: it may be an interpreter (P1)
+        if _SUB in words[at].split("/")[-1]:  # `$SH`, `$(echo python3)`: an interpreter? (P1)
             return True
         name: str = words[at].split("/")[-1].lower()
         family: str | None = (
@@ -708,8 +716,8 @@ def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
         index += 1
         if operator not in ("<", "<>") or fd not in ("", "0") or target.startswith("&"):
             continue
-        if _SUB not in target and not _is_stdin_device(target):
-            return False  # `python3 < x.py`
+        if not _unreadable_file(target) and not _is_stdin_device(target):
+            return False  # `python3 < x.py`, `< $DIR/in.txt`
     return _reads_stdin(argv, count, depth)
 
 

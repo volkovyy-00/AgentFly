@@ -418,6 +418,13 @@ def test_timeout_with_a_value_that_is_no_duration_keeps_every_later_word(
         (["python3", "@sub:cat@"], True),  # `<(cat)` as the script
         (["python3", "t.py", "$F"], False),  # the script is named first
         (["grep", "$PAT"], False),
+        # only the last part counts: a plain name there is a file or a program by that name
+        (["python3", "$D/stdin"], True),
+        (["python3", "$D/0"], True),
+        (["python3", "$HOME/t.py"], False),
+        (["python3", "@sub:dirname@/t.py"], False),
+        (["$HOME/bin/tool"], False),
+        (["$HOME/bin/python3"], True),
     ],
 )
 def test_an_unreadable_program_or_script_reads_stdin(words: list[str], fed: bool) -> None:

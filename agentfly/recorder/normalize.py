@@ -345,7 +345,7 @@ def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
             continue
         if word in _HEADS:
             return ()
-        if unreadable(word):  # `$A python3`: what runs is unknown, so every word may be it (P1)
+        if unreadable(base_name(word)):  # `$A python3`: what runs is unknown: every word may (P1)
             return tuple(range(index, len(argv)))
         if base_name(word) not in WRAPPERS:
             return (index,)
@@ -471,8 +471,19 @@ def holds_substitution(word: str) -> bool:
 
 def unreadable(word: str) -> bool:
     """A word the parse cannot read plainly: a `$` expansion or a substitution's output. As a
-    program, a script or stdin's file it counts as code from the pipe (P1, brief "Adversary")."""
+    program (its base name: `$HOME/bin/tool` is `tool`), a script or stdin's file
+    (`unreadable_file`) it counts as code from the pipe (P1, brief "Adversary")."""
     return "$" in word or holds_substitution(word)
+
+
+def unreadable_file(word: str) -> bool:
+    """A script or stdin file the parse cannot read: its last part is unreadable (`$F`,
+    `<(cat)`), or an unreadable word ends in a stdin device's name (`$D/stdin`, `$D/0`).
+    `$HOME/t.py` is a file named `t.py`."""
+    if not unreadable(word):
+        return False
+    name: str = word.rpartition("/")[2]
+    return unreadable(name) or name in ("", "stdin") or name.isdigit()
 
 
 def _shell_stdin_step(words: Sequence[str], at: int) -> int:
@@ -495,7 +506,7 @@ def _shell_stdin_step(words: Sequence[str], at: int) -> int:
 def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     """One step of a stdin walk: _STDIN, _SCRIPT, or how many words it moves on."""
     arg: str = words[at]
-    if _is_stdin(arg) or unreadable(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
+    if _is_stdin(arg) or unreadable_file(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
         return _STDIN
     if arg == "--":  # what follows is the script, if anything does
         return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
@@ -536,7 +547,7 @@ def reads_stdin(words: Sequence[str]) -> bool:
     """Does an interpreter or a shell at a program position read its code from stdin?"""
     tables: dict[str, list[bool]] = {}
     for at in programs(words, narrow=True):
-        if unreadable(words[at]):  # `$SH`, `$(echo python3)`: it may be an interpreter (P1)
+        if unreadable(base_name(words[at])):  # `$SH`, `$(echo python3)`: an interpreter? (P1)
             return True
         family: str | None = _stdin_family(base_name(words[at]))
         if family is None:
@@ -752,7 +763,9 @@ class _Scanner:
                 if self.target == "<" and not _is_stdin_device(source):
                     if source.startswith(SUB_PREFIX):
                         cmd.stdin = "sub"
-                    elif not unreadable(source):  # `< $F` may be /dev/stdin: stdin stays the pipe
+                    elif not unreadable_file(
+                        source
+                    ):  # `< $F` may be /dev/stdin: stdin stays the pipe
                         cmd.stdin = "file"
                 self.target = ""
 

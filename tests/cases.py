@@ -120,6 +120,11 @@ PIPED_CODE: list[str] = [
     "cat x | sudo $SH",
     "cat x | python3 $F",
     "cat x | python3 < $F",
+    # ... only by its last part: `$D/stdin` or `$D/0` may be a stdin device
+    "cat x | python3 $D/stdin",
+    "cat x | python3 $D/0",
+    "cat x | python3 < $D/stdin",
+    "cat x | $HOME/bin/python3",
     # P1 fix 6 (F3): `<(…)` as the script
     "cat x | python3 <(cat)",
     "cat x | bash <(cat)",
@@ -179,6 +184,11 @@ PIPED_NOT_INLINE: list[str] = [
     "cat x | awk '{print $1}'",
     'cat x | grep "$PAT"',
     "cat x | python3 $'t.py'",  # `$'…'` is a quote, not an expansion
+    # ... and a `$` word whose last part is a plain name is a file or a program by that name
+    "cat x | python3 $HOME/t.py",
+    'cat x | python3 "$HOME/t.py"',
+    "cat x | $HOME/bin/tool",
+    "cat x | python3 < $DIR/in.txt",
 ]
 
 NAMED_OUTBOUND: list[str] = [
