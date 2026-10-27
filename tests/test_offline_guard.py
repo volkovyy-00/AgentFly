@@ -243,6 +243,22 @@ def test_pipes_that_feed_no_code_are_allowed_offline(command: str) -> None:
     assert guard.offline_answer(command) == ({"permission": "allow"}, None), command
 
 
+# P1 fix 2 (D/F4): the guard folds `//` and `/./` in a stdin device, as the recorder does.
+@pytest.mark.parametrize(
+    "word",
+    ["/dev/./stdin", "//dev/stdin", "/dev//stdin", "/./dev/stdin", "/dev/fd//0", "/dev/fd/./0"],
+)
+def test_stdin_device_spellings_are_folded(word: str) -> None:
+    assert guard._is_stdin_device(word)
+
+
+@pytest.mark.parametrize(
+    "word", ["/dev/stdinx", "/dev/fd/x", "/dev/stdin/x", "dev/stdin", "/stdin"]
+)
+def test_non_stdin_devices_are_not_matched(word: str) -> None:
+    assert not guard._is_stdin_device(word)
+
+
 def test_a_quoted_pipe_counts_offline_but_not_in_the_recorder() -> None:
     # SPEC section 10, owner 2026-10-23: accepted. The guard reads a `|` inside quotes as a pipe
     # (to see into `bash -c '...'`), so this search is denied while the recorder is down

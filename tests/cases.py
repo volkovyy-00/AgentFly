@@ -45,6 +45,11 @@ PIPED_CODE: list[str] = [
     "cat x | python3 -u",
     "cat x | python3 /dev/stdin",
     "cat x | python3 /dev/fd/0",
+    # P1 fix 2 (D/F4): stdin-device spellings, `//` and `/./` folded before the match
+    "cat x | python3 /dev/./stdin",
+    "cat x | python3 /dev/fd//0",
+    "cat x | python3 //dev/stdin",
+    "cat x | python3 < /dev/./stdin",
     "cat x | python3 --",
     "cat x | ruby -",
     "cat x | perl -",

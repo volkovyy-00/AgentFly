@@ -389,8 +389,19 @@ def _is_stdin(word: str) -> bool:
     return word == "-" or _is_stdin_device(word)
 
 
+def _fold_slashes(word: str) -> str:
+    """Collapse `//`→`/` and `/./`→`/`, as paths are folded elsewhere (R0's guard paths)."""
+    while "//" in word:
+        word = word.replace("//", "/")
+    while "/./" in word:  # `/././` needs more than one pass
+        word = word.replace("/./", "/")
+    return word
+
+
 def _is_stdin_device(word: str) -> bool:
-    """`/dev/stdin` or `/dev/fd/N`: as a script or as `<`'s file, the code may be the pipe."""
+    """`/dev/stdin` or `/dev/fd/N`, `//` and `/./` folded first (`/dev/./stdin`, `/dev/fd//0`,
+    `//dev/stdin`): as a script or as `<`'s file, the code may be the pipe (D/F4)."""
+    word = _fold_slashes(word)
     return word == "/dev/stdin" or _DEV_FD.fullmatch(word) is not None
 
 

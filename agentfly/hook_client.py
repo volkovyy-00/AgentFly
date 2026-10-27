@@ -576,6 +576,11 @@ def _is_stdin(word: str) -> bool:
 
 
 def _is_stdin_device(word: str) -> bool:
+    # D/F4: fold `//`→`/` and `/./`→`/` first (`/dev/./stdin`, `/dev/fd//0`, `//dev/stdin`).
+    while "//" in word:
+        word = word.replace("//", "/")
+    while "/./" in word:  # `/././` needs more than one pass
+        word = word.replace("/./", "/")
     if word == "/dev/stdin":
         return True
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None

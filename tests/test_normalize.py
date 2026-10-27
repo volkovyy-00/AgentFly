@@ -13,6 +13,7 @@ import pytest
 from agentfly.recorder.normalize import (
     MAX_DEPTH,
     MAX_SCANS,
+    _is_stdin_device,
     _Scanner,
     normalize,
     script_indexes,
@@ -343,6 +344,22 @@ def test_every_allowed_case_is_not_outbound(command: str) -> None:
     if "\n" not in command and "'" not in command:
         assert not parsed_is_outbound(normalize(f"bash -c '{command}'")), command
         assert not parsed_is_outbound(normalize(f"env A=1 {command}")), command
+
+
+# P1 fix 2 (D/F4): a stdin device spelled with `//` or `/./` is still the device.
+@pytest.mark.parametrize(
+    "word",
+    ["/dev/./stdin", "//dev/stdin", "/dev//stdin", "/./dev/stdin", "/dev/fd//0", "/dev/fd/./0"],
+)
+def test_stdin_device_spellings_are_folded(word: str) -> None:
+    assert _is_stdin_device(word)
+
+
+@pytest.mark.parametrize(
+    "word", ["/dev/stdinx", "/dev/fd/x", "/dev/stdin/x", "dev/stdin", "/stdin"]
+)
+def test_non_stdin_devices_are_not_matched(word: str) -> None:
+    assert not _is_stdin_device(word)
 
 
 # ---------------------------------------------------------------- never raises, stays linear
