@@ -82,7 +82,9 @@ def test_the_example_uses_each_new_field() -> None:
     assert upload is not None and scope is not None and piped is not None
     assert ("curl", f"{rulefile.FLAG}-d") in upload.command
     assert scope.path_scope == "outside_workspace"
-    assert piped.pipe_into == frozenset({"sh", "bash", "zsh", "dash", "ksh", "eval", "source"})
+    assert piped.pipe_into == frozenset(
+        {"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "eval", "source"}
+    )
 
 
 def test_the_example_loads_as_the_active_file(active_rules: Path) -> None:

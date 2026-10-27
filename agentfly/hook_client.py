@@ -455,7 +455,7 @@ def _outbound_words(argv: list[str], text: str) -> bool:
 
 # ---- piped code (V5c): the stdin walk of agentfly/recorder/normalize.py, at word level
 
-_SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"})
 _SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
 _RUNNERS: frozenset[str] = frozenset(  # `normalize.RUNNERS`
     {"uv", "uvx", "arch", "xcrun", "bundle", "poetry", "pipenv", "pdm", "hatch", "conda"}
@@ -464,8 +464,8 @@ _RUNNERS: frozenset[str] = frozenset(  # `normalize.RUNNERS`
 _RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
 _WRAPPERS: frozenset[str] = _RUNNERS | frozenset(  # `normalize.WRAPPERS`, and `eval` (the
     {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}  # recorder
-    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "eval"}  # reads its words
-)  # again as a command)
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "script", "eval"}  # reads its
+)  # words again as a command)
 _DURATION: str = r"\d+(?:\.\d+)?[smhd]?"
 _KEYWORDS: frozenset[str] = frozenset(
     {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac"}

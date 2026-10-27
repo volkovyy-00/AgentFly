@@ -20,7 +20,7 @@ from agentfly.recorder.rulefile import Clause, Meter, WorkLimit, metered
 from tests.rules_helpers import default_with, list_line
 
 LISTS = list_line("downloaders", "curl", "wget") + list_line(
-    "shells", "sh", "bash", "zsh", "dash", "ksh", "eval", "source"
+    "shells", "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "eval", "source"
 )
 RULE14 = """
 [[rule]]
@@ -75,6 +75,8 @@ FIRES = [
     "curl x | zsh",
     "curl x | dash",
     "curl x | ksh",
+    "curl x | csh",  # P1 fix 10: csh and tcsh are in rule 14's shells list
+    "curl x | tcsh",
     'eval "$(curl x)"',
     "source <(curl x)",
     "sh -c `curl x`",

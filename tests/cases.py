@@ -95,6 +95,12 @@ PIPED_CODE: list[str] = [
     "echo 'import socket' | yarn run node",
     "echo 'import socket' | uv run --with rich python",
     "git ls-files | parallel grep -l sh",
+    # P1 fix 10 (owner 2026-10-24): csh and tcsh are shells; `script` is a wrapper, so the word
+    # after its option makes every later word a program and reaches the interpreter.
+    "cat x | csh",
+    "cat x | tcsh",
+    "cat x | csh5.2",  # a versioned name too
+    "cat x | script -q /dev/null python3",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [
@@ -141,6 +147,10 @@ PIPED_NOT_INLINE: list[str] = [
     "cat x | timeout 5 grep python",
     "cat x | uv run grep python",
     "cat x | xargs 2>/dev/null grep -l sh",
+    # P1 fix 10: `script` is a wrapper, but plain terminal-recording uses name no interpreter, so
+    # they stay allowed (the side effect of the wrapper change is harmless).
+    "cat x | script session.log",
+    "cat x | script -q out.txt",
 ]
 
 NAMED_OUTBOUND: list[str] = [

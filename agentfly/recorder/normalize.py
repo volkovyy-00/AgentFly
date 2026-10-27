@@ -30,7 +30,7 @@ MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this c
 # link a command once for each pipe around them, and the parse must stay within the client's wait.
 MAX_LINKS: int = 20_000
 
-SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"})
 # A quoted heredoc is literal data unless one of these reads it (D10, narrowed 2026-10-16).
 _READERS: frozenset[str] = frozenset({"ruby", "perl"})
 _INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
@@ -313,7 +313,7 @@ RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
 # runners among them.
 WRAPPERS: frozenset[str] = RUNNERS | frozenset(
     {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
-    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "script"}
 )
 _DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")  # `timeout 5s`
 # Shell words that stand before or around a command and are no program.
