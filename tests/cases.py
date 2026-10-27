@@ -148,6 +148,10 @@ PIPED_CODE: list[str] = [
     # P1 fix 6 (F3): `<(…)` as the script
     "cat x | python3 <(cat)",
     "cat x | bash <(cat)",
+    # P1 fix 9 (F2): a single-quoted `-c` script whose shell runs what the pipe holds
+    "cat x | bash -c '$(cat)'",
+    "cat x | bash -c '`cat`'",
+    "cat x | bash -c 'eval \"$(cat)\"'",
 ]
 # V5c: none of these reads code from its input.
 PIPED_NOT_INLINE: list[str] = [
