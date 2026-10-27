@@ -26,6 +26,11 @@ SUB_EMPTY: str = "@sub@"
 
 MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
+# A command longer than this is not parsed at all (owner 2026-10-25): it counts as unparsed (so R1
+# blocks it after a mark, and R0's lookup fallback still guards its paths) and the store saves it
+# as `… <unparsed>`. The cap sits before the scanner and `_piped_code`, so the O(n) walk never runs
+# on a 2 MiB line (closes L107: a 2 MiB newline / `a(`×1M / `sh -c -c …` line took seconds).
+_MAX_PARSE: int = 512 * 1024
 # Past this many links a line's links count as unknown (toward firing): groups nested in groups
 # link a command once for each pipe around them, and the parse must stay within the client's wait.
 MAX_LINKS: int = 20_000
@@ -1162,6 +1167,8 @@ def script_indexes(args: Sequence[str]) -> list[int | None]:
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
 def normalize(text: str) -> Parsed:
     """Parse a shell command line. Never raises: trouble becomes `unparsed`."""
+    if len(text) > _MAX_PARSE:  # too long to parse: unparsed, no loose scan, no O(n) walk
+        return Parsed(commands=(), unparsed=True)
     out = _Out()
     try:
         _Scanner(text, out, 0).parse_list(None)

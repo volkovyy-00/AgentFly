@@ -28,6 +28,7 @@ from tests.cases import (
     SCRIPT_NOT_INLINE,
     wrapped,
 )
+from tests.helpers import wallclock
 
 
 def words_of(command: str) -> list[str]:
@@ -344,6 +345,29 @@ def test_every_allowed_case_is_not_outbound(command: str) -> None:
     if "\n" not in command and "'" not in command:
         assert not parsed_is_outbound(normalize(f"bash -c '{command}'")), command
         assert not parsed_is_outbound(normalize(f"env A=1 {command}")), command
+
+
+# P1 fix 1 (size cap, owner 2026-10-25): a command over 512 KiB is not parsed; it counts as
+# unparsed (so R1 blocks it after a mark) and the O(n) scanner and _piped_code never run on it.
+def test_a_command_over_the_parse_cap_counts_as_unparsed() -> None:
+    parsed = normalize.__wrapped__("a" * (512 * 1024 + 1))
+    assert parsed.unparsed and parsed.commands == () and parsed.loose == ()
+    assert parsed_is_outbound(parsed)
+
+
+def test_a_command_just_under_the_parse_cap_is_parsed_as_now() -> None:
+    parsed = normalize.__wrapped__("echo " + "a" * (512 * 1024 - 10))
+    assert not parsed.unparsed and parsed.commands
+
+
+@wallclock
+@pytest.mark.parametrize(
+    "text", ["\n" * (2 * 1024 * 1024), "a(" * (1 << 20), "sh -c -c " * 200_000]
+)
+def test_the_parse_cap_answers_an_over_long_command_fast(text: str) -> None:
+    start = time.monotonic()
+    assert normalize.__wrapped__(text).unparsed
+    assert time.monotonic() - start < 1.0
 
 
 # P1 fix 2 (D/F4): a stdin device spelled with `//` or `/./` is still the device.

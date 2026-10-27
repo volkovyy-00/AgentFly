@@ -31,6 +31,8 @@ _PORT: int = 8787
 _BUDGET_S: float = 0.5  # total wait for the recorder, connect and answer together
 _MAX_STDIN: int = 64 * 1024 * 1024
 _MAX_GUARD_TEXT: int = 1024 * 1024
+_MAX_COMMAND: int = 512 * 1024  # a longer command is denied unread (owner 2026-10-25), before any
+# fold or scan: a stricter cap than _MAX_GUARD_TEXT, which still bounds a cut-off payload's raw text
 _MAX_ANSWER: int = 1024 * 1024
 _MAX_DEPTH: int = 24  # nested containers deeper than this are cut before they reach the body
 
@@ -862,7 +864,19 @@ def _quoted_one_liner(text: str) -> bool:
 
 
 def guard_reason(text: str) -> str | None:
-    """'guard_path', 'outbound' or None. Wrapped commands are found by scanning every word."""
+    """'guard_path', 'outbound' or None for a command. A command over 512 KiB is denied unread
+    (owner 2026-10-25), before any fold or scan. Wrapped commands are found by scanning every
+    word. The cut-off-payload scan uses `_scan_reason` instead, so this cap guards only a command
+    the hook was given (SPEC section 9)."""
+    if len(text) > _MAX_COMMAND:  # too long to read: denied unread, before any fold or scan
+        return "outbound"
+    return _scan_reason(text)
+
+
+def _scan_reason(text: str) -> str | None:
+    """'guard_path', 'outbound' or None for already-size-bounded text: the fold-and-scan that both
+    a command (`guard_reason`, with its 512 KiB cap on top) and a cut-off payload (`guard_raw`,
+    bounded by `_MAX_GUARD_TEXT`) share."""
     folded: str = text.casefold()
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
@@ -1101,9 +1115,12 @@ def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
         half: int = _MAX_GUARD_TEXT // 2
         raw = raw[:half] + b" " + raw[-half:]
     text: str = raw.decode("utf-8", "replace")
-    answer, reason = offline_answer(text)
+    # `_scan_reason`, not `guard_reason`: the 512 KiB command cap is for a command the hook was
+    # given, not for this raw scan, which is already bounded by `_MAX_GUARD_TEXT` (SPEC section 9).
+    reason: str | None = _scan_reason(text)
     if reason is None and _piped_code(_json_strings(text)):
-        return deny_answer("outbound"), "outbound"
+        reason = "outbound"
+    answer: dict[str, str] = {"permission": "allow"} if reason is None else deny_answer(reason)
     return answer, reason
 
 

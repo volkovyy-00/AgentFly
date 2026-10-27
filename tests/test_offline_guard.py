@@ -243,6 +243,23 @@ def test_pipes_that_feed_no_code_are_allowed_offline(command: str) -> None:
     assert guard.offline_answer(command) == ({"permission": "allow"}, None), command
 
 
+# P1 fix 1 (size cap, owner 2026-10-25): the guard denies a command over 512 KiB unread.
+def test_a_command_over_the_cap_is_denied_unread() -> None:
+    assert guard.guard_reason("a" * (512 * 1024 + 1)) == "outbound"
+
+
+def test_a_command_just_under_the_cap_is_read_as_now() -> None:
+    assert guard.guard_reason("ls " + "a" * (512 * 1024 - 10)) is None
+
+
+@wallclock
+@pytest.mark.parametrize("text", ["/" * (64 * 1024 * 1024), "a | " * (1 << 22)])
+def test_the_guard_cap_answers_an_over_long_command_fast(text: str) -> None:
+    start = time.monotonic()
+    assert guard.guard_reason(text) == "outbound"
+    assert time.monotonic() - start < 1.0
+
+
 # P1 fix 2 (D/F4): the guard folds `//` and `/./` in a stdin device, as the recorder does.
 @pytest.mark.parametrize(
     "word",
