@@ -26,12 +26,13 @@ SUB_EMPTY: str = "@sub@"
 
 MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
-# A command longer than this is not parsed at all (owner 2026-10-25): it counts as unparsed (so R1
-# blocks it after a mark) and the store saves it as `… <unparsed>`. Its loose scan is kept, as for
-# any unparsed text, so R0 and the command rules still see its words: padding hides no
-# `npm publish`. The cap sits before the scanner and `_piped_code`, so the O(n) walk never runs on
-# a 2 MiB line (closes L107: a 2 MiB newline / `a(`×1M / `sh -c -c …` line took seconds).
-_MAX_PARSE: int = 512 * 1024
+# A command longer than this is not parsed at all (owner 2026-10-25, 2026-10-27: 128 KiB; the
+# offline guard's cap is 512 KiB): it counts as unparsed (so R1 blocks it after a mark) and the
+# store saves it as `… <unparsed>`. A bag of its words is kept (`_loose_bag`), so R0 and the command
+# rules still see them: padding hides no `npm publish`. The cap sits before the scanner and
+# `_piped_code`, so their walk (about 10 µs of Python a simple command) never runs on a long line
+# (closes L107: 2 MiB of newlines or `a(`×1M took seconds); the full hook stays under 1 s to 2 MiB.
+MAX_PARSE: int = 128 * 1024
 # Past this many links a line's links count as unknown (toward firing): groups nested in groups
 # link a command once for each pipe around them, and the parse must stay within the client's wait.
 MAX_LINKS: int = 20_000
@@ -1275,7 +1276,7 @@ def script_indexes(args: Sequence[str]) -> list[int | None]:
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
 def normalize(text: str) -> Parsed:
     """Parse a shell command line. Never raises: trouble becomes `unparsed`."""
-    if len(text) > _MAX_PARSE:  # too long to parse: unparsed, read only as a bag of words
+    if len(text) > MAX_PARSE:  # too long to parse: unparsed, read only as a bag of words
         return Parsed(commands=(), unparsed=True, loose=_loose_bag(text))
     out = _Out()
     try:

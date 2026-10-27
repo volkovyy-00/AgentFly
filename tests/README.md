@@ -394,8 +394,9 @@ the maintainers' work items and decisions, which are kept outside this repo.
   An absolute program word is the step's file only if it is inside through the walk (an outside
   program such as `/bin/ls`, or one through a link that leads out, is not; a sensitive one is
   saved by its base name). Read and Write `file_path` keep `relative_file_path`. `@wallclock`:
-  300 distinct words of 1,022 characters, 2- and 60-character folders, outside, inside and
-  missing, inside and existing, answer within the client's wait through `apply_rules`.
+  128 distinct words of 1,022 characters (as many as fit under the recorder's 128 KiB parse cap;
+  P1, 300 before), 2- and 60-character folders, outside, inside and missing, inside and existing,
+  answer within the client's wait through `apply_rules`.
 - One-liner walks (`tests/test_one_liner_walk.py`, R1G, owner 2026-10-23): each family's table
   (`_one_liner_table`) gives the reference walk's answer at every position over the shared cases
   and 3,000 random runs of options, values and interpreter names, in the recorder and the offline

@@ -13,6 +13,7 @@ import pytest
 from agentfly.recorder.normalize import (
     _BAG_WORDS,
     MAX_DEPTH,
+    MAX_PARSE,
     MAX_SCANS,
     _is_stdin_device,
     _Scanner,
@@ -353,14 +354,15 @@ def test_every_allowed_case_is_not_outbound(command: str) -> None:
 # P1 fix 1 (size cap, owner 2026-10-25): a command over 512 KiB is not parsed; it counts as
 # unparsed (so R1 blocks it after a mark) and the O(n) scanner and _piped_code never run on it.
 def test_a_command_over_the_parse_cap_counts_as_unparsed() -> None:
-    text = "a" * (512 * 1024 + 1)
+    assert MAX_PARSE == 128 * 1024  # owner 2026-10-27: the recorder's cap (the guard's: 512 KiB)
+    text = "a" * (MAX_PARSE + 1)
     parsed = normalize.__wrapped__(text)
     assert parsed.unparsed and parsed.commands == () and parsed.loose == ((text, text),)
     assert parsed_is_outbound(parsed)
 
 
 def test_a_command_just_under_the_parse_cap_is_parsed_as_now() -> None:
-    parsed = normalize.__wrapped__("echo " + "a" * (512 * 1024 - 10))
+    parsed = normalize.__wrapped__("echo " + "a" * (MAX_PARSE - 10))
     assert not parsed.unparsed and parsed.commands
 
 
@@ -531,10 +533,11 @@ def big_command(words: int) -> str:
 
 def test_a_big_command_is_parsed_in_linear_time() -> None:
     # Four times the words cost about four times as much (a quadratic loop: sixteen). The shorter
-    # command is the baseline, timed in this test, so no number of seconds is involved.
-    short, long = fastest([big_command(8_000), big_command(32_000)], rounds=7)
+    # command is the baseline, timed in this test, so no number of seconds is involved. The longer
+    # one stays under the parse cap (P1: 128 KiB).
+    short, long = fastest([big_command(6_000), big_command(24_000)], rounds=7)
     assert long < 6 * short, f"4 times the words took {long / short:.1f} times as long"
-    assert not normalize.__wrapped__(big_command(32_000)).unparsed
+    assert not normalize.__wrapped__(big_command(24_000)).unparsed
 
 
 # ---------------------------------------------------------------- work stays bounded
