@@ -1131,9 +1131,13 @@ the same cases. Like the recorder it reads a backslash inside a program's name a
 the shell reads an unquoted one: `p\ython3`, and a written-out `pytho\n3` (`\n`,
 `\r` and `\t` are the letter) are `python3`, and a backslash-newline is dropped
 (P1-fix1). It splits an `env -S` argument list on `\_`, `\t`, `\n`, `\r`, `\v` and
-`\f` as the recorder does, expands a bare brace list within the same bound, and it
-reads a fed stage that holds a quote, `$(…)` or a backtick again with each quoted
-word whole (`… | python3 -X "a b"`; P1).
+`\f` as the recorder does — the value of such an option ends at a command separator or a
+`$`/backtick, never swallowing the next command (P1-fix1) — and inside a `$'…'` string a
+written-out `\t`, `\n`, `\r`, `\v` or `\f` is the whitespace it stands for, so it breaks the word
+as the shell does (`$'curl\t-d'` exposes `curl`; a hex or octal escape there stays a gap, below).
+It expands a bare brace list within the same bound, and it reads a fed stage that holds a quote,
+`$(…)` or a backtick again with each quoted word whole (`… | python3 -X "a b"`; P1). A loop fed
+by a pipe is read forwards to its `done` a bounded number of tokens (P1-fix1).
 
 **The accepted cost:** whenever the recorder is down (not started, crashed or
 killed), in every project and even with no secret read, the agent cannot run
@@ -1364,7 +1368,15 @@ Other measures:
   `bash -c` or `eval` string (`eval "{cur,}l x.com"`: the guard does not expand a
   quoted brace, though it expands a bare one), a heredoc or herestring read by an
   interpreter or a shell, or by a group that holds one (`python3 <<'EOF'`,
-  `{ python3; } <<< '…'`), and a program name split by quotes (`'p'ython3`).
+  `{ python3; } <<< '…'`), a program name split by quotes (`'p'ython3`), an ANSI-C `$'…'` string
+  whose escape is hex or octal (`$'\x63url'`; the guard now reads its `\t`/`\n`/`…` whitespace
+  escapes, P1-fix1, but not `\x`/`\0`), and a backslash-newline at the end of a `#` comment
+  (`| # c \` and a newline before `python3`; the recorder ends the comment at the newline). A
+  `$'…'` whitespace escape the guard reads is still missed by the recorder behind some wrappers
+  (`sudo $'curl\t…'`, `xargs $'…'`), its own pre-existing ANSI-C gap. Two scans of the text after
+  each `|` (fed stages and fed loops) each read a `#` comment to end of line, so a line that is
+  almost all `|#` is answered slowly though correctly (a count bounds the words read, not the
+  characters scanned; P1-fix1 lens, a later card).
 - The command cleaner (section 4) keeps less than a secret, not nothing. An
   option's value equal to an existing workspace file's name is saved as that path
   (a secret would have to be a file's name, which AgentFly saves anyway, owner
