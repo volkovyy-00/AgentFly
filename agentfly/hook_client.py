@@ -995,11 +995,12 @@ def _loop_end(text: str, start: int, count: _Count) -> int | None:
     paired where a command starts (`_owner_start`'s tokens, read forwards); the text's end if none
     does. None past the count."""
     found: Iterator[re.Match[str]] = re.compile(_OWNER_TOKEN).finditer(text, start)
-    # one token past what the count allows is enough to know it is past (no list of the rest)
-    tokens: list[re.Match[str]] = list(itertools.islice(found, max(count.left, 0) + 1))
+    budget: int = max(count.left, 0) + 1  # one token past the count proves it is past; read lazily
     depth: int = 0
     before: str = ";"
-    for spent, token in enumerate(tokens, start=1):
+    spent: int = 0
+    for token in found:  # P1-fix1: read forwards one token at a time, not a list of the rest
+        spent += 1
         word: str = token.group()
         if before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS:
             if word in _GROUP_OPENERS:
@@ -1009,7 +1010,9 @@ def _loop_end(text: str, start: int, count: _Count) -> int | None:
                 if depth == 0:
                     return None if count.spend(spent) else token.end()
         before = word
-    return None if count.spend(len(tokens)) else len(text)
+        if spent >= budget:
+            break
+    return None if count.spend(spent) else len(text)
 
 
 def _piped_code(text: str, walk: bool = True) -> bool:
@@ -1137,11 +1140,21 @@ _LINE_JOIN: str = r"(\\\\)|\\\n"
 # GNU `env -S` (`-iS`, `--split-string`) splits its argument list on the space `\_`, `\t`, `\n`,
 # `\r`, `\v` and `\f` stand for, as the recorder's `_env_unescape` does: in the value of such an
 # option they become spaces before the name fold above would read `\n` as a letter (P1-fix1).
-# The value runs to the next blank outside quotes, so `'"'"'` inside a `bash -c '…'` stays in it.
+# The value runs to the next blank outside quotes, so `'"'"'` inside a `bash -c '…'` stays in it,
+# but it stops at a command separator or a `$`/backtick (P1-fix1, adversary lens): the word after
+# a `-S` on another command (`ls -S;cu\rl …`) or a `$(…)` in its value is read on its own, not
+# swallowed; the option's own blank is a space or tab, never a newline (which ends the command).
 _SPLIT_STRING: str = (
-    r"""(?<![^\s;&|()<>])(?:-[A-Za-z]*S|--split-string)(?:=|\s*)(?:'[^']*+'?|"[^"]*+"?|[^\s'"])*+"""
+    r"""(?<![^\s;&|()<>])(?:-[A-Za-z]*S|--split-string)(?:=|[ \t]*)"""
+    r"""(?:'[^']*+'?|"[^"$`]*+"?|[^\s'"$`;&|()<>])*+"""
 )
 _SPLIT_ESCAPE: str = r"\\[_tnrvf]"
+# Inside a `$'…'` (ANSI-C) string a written-out `\t`, `\n`, `\r`, `\v` or `\f` is real whitespace
+# and breaks the word as the shell does (`$'curl\t-d'` runs `curl`, not the `curlt-d` the name fold
+# below would make of it); a hex or octal escape stays a guard gap (SPEC §10). P1-fix1 (lens). The
+# two body branches split on the first character, so the match is linear.
+_ANSI_C: str = r"\$'(?:[^'\\]|\\.)*+'"
+_ANSI_WS: str = r"\\[tnrvf]"
 # A brace list glued to a prefix/suffix, and several crossed, expand as the shell expands them
 # (`cur{l,}` is `curl cur`, `{cur,}l` is `curl l`, `c{u,}r{l,}` is `curl cur crl cr`), so the guard
 # sees the tool a glued list hides (P1, `normalize._brace_list`). A whole word that holds a `{` is
@@ -1209,6 +1222,9 @@ def _scan_reason(text: str, raw: bool = False) -> str | None:
             text = re.compile(_LINE_JOIN).sub(r"\1", text)
             escape: re.Pattern[str] = re.compile(_SPLIT_ESCAPE)
             text = re.compile(_SPLIT_STRING).sub(lambda m: escape.sub(" ", m.group()), text)
+            if "$'" in text:  # ANSI-C whitespace escapes split the word before the name fold
+                ansi_ws: re.Pattern[str] = re.compile(_ANSI_WS)
+                text = re.compile(_ANSI_C).sub(lambda m: ansi_ws.sub(" ", m.group()), text)
             text = re.compile(_NAME_ESCAPE).sub(r"\1", text)
         if "{" in text:  # a glued brace list expands to its words (`cur{l,}` is `curl cur`)
             text, past = _expand_braces(text)
