@@ -1088,6 +1088,42 @@ def guard_reason(text: str) -> str | None:
 # `\'` keep theirs too: they decide how the text splits. So do a written-out `\n`, `\r` and `\t`,
 # which `words` reads as JSON's (`ls\ncurl` names curl).
 _NAME_ESCAPE: str = r"\\((?![nrt])[a-zA-Z0-9.\-/])"
+# A brace list glued to a prefix/suffix, and several crossed, expand as the shell expands them
+# (`cur{l,}` is `curl cur`, `{cur,}l` is `curl l`, `c{u,}r{l,}` is `curl cur crl cr`), so the guard
+# sees the tool a glued list hides (P1, `normalize._brace_list`). A whole word is matched (not just
+# the braces) so adjacent lists cross correctly; the lookbehind keeps it at a word start, so a
+# `${a,b}` or a quoted list is left as it is. A word with a quote, `$`, backtick or backslash in
+# it, a `{a..b}` sequence (no comma), or an expansion past `_BRACE_CAP` words, is left as it is.
+_WORDCH: str = r"[^\s;&|()<>'\"$`\\]"  # a shell word's characters (braces kept, quotes/`$`/… not)
+_BRACE_WORD: str = rf"(?<![^\s;&|()<>])({_WORDCH}+)"
+_ONE_BRACE: str = r"\{([^{}]*,[^{}]*)\}"
+_BRACE_CAP: int = 64
+
+
+def _expand_braces(text: str) -> str:
+    one_brace: re.Pattern[str] = re.compile(_ONE_BRACE)
+
+    def expand(match: re.Match[str]) -> str:
+        word: str = match.group(1)
+        if "{" not in word:
+            return word
+        result: list[str] = [word]
+        index: int = 0
+        while index < len(result):
+            found: re.Match[str] | None = one_brace.search(result[index])
+            if found is None:
+                index += 1
+                continue
+            current: str = result[index]
+            result[index : index + 1] = [
+                current[: found.start()] + item + current[found.end() :]
+                for item in found.group(1).split(",")
+            ]
+            if len(result) > _BRACE_CAP:
+                return word
+        return word if result == [word] else " ".join(w for w in result if w)
+
+    return re.compile(_BRACE_WORD).sub(expand, text)
 
 
 def _scan_reason(text: str, raw: bool = False) -> str | None:
@@ -1097,6 +1133,8 @@ def _scan_reason(text: str, raw: bool = False) -> str | None:
     (`_NAME_ESCAPE`, P1); `raw` JSON text is read as it is, without the quote-aware walk."""
     if not raw:
         text = re.compile(_NAME_ESCAPE).sub(r"\1", text)
+        if "{" in text:  # a glued brace list expands to its words (`cur{l,}` is `curl cur`)
+            text = _expand_braces(text)
     folded: str = text.casefold()
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:

@@ -118,7 +118,7 @@ def test_the_default_and_the_layout_say_init_replaces_an_unedited_copy() -> None
     assert L21 in " ".join((Layout.rules.__doc__ or "").split())
 
 
-# P1 fix 1 (side-agent review): a command over the 512 KiB parse cap is not parsed, but its loose
+# P1 fix 1 (side-agent review): a command over the 128 KiB parse cap is not parsed, but its loose
 # word scan still reaches the command rules, so padding (a long comment) hides no named command.
 PAD = " # " + "a" * (128 * 1024)
 

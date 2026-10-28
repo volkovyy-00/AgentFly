@@ -150,6 +150,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   guard splits the word at the `\` and loses the `-i`) and a redirect between a loop's `done` and
   `< <(` (the closer is hidden). An unquoted `$(…)` glued to a named script (`$(pwd)/t.py`) the
   guard over-denies offline (the recorder allows it); within the guard-over-recorder margin.
+  Adversary lens (`BRACE_OUTBOUND`): a brace list glued to a prefix/suffix, or several crossed
+  (`cur{l,}`, `{cur,}l`, `c{u,}r{l,}`), expands to a real curl/wget call; the recorder denies each
+  bare and in every `wrapped` form after a mark (`test_rules.py`), and the guard denies each bare
+  and after a non-quoting wrapper (`test_offline_guard.py`). A glued brace inside a quoted
+  `bash -c`/`eval` string is a documented guard gap (SPEC §10); the recorder covers it. Expansion
+  is bounded to 64 words, so nested lists do not blow up.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;

@@ -9,7 +9,7 @@ import pytest
 from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
 from agentfly.recorder.rules import Action, Session, decide, mark
 from agentfly.recorder.sessions import SessionStore
-from tests.cases import MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
+from tests.cases import BRACE_OUTBOUND, MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
 from tests.rules_helpers import default_as, ruleset_of
 
 SENSITIVE = [
@@ -181,6 +181,15 @@ def test_inline_code_is_blocked_after_mark_even_without_http(command: str) -> No
 
 @pytest.mark.parametrize("command", NAMED_OUTBOUND + RECORDER_ONLY)
 def test_marked_session_denies_each_outbound_case_bare_and_wrapped(command: str) -> None:
+    for form in [command, *wrapped(command)]:
+        _, verdict, rule_id = _run(_shell(form), _session(marked=True))
+        assert (verdict, rule_id) == ("blocked", "R1"), form
+
+
+@pytest.mark.parametrize("command", BRACE_OUTBOUND)
+def test_marked_session_denies_a_glued_brace_list_bare_and_wrapped(command: str) -> None:
+    # P1 final-verification: a brace list glued to a prefix/suffix (or several crossed) expands
+    # to a real curl/wget call; R1 must see the tool after a mark (adversary lens).
     for form in [command, *wrapped(command)]:
         _, verdict, rule_id = _run(_shell(form), _session(marked=True))
         assert (verdict, rule_id) == ("blocked", "R1"), form

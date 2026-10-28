@@ -15,6 +15,7 @@ import pytest
 import agentfly.hook_client as guard
 from agentfly.recorder.rules import Session, decide, is_outbound_send, mark
 from tests.cases import (
+    BRACE_OUTBOUND,
     GUARD_PATHS,
     NAMED_OUTBOUND,
     PACKAGE_ALLOWED,
@@ -136,6 +137,15 @@ def test_outbound_commands_are_denied_bare_and_wrapped(command: str) -> None:
     assert answer["agent_message"].endswith(
         "Do not retry with another tool or language. Stop and tell the user."
     )
+
+
+@pytest.mark.parametrize("command", BRACE_OUTBOUND)
+def test_a_glued_brace_list_is_denied_offline(command: str) -> None:
+    # P1 final-verification: the guard expands a glued/crossed brace list (bare, and after a
+    # non-quoting wrapper) to see the curl/wget a list hides; a quoted `bash -c`/`eval` brace is
+    # a documented guard gap (SPEC §10), so only the non-quoting wrappers are asserted here.
+    for form in [command, f"sudo {command}", f"env A=1 {command}", f"xargs {command}"]:
+        assert guard.offline_answer(form)[1] == "outbound", form
 
 
 @pytest.mark.parametrize("command", NAMED_OUTBOUND)
