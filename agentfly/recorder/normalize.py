@@ -425,18 +425,24 @@ def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
     return None, at
 
 
-_ONE_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")  # one `{a,b,…}` list, innermost first
-_BRACE_CAP: int = 64  # a word's lists expand to at most this many words; beyond it, left as is
+# One `{a,b,…}` list, innermost first. The part before its first comma holds no comma, so a try
+# that finds no `}` fails at the next brace: an unclosed `{,,,…` is read in linear time (P1-fix1).
+_ONE_BRACE = re.compile(r"\{([^{},]*,[^{}]*)\}")
+_BRACE_CAP: int = 64  # a word's lists expand to at most this many words
+_BRACE_WORDS: int = 4096  # ... and a command's (its scripts' too) to at most this many (P1-fix1)
 
 
-def _brace_list(raw: str, word: str) -> list[str]:
+def _brace_list(raw: str, word: str, room: int) -> list[str] | None:
     """The words a brace list stands for, with any prefix and suffix glued on and several lists
     crossed, as the shell expands it: `{a,b}` is `a b`, `cur{l,}` is `curl cur`, `{cur,}l` is
     `curl l`, `c{u,}r{l,}` is `curl cur crl cr`. A quote, `$`, backtick or backslash in the raw
-    word leaves it as it is, as does a `{a..b}` sequence (no comma) or an expansion past
-    `_BRACE_CAP` words (P1); an empty element (`{a,}` glued to nothing) is dropped."""
+    word leaves it as it is, as does a `{a..b}` sequence (no comma): then `[]`. An empty element
+    (`{a,}` glued to nothing) is dropped. None past `_BRACE_CAP` words or past `room`, the words
+    the command may still expand to, counted before they are made: the word is then left as it
+    is and the command counts as unparsed (P1-fix1: `cu{r,}{,}{,}{,}{,}{,}{,}l` runs curl)."""
     if any(c in raw for c in "'\"$`\\") or "{" not in word:
         return []
+    limit: int = min(_BRACE_CAP, room)
     result: list[str] = [word]
     index: int = 0
     while index < len(result):
@@ -444,13 +450,13 @@ def _brace_list(raw: str, word: str) -> list[str]:
         if match is None:
             index += 1
             continue
+        items: list[str] = match.group(1).split(",")
+        if len(result) - 1 + len(items) > limit:
+            return None
         current: str = result[index]
         result[index : index + 1] = [
-            current[: match.start()] + item + current[match.end() :]
-            for item in match.group(1).split(",")
+            current[: match.start()] + item + current[match.end() :] for item in items
         ]
-        if len(result) > _BRACE_CAP:
-            return []
     return [] if result == [word] else [w for w in result if w]
 
 
@@ -759,6 +765,7 @@ class _Out:
         self.unquoted_heredoc: bool = False
         self.code_heredoc: bool = False
         self.scans: int = 0  # nested scans so far; MAX_SCANS caps the work of one command
+        self.braces: int = 0  # words brace lists expanded to so far; _BRACE_WORDS caps them
         self.links: list[tuple[int, int]] = []
         self.hubs: int = 0
         self.fed: set[int] = set()  # commands that read a pipe (or `>(…)`, or `< <(…)`)
@@ -977,10 +984,17 @@ class _Scanner:
                     out.links_unknown = True
                 cmd.start = word in _STARTERS
             brace: bool = not self.target and "{" in s[start : self.i]  # `{curl,…}`, `cur{l,}` (P1)
-            if brace and (items := _brace_list(s[start : self.i], word)):
-                cmd.words += items  # a brace list (with a prefix/suffix) expands to its words (P1)
-                take(len(items))
-                continue
+            if brace:
+                items: list[str] | None = _brace_list(
+                    s[start : self.i], word, _BRACE_WORDS - out.braces
+                )
+                if items is None:
+                    out.unparsed = True  # past the brace bound: left as it is (P1-fix1)
+                elif items:
+                    out.braces += len(items)
+                    cmd.words += items  # a brace list (with a prefix/suffix) expands (P1)
+                    take(len(items))
+                    continue
             cmd.words.append(word)
             take(1)
         finish()

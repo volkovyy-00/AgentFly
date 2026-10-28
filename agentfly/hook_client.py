@@ -431,8 +431,12 @@ def _inline_code(argv: list[str], names: list[str]) -> bool:
     or of `python3 -m pytest -c cfg` is not taken for it.
     """
     tables: dict[str, list[bool]] = {}  # `_one_liner_table`, one per family, made when needed
+    # each distinct name's family is worked out once (P1-fix1: 1 MiB of one word repeated)
+    families: dict[str, str | None] = {
+        name: _interpreter(name) or _script_family(name) for name in dict.fromkeys(names)
+    }
     for index, name in enumerate(names):
-        family: str | None = _interpreter(name) or _script_family(name)
+        family: str | None = families[name]
         if family is None:
             continue
         if family not in tables:
@@ -446,12 +450,13 @@ def _outbound_words(argv: list[str], text: str) -> bool:
     """`text` is the case-folded command, for the `http` test."""
     lower: list[str] = [a.lower() for a in argv]
     names: list[str] = [a.split("/")[-1].lower() for a in argv]
-    if any(n in _ALWAYS_OUTBOUND for n in names) or ("git" in names and "push" in lower):
+    distinct: dict[str, None] = dict.fromkeys(names)  # each name and word read once (P1-fix1)
+    if not _ALWAYS_OUTBOUND.isdisjoint(distinct) or ("git" in distinct and "push" in lower):
         return True
-    if _inline_code(argv, names) or (any(map(_interpreter, names)) and "http" in text):
+    if _inline_code(argv, names) or (any(map(_interpreter, distinct)) and "http" in text):
         return True
-    if any(n in _HOSTED_OUTBOUND for n in names):
-        hosts = [h for h in (_host_of_token(a) for a in argv) if h]
+    if not _HOSTED_OUTBOUND.isdisjoint(distinct):
+        hosts = [h for h in map(_host_of_token, dict.fromkeys(argv)) if h]
         return not hosts or any(not _is_local_host(h) for h in hosts)
     return False
 
@@ -540,6 +545,9 @@ _STDIN_SUB: str = r"(?:(?<![^\s;&|(){}])(\d+))?<>?[ \t]*<\("
 # quotes one at a time, words whole. A bracket always pairs (`$(…)`, `<(…)` and `${…}` too); a
 # keyword pairs where a command starts.
 _OWNER_TOKEN: str = r"""[;&|\n]+|[{}()'"`]|[^\s;&|(){}<>'"`]+"""
+# A loop fed by a pipe (`| while read l; do python3; done`, `until`, `for`): its body reads the
+# pipe, as the recorder reads it (P1-fix1). The match ends where the loop's keyword starts.
+_FED_LOOP: str = r"(?<!\|)\|(?!\|)&?(?:\s|[({!]|#[^\n]*)*+(?=(?:while|until|for)(?![^\s;&|()<>]))"
 _GROUP_OPENERS: frozenset[str] = frozenset({"if", "case", "while", "until", "for", "select"})
 _GROUP_CLOSERS: frozenset[str] = frozenset({"fi", "esac", "done"})
 _COMMAND_STARTERS: frozenset[str] = (
@@ -982,6 +990,28 @@ def _owner_start(text: str, lo: int, end: int, count: _Count) -> tuple[int, bool
     return (0, True) if depth and closed else (lo, closed)
 
 
+def _loop_end(text: str, start: int, count: _Count) -> int | None:
+    """Where the loop whose keyword is at `start` ends: after the `done` that closes it, keywords
+    paired where a command starts (`_owner_start`'s tokens, read forwards); the text's end if none
+    does. None past the count."""
+    found: Iterator[re.Match[str]] = re.compile(_OWNER_TOKEN).finditer(text, start)
+    # one token past what the count allows is enough to know it is past (no list of the rest)
+    tokens: list[re.Match[str]] = list(itertools.islice(found, max(count.left, 0) + 1))
+    depth: int = 0
+    before: str = ";"
+    for spent, token in enumerate(tokens, start=1):
+        word: str = token.group()
+        if before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS:
+            if word in _GROUP_OPENERS:
+                depth += 1
+            elif word in _GROUP_CLOSERS:
+                depth -= 1
+                if depth == 0:
+                    return None if count.spend(spent) else token.end()
+        before = word
+    return None if count.spend(len(tokens)) else len(text)
+
+
 def _piped_code(text: str, walk: bool = True) -> bool:
     """Code piped into an interpreter or a shell that names no script (SPEC section 9): the
     command after a `|` (`echo 'print(1)' | python3`), inside `>(` (`cat x > >(sh)`) or before
@@ -1006,6 +1036,19 @@ def _piped_code(text: str, walk: bool = True) -> bool:
             reads, read_to = _fed_stage_reads(text, start, stop, count, 0, read_to)
             if reads:
                 return True
+    # P1-fix1: a loop fed by a pipe feeds each command of its body; one inside a loop already
+    # read is read with it
+    read_to = 0
+    for fed in re.compile(_FED_LOOP).finditer(text):
+        stages += 1
+        if stages > _PIPE_STAGES:
+            return True
+        if fed.end() < read_to:
+            continue
+        loop_end: int | None = _loop_end(text, fed.end(), count)
+        if loop_end is None or _line_reads(text[fed.end() : loop_end], count, 0):
+            return True
+        read_to = loop_end
     # A `-c` word read past the count answers only for its place in a walk: the count spent decides
     if "<(" not in text:
         return count.left < 0
@@ -1082,31 +1125,49 @@ def guard_reason(text: str) -> str | None:
 
 
 # A backslash before a name's letter, digit, `.`, `-` or `/` is dropped, as the shell drops it
-# outside single quotes (`p\ython3`, `c\url`); inside them it stays, and is dropped too (toward
-# deny). `\_` keeps its backslash (so `words` splits there): GNU `env -S` reads `\_` as a space
-# that splits its argument list (`-S'curl\_-d\_@.env'` runs curl), P1. `\\`, `\|`, `\;`, `\"` and
-# `\'` keep theirs too: they decide how the text splits. So do a written-out `\n`, `\r` and `\t`,
-# which `words` reads as JSON's (`ls\ncurl` names curl).
-_NAME_ESCAPE: str = r"\\((?![nrt])[a-zA-Z0-9.\-/])"
+# outside single quotes (`p\ython3`, `c\url`, and a written-out `pytho\n3`, `cu\rl`, `wge\t`,
+# P1-fix1); inside them it stays, and is dropped too (toward deny). `\_`, `\v` and `\f` keep their
+# backslash (so `words` splits there): GNU `env -S` reads them as a space that splits its argument
+# list (`-S'curl\_-d\_@.env'` runs curl). `\\`, `\|`, `\;`, `\"` and `\'` keep theirs too: they
+# decide how the text splits.
+_NAME_ESCAPE: str = r"\\((?![vf])[a-zA-Z0-9.\-/])"
+# A backslash-newline is dropped, as the shell drops it (`pyt\` and a newline, `hon3`, is python3),
+# but not after an escaped backslash (`a\\` and a newline end the line), P1-fix1.
+_LINE_JOIN: str = r"(\\\\)|\\\n"
+# GNU `env -S` (`-iS`, `--split-string`) splits its argument list on the space `\_`, `\t`, `\n`,
+# `\r`, `\v` and `\f` stand for, as the recorder's `_env_unescape` does: in the value of such an
+# option they become spaces before the name fold above would read `\n` as a letter (P1-fix1).
+# The value runs to the next blank outside quotes, so `'"'"'` inside a `bash -c '…'` stays in it.
+_SPLIT_STRING: str = (
+    r"""(?<![^\s;&|()<>])(?:-[A-Za-z]*S|--split-string)(?:=|\s*)(?:'[^']*+'?|"[^"]*+"?|[^\s'"])*+"""
+)
+_SPLIT_ESCAPE: str = r"\\[_tnrvf]"
 # A brace list glued to a prefix/suffix, and several crossed, expand as the shell expands them
 # (`cur{l,}` is `curl cur`, `{cur,}l` is `curl l`, `c{u,}r{l,}` is `curl cur crl cr`), so the guard
-# sees the tool a glued list hides (P1, `normalize._brace_list`). A whole word is matched (not just
-# the braces) so adjacent lists cross correctly; the lookbehind keeps it at a word start, so a
-# `${a,b}` or a quoted list is left as it is. A word with a quote, `$`, backtick or backslash in
-# it, a `{a..b}` sequence (no comma), or an expansion past `_BRACE_CAP` words, is left as it is.
+# sees the tool a glued list hides (P1, `normalize._brace_list`). A whole word that holds a `{` is
+# matched (not just the braces) so adjacent lists cross correctly; the lookbehind keeps it at a
+# word start, so a `${a,b}` or a quoted list is left as it is. A word with a quote, `$`, backtick
+# or backslash in it, or a `{a..b}` sequence (no comma), is left as it is. Past `_BRACE_CAP` words
+# for a word, or `_BRACE_WORDS` for the command, the word is left as it is and the command counts
+# as outbound (P1-fix1). The part of a list before its first comma holds no comma, so an unclosed
+# `{,,,…` is read in linear time.
 _WORDCH: str = r"[^\s;&|()<>'\"$`\\]"  # a shell word's characters (braces kept, quotes/`$`/… not)
-_BRACE_WORD: str = rf"(?<![^\s;&|()<>])({_WORDCH}+)"
-_ONE_BRACE: str = r"\{([^{}]*,[^{}]*)\}"
+_BRACE_WORD: str = r"""(?<![^\s;&|()<>])[^\s;&|()<>'"$`\\{]*\{""" + _WORDCH + "*"
+_ONE_BRACE: str = r"\{([^{},]*,[^{}]*)\}"
 _BRACE_CAP: int = 64
+_BRACE_WORDS: int = 4096
 
 
-def _expand_braces(text: str) -> str:
+def _expand_braces(text: str) -> tuple[str, bool]:
+    """The text with each brace word expanded, and whether it went past the brace bound."""
     one_brace: re.Pattern[str] = re.compile(_ONE_BRACE)
+    room: list[int] = [_BRACE_WORDS]  # the words the command may still expand to
 
     def expand(match: re.Match[str]) -> str:
-        word: str = match.group(1)
-        if "{" not in word:
+        word: str = match.group()
+        if room[0] < 0:
             return word
+        limit: int = min(_BRACE_CAP, room[0])
         result: list[str] = [word]
         index: int = 0
         while index < len(result):
@@ -1114,27 +1175,38 @@ def _expand_braces(text: str) -> str:
             if found is None:
                 index += 1
                 continue
+            items: list[str] = found.group(1).split(",")
+            if len(result) - 1 + len(items) > limit:  # counted before the words are made
+                room[0] = -1
+                return word
             current: str = result[index]
             result[index : index + 1] = [
-                current[: found.start()] + item + current[found.end() :]
-                for item in found.group(1).split(",")
+                current[: found.start()] + item + current[found.end() :] for item in items
             ]
-            if len(result) > _BRACE_CAP:
-                return word
-        return word if result == [word] else " ".join(w for w in result if w)
+        if result == [word]:
+            return word
+        room[0] -= len(result)
+        return " ".join(w for w in result if w)
 
-    return re.compile(_BRACE_WORD).sub(expand, text)
+    text = re.compile(_BRACE_WORD).sub(expand, text)
+    return text, room[0] < 0
 
 
 def _scan_reason(text: str, raw: bool = False) -> str | None:
     """'guard_path', 'outbound' or None for already-size-bounded text: the fold-and-scan that both
-    a command (`guard_reason`, with its 512 KiB cap on top) and a cut-off payload (`guard_raw`,
-    bounded by `_MAX_GUARD_TEXT`) share. Command text has its names read as the shell reads them
-    (`_NAME_ESCAPE`, P1); `raw` JSON text is read as it is, without the quote-aware walk."""
+    a command (`guard_reason`, with its 512 KiB cap on top) and a cut-off payload's decoded text
+    (`guard_raw`, bounded by `_MAX_GUARD_TEXT`) share. Command text has its names read as the
+    shell reads them (`_LINE_JOIN`, `_SPLIT_STRING`, `_NAME_ESCAPE`, P1). `raw` JSON text is read
+    as it is, for guard paths and piped code only (`guard_raw` reads its tools' names decoded)."""
+    past: bool = False
     if not raw:
-        text = re.compile(_NAME_ESCAPE).sub(r"\1", text)
+        if "\\" in text:
+            text = re.compile(_LINE_JOIN).sub(r"\1", text)
+            escape: re.Pattern[str] = re.compile(_SPLIT_ESCAPE)
+            text = re.compile(_SPLIT_STRING).sub(lambda m: escape.sub(" ", m.group()), text)
+            text = re.compile(_NAME_ESCAPE).sub(r"\1", text)
         if "{" in text:  # a glued brace list expands to its words (`cur{l,}` is `curl cur`)
-            text = _expand_braces(text)
+            text, past = _expand_braces(text)
     folded: str = text.casefold()
     plain: str = folded.replace("\\", "")  # `Application\ Support`
     while "//" in plain:
@@ -1145,7 +1217,9 @@ def _scan_reason(text: str, raw: bool = False) -> str | None:
         plain += " " + " ".join(os.path.normpath(w) for w in plain.split() if "/.." in w)
     if any(path in plain for path in _GUARD_PATHS):
         return "guard_path"
-    if _outbound_words(words(text), folded) or _piped_code(text, walk=not raw):
+    if raw:
+        return "outbound" if _piped_code(text, walk=False) else None
+    if past or _outbound_words(words(text), folded) or _piped_code(text):
         return "outbound"
     quotes: bool = any(q in text for q in "'\"\\")
     return "outbound" if quotes and "perl" in folded and _quoted_one_liner(text) else None
@@ -1367,16 +1441,18 @@ def _json_strings(text: str) -> str:
 
 
 def guard_raw(raw: bytes) -> tuple[dict[str, str], str | None]:
-    """The offline guard on input that could not be read as a hook payload: on its raw text, then
-    on that text with its JSON strings read (`_json_strings`), as a command's text is (P1: a perl
-    `-M` line in `bash -c '…'`, whose raw text holds JSON's `\\"`; `p\\ython3`)."""
+    """The offline guard on input that could not be read as a hook payload: its text with its JSON
+    strings read (`_json_strings`), as a command's text is (P1: a perl `-M` line in `bash -c '…'`,
+    whose raw text holds JSON's `\\"`; `p\\ython3`), then its raw text for guard paths and piped
+    code. A tool's name is read once, in the decoded text (P1-fix1: a second read of 1 MiB took
+    the scan past 1 s)."""
     if len(raw) > _MAX_GUARD_TEXT:  # a tool name may sit at either end of a cut-off payload
         half: int = _MAX_GUARD_TEXT // 2
         raw = raw[:half] + b" " + raw[-half:]
     text: str = raw.decode("utf-8", "replace")
     # `_scan_reason`, not `guard_reason`: the 512 KiB command cap is for a command the hook was
     # given, not for this raw scan, which is already bounded by `_MAX_GUARD_TEXT` (SPEC section 9).
-    reason: str | None = _scan_reason(text, raw=True) or _scan_reason(_json_strings(text))
+    reason: str | None = _scan_reason(_json_strings(text)) or _scan_reason(text, raw=True)
     answer: dict[str, str] = {"permission": "allow"} if reason is None else deny_answer(reason)
     return answer, reason
 

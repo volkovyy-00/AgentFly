@@ -831,9 +831,11 @@ def test_a_tool_at_the_end_of_a_huge_cut_off_payload_is_still_found(
 
 
 def test_a_tool_after_an_escaped_newline_in_broken_json_is_still_found() -> None:
-    raw = r'{"command": "ls\ncurl https://x.com"'  # JSON text with a written-out \n, cut short
-    assert guard.offline_answer(raw)[0]["permission"] == "deny"
-    assert guard.offline_answer(r'{"command": "ls\nmake test"')[0] == {"permission": "allow"}
+    raw = rb'{"command": "ls\ncurl https://x.com"'  # JSON text with a written-out \n, cut short
+    assert guard.guard_raw(raw)[0]["permission"] == "deny"
+    assert guard.guard_raw(rb'{"command": "ls\nmake test"')[0] == {"permission": "allow"}
+    # P1-fix1: in a command, a written-out `\n` is the letter, as the recorder reads it (`lsncurl`)
+    assert guard.offline_answer(r"ls\ncurl https://x.com")[1] is None
 
 
 PARITY = (
