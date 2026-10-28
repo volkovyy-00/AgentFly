@@ -496,6 +496,28 @@ def test_each_wrapper_value_option_takes_the_next_word(project_root: Path) -> No
             assert clean_command(raw, project_root) == expected, raw
 
 
+@pytest.mark.parametrize("program", ["echo", "git push --force #"])
+def test_a_command_over_the_recorders_parse_cap_is_saved_unparsed(
+    project_root: Path, program: str
+) -> None:
+    # P1 (owner 2026-10-25, 2026-10-27): a command over 128 KiB is not parsed and is saved as
+    # `<unparsed>`, whatever its shape; one just under is cleaned as before
+    over = f"{program} " + "a" * (128 * 1024)
+    assert clean_command(over, project_root) == f"{program.split()[0]} <unparsed>"
+    under = "echo " + "a" * (128 * 1024 - 10)
+    assert clean_command(under, project_root) == "echo <arg>"
+
+
+@wallclock
+def test_an_over_long_command_is_saved_unread_fast(project_root: Path) -> None:
+    # the program is named from the command's start: the token walk is Python, a character at a
+    # time (2 MiB took about 0.6 s of CPU)
+    command = "ls " + "a " * (1 << 20)
+    started = time.process_time()
+    assert clean_command(command, project_root) == "ls <unparsed>"
+    assert time.process_time() - started < 0.1
+
+
 def test_a_command_past_the_parts_count_ends_in_unparsed(
     project_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

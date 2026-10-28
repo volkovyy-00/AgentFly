@@ -11,7 +11,7 @@ from functools import cached_property
 from pathlib import Path
 from urllib.parse import urlparse
 
-from agentfly.recorder.normalize import SHELLS
+from agentfly.recorder.normalize import MAX_PARSE, SHELLS
 
 # On by default. Set CLEAN_COMMANDS=0|false|no|off to store raw commands (unsafe).
 CLEAN_COMMANDS: bool = os.environ.get("CLEAN_COMMANDS", "1").strip().lower() not in {
@@ -211,6 +211,10 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
     if not stripped:
         return ""
 
+    # P1 (owner 2026-10-25): a command the recorder does not parse is saved unread; its program
+    # is named from its start only (the token walk below is Python, a character at a time)
+    if len(stripped) > MAX_PARSE:
+        return f"{_first_program(stripped[:4096])} <unparsed>"
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>"
 

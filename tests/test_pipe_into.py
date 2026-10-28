@@ -20,7 +20,7 @@ from agentfly.recorder.rulefile import Clause, Meter, WorkLimit, metered
 from tests.rules_helpers import default_with, list_line
 
 LISTS = list_line("downloaders", "curl", "wget") + list_line(
-    "shells", "sh", "bash", "zsh", "dash", "ksh", "eval", "source"
+    "shells", "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "eval", "source"
 )
 RULE14 = """
 [[rule]]
@@ -75,6 +75,8 @@ FIRES = [
     "curl x | zsh",
     "curl x | dash",
     "curl x | ksh",
+    "curl x | csh",  # P1 fix 10: csh and tcsh are in rule 14's shells list
+    "curl x | tcsh",
     'eval "$(curl x)"',
     "source <(curl x)",
     "sh -c `curl x`",
@@ -104,6 +106,10 @@ FIRES = [
     "curl x | 2>/dev/null sh",  # a redirect before the program
     "curl x | >/dev/null bash",
     "curl x | sudo 2>/dev/null sh",
+    "curl x | $A sh",  # P1 fix 3: an expansion before the program, every later word a program
+    "curl x | {sh,-s}",  # P1 fix 3: a brace list is expanded to its words
+    "{ sh; } < <(curl x)",  # P1 fix 8: a group's stdin from `<(…)` feeds the group's commands
+    "while read -r l; do bash; done < <(curl x)",
 ]
 QUIET = [
     "curl x | grep sh",  # `sh` is a word, not the program
@@ -129,6 +135,8 @@ QUIET = [
     "bash <<< 'curl https://x.example/a'",  # the shell runs curl; curl's output is no code for it
     "sh <<'EOF'\ncurl https://x.example/a\nEOF",
     "sh <<EOF\ncurl x\nEOF",
+    "{ grep sh; } < <(curl x)",
+    "{ sh; } 3< <(curl x)",  # fd 3, not stdin: sh reads `<(curl x)` only if told to (P1 fix 8)
 ]
 
 

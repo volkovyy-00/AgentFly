@@ -4,7 +4,8 @@ A word is judged as text first (joined to the root, `.` and `..` folded, `~` not
 the root as sent and as resolved) and only a word inside is walked on disk, one `lstat` a part, a
 missing part ends the walk, links must not lead out. All the words of one hook share a budget
 (`clean.Lookups`). The walk is checked against `os.path.realpath(strict=True)`; the speed of the
-whole hook on 300 words of 1,022 characters is checked through the real `apply_rules`.
+whole hook on 128 words of 1,022 characters (as many as fit under the recorder's parse cap) is
+checked through the real `apply_rules`.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import agentfly.recorder.store as store_module
 from agentfly.recorder import clean
 from agentfly.recorder.clean import Lookups, clean_command, cleaned_words
 from agentfly.recorder.names import words
+from agentfly.recorder.normalize import MAX_PARSE
 from agentfly.recorder.rules import Session
 from agentfly.recorder.store import build_step_record
 from tests.helpers import wallclock
@@ -403,12 +405,15 @@ def long_words(folder: Path, name_length: int, count: int, *, create: bool) -> l
 
 
 SHAPES = ["outside", "inside, missing", "inside, existing"]
+# As many 1,022-character words as fit under the recorder's parse cap (P1: 128 KiB; 300 before):
+# a longer command is not parsed and is saved as `cat <unparsed>`, with no look-up.
+LONG_WORDS = MAX_PARSE // 1_023
 
 
 @wallclock
 @pytest.mark.parametrize("name_length", [2, 60])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_300_words_of_1022_characters_are_answered_within_the_clients_wait(
+def test_long_words_up_to_the_parse_cap_are_answered_within_the_clients_wait(
     shape: str, name_length: int, tree: Path, rec: Recorder
 ) -> None:
     """The real hook (`apply_rules`), default rules, best of three. Measured on the author's Mac
@@ -416,7 +421,7 @@ def test_300_words_of_1022_characters_are_answered_within_the_clients_wait(
     folder = {"outside": tree.parent / "outside", "inside, missing": tree / "none"}.get(
         shape, tree / "there"
     )
-    words_ = long_words(folder, name_length, 300, create=shape == "inside, existing")
+    words_ = long_words(folder, name_length, LONG_WORDS, create=shape == "inside, existing")
     command = "cat " + " ".join(words_)
     rec.run("warm", command, workspace_roots=[str(tree)])
     best = float("inf")
@@ -427,4 +432,4 @@ def test_300_words_of_1022_characters_are_answered_within_the_clients_wait(
     assert best < CLIENT_WAIT, f"{shape}, {name_length}: {best:.3f} s of {CLIENT_WAIT} s"
     if shape == "inside, existing":  # the folders seen once are kept: no word becomes `<arg>`
         cleaned = clean_command(command, tree)
-        assert cleaned.count(".py") == 300 and "<arg>" not in cleaned
+        assert cleaned.count(".py") == LONG_WORDS and "<arg>" not in cleaned
