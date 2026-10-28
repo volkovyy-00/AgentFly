@@ -1370,7 +1370,11 @@ Other measures:
   interpreter or a shell, or by a group that holds one (`python3 <<'EOF'`,
   `{ python3; } <<< '…'`), a program name split by quotes (`'p'ython3`), an ANSI-C `$'…'` string
   whose escape is hex or octal (`$'\x63url'`; the guard now reads its `\t`/`\n`/`…` whitespace
-  escapes, P1-fix1, but not `\x`/`\0`), and a backslash-newline at the end of a `#` comment
+  escapes, P1-fix1, but not `\x`/`\0`), a value glued to GNU `env -S` with no space, quote or
+  escape (`env -Scurl …` runs curl, as the recorder peels it; the guard cannot tell it from a
+  clustered flag such as `python3 -Sc` without the program-is-`env` context the recorder parses,
+  so splitting it would wreck the other case — P1-fix1 lens, a later card), and a
+  backslash-newline at the end of a `#` comment
   (`| # c \` and a newline before `python3`; the recorder ends the comment at the newline). A
   `$'…'` whitespace escape the guard reads is still missed by the recorder behind some wrappers
   (`sudo $'curl\t…'`, `xargs $'…'`), its own pre-existing ANSI-C gap. Two scans of the text after

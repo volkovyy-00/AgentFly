@@ -190,6 +190,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   newline form are denied. `test_a_pipe_of_many_closed_loops_is_read_in_bounded_time` (`@wallclock`,
   CPU time) — 999 closed decoy loops then 20,000 words are read in well under 1 s (eager it was
   about 4 s), and a real fed loop among the decoys is still denied.
+  A second, post-fix lens pass added two `GUARD_MISSED` rows (`tests/cases.py`), caught by
+  `test_the_shared_outbound_cases_are_denied_bare_and_wrapped` on both engines: a pipe-fed loop
+  whose body opens a compound after a `case` pattern `)` no longer ends the loop early, so the
+  trailing interpreter is still denied (`… do case $l in p) for i in x; do :; done;; esac; python3; done`,
+  and the `until`/`if…fi` variant). The same pass found `env -Scurl …` (a value glued to `-S`):
+  the guard allows it, a documented leftover (SPEC §10), so it is not in a table.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
