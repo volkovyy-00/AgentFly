@@ -298,6 +298,10 @@ GUARD_MISSED: list[str] = [
     "cat x | for i in 1; do python3; done",
     "cat x | while read -r l; do sh; done",
     "cat x | while read l; do while true; do :; done; python3; done",  # the outer body, whole
+    # a `case` arm whose body opens a compound after the pattern `)` does not end the loop early
+    # (P1-fix1 lens): the trailing interpreter is still in the body
+    "cat x | while read l; do case $l in p) for i in x; do :; done;; esac; python3; done",
+    "cat x | until false; do case $x in a) if y; then z; fi;; esac; sh; done",
     # a backslash-newline inside a word is dropped (bash runs `python3`, `curl`), but not after an
     # escaped backslash, where the line ends (`pytho\` and a newline, `3`, is `pytho3`: no case)
     "cat x | pyt\\\nhon3",

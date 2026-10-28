@@ -1002,7 +1002,11 @@ def _loop_end(text: str, start: int, count: _Count) -> int | None:
     for token in found:  # P1-fix1: read forwards one token at a time, not a list of the rest
         spent += 1
         word: str = token.group()
-        if before[0] in ";&|\n({'\"`" or before in _COMMAND_STARTERS:
+        # a `)` begins a command too: it closes a `case` pattern, so `p) for …; done` opens the
+        # `for` (without it the opener's +1 is skipped but its `done`'s -1 counts, and the walk
+        # ends the loop early, before a trailing interpreter; P1-fix1, adversary lens). Counting
+        # it can only raise depth, so the loop end is found no sooner — the safe direction.
+        if before[0] in ";&|\n(){'\"`" or before in _COMMAND_STARTERS:
             if word in _GROUP_OPENERS:
                 depth += 1
             elif word in _GROUP_CLOSERS:
@@ -1144,6 +1148,9 @@ _LINE_JOIN: str = r"(\\\\)|\\\n"
 # but it stops at a command separator or a `$`/backtick (P1-fix1, adversary lens): the word after
 # a `-S` on another command (`ls -S;cu\rl …`) or a `$(…)` in its value is read on its own, not
 # swallowed; the option's own blank is a space or tab, never a newline (which ends the command).
+# A value glued on with no space, quote or escape (`env -Scurl`) is left unsplit: splitting it
+# needs the program-is-env context the recorder has and this heuristic does not, and a blind space
+# would wreck a clustered flag on another tool (`python3 -Sc`). Logged as a leftover (SPEC §10).
 _SPLIT_STRING: str = (
     r"""(?<![^\s;&|()<>])(?:-[A-Za-z]*S|--split-string)(?:=|[ \t]*)"""
     r"""(?:'[^']*+'?|"[^"$`]*+"?|[^\s'"$`;&|()<>])*+"""
