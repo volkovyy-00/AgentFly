@@ -139,7 +139,17 @@ the maintainers' work items and decisions, which are kept outside this repo.
   after `env A=1`, after another `< <(…)` and nested; a keyword as an argument, `echo done`, is
   no closer; `3< <(…)` and `< x.py` feed nothing), and the words before a `< <(…)` count toward
   `_PIPED_WORDS` (4,000 are read, 12,000 deny); `{ a; } < <(` and `done < <(` repeated stay
-  linear.
+  linear. P1 final-verification (the `PIPED_CODE`, `PIPED_NOT_INLINE` and `NAMED_OUTBOUND` lines
+  above, both engines): after `--` an unreadable word (`<(…)`, `$F`) is still the script; the
+  stdin device is matched case-insensitively and with `.`/`..`/`//` folded out (`/DEV/stdin`,
+  `/dev/../dev/stdin`); `script FILE python3` reaches the interpreter with no option too; `env -S`
+  reads `\_` as a space that splits its argument list (`curl`/`ssh` is the program); and an option
+  whose `$` value is not the script (`-W$W`, `--env-file=$ENV`) or a `${…}` glued into a named
+  script (`${HOME}/t.py`) leaves the real script named, so both engines allow it. Guard gaps the
+  recorder denies (`RECORDER_ONLY`, SPEC section 10): a piped `env -S'python3\_-i\_t.py'` (the
+  guard splits the word at the `\` and loses the `-i`) and a redirect between a loop's `done` and
+  `< <(` (the closer is hidden). An unquoted `$(…)` glued to a named script (`$(pwd)/t.py`) the
+  guard over-denies offline (the recorder allows it); within the guard-over-recorder margin.
 - Serve (`tests/test_serve_port.py`): a second `serve` on a busy port exits 1, the
   token is unchanged and the first recorder still blocks R1. Docs
   (`tests/test_install_docs.py`): `install.sh` creates no `~/.config/flightrecorder`;
