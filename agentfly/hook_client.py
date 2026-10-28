@@ -1148,27 +1148,29 @@ _SPLIT_ESCAPE: str = r"\\[_tnrvf]"
 # matched (not just the braces) so adjacent lists cross correctly; the lookbehind keeps it at a
 # word start, so a `${a,b}` or a quoted list is left as it is. A word with a quote, `$`, backtick
 # or backslash in it, or a `{a..b}` sequence (no comma), is left as it is. Past `_BRACE_CAP` words
-# for a word, or `_BRACE_WORDS` for the command, the word is left as it is and the command counts
-# as outbound (P1-fix1). The part of a list before its first comma holds no comma, so an unclosed
-# `{,,,…` is read in linear time.
+# for a word, or `_BRACE_WORDS` words or `_BRACE_BYTES` bytes for the command, the word is left as
+# it is and the command counts as outbound (P1-fix1, owner 2026-10-28). The part of a list before
+# its first comma holds no comma, so an unclosed `{,,,…` is read in linear time.
 _WORDCH: str = r"[^\s;&|()<>'\"$`\\]"  # a shell word's characters (braces kept, quotes/`$`/… not)
 _BRACE_WORD: str = r"""(?<![^\s;&|()<>])[^\s;&|()<>'"$`\\{]*\{""" + _WORDCH + "*"
 _ONE_BRACE: str = r"\{([^{},]*,[^{}]*)\}"
 _BRACE_CAP: int = 64
 _BRACE_WORDS: int = 4096
+_BRACE_BYTES: int = 512 * 1024  # the bytes a command's lists may make (owner 2026-10-28)
 
 
 def _expand_braces(text: str) -> tuple[str, bool]:
     """The text with each brace word expanded, and whether it went past the brace bound."""
     one_brace: re.Pattern[str] = re.compile(_ONE_BRACE)
-    room: list[int] = [_BRACE_WORDS]  # the words the command may still expand to
+    left: list[int] = [_BRACE_WORDS, _BRACE_BYTES]  # the words and bytes the command may still make
 
     def expand(match: re.Match[str]) -> str:
         word: str = match.group()
-        if room[0] < 0:
+        if left[0] < 0:
             return word
-        limit: int = min(_BRACE_CAP, room[0])
+        limit: int = min(_BRACE_CAP, left[0])
         result: list[str] = [word]
+        size: int = len(word)  # the bytes of `result`, counted before its words are made
         index: int = 0
         while index < len(result):
             found: re.Match[str] | None = one_brace.search(result[index])
@@ -1176,20 +1178,23 @@ def _expand_braces(text: str) -> tuple[str, bool]:
                 index += 1
                 continue
             items: list[str] = found.group(1).split(",")
-            if len(result) - 1 + len(items) > limit:  # counted before the words are made
-                room[0] = -1
-                return word
             current: str = result[index]
+            rest: int = len(current) - (found.end() - found.start())
+            size += len(items) * rest + len(found.group(1)) - len(items) + 1 - len(current)
+            if len(result) - 1 + len(items) > limit or size > left[1]:
+                left[0] = -1
+                return word
             result[index : index + 1] = [
                 current[: found.start()] + item + current[found.end() :] for item in items
             ]
         if result == [word]:
             return word
-        room[0] -= len(result)
+        left[0] -= len(result)
+        left[1] -= size
         return " ".join(w for w in result if w)
 
     text = re.compile(_BRACE_WORD).sub(expand, text)
-    return text, room[0] < 0
+    return text, left[0] < 0
 
 
 def _scan_reason(text: str, raw: bool = False) -> str | None:

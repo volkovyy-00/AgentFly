@@ -430,20 +430,23 @@ def _env_split_string(argv: Sequence[str], at: int) -> tuple[str | None, int]:
 _ONE_BRACE = re.compile(r"\{([^{},]*,[^{}]*)\}")
 _BRACE_CAP: int = 64  # a word's lists expand to at most this many words
 _BRACE_WORDS: int = 4096  # ... and a command's (its scripts' too) to at most this many (P1-fix1)
+_BRACE_BYTES: int = 512 * 1024  # ... and to at most this many bytes (owner 2026-10-28)
 
 
-def _brace_list(raw: str, word: str, room: int) -> list[str] | None:
+def _brace_list(raw: str, word: str, room: int, size_room: int) -> list[str] | None:
     """The words a brace list stands for, with any prefix and suffix glued on and several lists
     crossed, as the shell expands it: `{a,b}` is `a b`, `cur{l,}` is `curl cur`, `{cur,}l` is
     `curl l`, `c{u,}r{l,}` is `curl cur crl cr`. A quote, `$`, backtick or backslash in the raw
-    word leaves it as it is, as does a `{a..b}` sequence (no comma): then `[]`. An empty element
-    (`{a,}` glued to nothing) is dropped. None past `_BRACE_CAP` words or past `room`, the words
-    the command may still expand to, counted before they are made: the word is then left as it
-    is and the command counts as unparsed (P1-fix1: `cu{r,}{,}{,}{,}{,}{,}{,}l` runs curl)."""
+    word leaves it as it is, as does a `{a..b}` sequence (no comma): then `[]`. Empty words stay
+    in the list for the count; the shell drops them (`{,} python3` runs python3). None past
+    `_BRACE_CAP` words, past `room` (the words the command may still expand to) or past
+    `size_room` (its bytes), counted before the words are made: the word is then left as it is
+    and the command counts as unparsed (P1-fix1: `cu{r,}{,}{,}{,}{,}{,}{,}l` runs curl)."""
     if any(c in raw for c in "'\"$`\\") or "{" not in word:
         return []
     limit: int = min(_BRACE_CAP, room)
     result: list[str] = [word]
+    size: int = len(word)  # the bytes of `result`
     index: int = 0
     while index < len(result):
         match: re.Match[str] | None = _ONE_BRACE.search(result[index])
@@ -451,13 +454,15 @@ def _brace_list(raw: str, word: str, room: int) -> list[str] | None:
             index += 1
             continue
         items: list[str] = match.group(1).split(",")
-        if len(result) - 1 + len(items) > limit:
-            return None
         current: str = result[index]
+        rest: int = len(current) - (match.end() - match.start())
+        size += len(items) * rest + len(match.group(1)) - len(items) + 1 - len(current)
+        if len(result) - 1 + len(items) > limit or size > size_room:
+            return None
         result[index : index + 1] = [
             current[: match.start()] + item + current[match.end() :] for item in items
         ]
-    return [] if result == [word] else [w for w in result if w]
+    return [] if result == [word] else result
 
 
 def _stdin_family(name: str) -> str | None:
@@ -766,6 +771,7 @@ class _Out:
         self.code_heredoc: bool = False
         self.scans: int = 0  # nested scans so far; MAX_SCANS caps the work of one command
         self.braces: int = 0  # words brace lists expanded to so far; _BRACE_WORDS caps them
+        self.brace_bytes: int = 0  # ... and their bytes; _BRACE_BYTES caps them
         self.links: list[tuple[int, int]] = []
         self.hubs: int = 0
         self.fed: set[int] = set()  # commands that read a pipe (or `>(…)`, or `< <(…)`)
@@ -986,12 +992,17 @@ class _Scanner:
             brace: bool = not self.target and "{" in s[start : self.i]  # `{curl,…}`, `cur{l,}` (P1)
             if brace:
                 items: list[str] | None = _brace_list(
-                    s[start : self.i], word, _BRACE_WORDS - out.braces
+                    s[start : self.i],
+                    word,
+                    _BRACE_WORDS - out.braces,
+                    _BRACE_BYTES - out.brace_bytes,
                 )
                 if items is None:
                     out.unparsed = True  # past the brace bound: left as it is (P1-fix1)
                 elif items:
                     out.braces += len(items)
+                    out.brace_bytes += sum(map(len, items))
+                    items = [item for item in items if item]  # the shell drops an empty word
                     cmd.words += items  # a brace list (with a prefix/suffix) expands (P1)
                     take(len(items))
                     continue
