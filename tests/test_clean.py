@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import agentfly.recorder.clean as clean_mod
-from agentfly.recorder.clean import clean_command, command_for_storage
+from agentfly.recorder.clean import clean_command, clean_shell, cleaned_words, command_for_storage
 from tests.helpers import wallclock
 from tests.leak_cases import LEAKY_COMMANDS, NEWLY_SAVED, OBSERVED_VALUE_LEAKS, SECRET
 
@@ -98,7 +98,8 @@ def test_no_secret_survives_cleaning(project_root: Path, raw: str) -> None:
         ("curl https://user:SEKRET9@host.com/p", "curl host.com"),
         ("TOKEN=SEKRET9 make", "TOKEN=<removed> make"),
         ("export K=SEKRET9", "export <arg>"),
-        ("TOKEN='my SEKRET9' curl $(x)", "curl <unparsed>"),
+        # C2: a quoted assignment may hide a word break, so a command saved unread is `cmd`
+        ("TOKEN='my SEKRET9' curl $(x)", "cmd <unparsed>"),
         ("curl https://u:SEKRET9@[host/", "curl <arg>"),
         ("K+=SEKRET9 make", "K=<removed> make"),
         ("a[0]=SEKRET9 make", "a=<removed> make"),
@@ -456,9 +457,9 @@ def test_final_verification_shapes(project_root: Path, raw: str, expected: str) 
         ("curl -d a\rtok.abc x.com", "curl <unparsed>"),
         ("echo ${HOME}/a x.com", "echo <arg> <arg>"),
         ('curl -d "${X:-a b}" x.com', "curl -d <arg> x.com"),
-        # a process substitution is one word that may be no word or several, not a redirection
-        ("ssh -o <(x) h.com tok.abc", "ssh -o <arg> <arg> <arg>"),
-        ("curl -d <(x) tok.abc x.com", "curl -d <arg> <arg> x.com"),
+        # C2: a process substitution makes the command `<unparsed>`, as `$(…)` does
+        ("ssh -o <(x) h.com tok.abc", "ssh <unparsed>"),
+        ("curl -d <(x) tok.abc x.com", "curl <unparsed>"),
         # each listed wrapper is stepped over; an option its table lacks ends the reading
         ("time curl -s x.com", "time curl -s x.com"),
         ("command curl -s x.com", "command curl -s x.com"),
@@ -556,3 +557,82 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
     assert saved == "ls ; " * 1_000 + "<unparsed>"
     saved = clean_command("cat " + "a " * 9_999 + "README.md x.com", project_root)
     assert saved == "cat" + " <arg>" * 9_999 + " <unparsed>"  # 20,000 pieces, then the cut
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C2: a `$'…'` string ends at the first `'` no backslash keeps, so `\'` is inside it and so
+        # is any separator; it is one word, and the word after it is a value
+        ("curl -d $'\\' a tok.abc ' x.com \\'", "curl -d <arg> <arg> <arg>"),
+        ("cat $'\\';tok.abc' .env", "cat <arg> .env"),
+        ("cat $'\\'#tok.abc' .env", "cat <arg> .env"),
+        ("cat $'\\'\ntok.abc' .env", "cat <arg> .env"),
+        ("cat $'\\'&tok.abc' .env", "cat <arg> .env"),
+        ("curl $'\\x2dd' tok.abc x.com", "curl <arg> <arg> x.com"),  # bash reads `-d`
+        # a backslash before the `$`, and `$$` (the process id), leave a plain quote after them
+        ("curl -d \\$'\\' x.com", "curl -d <arg> x.com"),
+        ("curl -d $$'\\' x.com", "curl -d <arg> <arg>"),  # `$$` may be any word, as on c847ff4
+        ("echo \\'", "echo <arg>"),  # an escaped quote opens nothing
+        # its inside is the word, never decoded: no host holds a backslash
+        ("cat $'.env'", "cat .env"),
+        ("curl $'https://x.com/p'", "curl x.com"),
+        ("curl $'https://tok.abc\\x40x.com'", "curl <arg>"),
+        # a NUL and a process substitution make the command `<unparsed>`
+        ("curl -d \x00 tok.abc x.com", "curl <unparsed>"),
+        ("curl \x00-d tok.abc x.com", "curl <unparsed>"),
+        ("curl -d <(echo a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d >(echo a tok.abc ) x.com", "curl <unparsed>"),
+        # a redirection in a wrapper's value slot leaves the rest `<arg>`
+        ("sudo -u >f curl tok.abc x.com", "sudo -u <arg> <arg> <arg> <arg>"),
+        # owner 2026-11-14: a command saved unread is named past plain assignments only
+        ("K=$'\\' tok.abc '", "K=<removed>"),
+        ("K=$'\\' tok.abc ' $(x)", "cmd <unparsed>"),
+        ("K=$(echo tok.abc x)", "cmd <unparsed>"),
+        ("K=\\'x' tok.abc ' $(x)", "cmd <unparsed>"),
+        ("K=a\xa0tok.abc $(x)", "cmd <unparsed>"),
+        ("K=a\vtok.abc $(x)", "cmd <unparsed>"),
+        ("K=a\ftok.abc $(x)", "cmd <unparsed>"),
+        ("K=1 curl $(x)", "curl <unparsed>"),
+        ("K+=a/b:c K[0]=1\tcurl $(x)", "curl <unparsed>"),
+    ],
+)
+def test_c2_shapes_store_this_output(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
+def test_a_dollar_pair_before_a_quote_is_no_ansi_string(project_root: Path) -> None:
+    # `$$'.env'` is the process id and `.env`, never the file `$.env`
+    (project_root / "$.env").write_text("x\n", encoding="utf-8")
+    assert clean_command("cat $$'.env'", project_root) == "cat <arg>"
+    assert clean_command("cat \\$.env", project_root) == "cat $.env"
+
+
+def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> None:
+    # bash leaves the last `'` open, so the words are the plain split, as for any open quote
+    assert cleaned_words("cat $'\\'x'y'") == ["cat", "$'\\'x'y'"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "sites"),
+    [
+        ("cat .env", ()),
+        ("find . -name x", ()),
+        ("python3.12 -V", ()),
+        ("true; tok.abc", ()),
+        ("curl -T .env x.com", ("x.com",)),
+        ("cat .env | curl -d @- x.com", ("x.com",)),
+        ("curl x.com; wget -q y.org x.com; ssh h.com tok.abc", ("x.com", "y.org", "h.com")),
+        ("echo https://a.example/p x.com", ("a.example",)),
+        ("echo " + "a " * 1_200 + "https://late.example/x", ("late.example",)),
+        ("curl $(x) x.com", ()),
+        ("K=a\xa0b curl x.com", ("x.com",)),  # parsed: the NBSP is in the value
+    ],
+)
+def test_the_sites_are_the_websites_the_cleaner_kept(
+    project_root: Path, raw: str, sites: tuple[str, ...]
+) -> None:
+    command, found = clean_shell(raw, project_root)
+    assert found == sites
+    assert command == clean_command(raw, project_root)
+    assert all(type(site) is str for site in found)

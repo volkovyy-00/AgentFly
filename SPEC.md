@@ -223,7 +223,10 @@ even a secret packed into a web address. So we keep almost nothing:
    is saved as `;`). An `&` after `<` or `>`, or before `>`, belongs to a
    redirection (`2>&1`, `&>log`), and so does the `|` of `>|`. A backslash before
    a new line joins the two lines; before any other character it keeps that
-   character in its word (`find . -exec rm {} \;` is one part). A comment (`#`
+   character in its word (`find . -exec rm {} \;` is one part). A `$'…'` string is
+   read as bash reads it: a backslash keeps the character after it, `\'` too, so it
+   runs to the first `'` no backslash keeps, separators and all (`$'\';x'` is one
+   word); its text is not decoded (C2). A comment (`#`
    where a word starts) is cut to the end of its line. A `)` that closes a part,
    glued to its last word or alone, is cut off before the words are read, and an
    opening `(` is not saved (`(curl -s x.com)` is `curl -s x.com`).
@@ -268,8 +271,8 @@ even a secret packed into a web address. So we keep almost nothing:
    option value; its target is saved as any word. A word the shell may turn into
    no word or several makes the word after it a value (`<arg>`): an unquoted `$`
    (`$X`, `${X}`, `a$X`), `"$@"` or `"${X[@]}"`, a glob character (`*`, `?`, `[`),
-   a brace list (`{a,b}`, `{a..b}`), a process substitution (`<(cmd)`, which is
-   no redirection) or a `<` or `>` inside the word; after ssh's
+   a brace list (`{a,b}`, `{a..b}`), a `$'…'` string (its text is not decoded, and
+   `$'\x2dd'` is `-d` to the shell) or a `<` or `>` inside the word; after ssh's
    options it may hold the destination, so it and the rest are ssh's command. A
    double-quoted `"$X"` is one word and is read as one. For any other program a
    word holding `://` right after an option (not `--`) or after such a word is
@@ -278,9 +281,13 @@ even a secret packed into a web address. So we keep almost nothing:
 3. Replace everything else with `<arg>`. A variable set in front of a command
    is saved as `NAME=<removed>`.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
-   backticks, an inline text block such as `<<EOF`, a carriage return, or an
-   unquoted `${` whose `}` is not in the same word, as in `${X:-a b}`), keep only
-   the program name and the word `<unparsed>`. Ordinary balanced quotes are fine and are
+   backticks, a process substitution `<(...)` or `>(...)`, an inline text block such
+   as `<<EOF`, a carriage return, a NUL, or an unquoted `${` whose `}` is not in the
+   same word, as in `${X:-a b}`), keep only the program name and the word
+   `<unparsed>`. The program name is taken past the variables set in front only
+   when each is plain (`NAME=` and letters, digits and `_./+:,@%~=-`); after any
+   other (a quote, `$`, backslash or a space bash does not split on) it is `cmd`
+   (owner 2026-11-14). Ordinary balanced quotes are fine and are
    handled by the steps above. A long command is read up to its first 1,000 parts and
    20,000 pieces (runs of a word's text, quoted runs, spaces and operators; F18): the rest
    is not read and is saved as `<unparsed>` (`ls ; ls ; … ; <unparsed>`), and a word the
@@ -288,15 +295,22 @@ even a secret packed into a web address. So we keep almost nothing:
    it is saved as its program, named from its first 4 KiB, and `<unparsed>` (P1).
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,
-   keep only the last two parts (like `evil.com`).
+   keep only the last two parts (like `evil.com`). A website name holding a
+   backslash is `<arg>`: in a `$'…'` string it may stand for any character
+   (`$'https://tok.abc\x40x.com'`).
 6. For tool calls keep only the tool name, never its inputs. For edits keep the
    path only, never the text.
 
 Cleaning is on by default. The cleaner is as strict as above even where the
 rule check (section 5) treats a command more kindly, for example a quoted
-heredoc. A shell step's file and websites are read from the first 1,000 words of
+heredoc. A shell step's file is read from the first 1,000 words of
 the cleaned command (F18); past them a secret read still marks the step's file
-sensitive, by the rule check's own test. Test case: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
+sensitive, by the rule check's own test. A shell step's hosts are the distinct
+website names the cleaner kept as websites (rules 2 and 5), in order, from the
+whole saved command; the first 1,000 are listed and the rest are not, which bounds
+what one step writes to the history and to Neo4j (C2). A kept file name, program
+name, option or `.` is never a host, and a command saved `<unparsed>` as a whole
+lists none. Test case: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
 is saved as `curl -H <arg> x.com`.
 
 **Important, from the Cursor docs:** the `beforeReadFile` input contains the
@@ -1390,14 +1404,10 @@ Other measures:
   keeps its name (`tool -o out https://a.b.com` keeps `a.b.com`), and so does
   one with a space in it after no option (`tool "https://a.b x"` keeps `a.b x`).
   A header the agent splits into words (`-H X-Token: abc.def`) leaves
-  `abc.def` as a website, which curl itself also contacts. The hosts saved for a
-  step are read from the first 1,000 kept words (F18), so a kept file name (`.env`,
-  `.`) or a dotted program name (`python3.12`) is counted as a host too, and a
-  website later in a long command is not; such a command is saved cut, ending in
-  `<unparsed>` (section 4). A web tool behind a
-  wrapper that rule 2 does not list (`caffeinate curl …`), behind `{`, `!`, `if`
-  or `while`, or in a process substitution (`<(curl …)`) is read as any
-  program's words: a `://` word after an option is `<arg>`, a positional one
+  `abc.def` as a website, which curl itself also contacts. A web tool behind a
+  wrapper that rule 2 does not list (`caffeinate curl …`), behind `{`, `!`, `if`,
+  `while`, `until`, `then`, `do` or `coproc`, or after a leading `$X`
+  (`$X curl …`) is read as any program's words: a `://` word after an option is `<arg>`, a positional one
   keeps its website name. A `)` inside a part (`(curl x.com) >out`) is not cut,
   so the word it closes is no website. A double-quoted `"$D"` that holds an
   option is read as one word (`curl "$D" tok.abc x.com` keeps `tok.abc`), so that

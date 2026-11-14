@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -339,7 +340,8 @@ def build_old_history(path: Path) -> None:
     for statement in OLD_SCHEMA:
         conn.execute(statement)
     for index, (chat, (steps, _)) in enumerate(OLD_SESSIONS.items()):
-        started = f"2026-10-0{index + 1}T10:00:00+00:00"
+        # dated from now, days apart in order: fixed dates pass the 28-day retention (D14)
+        started = (datetime.now(UTC) - timedelta(days=4 - index)).isoformat()
         conn.execute("INSERT INTO sessions VALUES (?, '/w', ?, NULL)", (chat, started))
         for order, (kind, file_path, sensitive) in enumerate(steps, start=1):
             conn.execute(
