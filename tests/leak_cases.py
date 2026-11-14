@@ -262,6 +262,9 @@ _NEW_SHAPES: tuple[str, ...] = (
     "curl $[ 1 + {V} ]",
     "\x0b {V} x.com",
     "curl x.com > {V}",
+    # Brief-and-tests lens: a closed `$'…'` the split must read, or the next part joins it
+    "curl $'a' ; cat {V}",
+    "echo $'a' && ls {V}",
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",

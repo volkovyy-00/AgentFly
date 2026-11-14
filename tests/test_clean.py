@@ -576,6 +576,9 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         # the split pairs `$$` too, so the `;` after `$$'\\'` ends the part
         ("echo $$'\\' ; ssh h.com tok.abc ; echo 'x'", "echo <arg> ; ssh h.com <arg> ; echo <arg>"),
         ("echo \\'", "echo <arg>"),  # an escaped quote opens nothing
+        # the split reads a closed `$'…'`, so the separator after it ends the part
+        ("curl $'a' ; cat tok.abc", "curl <arg> ; cat <arg>"),
+        ("wget $'a' && ls tok.abc", "wget <arg> && ls <arg>"),
         # its inside is the word, never decoded: a word holding a backslash names no website
         ("cat $'.env'", "cat .env"),
         ("curl $'https://x.com/p'", "curl x.com"),
@@ -662,6 +665,7 @@ def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> No
         ("echo https://a.example/p x.com", ("a.example",)),
         ("echo " + "a " * 1_200 + "https://late.example/x", ("late.example",)),
         ("curl $(x) x.com", ()),
+        ("echo $'a' ; curl x.com", ("x.com",)),
         ("K=a\xa0b curl x.com", ("x.com",)),  # parsed: the NBSP is in the value
         # a project file, `.` or a name with an empty label is never a website
         ("scp .env user@x.com:", ("x.com",)),
