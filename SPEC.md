@@ -279,12 +279,15 @@ even a secret packed into a web address. So we keep almost nothing:
    that option's value, `<arg>` (`tool --url https://a.b.com` is
    `tool --url <arg>`); one after no option keeps its website name.
 3. Replace everything else with `<arg>`. A variable set in front of a command
-   is saved as `NAME=<removed>`.
+   is saved as `NAME=<removed>`; it is read as written, so a quoted `'X=1'` or
+   `$'X=1'` is no assignment (bash runs it as a program) and is `<arg>`.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
    backticks, a process substitution `<(...)` or `>(...)`, an inline text block such
    as `<<EOF`, a carriage return, a NUL, or an unquoted `${` whose `}` is not in the
    same word, as in `${X:-a b}`), keep only the program name and the word
-   `<unparsed>`. The program name is taken past the variables set in front only
+   `<unparsed>`. These are looked for with each line continuation joined, as bash
+   joins it first (`<\⏎(` is `<(`), and a `$` right before one is not read either
+   (C2). The program name is taken past the variables set in front only
    when each is plain (`NAME=` and letters, digits and `_./+:,@%~=-`); after any
    other (a quote, `$`, backslash or a space bash does not split on) it is `cmd`
    (owner 2026-11-14). Ordinary balanced quotes are fine and are
@@ -295,10 +298,12 @@ even a secret packed into a web address. So we keep almost nothing:
    it is saved as its program, named from its first 4 KiB, and `<unparsed>` (P1).
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,
-   keep only the last two parts (like `evil.com`). A word that still holds a
-   backslash once its quotes are read names no website (`<arg>`): in a `$'…'`
-   string it may stand for any character and move the host
-   (`$'https://x.com\x2f@tok.abc'` is bash's `x.com`).
+   keep only the last two parts (like `evil.com`). A word holding a `$'…'` string
+   with a backslash names no website (`<arg>`): its text is not decoded, and the
+   escape may move the host (`$'https://x.com\x2f@tok.abc'` is bash's `x.com`).
+   An address with no scheme loses its path before its user (`x.com/@tok.abc` is
+   `x.com`), and a name with an empty label (`.`, `.env`, `./dist`) is no website.
+   A web tool's word that names a project file is that file, never a website.
 6. For tool calls keep only the tool name, never its inputs. For edits keep the
    path only, never the text.
 

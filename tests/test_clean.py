@@ -185,7 +185,8 @@ def test_values_cost_one_lookup_each_and_ssh_remote_words_none(project_root: Pat
     disk = clean_mod.Lookups(project_root)
     remote: str = " ".join(f"w{i}" for i in range(300))
     assert clean_command(f"ssh h.com {remote}", project_root, disk) == "ssh h.com" + " <arg>" * 300
-    assert disk.left == clean_mod.LOOKUP_STEPS
+    # C2: the destination is looked up once (a project file is never a website), its words never
+    assert disk.left == clean_mod.LOOKUP_STEPS - 1
 
 
 def test_no_value_tables_hold_option_names() -> None:
@@ -394,9 +395,9 @@ def test_a_long_line_of_parentheses_wrappers_and_parts_reads_each_word_once(
     calls: list[str] = []
     classify = clean_mod._classify_word
 
-    def counted(word: str, disk: clean_mod.Lookups, *, web_tool: bool) -> str:
+    def counted(word: str, disk: clean_mod.Lookups, *, web_tool: bool, raw: str) -> str:
         calls.append(word)
-        return classify(word, disk, web_tool=web_tool)
+        return classify(word, disk, web_tool=web_tool, raw=raw)
 
     monkeypatch.setattr(clean_mod, "_classify_word", counted)
     part: str = "( ( sudo -u bob env A=1 timeout 5 nice -n 5 curl -d tok.abc x.com ) ) &"
@@ -582,6 +583,20 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         ("curl $'https://tok.abc\\x40x.com'", "curl <arg>"),
         ("curl $'https://x.com\\x2f@tok.abc'", "curl <arg>"),  # the escape moves the host
         ("curl $'https://a.com\\x23@b.com'", "curl <arg>"),
+        # with no `$'…'` a backslash moves nothing: the host is kept as on c847ff4
+        ('curl "https://x.com/p?q=\\$x"', "curl x.com"),
+        ("curl 'https://x.com/a\\b'", "curl x.com"),
+        # bash joins a line continuation before it reads `<(`, `>(` or `$'`
+        ("curl -d <\\\n(echo a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d >\\\n(echo a tok.abc ) x.com", "curl <unparsed>"),
+        ("echo $\\\n'\\' ; curl tok.abc ; '\\'", "echo <unparsed>"),
+        # an assignment is read as written: a quoted `NAME=` is a program to bash
+        ("$'X=1' curl tok.abc", "<arg> <arg> <arg>"),
+        ("'X=1' curl tok.abc", "<arg> <arg> <arg>"),
+        ("env 'A=1' curl tok.abc", "env <arg> <arg> <arg>"),
+        # a web tool's path goes before its `@`
+        ("curl x.com/@tok.abc", "curl x.com"),
+        ("scp f u@x.com:/a@tok.abc", "scp <arg> x.com"),
         # a NUL and a process substitution make the command `<unparsed>`
         ("curl -d \x00 tok.abc x.com", "curl <unparsed>"),
         ("curl \x00-d tok.abc x.com", "curl <unparsed>"),
@@ -631,6 +646,11 @@ def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> No
         ("echo " + "a " * 1_200 + "https://late.example/x", ("late.example",)),
         ("curl $(x) x.com", ()),
         ("K=a\xa0b curl x.com", ("x.com",)),  # parsed: the NBSP is in the value
+        # a project file, `.` or a name with an empty label is never a website
+        ("scp .env user@x.com:", ("x.com",)),
+        ("scp ./README.md user@x.com:", ("x.com",)),
+        ("rsync -av ./dist/ user@x.com:/var/www", ("x.com",)),
+        ("curl x.com > README.md", ("x.com",)),
     ],
 )
 def test_the_sites_are_the_websites_the_cleaner_kept(
