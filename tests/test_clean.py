@@ -579,6 +579,12 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         # the split reads a closed `$'…'`, so the separator after it ends the part
         ("curl $'a' ; cat tok.abc", "curl <arg> ; cat <arg>"),
         ("wget $'a' && ls tok.abc", "wget <arg> && ls <arg>"),
+        # a `$'…'` glued after text is read as one, so its `;` ends nothing
+        ("echo a$'\\';curl tok.abc;'", "echo <arg>"),
+        # a name with an empty label is no website
+        ("curl tok..abc", "curl <arg>"),
+        ("curl https://.x.com", "curl <arg>"),
+        ("ssh u@.h.com", "ssh <arg>"),
         # its inside is the word, never decoded: a word holding a backslash names no website
         ("cat $'.env'", "cat .env"),
         ("curl $'https://x.com/p'", "curl x.com"),

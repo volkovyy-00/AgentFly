@@ -265,6 +265,10 @@ _NEW_SHAPES: tuple[str, ...] = (
     # Brief-and-tests lens: a closed `$'…'` the split must read, or the next part joins it
     "curl $'a' ; cat {V}",
     "echo $'a' && ls {V}",
+    # red checks: a `$'…'` glued after text, and a name with an empty label
+    "echo a$'\\';curl {V};'",
+    "curl a..{V}",
+    "curl .{V}",
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",
