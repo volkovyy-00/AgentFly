@@ -573,6 +573,8 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         # a backslash before the `$`, and `$$` (the process id), leave a plain quote after them
         ("curl -d \\$'\\' x.com", "curl -d <arg> x.com"),
         ("curl -d $$'\\' x.com", "curl -d <arg> <arg>"),  # `$$` may be any word, as on c847ff4
+        # the split pairs `$$` too, so the `;` after `$$'\\'` ends the part
+        ("echo $$'\\' ; ssh h.com tok.abc ; echo 'x'", "echo <arg> ; ssh h.com <arg> ; echo <arg>"),
         ("echo \\'", "echo <arg>"),  # an escaped quote opens nothing
         # its inside is the word, never decoded: no host holds a backslash
         ("cat $'.env'", "cat .env"),
