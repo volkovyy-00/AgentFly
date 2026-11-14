@@ -156,11 +156,15 @@ _DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
 # the string ends at the first `'` no backslash keeps. Each scanner reads it before a plain `$`,
 # and pairs `$$` first (the shell's process id, then a plain quote: `$$'x'`); a backslash outside
 # quotes keeps the `$` after it (`\$'x'` is a plain quote too).
-_ANSI: str = r"\$'(?:[^'\\]++|\\.)*+"
-# A character a backslash keeps, a `$$`, a closed quoted run, or a quote that is never closed
-# (`open`: it runs to the end).
-_QUOTE_SCAN = re.compile(
-    rf"""\\.|\$\$|{_ANSI}'|{_SINGLE}'|{_DOUBLE}"|(?P<open>\$'|['"])""", re.DOTALL
+_ANSI_BODY: str = r"(?:[^'\\]++|\\.)*+"
+_ANSI: str = rf"\$'{_ANSI_BODY}"
+# A `$` that opens no `$'…'` string: the pair `$$`, or one not before a `'`.
+_DOLLAR: str = r"\$\$|\$(?!')"
+# A command whose every quote is closed, read in one C-speed match: other text, a character a
+# backslash keeps, a closed `$'…'`, a `$` that opens none, closed quoted runs, and a lone
+# backslash at the end.
+_BALANCED = re.compile(
+    rf"""(?:[^'"\\$]++|\\.|{_ANSI}'|{_DOLLAR}|{_SINGLE}'|{_DOUBLE}")*+\\?""", re.DOTALL
 )
 # The pieces `_split_keeping_seps` reads a command in, one after another: a quoted run (an
 # unclosed one runs to the end, a lone backslash at the end with it), a line continuation (`\` and
@@ -172,7 +176,7 @@ _QUOTE_SCAN = re.compile(
 _BRACE_SCAN = re.compile(r"\\.|\$\{|\}")
 _SPLIT_TOKEN = re.compile(
     rf"""(?P<quoted>{_ANSI}(?:'|\\?\Z)|{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
-    r"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#$]|\\[^\n]|\$\$|\$(?!'))++|\\\Z)|(?P<hash>\#)"""
+    rf"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#$]|\\[^\n]|{_DOLLAR})++|\\\Z)|(?P<hash>\#)"""
     r"""|(?P<redirect>[<>]&|&>|>\|)|(?P<sep>\|\||\|&|&&|[&|;\n])|(?P<blank>[ \t\r]++|[()<>])""",
     re.DOTALL,
 )
@@ -182,15 +186,15 @@ _SHELL_SPACE: str = " \t\r\n"
 _PLAIN_WORD = re.compile(r"[^ \t\r\n]+")
 # A whole word, then the space after it or the end.
 _SHELL_WORD = re.compile(
-    rf"""((?:[^ \t\r\n'"\\$]++|\\.|\$\$|{_ANSI}'|\$(?!')|{_SINGLE}'|{_DOUBLE}")++)"""
+    rf"""((?:[^ \t\r\n'"\\$]++|\\.|{_ANSI}'|{_DOLLAR}|{_SINGLE}'|{_DOUBLE}")++)"""
     r"""(?:[ \t\r\n]++|\Z)""",
     re.DOTALL,
 )
 # One piece of a whole shell word: a character after a backslash, the inside of a single- or
 # double-quoted run, plain text, or the inside of a `$'…'` string (C2: never decoded).
 _WORD_PIECE = re.compile(
-    r"""\\(.)|'([^']*+)'|"([^"\\]*+(?:\\.[^"\\]*+)*+)"|((?:[^'"\\$]++|\$\$|\$(?!'))++)"""
-    r"""|\$'((?:[^'\\]++|\\.)*+)'""",
+    rf"""\\(.)|'([^']*+)'|"([^"\\]*+(?:\\.[^"\\]*+)*+)"|((?:[^'"\\$]++|{_DOLLAR})++)"""
+    rf"""|\$'({_ANSI_BODY})'""",
     re.DOTALL,
 )
 # In double quotes a backslash goes only before `"` and before another backslash.
@@ -272,7 +276,7 @@ def _needs_unparsed(cmd: str) -> bool:
 
 
 def _quotes_balanced(cmd: str) -> bool:
-    return not any(run.group("open") for run in _QUOTE_SCAN.finditer(cmd))
+    return _BALANCED.fullmatch(cmd) is not None
 
 
 def _assign_name(token: str) -> str | None:
@@ -460,9 +464,9 @@ def _ends_in_escape(text: str) -> bool:
 
 
 def cleaned_words(command: str) -> list[str]:
-    """The words of a cleaned command as `names.words` gives them (`shlex.split`, and a plain
-    `split` when the quoting does not balance), at regular-expression speed: the cleaner already
-    has the same words as `shlex.split`, and a command of 300 long paths takes `shlex` 0.35 s."""
+    """The words of a cleaned command as `_shell_words` gives them (`shlex.split`'s, but a `$'…'`
+    string read as bash reads it), and a plain `split` when they are not whole words, at
+    regular-expression speed: a command of 300 long paths takes `shlex` 0.35 s."""
     try:
         return _shell_words(command)
     except ValueError:
@@ -781,6 +785,10 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
 
 
 def _website_name(word: str) -> str | None:
+    # C2: a word that still holds a backslash names no website: in a `$'…'` string, which is not
+    # decoded, it may stand for any character, so it may move the host (`$'https://x.com\x2f@a.b'`)
+    if "\\" in word:
+        return None
     host: str | None = None
     if "://" in word:
         try:
@@ -804,9 +812,7 @@ def _website_name(word: str) -> str | None:
         if _HOST_WORD.fullmatch(candidate) and ("." in candidate or candidate == "localhost"):
             host = candidate
 
-    # C2: no host holds a backslash; one may stand for any character in a `$'…'` string, which is
-    # not decoded (`$'https://tok.abc\x40x.com'`)
-    if host is None or host == "" or "\\" in host:
+    if host is None or host == "":
         return None
 
     reduced: str = _reduce_host_labels(host)

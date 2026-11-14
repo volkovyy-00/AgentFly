@@ -295,9 +295,10 @@ even a secret packed into a web address. So we keep almost nothing:
    it is saved as its program, named from its first 4 KiB, and `<unparsed>` (P1).
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,
-   keep only the last two parts (like `evil.com`). A website name holding a
-   backslash is `<arg>`: in a `$'…'` string it may stand for any character
-   (`$'https://tok.abc\x40x.com'`).
+   keep only the last two parts (like `evil.com`). A word that still holds a
+   backslash once its quotes are read names no website (`<arg>`): in a `$'…'`
+   string it may stand for any character and move the host
+   (`$'https://x.com\x2f@tok.abc'` is bash's `x.com`).
 6. For tool calls keep only the tool name, never its inputs. For edits keep the
    path only, never the text.
 

@@ -407,7 +407,7 @@ def build_step_record(
         hosts = sites[:MAX_HOSTS]  # C2: the websites the cleaner kept, from the whole command
         if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
-        tokens: list[str] = cleaned_words(command)[:MAX_RECORD_WORDS]  # split once
+        tokens: list[str] = cleaned_words(command)[:MAX_RECORD_WORDS]
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in tokens:
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:

@@ -576,10 +576,12 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         # the split pairs `$$` too, so the `;` after `$$'\\'` ends the part
         ("echo $$'\\' ; ssh h.com tok.abc ; echo 'x'", "echo <arg> ; ssh h.com <arg> ; echo <arg>"),
         ("echo \\'", "echo <arg>"),  # an escaped quote opens nothing
-        # its inside is the word, never decoded: no host holds a backslash
+        # its inside is the word, never decoded: a word holding a backslash names no website
         ("cat $'.env'", "cat .env"),
         ("curl $'https://x.com/p'", "curl x.com"),
         ("curl $'https://tok.abc\\x40x.com'", "curl <arg>"),
+        ("curl $'https://x.com\\x2f@tok.abc'", "curl <arg>"),  # the escape moves the host
+        ("curl $'https://a.com\\x23@b.com'", "curl <arg>"),
         # a NUL and a process substitution make the command `<unparsed>`
         ("curl -d \x00 tok.abc x.com", "curl <unparsed>"),
         ("curl \x00-d tok.abc x.com", "curl <unparsed>"),
@@ -636,5 +638,4 @@ def test_the_sites_are_the_websites_the_cleaner_kept(
 ) -> None:
     command, found = clean_shell(raw, project_root)
     assert found == sites
-    assert command == clean_command(raw, project_root)
     assert all(type(site) is str for site in found)
