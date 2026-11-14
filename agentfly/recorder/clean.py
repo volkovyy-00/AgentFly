@@ -269,15 +269,16 @@ def clean_shell(
 
 
 # What makes a command `<unparsed>` wherever it stands (SPEC §4 rule 4).
-_UNREAD_MARKS: tuple[str, ...] = ("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(")
+_UNREAD_MARKS: tuple[str, ...] = ("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(", "((")
 
 
 def _needs_unparsed(cmd: str) -> bool:
     # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not.
     # C2: bash drops a NUL, and the words of a process substitution (`<(…)`, `>(…)`) and of
-    # `$[…]` run on as those of `$(…)` do. Bash joins a line continuation first (`<\⏎(` is `<(`),
-    # so the marks are looked for with it cut, and a `$` before one (`$\⏎'` opens a `$'…'`) is
-    # not read.
+    # `$[…]` run on as those of `$(…)` do. C2-fix1: bash reads `((` as arithmetic or as two
+    # subshells by what follows, so which words are a program's is not known. Bash joins a line
+    # continuation first (`<\⏎(` is `<(`), so the marks are looked for with it cut, and a `$`
+    # before one (`$\⏎'` opens a `$'…'`) is not read.
     joined: str = cmd.replace("\\\n", "")
     if "$\\\n" in cmd or any(m in joined for m in _UNREAD_MARKS):
         return True

@@ -315,8 +315,8 @@ def test_wrappers_and_parentheses_are_stepped_over_up_to_their_bounds(project_ro
     assert clean_command("nohup " * 9 + tail, project_root) == "nohup " * 8 + " ".join(
         ["<arg>"] * 5
     )
-    assert clean_command("(" * 16 + tail, project_root) == "curl -d <arg> x.com"
-    assert clean_command("(" * 17 + tail, project_root) == "<arg> <arg> <arg> <arg>"
+    # C2-fix1: glued `((` is `<unparsed>`, so the bound is counted on spaced `( `
+    assert clean_command("( " * 16 + tail, project_root) == "curl -d <arg> x.com"
     assert clean_command("( " * 17 + tail, project_root) == "<arg> <arg> <arg> <arg> <arg>"
 
 
@@ -402,7 +402,7 @@ def test_a_long_line_of_parentheses_wrappers_and_parts_reads_each_word_once(
     part: str = "( ( sudo -u bob env A=1 timeout 5 nice -n 5 curl -d tok.abc x.com ) ) &"
     lines: list[str] = [
         " ".join([part] * 16),  # 304 words in 16 parts
-        "(" * 16 + " nohup" * 8 + " curl" + " -d tok.abc" * 145 + " x.com",  # 301 in one
+        "( " * 16 + "nohup " * 8 + "curl" + " -d tok.abc" * 145 + " x.com",  # 316 in one
     ]
     for line in lines:
         words: int = len(line.split())
@@ -475,6 +475,26 @@ def test_final_verification_shapes(project_root: Path, raw: str, expected: str) 
 )
 def test_lens_shapes(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C2-fix1: bash reads `((` as arithmetic or as two subshells by what follows, so a `((`
+        # anywhere, after a line continuation is joined too, makes the command `<unparsed>`
+        ("(( curl + tok.abc ))", "cmd <unparsed>"),
+        ("((curl + tok.abc))", "cmd <unparsed>"),
+        ("(\\\n( curl + tok.abc ))", "cmd <unparsed>"),
+        ("cd a && (( curl + tok.abc ))", "cd <unparsed>"),
+        ("echo '((' tok.abc", "echo <unparsed>"),
+        # glued subshells written apart are read as before
+        ("( (curl -d tok.abc x.com) )", "curl -d <arg> x.com"),
+    ],
+)
+def test_a_double_parenthesis_is_unparsed(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+    sites: tuple[str, ...] = ("x.com",) if "x.com" in expected else ()
+    assert clean_mod.clean_shell(raw, project_root)[1] == sites
 
 
 def test_each_wrapper_value_option_takes_the_next_word(project_root: Path) -> None:

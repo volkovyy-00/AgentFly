@@ -285,7 +285,8 @@ even a secret packed into a web address. So we keep almost nothing:
    new line) are trimmed from a command or a part; `\v` or a no-break space is
    word text.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
-   backticks, a process substitution `<(...)` or `>(...)`, `$[...]`, a double-quoted
+   backticks, a process substitution `<(...)` or `>(...)`, `$[...]`, `((` (bash reads
+   it as arithmetic or as two subshells by what follows, C2-fix1), a double-quoted
    `${` whose `}` is past its closing `"` (`"${X:-" a "}"`), an inline text block such
    as `<<EOF`, a carriage return, a NUL, or an unquoted `${` whose `}` is not in the
    same word, as in `${X:-a b}`), keep only the program name and the word
@@ -1423,9 +1424,7 @@ Other measures:
   keeps its website name. A `)` inside a part (`(curl x.com) >out`) is not cut,
   so the word it closes is no website. A double-quoted `"$D"` that holds an
   option is read as one word (`curl "$D" tok.abc x.com` keeps `tok.abc`), so that
-  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host. An arithmetic
-  command `(( … ))` is read as words (`(( curl + tok.abc ))` keeps `tok.abc`):
-  bash reads `((` as two subshells or as arithmetic by what follows.
+  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host.
 
 ---
 

@@ -43,7 +43,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   redirections and the listed wrappers is read with their value options (`sudo -u <arg> curl -s
   x.com`, `timeout -s <arg> <arg> curl …`, `xargs -I<arg> curl …`); `sudo -E`, a loose word in
   a wrapper's options and a redirection in its value slot leave the rest `<arg>`; 8 wrappers and
-  16 `(` are read, a 9th or 17th leaves the rest `<arg>`. `_out_of_step` says which words may be
+  16 `( ` are read, a 9th or 17th leaves the rest `<arg>`. `_out_of_step` says which words may be
   no word or several (`$E`, `${E}`, `a$E`, `$'x'`, `"$@"`, `"${A[@]}"`, `-d>s`, globs, `{,}`,
   `{a..b}`) and which are one (`"$X"`, `"${SRC}/"`, `{}`, `-I{}`, a redirection). After a web
   tool a redirection uses up no value and a loose word makes the next a value (for ssh, it and
@@ -56,8 +56,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   form between an option and its value for curl and wget, and each loose form. The brief's
   newly saved commands keep the tool's name and `x.com` as a host, its kept commands their
   name and hosts (two strings change: `cd <arg> && curl -s x.com &`, and the continuation line
-  `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 301-word part behind 16
-  `(` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
+  `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 316-word part behind 16
+  `( ` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
   F18 (`test_clean.py`): with `MAX_PARTS` or `MAX_PIECES` lowered, a command past the count is
   saved ending in `<unparsed>` with no later website or project file, a word the cut falls inside
   (`x.com'/p'`, `x.co\⏎m`, `"x".com`) is dropped whole, and at exactly the count all is read; the
@@ -93,8 +93,12 @@ the maintainers' work items and decisions, which are kept outside this repo.
   value slot leaves the rest `<arg>` (`sudo -u >f curl tok.abc x.com`); a command saved unread is
   named past plain assignments only, else `cmd` (`K=$(echo tok.abc x)`, `K=a<NBSP>tok.abc $(x)`;
   owner 2026-11-14). `leak_cases.py` holds these shapes with a value, each alone, behind each
-  wrapper of `_WRAPPED`, with a continuation, in `( … )`, `((…) )`, after `&`, `|&`, a new line
+  wrapper of `_WRAPPED`, with a continuation, in `( … )`, `( (…) )`, after `&`, `|&`, a new line
   and a comment (`NEW_SHAPE_COMMANDS`), and the owner's shapes (`FIRST_PROGRAM_LEAKS`).
+  C2-fix1 (`test_a_double_parenthesis_is_unparsed`): a `((` anywhere, also split by a line
+  continuation (`(\⏎(`), makes the command `<unparsed>` with no site (`(( curl + tok.abc ))` is
+  `cmd <unparsed>`); glued subshells are tested written apart, `( (…) )` and `( ` × 16;
+  `leak_cases.py` holds the three `((` shapes in each form above.
   `test_the_sites_are_the_websites_the_cleaner_kept` (`clean_shell`): the sites are the kept
   websites in order, never a file, program, option or `.`, and none for an unread command.
   (`test_store.py`) `test_a_step_hosts_only_the_websites_the_cleaner_kept`: `cat .env`,
