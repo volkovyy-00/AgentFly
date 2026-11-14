@@ -185,8 +185,7 @@ def test_values_cost_one_lookup_each_and_ssh_remote_words_none(project_root: Pat
     disk = clean_mod.Lookups(project_root)
     remote: str = " ".join(f"w{i}" for i in range(300))
     assert clean_command(f"ssh h.com {remote}", project_root, disk) == "ssh h.com" + " <arg>" * 300
-    # C2: the destination is looked up once (a project file is never a website), its words never
-    assert disk.left == clean_mod.LOOKUP_STEPS - 1
+    assert disk.left == clean_mod.LOOKUP_STEPS
 
 
 def test_no_value_tables_hold_option_names() -> None:
@@ -593,10 +592,22 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
         # an assignment is read as written: a quoted `NAME=` is a program to bash
         ("$'X=1' curl tok.abc", "<arg> <arg> <arg>"),
         ("'X=1' curl tok.abc", "<arg> <arg> <arg>"),
-        ("env 'A=1' curl tok.abc", "env <arg> <arg> <arg>"),
+        ("env 'A=1' curl -d tok.abc x.com", "env A=<removed> curl -d <arg> x.com"),  # env unquotes
         # a web tool's path goes before its `@`
         ("curl x.com/@tok.abc", "curl x.com"),
         ("scp f u@x.com:/a@tok.abc", "scp <arg> x.com"),
+        # lenses: a query or fragment goes before `@` too; a double-quoted `${` whose `}` is past
+        # its `"`, and `$[…]`, are `<unparsed>`; only bash's blanks are stripped; a web tool's
+        # redirection target is a file; env and sudo get their `NAME=value` unquoted
+        ("curl 'x.com?k=v@tok.abc'", "curl x.com"),
+        ("curl x.com#@tok.abc", "curl x.com"),
+        ('curl -d "${X:-" tok.abc "}" x.com', "curl <unparsed>"),
+        ('curl -d "${HOME}/x" x.com', "curl -d <arg> x.com"),
+        ("curl $[ 1 + tok.abc ]", "curl <unparsed>"),
+        ("\x0b tok.abc x.com", "<arg> <arg> <arg>"),
+        ("curl x.com; \u3000 sk.live.abc", "curl x.com ; <arg> <arg>"),
+        ("curl x.com > tok.abc", "curl x.com <arg> <arg>"),
+        ('env "X=1" curl -d tok.abc x.com', "env X=<removed> curl -d <arg> x.com"),
         # a NUL and a process substitution make the command `<unparsed>`
         ("curl -d \x00 tok.abc x.com", "curl <unparsed>"),
         ("curl \x00-d tok.abc x.com", "curl <unparsed>"),
@@ -618,6 +629,12 @@ def test_the_cleaner_counts_are_pinned(project_root: Path) -> None:
 )
 def test_c2_shapes_store_this_output(project_root: Path, raw: str, expected: str) -> None:
     assert clean_command(raw, project_root) == expected
+
+
+def test_a_project_file_never_hides_a_website(project_root: Path) -> None:
+    # lens: curl contacts `evil.com` whether or not the project holds a file of that name
+    (project_root / "evil.com").write_text("x\n", encoding="utf-8")
+    assert clean_shell("curl evil.com", project_root) == ("curl evil.com", ("evil.com",))
 
 
 def test_a_dollar_pair_before_a_quote_is_no_ansi_string(project_root: Path) -> None:
@@ -651,6 +668,8 @@ def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> No
         ("scp ./README.md user@x.com:", ("x.com",)),
         ("rsync -av ./dist/ user@x.com:/var/www", ("x.com",)),
         ("curl x.com > README.md", ("x.com",)),
+        ("curl https://x.com > out.json", ("x.com",)),
+        ("scp notes.txt me@h.com:/p", ("h.com",)),
     ],
 )
 def test_the_sites_are_the_websites_the_cleaner_kept(

@@ -123,6 +123,8 @@ _PLAIN_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]*\])?\+?=[A-Za-z0-9
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
+# C2: where a web address written without a scheme stops naming its host
+_PAST_HOST = re.compile(r"[/?#]")
 # A word longer than this (in characters) is never looked up as a file (V5b-fix2 §5).
 MAX_PATH_WORD: int = 1024
 # What the words of one command may cost the file system (V5d): a step for each `lstat` and each
@@ -237,7 +239,7 @@ def clean_shell(
 ) -> tuple[str, tuple[str, ...]]:
     """`clean_command`, and the distinct websites it kept, in order (C2: a step's hosts). A file
     name, a program name, an option or `.` is never one; a command saved unread gives none."""
-    stripped: str = cmd.strip()
+    stripped: str = cmd.strip(_SHELL_SPACE)  # C2: `\v`, NBSP and the like are word text to bash
     if not stripped:
         return "", ()
 
@@ -256,7 +258,7 @@ def clean_shell(
     cleaned_bits: list[str] = []
     sites: dict[str, None] = {}  # distinct, in order
     for text, sep in parts:
-        words: list[str] = _clean_segment(text.strip(), disk)
+        words: list[str] = _clean_segment(text.strip(_SHELL_SPACE), disk)
         sites.update((str(word), None) for word in words if isinstance(word, _Site))
         cleaned_bits.append(" ".join(words))
         if sep:
@@ -266,13 +268,18 @@ def clean_shell(
     return (f"{cleaned} <unparsed>".lstrip() if cut else cleaned), tuple(sites)
 
 
+# What makes a command `<unparsed>` wherever it stands (SPEC §4 rule 4).
+_UNREAD_MARKS: tuple[str, ...] = ("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(")
+
+
 def _needs_unparsed(cmd: str) -> bool:
     # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not.
-    # C2: bash drops a NUL, and the words of a process substitution (`<(…)`, `>(…)`) run on as
-    # those of `$(…)` do. Bash joins a line continuation first (`<\⏎(` is `<(`), so the marks are
-    # looked for with it cut, and a `$` before one (`$\⏎'` opens a `$'…'`) is not read.
+    # C2: bash drops a NUL, and the words of a process substitution (`<(…)`, `>(…)`) and of
+    # `$[…]` run on as those of `$(…)` do. Bash joins a line continuation first (`<\⏎(` is `<(`),
+    # so the marks are looked for with it cut, and a `$` before one (`$\⏎'` opens a `$'…'`) is
+    # not read.
     joined: str = cmd.replace("\\\n", "")
-    if "$\\\n" in cmd or any(m in joined for m in ("`", "$(", "<<", "\r", "\x00", "<(", ">(")):
+    if "$\\\n" in cmd or any(m in joined for m in _UNREAD_MARKS):
         return True
     return not _quotes_balanced(cmd)
 
@@ -364,6 +371,9 @@ def _split_keeping_seps(cmd: str) -> tuple[list[tuple[str, str]], bool] | None:
             braces = _open_braces(found.group(), braces)
         elif braces and kind in ("redirect", "sep", "blank"):
             return None
+        elif kind == "quoted" and found.group().startswith('"') and "${" in found.group():
+            if _open_braces(found.group(), 0):  # C2: its `}` is past the `"` (`"${X:-" a "}"`)
+                return None
         if kind == "hash" and word_start:
             line_end: int = cmd.find("\n", at)
             pieces.append(cmd[start:at])
@@ -648,7 +658,8 @@ def _after_wrapper(
         if _out_of_step(raw):
             _rest_unread(pairs, at, out)
             return None
-        if wrapper in ("env", "sudo") and (name := _assign_name(raw)) is not None:
+        # env and sudo get the word unquoted, so `env "X=1"` sets X (the shell's own are as written)
+        if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
             out.append(f"{name}=<removed>")
             at = _after_assignment(pairs, at)
             continue
@@ -706,7 +717,8 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
             remote = True
             continue
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=True, raw=raw))
+            # C2: a redirection's target is a file, read as any program's word
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             continue
         if value_next:
@@ -720,7 +732,9 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
                 value_next = False
                 remote = may_be_whole and tool == "ssh"
         else:
-            out.append(_classify_word(word, disk, web_tool=True, raw=raw))
+            # C2: an scp or rsync word with no `:` is a local path, never a website
+            site_slot: bool = tool not in ("scp", "rsync") or ":" in word
+            out.append(_classify_word(word, disk, web_tool=site_slot, raw=raw))
             if options_ended or not _is_option(word):
                 remote = tool == "ssh"  # the first word that is no option is ssh's destination
             else:
@@ -776,10 +790,8 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool, raw: str) -> str
         # -pX and -la look alike, so a cluster keeps only its first letter.
         return word if len(word) == 2 else f"{word[:2]}<arg>"
 
-    # (2) web address; C2: a web tool's word that names a project file is that file, never a website
+    # (2) web address
     if "://" in word or web_tool:
-        if web_tool and "://" not in word and (rel := disk.project_relative(word)) is not None:
-            return rel
         site: str | None = None if _undecoded(raw) else _website_name(word)
         if site is not None:
             return _Site(site)
@@ -805,8 +817,8 @@ def _website_name(word: str) -> str | None:
     else:
         if word.startswith("@"):  # curl -d @file is a file, not a host
             return None
-        # scp/rsync user@host:path; C2: the path goes first (`x.com/@a.b` is x.com's)
-        candidate: str = word.split("/", 1)[0]
+        # scp/rsync user@host:path; C2: the path, query or fragment goes first (`x.com/@a.b`)
+        candidate: str = _PAST_HOST.split(word, 1)[0]
         if "@" in candidate:
             candidate = candidate.rsplit("@", 1)[-1]
         if ":" in candidate and not candidate.startswith("["):

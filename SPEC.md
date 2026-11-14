@@ -280,9 +280,13 @@ even a secret packed into a web address. So we keep almost nothing:
    `tool --url <arg>`); one after no option keeps its website name.
 3. Replace everything else with `<arg>`. A variable set in front of a command
    is saved as `NAME=<removed>`; it is read as written, so a quoted `'X=1'` or
-   `$'X=1'` is no assignment (bash runs it as a program) and is `<arg>`.
+   `$'X=1'` is no assignment (bash runs it as a program) and is `<arg>` (env and
+   sudo get theirs unquoted: `env "X=1"` sets X). Only bash's blanks (space, tab,
+   new line) are trimmed from a command or a part; `\v` or a no-break space is
+   word text.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
-   backticks, a process substitution `<(...)` or `>(...)`, an inline text block such
+   backticks, a process substitution `<(...)` or `>(...)`, `$[...]`, a double-quoted
+   `${` whose `}` is past its closing `"` (`"${X:-" a "}"`), an inline text block such
    as `<<EOF`, a carriage return, a NUL, or an unquoted `${` whose `}` is not in the
    same word, as in `${X:-a b}`), keep only the program name and the word
    `<unparsed>`. These are looked for with each line continuation joined, as bash
@@ -302,8 +306,10 @@ even a secret packed into a web address. So we keep almost nothing:
    with a backslash names no website (`<arg>`): its text is not decoded, and the
    escape may move the host (`$'https://x.com\x2f@tok.abc'` is bash's `x.com`).
    An address with no scheme loses its path before its user (`x.com/@tok.abc` is
-   `x.com`), and a name with an empty label (`.`, `.env`, `./dist`) is no website.
-   A web tool's word that names a project file is that file, never a website.
+   `x.com`; so do a query and a fragment), and a name with an empty label (`.`,
+   `.env`, `./dist`) is no website. An scp or rsync word with no `:` is a local
+   path, never a website, and a web tool's redirection target is read as any
+   program's word.
 6. For tool calls keep only the tool name, never its inputs. For edits keep the
    path only, never the text.
 
@@ -1417,9 +1423,9 @@ Other measures:
   keeps its website name. A `)` inside a part (`(curl x.com) >out`) is not cut,
   so the word it closes is no website. A double-quoted `"$D"` that holds an
   option is read as one word (`curl "$D" tok.abc x.com` keeps `tok.abc`), so that
-  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host. The target of a
-  bare redirection after a web tool is read as its other words are
-  (`curl x.com > tok.abc` keeps `tok.abc`).
+  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host. An arithmetic
+  command `(( … ))` is read as words (`(( curl + tok.abc ))` keeps `tok.abc`):
+  bash reads `((` as two subshells or as arithmetic by what follows.
 
 ---
 

