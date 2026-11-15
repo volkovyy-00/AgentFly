@@ -123,6 +123,9 @@ _PLAIN_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]*\])?\+?=[A-Za-z0-9
 # C2-fix2: what makes an unread command's first word not surely its program: a redirection (its
 # target is no program), a group or comment (`@(…)`, `#…`) and a backslash (`\'` opens no quote).
 _UNSURE_PROGRAM = re.compile(r"[<>(#\\]")
+# C2-fix2: hosts are one when they differ only in ASCII case, as DNS reads them; `straße.com` and
+# `strasse.com` stay two (`str.casefold` would join them).
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
@@ -259,12 +262,12 @@ def clean_shell(
     parts, cut = split
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
     cleaned_bits: list[str] = []
-    sites: dict[str, str] = {}  # distinct ignoring case (C2-fix2), in order, first spelling kept
+    sites: dict[str, str] = {}  # distinct up to ASCII case (C2-fix2), in order, first spelling kept
     for text, sep in parts:
         words: list[str] = _clean_segment(text.strip(_SHELL_SPACE), disk)
         for word in words:
             if isinstance(word, _Site):
-                sites.setdefault(word.casefold(), str(word))
+                sites.setdefault(word.translate(_ASCII_LOWER), str(word))
         cleaned_bits.append(" ".join(words))
         if sep:
             cleaned_bits.append(f" {sep} ")

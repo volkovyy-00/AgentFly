@@ -325,7 +325,7 @@ heredoc. A shell step's file is read from the first 1,000 words of
 the cleaned command (F18); past them a secret read still marks the step's file
 sensitive, by the rule check's own test. A shell step's hosts are the distinct
 website names the cleaner kept as websites (rules 2 and 5), in order, from the
-whole saved command; names that differ only in case are one host, listed as
+whole saved command; names that differ only in ASCII case are one host, listed as
 first written (`curl x.com X.com` lists `x.com`, C2-fix2); the first 1,000 are listed and the rest are not, which bounds
 what one step writes to the history and to Neo4j (C2). A kept file name, program
 name, option or `.` is never a host, and a command saved `<unparsed>` as a whole

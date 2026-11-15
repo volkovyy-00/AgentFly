@@ -767,6 +767,9 @@ def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> No
         ("curl x.com X.com", ("x.com",)),
         ("curl https://x.com X.COM", ("x.com",)),
         ("curl X.com x.com y.org", ("X.com", "y.org")),
+        # only ASCII case: names that differ in more than case stay two
+        ("curl https://straße.com https://strasse.com", ("straße.com", "strasse.com")),
+        ("curl https://ς.com https://σ.com", ("ς.com", "σ.com")),
     ],
 )
 def test_the_sites_are_the_websites_the_cleaner_kept(
