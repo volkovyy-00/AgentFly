@@ -120,6 +120,9 @@ _ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
 # C2: an assignment that cannot hide a word break (no quote, `$`, backslash or space of any kind),
 # so the word after it is the one bash runs.
 _PLAIN_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]*\])?\+?=[A-Za-z0-9_./+:,@%~=-]*")
+# C2-fix2: what makes an unread command's first word not surely its program: a redirection (its
+# target is no program), a group or comment (`@(…)`, `#…`) and a backslash (`\'` opens no quote).
+_UNSURE_PROGRAM = re.compile(r"[<>(#\\]")
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
@@ -256,20 +259,25 @@ def clean_shell(
     parts, cut = split
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
     cleaned_bits: list[str] = []
-    sites: dict[str, None] = {}  # distinct, in order
+    sites: dict[str, str] = {}  # distinct ignoring case (C2-fix2), in order, first spelling kept
     for text, sep in parts:
         words: list[str] = _clean_segment(text.strip(_SHELL_SPACE), disk)
-        sites.update((str(word), None) for word in words if isinstance(word, _Site))
+        for word in words:
+            if isinstance(word, _Site):
+                sites.setdefault(word.casefold(), str(word))
         cleaned_bits.append(" ".join(words))
         if sep:
             cleaned_bits.append(f" {sep} ")
     cleaned: str = "".join(cleaned_bits).strip()
     # where the unread rest was
-    return (f"{cleaned} <unparsed>".lstrip() if cut else cleaned), tuple(sites)
+    return (f"{cleaned} <unparsed>".lstrip() if cut else cleaned), tuple(sites.values())
 
 
 # What makes a command `<unparsed>` wherever it stands (SPEC §4 rule 4).
-_UNREAD_MARKS: tuple[str, ...] = ("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(", "((")
+_UNREAD_MARKS: tuple[str, ...] = (
+    *("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(", "(("),
+    *("@(", "+(", "!(", "*(", "?("),  # C2-fix2: an extglob group is one word to bash
+)
 
 
 def _needs_unparsed(cmd: str) -> bool:
@@ -278,7 +286,8 @@ def _needs_unparsed(cmd: str) -> bool:
     # `$[…]` run on as those of `$(…)` do. C2-fix1: bash reads `((` as arithmetic or as two
     # subshells by what follows, so which words are a program's is not known. Bash joins a line
     # continuation first (`<\⏎(` is `<(`), so the marks are looked for with it cut, and a `$`
-    # before one (`$\⏎'` opens a `$'…'`) is not read.
+    # before one (`$\⏎'` opens a `$'…'`) is not read. C2-fix2: with `extglob` on, bash reads
+    # `@(a b)` (also `+(`, `!(`, `*(`, `?(`) as one word, which the split here reads as several.
     joined: str = cmd.replace("\\\n", "")
     if "$\\\n" in cmd or any(m in joined for m in _UNREAD_MARKS):
         return True
@@ -331,12 +340,15 @@ def _rough_tokens(cmd: str) -> list[str]:
 
 def _first_program(cmd: str) -> str:
     """The program a command saved unread is named by. C2 (owner 2026-11-14): the rough tokens
-    split as bash does only where an assignment is plain, so any other assignment names `cmd`."""
+    split as bash does only where an assignment is plain, so any other assignment names `cmd`.
+    C2-fix2: so does a first word holding `<`, `>`, `(`, `#` or a backslash."""
     for token in _rough_tokens(cmd):
         if _is_env_assign(token):
             if _PLAIN_ASSIGN.fullmatch(token) is None:
                 return "cmd"
             continue
+        if _UNSURE_PROGRAM.search(token):
+            return "cmd"
         bare: str = token.strip("'\"")
         name: str = Path(bare).name or bare
         return name if _PROGRAM_NAME.fullmatch(name) else "cmd"

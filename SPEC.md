@@ -286,7 +286,9 @@ even a secret packed into a web address. So we keep almost nothing:
    word text.
 4. If the command cannot be split cleanly (an unbalanced quote, `$(...)`,
    backticks, a process substitution `<(...)` or `>(...)`, `$[...]`, `((` (bash reads
-   it as arithmetic or as two subshells by what follows, C2-fix1), a double-quoted
+   it as arithmetic or as two subshells by what follows, C2-fix1), a `(` glued after
+   `@`, `+`, `!`, `*` or `?` (with `extglob` on, bash reads `@(a b)` as one word,
+   C2-fix2), a double-quoted
    `${` whose `}` is past its closing `"` (`"${X:-" a "}"`), an inline text block such
    as `<<EOF`, a carriage return, a NUL, or an unquoted `${` whose `}` is not in the
    same word, as in `${X:-a b}`), keep only the program name and the word
@@ -295,7 +297,10 @@ even a secret packed into a web address. So we keep almost nothing:
    (C2). The program name is taken past the variables set in front only
    when each is plain (`NAME=` and letters, digits and `_./+:,@%~=-`); after any
    other (a quote, `$`, backslash or a space bash does not split on) it is `cmd`
-   (owner 2026-11-14). Ordinary balanced quotes are fine and are
+   (owner 2026-11-14), and so it is when the first word left holds `<`, `>`, `(`, `#`
+   or a backslash (a redirection's target, a group, a comment or an escape is not
+   surely the program: `2>/a/tok.abc cat $(y)` is `cmd <unparsed>`, C2-fix2). A plain
+   word or path keeps its name. Ordinary balanced quotes are fine and are
    handled by the steps above. A long command is read up to its first 1,000 parts and
    20,000 pieces (runs of a word's text, quoted runs, spaces and operators; F18): the rest
    is not read and is saved as `<unparsed>` (`ls ; ls ; … ; <unparsed>`), and a word the
@@ -320,7 +325,8 @@ heredoc. A shell step's file is read from the first 1,000 words of
 the cleaned command (F18); past them a secret read still marks the step's file
 sensitive, by the rule check's own test. A shell step's hosts are the distinct
 website names the cleaner kept as websites (rules 2 and 5), in order, from the
-whole saved command; the first 1,000 are listed and the rest are not, which bounds
+whole saved command; names that differ only in case are one host, listed as
+first written (`curl x.com X.com` lists `x.com`, C2-fix2); the first 1,000 are listed and the rest are not, which bounds
 what one step writes to the history and to Neo4j (C2). A kept file name, program
 name, option or `.` is never a host, and a command saved `<unparsed>` as a whole
 lists none. Test case: `curl -H 'Authorization: Bearer abc' https://u:p@x.com/?t=1`
@@ -1424,7 +1430,10 @@ Other measures:
   keeps its website name. A `)` inside a part (`(curl x.com) >out`) is not cut,
   so the word it closes is no website. A double-quoted `"$D"` that holds an
   option is read as one word (`curl "$D" tok.abc x.com` keeps `tok.abc`), so that
-  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host.
+  `scp "$FILE" deploy@prod.example.com:/srv/` keeps its host. A `(` glued after `@`,
+  `+`, `!`, `*` or `?` makes a command `<unparsed>` even where bash reads no group (with
+  `extglob` off, or quoted: `grep -E 'a+(b)' f`), so such a command keeps only its program
+  name (C2-fix2).
 
 ---
 

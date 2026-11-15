@@ -10,7 +10,14 @@ import pytest
 import agentfly.recorder.clean as clean_mod
 from agentfly.recorder.clean import clean_command, clean_shell, cleaned_words, command_for_storage
 from tests.helpers import wallclock
-from tests.leak_cases import LEAKY_COMMANDS, NEWLY_SAVED, OBSERVED_VALUE_LEAKS, SECRET
+from tests.leak_cases import (
+    FIRST_WORD_SHAPES,
+    LEAKY_COMMANDS,
+    NEWLY_SAVED,
+    OBSERVED_VALUE_LEAKS,
+    SECRET,
+    in_every_form,
+)
 
 
 @pytest.fixture()
@@ -497,6 +504,62 @@ def test_a_double_parenthesis_is_unparsed(project_root: Path, raw: str, expected
     assert clean_mod.clean_shell(raw, project_root)[1] == sites
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C2-fix2: a command saved unread is named `cmd` when its first word is a redirection, a
+        # group, a comment or holds a backslash (the lead's merge review of 27a7358)
+        ("2>/a/tok.abc cat $(y)", "cmd <unparsed>"),
+        ("cat</a/tok.abc $(y)", "cmd <unparsed>"),
+        ("X=1 >/a/tok.abc cat $(y)", "cmd <unparsed>"),
+        ("\\' /tok.abc' $(y) '", "cmd <unparsed>"),
+        ("!(/a/tok.abc x) x.com", "cmd <unparsed>"),
+        ("@(/a/tok.abc x) $(y)", "cmd <unparsed>"),
+        ("#/a/tok.abc $(y)", "cmd <unparsed>"),
+        ("2>/a/tok.abc cat " + "a " * (64 * 1024), "cmd <unparsed>"),  # past the cap
+        # a plain word, a plain path and a plain assignment keep the name
+        ("cat $(y)", "cat <unparsed>"),
+        ("/usr/bin/cat $(y)", "cat <unparsed>"),
+        ("X=1 cat $(y)", "cat <unparsed>"),
+        ("cat " + "a " * (64 * 1024), "cat <unparsed>"),
+    ],
+)
+def test_an_unread_command_names_no_unsure_first_word(
+    project_root: Path, raw: str, expected: str
+) -> None:
+    assert clean_shell(raw, project_root) == (expected, ())
+
+
+def test_an_unsure_first_word_past_the_cap_names_no_value(project_root: Path) -> None:
+    # past 128 KiB only the start is read, so each form is read there too
+    pad: str = " a" * (64 * 1024)
+    for form in in_every_form(FIRST_WORD_SHAPES):
+        raw: str = form.format(V=f"{SECRET}.abc") + pad
+        command, sites = clean_shell(raw, project_root)
+        assert SECRET not in command and sites == (), form
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C2-fix2: with `extglob` on, bash reads `@(…)`, `+(…)`, `!(…)`, `*(…)` and `?(…)` as one
+        # word, so a `(` glued after one of them anywhere makes the command `<unparsed>`
+        ("curl -d @(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d +(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d !(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d *(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d ?(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d @\\\n(a tok.abc ) x.com", "curl <unparsed>"),
+        ("curl -d x+(a tok.abc ) x.com", "curl <unparsed>"),
+        ("echo '!(' tok.abc", "echo <unparsed>"),
+        # spaced, they are read as before
+        ("curl -d @ (a) x.com", "curl -d <arg> <arg> x.com"),
+    ],
+)
+def test_an_extglob_group_is_unparsed(project_root: Path, raw: str, expected: str) -> None:
+    assert clean_command(raw, project_root) == expected
+
+
 def test_each_wrapper_value_option_takes_the_next_word(project_root: Path) -> None:
     # the brief's lists, written out: a letter dropped from a table fails here
     listed: dict[str, str] = {
@@ -700,6 +763,10 @@ def test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string() -> No
         ("curl x.com > README.md", ("x.com",)),
         ("curl https://x.com > out.json", ("x.com",)),
         ("scp notes.txt me@h.com:/p", ("h.com",)),
+        # C2-fix2: distinct ignoring case, the first spelling kept
+        ("curl x.com X.com", ("x.com",)),
+        ("curl https://x.com X.COM", ("x.com",)),
+        ("curl X.com x.com y.org", ("X.com", "y.org")),
     ],
 )
 def test_the_sites_are_the_websites_the_cleaner_kept(

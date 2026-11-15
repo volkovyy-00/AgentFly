@@ -525,6 +525,9 @@ _HOST_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("echo " + "a " * 1_200 + "https://late.example/x", ("late.example",)),
     # a URL holding a space is one website, saved as written (SPEC §10)
     ('tool "https://a.b x"', ("a.b x",)),
+    # C2-fix2: one website, whatever its case; the first spelling is kept
+    ("curl x.com X.com", ("x.com",)),
+    ("curl https://x.com X.COM", ("x.com",)),
 )
 
 
@@ -560,6 +563,13 @@ def test_a_step_lists_the_first_max_hosts_websites(tmp_path: Path) -> None:
     record: StepRecord = _shell_record(tmp_path, "curl " + " ".join(f"https://{s}" for s in sites))
     assert record.hosts == tuple(sites[:1_000])
     assert record.command == "curl " + " ".join(sites)  # the saved command keeps them all
+
+
+def test_a_step_counts_its_hosts_ignoring_case(tmp_path: Path) -> None:
+    # C2-fix2: a name twice in two cases is one host, so 1,200 pairs list the first 1,000 names
+    pairs: str = " ".join(f"a{n}.example A{n}.EXAMPLE" for n in range(1, 1_201))
+    record: StepRecord = _shell_record(tmp_path, f"curl {pairs}")
+    assert record.hosts == tuple(f"a{n}.example" for n in range(1, 1_001))
 
 
 @pytest.mark.parametrize(

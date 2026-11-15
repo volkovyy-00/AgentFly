@@ -234,6 +234,17 @@ _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET
 
 LEAKY_COMMANDS += tuple(form.format(V=value) for form in _VALUE_FORMS for value in _HOST_SHAPED)
 
+# C2-fix2: a command saved unread whose first word is a redirection, a group, a comment or holds a
+# backslash; 27a7358 named it by the value's file name. Each is also read past the 128 KiB cap.
+FIRST_WORD_SHAPES: tuple[str, ...] = (
+    "2>/a/{V} cat $(y)",
+    "cat</a/{V} $(y)",
+    "X=1 >/a/{V} cat $(y)",
+    "\\' /{V}' $(y) '",
+    "!(/a/{V} x) x.com",
+    "@(/a/{V} x) $(y)",
+    "#/a/{V} $(y)",
+)
 # C2: what c847ff4 saved with the value kept: a `$'…'` string holding `\'` (bash reads it as a
 # quote character inside the string), a process substitution, a NUL (bash drops it), a
 # redirection in a wrapper's value slot (pinned: the rest is `<arg>`), and (final verification) an
@@ -273,6 +284,14 @@ _NEW_SHAPES: tuple[str, ...] = (
     "(( curl + {V} ))",
     "((curl + {V}))",
     "(\\\n( curl + {V} ))",
+    # C2-fix2: an extglob group is one word to bash (`-d`'s value), glued after a continuation too
+    "curl -d @(a {V} ) x.com",
+    "curl -d +(a {V} ) x.com",
+    "curl -d !(a {V} ) x.com",
+    "curl -d *(a {V} ) x.com",
+    "curl -d ?(a {V} ) x.com",
+    "curl -d @\\\n(a {V} ) x.com",
+    *FIRST_WORD_SHAPES,
 )
 _SEPARATED: tuple[str, ...] = (
     "{T}",
@@ -284,15 +303,22 @@ _SEPARATED: tuple[str, ...] = (
     "cd a\n{T}",
     "curl x.com # \\\n{T}",
 )
-NEW_SHAPE_COMMANDS: tuple[str, ...] = tuple(
-    form.replace("{T}", tail)
-    for tail in (
-        *_NEW_SHAPES,
-        *(f"{w} {t}" for w in _WRAPPED for t in _NEW_SHAPES),
-        *(t.replace(" ", " \\\n ", 1) for t in _NEW_SHAPES),  # a line continuation in it
+
+
+def in_every_form(shapes: tuple[str, ...]) -> tuple[str, ...]:
+    """Each shape alone, behind each wrapper, with a line continuation, in each separator form."""
+    return tuple(
+        form.replace("{T}", tail)
+        for tail in (
+            *shapes,
+            *(f"{w} {t}" for w in _WRAPPED for t in shapes),
+            *(t.replace(" ", " \\\n ", 1) for t in shapes),  # a line continuation in it
+        )
+        for form in _SEPARATED
     )
-    for form in _SEPARATED
-)
+
+
+NEW_SHAPE_COMMANDS: tuple[str, ...] = in_every_form(_NEW_SHAPES)
 # C2 (owner 2026-11-14): a command saved unread is named by its first program, past the
 # assignments before it; c847ff4 split them otherwise than bash (a `$'…'` string, a `$(…)`, a
 # backslash before a quote, a space bash does not split on), so the value was saved as the name.
