@@ -197,7 +197,8 @@ def test_a_word_that_is_a_file_inside_the_root_is_saved_relative(workspace: Path
 def test_a_word_the_system_cannot_encode_is_not_a_path(word: str, workspace: Path) -> None:
     """A lone surrogate comes from JSON (`"\\ud800"`), a NUL from a quoted string: `ValueError`."""
     assert _project_relative(word, workspace) is None
-    assert clean_command(f"echo '{word}'", workspace) == "echo <arg>"
+    saved: str = "echo <unparsed>" if "\x00" in word else "echo <arg>"  # C2: a NUL is unread
+    assert clean_command(f"echo '{word}'", workspace) == saved
     # The history's own look at a path never raises either: a relative word is its base name,
     # stored with each lone surrogate as U+FFFD.
     assert relative_file_path(word, workspace) == storable(Path(word).name)

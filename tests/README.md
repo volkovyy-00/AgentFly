@@ -43,7 +43,7 @@ the maintainers' work items and decisions, which are kept outside this repo.
   redirections and the listed wrappers is read with their value options (`sudo -u <arg> curl -s
   x.com`, `timeout -s <arg> <arg> curl …`, `xargs -I<arg> curl …`); `sudo -E`, a loose word in
   a wrapper's options and a redirection in its value slot leave the rest `<arg>`; 8 wrappers and
-  16 `(` are read, a 9th or 17th leaves the rest `<arg>`. `_out_of_step` says which words may be
+  16 `( ` are read, a 9th or 17th leaves the rest `<arg>`. `_out_of_step` says which words may be
   no word or several (`$E`, `${E}`, `a$E`, `$'x'`, `"$@"`, `"${A[@]}"`, `-d>s`, globs, `{,}`,
   `{a..b}`) and which are one (`"$X"`, `"${SRC}/"`, `{}`, `-I{}`, a redirection). After a web
   tool a redirection uses up no value and a loose word makes the next a value (for ssh, it and
@@ -56,14 +56,15 @@ the maintainers' work items and decisions, which are kept outside this repo.
   form between an option and its value for curl and wget, and each loose form. The brief's
   newly saved commands keep the tool's name and `x.com` as a host, its kept commands their
   name and hosts (two strings change: `cd <arg> && curl -s x.com &`, and the continuation line
-  `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 301-word part behind 16
-  `(` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
+  `curl -s -H <arg> api.example.com`); a 304-word line of 16 parts and a 316-word part behind 16
+  `( ` and 8 wrappers call `_classify_word` at most once a word and look up at most once a word.
   F18 (`test_clean.py`): with `MAX_PARTS` or `MAX_PIECES` lowered, a command past the count is
   saved ending in `<unparsed>` with no later website or project file, a word the cut falls inside
   (`x.com'/p'`, `x.co\⏎m`, `"x".com`) is dropped whole, and at exactly the count all is read; the
   real counts (1,000 and 20,000) are pinned. (`test_store.py`): a step reads at most
-  `MAX_RECORD_WORDS` (1,000, pinned) cleaned words, so a late host or `.env` is not the step's and
-  `is_sensitive` is asked at most that often; the secret flag then comes from `reads_secret`.
+  `MAX_RECORD_WORDS` (1,000, pinned) cleaned words, so a late `.env` is not the step's file and
+  `is_sensitive` is asked at most that often; the secret flag then comes from `reads_secret`
+  (a late host still is the step's: C2 below).
   Final verification and lenses (`test_final_verification_shapes`, `test_lens_shapes`,
   `test_each_wrapper_value_option_takes_the_next_word`, `test_an_unclosed_brace_list_is_read_in_one_pass`
   `@wallclock`): a character a backslash keeps is no operator or word break (`echo \>& ssh …`),
@@ -71,12 +72,57 @@ the maintainers' work items and decisions, which are kept outside this repo.
   over, `env -` and `sudo -s`/`-i`, `env -S`/`-i` leave the rest `<arg>`, `sudo/` is no wrapper,
   `time`, `command`, `doas`, `nohup` and `xargs` are stepped over, every value letter of the
   brief's wrapper lists takes the next word, an unclosed `${` in a word (`${X:-a b}`) and a `\r`
-  make the command `<unparsed>`, `<(x)` is a loose word (not a redirection), and a 64,000-comma
+  make the command `<unparsed>`, so does `<(x)` (C2), and a 64,000-comma
   `{` word is read in well under 0.25 s; `leak_cases.py` holds each of these shapes with a value.
   P1 (`test_a_command_over_the_recorders_parse_cap_is_saved_unparsed`,
   `test_an_over_long_command_is_saved_unread_fast` `@wallclock`): a command over 128 KiB is saved
   as its program and `<unparsed>`, whatever its shape, one just under is cleaned as before, and
   2 MiB of `a ` is saved unread in under 0.1 s of CPU.
+  C2 (`test_c2_shapes_store_this_output`, `test_a_dollar_pair_before_a_quote_is_no_ansi_string`,
+  `test_a_cleaned_command_is_never_split_as_shlex_splits_an_ansi_string`): a `$'…'` string runs
+  to the first `'` no backslash keeps (`\'`, `;`, `#`, a new line and `&` stay in it), is one
+  word, is not decoded, and makes the next word a value (`curl $'\x2dd' tok.abc x.com`); `\$'`
+  and `$$'` open a plain quote, an escaped `\'` opens nothing, a word holding a `$'…'` string
+  with a backslash names no website (`$'https://x.com\x2f@tok.abc'` is `<arg>`; a quoted URL with
+  a backslash keeps its host as on c847ff4); a line continuation is joined before `<(`, `>(` and
+  `$'` are looked for; `$'X=1'` and `'X=1'` are no assignment (`env "X=1"` is); a path, query or
+  fragment goes before `@` (`curl x.com/@tok.abc` is `curl x.com`); `.`, `.env`, an scp/rsync word
+  with no `:` and a web tool's redirection target are never a site, and a project file never hides
+  one (`test_a_project_file_never_hides_a_website`); a double-quoted `${` closed past its `"`,
+  `$[…]` make the command `<unparsed>`; only bash's blanks are stripped (`\v tok.abc` is `<arg>`); a NUL, `<(…)` and `>(…)` make the command `<unparsed>`; a redirection in a wrapper's
+  value slot leaves the rest `<arg>` (`sudo -u >f curl tok.abc x.com`); a command saved unread is
+  named past plain assignments only, else `cmd` (`K=$(echo tok.abc x)`, `K=a<NBSP>tok.abc $(x)`;
+  owner 2026-11-14). `leak_cases.py` holds these shapes with a value, each alone, behind each
+  wrapper of `_WRAPPED`, with a continuation, in `( … )`, `( (…) )`, after `&`, `|&`, a new line
+  and a comment (`NEW_SHAPE_COMMANDS`), and the owner's shapes (`FIRST_PROGRAM_LEAKS`).
+  C2-fix1 (`test_a_double_parenthesis_is_unparsed`): a `((` anywhere, also split by a line
+  continuation (`(\⏎(`), makes the command `<unparsed>` with no site (`(( curl + tok.abc ))` is
+  `cmd <unparsed>`); glued subshells are tested written apart, `( (…) )` and `( ` × 16;
+  `leak_cases.py` holds the three `((` shapes in each form above.
+  C2-fix2 (`test_an_unread_command_names_no_unsure_first_word`): a command saved unread whose
+  first word holds `<`, `>`, `(`, `#` or a backslash is `cmd <unparsed>` (`2>/a/tok.abc cat $(y)`,
+  `\' /tok.abc' $(y) '`, `#/a/tok.abc $(y)`, also past 128 KiB); a plain word, path or
+  assignment keeps the name. `test_an_unsure_first_word_past_the_cap_names_no_value` reads each
+  form of `FIRST_WORD_SHAPES` past 128 KiB. `test_an_extglob_group_is_unparsed`: a `(` glued
+  after `@`, `+`, `!`, `*` or `?` anywhere (after a continuation, quoted) makes the command
+  `<unparsed>`; spaced, it is read as before. `leak_cases.py` holds those shapes and
+  `FIRST_WORD_SHAPES` in each form above (`in_every_form`).
+  C2-fix3 (`test_a_program_word_cut_by_the_window_is_cmd`): past 128 KiB, a program word (past
+  plain assignments) that runs to the end of the 4,096-character window it is named from is
+  `cmd <unparsed>`, also one that ends on the window's last character; one followed by a blank
+  or `;` inside the window keeps its name (`cat`; `xx…/a/tok.abc z` with its blank at 4,096).
+  `test_the_sites_are_the_websites_the_cleaner_kept` (`clean_shell`): the sites are the kept
+  websites in order, never a file, program, option or `.`, and none for an unread command.
+  (`test_store.py`) `test_a_step_hosts_only_the_websites_the_cleaner_kept`: `cat .env`,
+  `find . -name x`, `python3.12 -V` and `true; tok.abc` list no host, `cat .env | curl -d @- x.com`
+  lists `x.com`, a website after 1,200 words is listed, and `tool "https://a.b x"` lists `a.b x`;
+  `test_a_step_lists_the_first_max_hosts_websites` lists the first `MAX_HOSTS` (1,000, pinned) of
+  1,200; C2-fix2: hosts are distinct ignoring ASCII case (`straße.com`/`strasse.com` stay two), first spelling kept (`curl x.com X.com` lists
+  `x.com`; `test_a_step_counts_its_hosts_ignoring_case`: 1,200 pairs `aN.example AN.EXAMPLE`
+  list `a1.example` … `a1000.example`); each host of a step stands in its saved command as whole words (over `LEAKY_COMMANDS`,
+  the host commands, a spaced and a backslashed URL, and the store's `Authorization` command). (`test_app.py`)
+  `test_a_piped_secret_read_shows_the_website_as_its_host`: that step's `host` in `/api/steps` is
+  `x.com`; `test_secrets_glued_to_options_never_reach_the_page` is `slow` (every leak command).
 - Whitelist: the app serves only the `(method, path)` pairs in `ROUTE_WHITELIST`
   (`tests/test_app.py`); HEAD on an API route is 405; `/docs`, `/redoc` and
   `/openapi.json` are 404.
@@ -284,7 +330,8 @@ the maintainers' work items and decisions, which are kept outside this repo.
   either order, nested) and a chat in the 30-minute fallback are marked with no marking step
   (a fallback chat that marks itself after the window ended names that step, as `/api/steps`
   does), another workspace is not; a `history.db` from before V6b opens with every row, the same marked
-  flags and the first read answering 200; a failed upgrade rolls back; a flagging failure changes
+  flags and the first read answering 200 (its chats are dated 4 to 1 days before now, so the
+  28-day retention never drops them; C2); a failed upgrade rolls back; a flagging failure changes
   no hook answer.
 - Step merge (`tests/test_step_merge.py`, `tests/fixtures/v2c_capture.json`): a shell, read
   or MCP pair with one `tool_use_id` is one step on the page, in history and in Neo4j's

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import posixpath
 import re
-import shlex
 import stat
 from functools import cached_property
 from pathlib import Path
@@ -118,9 +117,20 @@ _LONG_OPTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
 _PROGRAM_NAME = re.compile(r"[\w./+~-]+")
 # `NAME=`, `NAME+=` and `NAME[i]=` set a variable; the index is dropped, it is not a name.
 _ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]=]*\])?\+?")
+# C2: an assignment that cannot hide a word break (no quote, `$`, backslash or space of any kind),
+# so the word after it is the one bash runs.
+_PLAIN_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]*\])?\+?=[A-Za-z0-9_./+:,@%~=-]*")
+# C2-fix2: what makes an unread command's first word not surely its program: a redirection (its
+# target is no program), a group or comment (`@(…)`, `#…`) and a backslash (`\'` opens no quote).
+_UNSURE_PROGRAM = re.compile(r"[<>(#\\]")
+# C2-fix2: hosts are one when they differ only in ASCII case, as DNS reads them; `straße.com` and
+# `strasse.com` stay two (`str.casefold` would join them).
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 # What a host written without a scheme may look like. A data argument (`token=a.b`, `hi a.com`)
 # is not one.
 _HOST_WORD = re.compile(r"[A-Za-z0-9._-]+")
+# C2: where a web address written without a scheme stops naming its host
+_PAST_HOST = re.compile(r"[/?#]")
 # A word longer than this (in characters) is never looked up as a file (V5b-fix2 §5).
 MAX_PATH_WORD: int = 1024
 # What the words of one command may cost the file system (V5d): a step for each `lstat` and each
@@ -150,8 +160,20 @@ MAX_PIECES: int = 20_000
 # backslash keeps the character after it.
 _SINGLE: str = r"'[^']*+"
 _DOUBLE: str = r'"[^"\\]*+(?:\\.[^"\\]*+)*+'
-# A closed quoted run, or a quote that is never closed (it runs to the end).
-_QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
+# C2: a `$'…'` string, as bash reads it: a backslash keeps the character after it, `\'` too, so
+# the string ends at the first `'` no backslash keeps. Each scanner reads it before a plain `$`,
+# and pairs `$$` first (the shell's process id, then a plain quote: `$$'x'`); a backslash outside
+# quotes keeps the `$` after it (`\$'x'` is a plain quote too).
+_ANSI_BODY: str = r"(?:[^'\\]++|\\.)*+"
+_ANSI: str = rf"\$'{_ANSI_BODY}"
+# A `$` that opens no `$'…'` string: the pair `$$`, or one not before a `'`.
+_DOLLAR: str = r"\$\$|\$(?!')"
+# A command whose every quote is closed, read in one C-speed match: other text, a character a
+# backslash keeps, a closed `$'…'`, a `$` that opens none, closed quoted runs, and a lone
+# backslash at the end.
+_BALANCED = re.compile(
+    rf"""(?:[^'"\\$]++|\\.|{_ANSI}'|{_DOLLAR}|{_SINGLE}'|{_DOUBLE}")*+\\?""", re.DOTALL
+)
 # The pieces `_split_keeping_seps` reads a command in, one after another: a quoted run (an
 # unclosed one runs to the end, a lone backslash at the end with it), a line continuation (`\` and
 # a new line: cut, and the word goes on), a run of a word's other text with each character a
@@ -161,8 +183,8 @@ _QUOTE_SCAN = re.compile(rf"""{_SINGLE}'|{_DOUBLE}"|['"]""", re.DOTALL)
 # A word's `${`, `}` and the characters a backslash keeps (`\${` opens nothing).
 _BRACE_SCAN = re.compile(r"\\.|\$\{|\}")
 _SPLIT_TOKEN = re.compile(
-    rf"""(?P<quoted>{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
-    r"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#]|\\[^\n])++|\\\Z)|(?P<hash>\#)"""
+    rf"""(?P<quoted>{_ANSI}(?:'|\\?\Z)|{_SINGLE}(?:'|\Z)|{_DOUBLE}(?:"|\\?\Z))|(?P<join>\\\n)"""
+    rf"""|(?P<text>(?:[^ \t\r\n;&|()<>'"\\#$]|\\[^\n]|{_DOLLAR})++|\\\Z)|(?P<hash>\#)"""
     r"""|(?P<redirect>[<>]&|&>|>\|)|(?P<sep>\|\||\|&|&&|[&|;\n])|(?P<blank>[ \t\r]++|[()<>])""",
     re.DOTALL,
 )
@@ -172,25 +194,29 @@ _SHELL_SPACE: str = " \t\r\n"
 _PLAIN_WORD = re.compile(r"[^ \t\r\n]+")
 # A whole word, then the space after it or the end.
 _SHELL_WORD = re.compile(
-    rf"""((?:[^ \t\r\n'"\\]++|\\.|{_SINGLE}'|{_DOUBLE}")++)(?:[ \t\r\n]++|\Z)""", re.DOTALL
+    rf"""((?:[^ \t\r\n'"\\$]++|\\.|{_ANSI}'|{_DOLLAR}|{_SINGLE}'|{_DOUBLE}")++)"""
+    r"""(?:[ \t\r\n]++|\Z)""",
+    re.DOTALL,
 )
 # One piece of a whole shell word: a character after a backslash, the inside of a single- or
-# double-quoted run, or plain text.
+# double-quoted run, plain text, or the inside of a `$'…'` string (C2: never decoded).
 _WORD_PIECE = re.compile(
-    r"""\\(.)|'([^']*+)'|"([^"\\]*+(?:\\.[^"\\]*+)*+)"|([^'"\\]++)""", re.DOTALL
+    rf"""\\(.)|'([^']*+)'|"([^"\\]*+(?:\\.[^"\\]*+)*+)"|((?:[^'"\\$]++|{_DOLLAR})++)"""
+    rf"""|\$'({_ANSI_BODY})'""",
+    re.DOTALL,
 )
 # In double quotes a backslash goes only before `"` and before another backslash.
 _DOUBLE_ESCAPE = re.compile(r'\\(["\\])')
 # C1-fix1: a redirection at a word's start as written (`>f`, `2>&1`, `&>f`, `<f`, `{fd}>f`); when
 # it is the whole word (`>`, `2>`, `{fd}>`) the next word is its target.
-_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)(?!\()")
+_REDIRECT = re.compile(r"(?:[0-9]*|&|\{[A-Za-z_]\w*\})(?:>>|>\||>&|<>|<&|>|<)")
 # In a word's unquoted text, what may make it no word or several: a `$` (a variable may be empty
 # or hold spaces), a glob character (it may match a file named `-d`), a `<` or `>` after the
-# word's start (the shell cuts the word there), a process substitution (`<(cmd)`, whose words may
-# run on) and a brace list or range (`{,}` is no word). The
+# word's start (the shell cuts the word there) and a brace list or range (`{,}` is no word). The
 # brace part never steps back (possessive, and its first run stops at the first `,` or `..`), so
-# an unclosed `{,,,…` is read in one pass.
-_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\A[<>]\(|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
+# an unclosed `{,,,…` is read in one pass. (A process substitution, `<(…)`, makes the command
+# `<unparsed>`.)
+_LOOSE_TEXT = re.compile(r"[$*?\[]|(?!\A)[<>]|\{(?:[^{},.]|\.(?!\.))*+(?:,|\.\.)[^{}]*+\}")
 
 
 def command_for_storage(cmd: str, project_root: Path) -> str:
@@ -207,40 +233,75 @@ def clean_command(cmd: str, project_root: Path, lookups: Lookups | None = None) 
     about the same words (the step record) passes the one it also uses. Without one the command
     gets a budget of its own.
     """
-    stripped: str = cmd.strip()
+    return clean_shell(cmd, project_root, lookups)[0]
+
+
+class _Site(str):
+    """A kept word that the cleaner judged a website (`_classify_word`, step 2)."""
+
+
+def clean_shell(
+    cmd: str, project_root: Path, lookups: Lookups | None = None
+) -> tuple[str, tuple[str, ...]]:
+    """`clean_command`, and the distinct websites it kept, in order (C2: a step's hosts). A file
+    name, a program name, an option or `.` is never one; a command saved unread gives none."""
+    stripped: str = cmd.strip(_SHELL_SPACE)  # C2: `\v`, NBSP and the like are word text to bash
     if not stripped:
-        return ""
+        return "", ()
 
     # P1 (owner 2026-10-25): a command the recorder does not parse is saved unread; its program
     # is named from its start only (the token walk below is Python, a character at a time)
     if len(stripped) > MAX_PARSE:
-        return f"{_first_program(stripped[:4096])} <unparsed>"
+        return f"{_first_program(stripped[:_PROGRAM_WINDOW], cut=True)} <unparsed>", ()
     if _needs_unparsed(stripped):
-        return f"{_first_program(stripped)} <unparsed>"
+        return f"{_first_program(stripped)} <unparsed>", ()
 
     split: tuple[list[tuple[str, str]], bool] | None = _split_keeping_seps(stripped)
     if split is None:
-        return f"{_first_program(stripped)} <unparsed>"
+        return f"{_first_program(stripped)} <unparsed>", ()
     parts, cut = split
     disk: Lookups = lookups if lookups is not None else Lookups(project_root)
     cleaned_bits: list[str] = []
+    sites: dict[str, str] = {}  # distinct up to ASCII case (C2-fix2), in order, first spelling kept
     for text, sep in parts:
-        cleaned_bits.append(_clean_segment(text.strip(), disk))
+        words: list[str] = _clean_segment(text.strip(_SHELL_SPACE), disk)
+        for word in words:
+            if isinstance(word, _Site):
+                sites.setdefault(word.translate(_ASCII_LOWER), str(word))
+        cleaned_bits.append(" ".join(words))
         if sep:
             cleaned_bits.append(f" {sep} ")
     cleaned: str = "".join(cleaned_bits).strip()
-    return f"{cleaned} <unparsed>".lstrip() if cut else cleaned  # where the unread rest was
+    # where the unread rest was
+    return (f"{cleaned} <unparsed>".lstrip() if cut else cleaned), tuple(sites.values())
+
+
+# Past `MAX_PARSE` a command's program is named from this many characters at its start (P1).
+_PROGRAM_WINDOW: int = 4096
+
+# What makes a command `<unparsed>` wherever it stands (SPEC §4 rule 4).
+_UNREAD_MARKS: tuple[str, ...] = (
+    *("`", "$(", "$[", "<<", "\r", "\x00", "<(", ">(", "(("),
+    *("@(", "+(", "!(", "*(", "?("),  # C2-fix2: an extglob group is one word to bash
+)
 
 
 def _needs_unparsed(cmd: str) -> bool:
-    # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not
-    if "`" in cmd or "$(" in cmd or "<<" in cmd or "\r" in cmd:
+    # C1-fix1: the shell reads a `\r` as part of a word, which the word splitting here does not.
+    # C2: bash drops a NUL, and the words of a process substitution (`<(…)`, `>(…)`) and of
+    # `$[…]` run on as those of `$(…)` do. C2-fix1: bash reads `((` as arithmetic or as two
+    # subshells by what follows, so which words are a program's is not known. Bash joins a line
+    # continuation first (`<\⏎(` is `<(`), so the marks are looked for with it cut, and a `$`
+    # before one (`$\⏎'` opens a `$'…'`) is not read. C2-fix2: with `extglob` on, bash reads
+    # `@(a b)` (also `+(`, `!(`, `*(`, `?(`) as one word, which the split here reads as several.
+    joined: str = cmd.replace("\\\n", "")
+    if "$\\\n" in cmd or any(m in joined for m in _UNREAD_MARKS):
         return True
     return not _quotes_balanced(cmd)
 
 
 def _quotes_balanced(cmd: str) -> bool:
-    return all(len(run.group()) > 1 for run in _QUOTE_SCAN.finditer(cmd))
+    return _BALANCED.fullmatch(cmd) is not None
 
 
 def _assign_name(token: str) -> str | None:
@@ -255,8 +316,9 @@ def _is_env_assign(token: str) -> bool:
     return _assign_name(token) is not None
 
 
-def _rough_tokens(cmd: str) -> list[str]:
-    """Split on whitespace, | ; & outside quotes. Tolerates unbalanced quotes; keeps quotes."""
+def _rough_tokens(cmd: str) -> tuple[list[str], bool]:
+    """Split on bash's blanks (space, tab, new line) and | ; & outside quotes. Tolerates unbalanced
+    quotes; keeps quotes. Also whether the last token runs to the end of `cmd`."""
     tokens: list[str] = []
     buf: list[str] = []
     quote: str = ""
@@ -269,7 +331,7 @@ def _rough_tokens(cmd: str) -> list[str]:
             continue
         if ch in {"'", '"'} and quote in {"", ch}:
             quote = "" if quote else ch
-        elif not quote and (ch.isspace() or ch in "|;&"):
+        elif not quote and ch in " \t\n|;&":
             if buf:
                 tokens.append("".join(buf))
                 buf = []
@@ -279,13 +341,25 @@ def _rough_tokens(cmd: str) -> list[str]:
         i += 1
     if buf:
         tokens.append("".join(buf))
-    return tokens
+    return tokens, bool(buf)
 
 
-def _first_program(cmd: str) -> str:
-    for token in _rough_tokens(cmd):
+def _first_program(cmd: str, cut: bool = False) -> str:
+    """The program a command saved unread is named by. C2 (owner 2026-11-14): the rough tokens
+    split as bash does only where an assignment is plain, so any other assignment names `cmd`.
+    C2-fix2: so does a first word holding `<`, `>`, `(`, `#` or a backslash. C2-fix3: when `cmd`
+    is the start of a longer command (`cut`), so does a word that runs to its end: the quote,
+    blank or `$` that would make it `cmd` may lie past the cut."""
+    tokens, open_end = _rough_tokens(cmd)
+    for at, token in enumerate(tokens):
+        if cut and open_end and at == len(tokens) - 1:
+            return "cmd"
         if _is_env_assign(token):
-            continue  # a quoted value stays inside its token, so no part of it is read
+            if _PLAIN_ASSIGN.fullmatch(token) is None:
+                return "cmd"
+            continue
+        if _UNSURE_PROGRAM.search(token):
+            return "cmd"
         bare: str = token.strip("'\"")
         name: str = Path(bare).name or bare
         return name if _PROGRAM_NAME.fullmatch(name) else "cmd"
@@ -321,6 +395,9 @@ def _split_keeping_seps(cmd: str) -> tuple[list[tuple[str, str]], bool] | None:
             braces = _open_braces(found.group(), braces)
         elif braces and kind in ("redirect", "sep", "blank"):
             return None
+        elif kind == "quoted" and found.group().startswith('"') and "${" in found.group():
+            if _open_braces(found.group(), 0):  # C2: its `}` is past the `"` (`"${X:-" a "}"`)
+                return None
         if kind == "hash" and word_start:
             line_end: int = cmd.find("\n", at)
             pieces.append(cmd[start:at])
@@ -360,8 +437,9 @@ def _open_braces(text: str, braces: int) -> int:
 
 
 def _shell_words(segment: str) -> list[str]:
-    """`shlex.split(segment)`, the same words. A segment that is not whole words (an unclosed
-    quote, a backslash at the end) goes to `shlex.split`, which raises `ValueError` as before."""
+    """`shlex.split(segment)`, the same words, but a `$'…'` string read as bash reads it (C2). A
+    segment that is not whole words (an unclosed quote, a backslash at the end) raises
+    `ValueError`, as `shlex.split` does."""
     return [word for _, word in _raw_words(segment)]
 
 
@@ -375,7 +453,7 @@ def _raw_words(segment: str) -> list[tuple[str, str]]:
     while at < len(segment):
         found = _SHELL_WORD.match(segment, at)
         if found is None:
-            return [(word, word) for word in shlex.split(segment)]
+            raise ValueError("not whole shell words")  # never `shlex`: it splits `$'…'` apart
         pairs.append((found.group(1), _unquote(found.group(1))))
         at = found.end()
     return pairs
@@ -384,8 +462,9 @@ def _raw_words(segment: str) -> list[tuple[str, str]]:
 def _out_of_step(raw: str) -> bool:
     """Whether a word as written may stand for no word or several, so that the words after it
     may not be the ones they look like (C1-fix1): an unquoted `$`, glob character, brace list or
-    `<`/`>` after its start, or a double-quoted `"$@"` or `"${X[@]}"`. A quoted `"$X"` is one
-    word. A redirection is no word, whatever its target holds."""
+    `<`/`>` after its start, a double-quoted `"$@"` or `"${X[@]}"`, or a `$'…'` string (C2: its
+    text is not decoded, `$'\x2dd'` is `-d`). A quoted `"$X"` is one word. A redirection is no
+    word, whatever its target holds."""
     if _REDIRECT.match(raw):
         return False
     if not _has_quoting(raw):
@@ -395,6 +474,8 @@ def _out_of_step(raw: str) -> bool:
         if piece.lastindex == 4:
             plain.append(piece.group(4))
             continue
+        if piece.lastindex == 5:
+            return True
         quoted: str = piece.group(piece.lastindex or 0)
         if piece.lastindex == 3 and (
             "$@" in quoted or "${@" in quoted or ("[@]" in quoted and "$" in quoted)
@@ -419,9 +500,9 @@ def _ends_in_escape(text: str) -> bool:
 
 
 def cleaned_words(command: str) -> list[str]:
-    """The words of a cleaned command as `names.words` gives them (`shlex.split`, and a plain
-    `split` when the quoting does not balance), at regular-expression speed: the cleaner already
-    has the same words as `shlex.split`, and a command of 300 long paths takes `shlex` 0.35 s."""
+    """The words of a cleaned command as `_shell_words` gives them (`shlex.split`'s, but a `$'…'`
+    string read as bash reads it), and a plain `split` when they are not whole words, at
+    regular-expression speed: a command of 300 long paths takes `shlex` 0.35 s."""
     try:
         return _shell_words(command)
     except ValueError:
@@ -434,7 +515,8 @@ def _has_quoting(text: str) -> bool:
 
 def _unquote(word: str) -> str:
     """A whole shell word's text as shlex gives it: the quotes go, a backslash outside quotes
-    keeps the character after it, and one in double quotes goes only before `"` or `\\`."""
+    keeps the character after it, and one in double quotes goes only before `"` or `\\`. A
+    `$'…'` string gives its inside as written (C2: never decoded)."""
     if not _has_quoting(word):
         return word
     texts: list[str] = []
@@ -444,19 +526,20 @@ def _unquote(word: str) -> str:
     return "".join(texts)
 
 
-def _clean_segment(segment: str, disk: Lookups) -> str:
+def _clean_segment(segment: str, disk: Lookups) -> list[str]:
+    """The part's words as saved; a website among them is a `_Site`."""
     segment = _without_closing(segment)
     if not segment:
-        return ""
+        return []
     try:
         pairs: list[tuple[str, str]] = _raw_words(segment)
     except ValueError:
-        return f"{_first_program(segment)} <unparsed>"
+        return [f"{_first_program(segment)} <unparsed>"]
 
     out: list[str] = []
     found: tuple[int, str, str] | None = _program_index(pairs, out, disk)
     if found is None:
-        return " ".join(out)
+        return out
 
     idx, raw, program = found
     out.append(program if _PROGRAM_NAME.fullmatch(program) else "<arg>")
@@ -471,7 +554,7 @@ def _clean_segment(segment: str, disk: Lookups) -> str:
         end: int = _script_start(rest) if prog_base in SHELLS else len(rest)
         out.extend(_clean_other_words(rest[:end], disk, loose=_out_of_step(raw)))
         _rest_unread(rest, end, out)
-    return " ".join(out)
+    return out
 
 
 def _script_start(pairs: list[tuple[str, str]]) -> int:
@@ -500,13 +583,13 @@ def _clean_other_words(pairs: list[tuple[str, str]], disk: Lookups, *, loose: bo
     target: bool = False  # the word after a bare redirection is its target
     for raw, word in pairs:
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             continue
         if loose and "://" in word:
             out.append("<arg>")
         else:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
         loose = (_is_option(word) and word != "--") or _out_of_step(raw)
     return out
 
@@ -537,10 +620,10 @@ def _program_index(
                 idx += 1
                 continue
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             idx += 1
-        elif (name := _assign_name(word)) is not None:
+        elif (name := _assign_name(raw)) is not None:  # C2: as written (`$'X=1'` is none)
             out.append(f"{name}=<removed>")
             idx = _after_assignment(pairs, idx)
         elif (wrapper := posixpath.basename(word).lower()) in _WRAPPERS:  # `sudo/` is a folder
@@ -592,13 +675,14 @@ def _after_wrapper(
     while at < len(pairs):
         raw, word = pairs[at]
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             at += 1
             continue
         if _out_of_step(raw):
             _rest_unread(pairs, at, out)
             return None
+        # env and sudo get the word unquoted, so `env "X=1"` sets X (the shell's own are as written)
         if wrapper in ("env", "sudo") and (name := _assign_name(word)) is not None:
             out.append(f"{name}=<removed>")
             at = _after_assignment(pairs, at)
@@ -610,7 +694,7 @@ def _after_wrapper(
             out.append(word)
             break
         if word == "-" or word.startswith("--") or word[1] not in values:
-            out.append(_classify_word(word, disk, web_tool=False))
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             _rest_unread(pairs, at, out)
             return None
         if len(word) > 2:
@@ -657,7 +741,8 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
             remote = True
             continue
         if (after := _redirection_step(raw, target)) is not None:
-            out.append(_classify_word(word, disk, web_tool=True))
+            # C2: a redirection's target is a file, read as any program's word
+            out.append(_classify_word(word, disk, web_tool=False, raw=raw))
             target = after
             continue
         if value_next:
@@ -671,7 +756,9 @@ def _clean_web_words(pairs: list[tuple[str, str]], tool: str, disk: Lookups) -> 
                 value_next = False
                 remote = may_be_whole and tool == "ssh"
         else:
-            out.append(_classify_word(word, disk, web_tool=True))
+            # C2: an scp or rsync word with no `:` is a local path, never a website
+            site_slot: bool = tool not in ("scp", "rsync") or ":" in word
+            out.append(_classify_word(word, disk, web_tool=site_slot, raw=raw))
             if options_ended or not _is_option(word):
                 remote = tool == "ssh"  # the first word that is no option is ssh's destination
             else:
@@ -707,7 +794,14 @@ def _may_hold_value(option: str, tool: str) -> bool:
     return option.startswith("--") or bool(option[1:-1].strip(short))  # strip: C speed
 
 
-def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
+def _undecoded(raw: str) -> bool:
+    """Whether a word as written may hold a `$'…'` string with an escape (C2): its text is not
+    decoded, so a backslash in it may stand for any character and move a website's host
+    (`$'https://x.com\\x2f@tok.abc'` is bash's `x.com`)."""
+    return "$'" in raw and "\\" in raw
+
+
+def _classify_word(word: str, disk: Lookups, *, web_tool: bool, raw: str) -> str:
     # (1) options: keep names, drop values, also a value stuck onto its option (-pSECRET)
     if word == "--":
         return word
@@ -722,9 +816,9 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
 
     # (2) web address
     if "://" in word or web_tool:
-        site: str | None = _website_name(word)
+        site: str | None = None if _undecoded(raw) else _website_name(word)
         if site is not None:
-            return site
+            return _Site(site)
         if "://" in word:
             return "<arg>"
 
@@ -737,11 +831,6 @@ def _classify_word(word: str, disk: Lookups, *, web_tool: bool) -> str:
     return "<arg>"
 
 
-def website_name(word: str) -> str | None:
-    """Public alias for host extraction from a command token."""
-    return _website_name(word)
-
-
 def _website_name(word: str) -> str | None:
     host: str | None = None
     if "://" in word:
@@ -752,21 +841,20 @@ def _website_name(word: str) -> str | None:
     else:
         if word.startswith("@"):  # curl -d @file is a file, not a host
             return None
-        # scp/rsync user@host:path
-        candidate: str = word
+        # scp/rsync user@host:path; C2: the path, query or fragment goes first (`x.com/@a.b`)
+        candidate: str = _PAST_HOST.split(word, 1)[0]
         if "@" in candidate:
             candidate = candidate.rsplit("@", 1)[-1]
         if ":" in candidate and not candidate.startswith("["):
             # host:path or host:port — prefer left side if it looks like a name
             left: str = candidate.split(":", 1)[0]
-            if left and "/" not in left:
+            if left:
                 candidate = left
-        # strip path-like suffix
-        candidate = candidate.split("/")[0]
         if _HOST_WORD.fullmatch(candidate) and ("." in candidate or candidate == "localhost"):
             host = candidate
 
-    if host is None or host == "":
+    # C2: a name with an empty label (`.`, `.env`, `a..b`) is no website
+    if not host or host.startswith(".") or ".." in host:
         return None
 
     reduced: str = _reduce_host_labels(host)

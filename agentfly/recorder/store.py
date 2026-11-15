@@ -19,11 +19,10 @@ from neo4j import Driver, GraphDatabase
 from agentfly.recorder import clean as clean_settings
 from agentfly.recorder.clean import (
     Lookups,
-    clean_command,
+    clean_shell,
     cleaned_words,
     contained_relative,
     resolved_or_none,
-    website_name,
 )
 from agentfly.recorder.config_env import neo4j_settings
 from agentfly.recorder.names import is_sensitive
@@ -34,9 +33,12 @@ logger = logging.getLogger("agentfly")
 
 _LABELS: tuple[LiteralString, ...] = ("Session", "Step", "File", "Command", "Host", "Rule")
 _QUEUE_MAX: int = 256
-# F18: the words of the cleaned command a step reads for its file and websites. Past them nothing
-# is read; the step's secret flag then falls to the rule engine's own test (`reads_secret`).
+# F18: the words of the cleaned command a step reads for its file. Past them nothing is read; the
+# step's secret flag then falls to the rule engine's own test (`reads_secret`).
 MAX_RECORD_WORDS: int = 1_000
+# C2: a step lists at most this many of the websites the cleaner kept (the first ones); it bounds
+# what one step writes to the history and to Neo4j.
+MAX_HOSTS: int = 1_000
 _SENTINEL: object = object()
 
 
@@ -351,25 +353,6 @@ def _word_path(token: str, lookups: Lookups) -> str:
     return _storable(Path(token).name)
 
 
-def hosts_from_cleaned(tokens: list[str]) -> tuple[str, ...]:
-    """The hosts the words of a cleaned command name."""
-    found: list[str] = []
-    for token in tokens:
-        if token in {"<arg>", "<unparsed>", "<removed>"}:
-            continue
-        if token.startswith("-"):
-            continue
-        site: str | None = website_name(token)
-        if site is None and "." in token and "/" not in token and "=" not in token:
-            if website_name(f"https://{token}") is not None:
-                site = token
-            elif token.count(".") >= 1 and not token.startswith("<"):
-                site = token
-        if site is not None and site not in found:
-            found.append(site)
-    return tuple(found)
-
-
 def kind_from_event(event: str) -> str:
     mapping: dict[str, str] = {
         "beforeReadFile": "read",
@@ -420,11 +403,11 @@ def build_step_record(
     elif kind == "shell":
         raw_cmd: str = str(payload.get("command", "") or "")
         lookups = Lookups(root)  # the cleaner and the word loop below share one budget
-        command = clean_command(raw_cmd, root, lookups)
+        command, sites = clean_shell(raw_cmd, root, lookups)
+        hosts = sites[:MAX_HOSTS]  # C2: the websites the cleaner kept, from the whole command
         if not clean_settings.CLEAN_COMMANDS:
             raw_command = raw_cmd
-        tokens: list[str] = cleaned_words(command)[:MAX_RECORD_WORDS]  # split once
-        hosts = hosts_from_cleaned(tokens)
+        tokens: list[str] = cleaned_words(command)[:MAX_RECORD_WORDS]
         # Paths that survived cleaning (e.g. .env) as File touch; a sensitive one wins.
         for token in tokens:
             if token in {"<arg>", "<unparsed>"} or token.startswith("-") or "=" in token:

