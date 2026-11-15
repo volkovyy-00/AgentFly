@@ -530,6 +530,33 @@ def test_an_unread_command_names_no_unsure_first_word(
     assert clean_shell(raw, project_root) == (expected, ())
 
 
+_PAST_CAP: str = " x" * 70_000  # 140,000 characters: the command is over 128 KiB
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # C2-fix3: past 128 KiB the program is named from the first 4,096 characters, so a
+        # program word that runs to the end of them is cut before what would name it `cmd`
+        ("x" * 4086 + "/a/tok.abc'q' z", "cmd <unparsed>"),
+        ("'" + "x" * 4085 + "/a/tok.abc z' y", "cmd <unparsed>"),
+        ("x" * 4086 + "/a/tok.abc$X z", "cmd <unparsed>"),
+        ("x" * 4086 + "/a/tok.abc z", "cmd <unparsed>"),  # fills the window to its last character
+        ("A=b " * 1021 + "xx/a/tok.abc$X z", "cmd <unparsed>"),
+        ("A=b " * 1024 + "cat z", "cmd <unparsed>"),  # no program word inside the window
+        # a program word followed by a blank or a separator inside the window keeps its name
+        ("cat", "cat <unparsed>"),
+        ("x" * 4085 + "/a/tok.abc z", "tok.abc <unparsed>"),  # its last character, a blank
+        ("x" * 4085 + "/a/tok.abc;z", "tok.abc <unparsed>"),
+        ("A=b " * 1020 + "xx/a/tok.abc z", "tok.abc <unparsed>"),
+    ],
+)
+def test_a_program_word_cut_by_the_window_is_cmd(
+    project_root: Path, raw: str, expected: str
+) -> None:
+    assert clean_shell(raw + _PAST_CAP, project_root) == (expected, ())
+
+
 def test_an_unsure_first_word_past_the_cap_names_no_value(project_root: Path) -> None:
     # past 128 KiB only the start is read, so each form is read there too
     pad: str = " a" * (64 * 1024)

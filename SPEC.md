@@ -305,7 +305,9 @@ even a secret packed into a web address. So we keep almost nothing:
    20,000 pieces (runs of a word's text, quoted runs, spaces and operators; F18): the rest
    is not read and is saved as `<unparsed>` (`ls ; ls ; … ; <unparsed>`), and a word the
    cut falls inside is dropped whole. A command longer than 128 KiB is not read at all:
-   it is saved as its program, named from its first 4 KiB, and `<unparsed>` (P1).
+   it is saved as its program, named from its first 4 KiB, and `<unparsed>` (P1). A
+   program word with no blank or separator after it inside those 4 KiB may be cut, so
+   it names `cmd` (C2-fix3).
 5. For a web address, keep only the website name. Drop the user, password, path
    and query. If a piece of the website name is very long or looks encoded,
    keep only the last two parts (like `evil.com`). A word holding a `$'…'` string

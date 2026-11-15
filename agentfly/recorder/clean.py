@@ -252,7 +252,7 @@ def clean_shell(
     # P1 (owner 2026-10-25): a command the recorder does not parse is saved unread; its program
     # is named from its start only (the token walk below is Python, a character at a time)
     if len(stripped) > MAX_PARSE:
-        return f"{_first_program(stripped[:4096])} <unparsed>", ()
+        return f"{_first_program(stripped[:_PROGRAM_WINDOW], cut=True)} <unparsed>", ()
     if _needs_unparsed(stripped):
         return f"{_first_program(stripped)} <unparsed>", ()
 
@@ -275,6 +275,9 @@ def clean_shell(
     # where the unread rest was
     return (f"{cleaned} <unparsed>".lstrip() if cut else cleaned), tuple(sites.values())
 
+
+# Past `MAX_PARSE` a command's program is named from this many characters at its start (P1).
+_PROGRAM_WINDOW: int = 4096
 
 # What makes a command `<unparsed>` wherever it stands (SPEC §4 rule 4).
 _UNREAD_MARKS: tuple[str, ...] = (
@@ -313,9 +316,9 @@ def _is_env_assign(token: str) -> bool:
     return _assign_name(token) is not None
 
 
-def _rough_tokens(cmd: str) -> list[str]:
+def _rough_tokens(cmd: str) -> tuple[list[str], bool]:
     """Split on bash's blanks (space, tab, new line) and | ; & outside quotes. Tolerates unbalanced
-    quotes; keeps quotes."""
+    quotes; keeps quotes. Also whether the last token runs to the end of `cmd`."""
     tokens: list[str] = []
     buf: list[str] = []
     quote: str = ""
@@ -338,14 +341,19 @@ def _rough_tokens(cmd: str) -> list[str]:
         i += 1
     if buf:
         tokens.append("".join(buf))
-    return tokens
+    return tokens, bool(buf)
 
 
-def _first_program(cmd: str) -> str:
+def _first_program(cmd: str, cut: bool = False) -> str:
     """The program a command saved unread is named by. C2 (owner 2026-11-14): the rough tokens
     split as bash does only where an assignment is plain, so any other assignment names `cmd`.
-    C2-fix2: so does a first word holding `<`, `>`, `(`, `#` or a backslash."""
-    for token in _rough_tokens(cmd):
+    C2-fix2: so does a first word holding `<`, `>`, `(`, `#` or a backslash. C2-fix3: when `cmd`
+    is the start of a longer command (`cut`), so does a word that runs to its end: the quote,
+    blank or `$` that would make it `cmd` may lie past the cut."""
+    tokens, open_end = _rough_tokens(cmd)
+    for at, token in enumerate(tokens):
+        if cut and open_end and at == len(tokens) - 1:
+            return "cmd"
         if _is_env_assign(token):
             if _PLAIN_ASSIGN.fullmatch(token) is None:
                 return "cmd"

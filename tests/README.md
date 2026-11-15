@@ -107,6 +107,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   after `@`, `+`, `!`, `*` or `?` anywhere (after a continuation, quoted) makes the command
   `<unparsed>`; spaced, it is read as before. `leak_cases.py` holds those shapes and
   `FIRST_WORD_SHAPES` in each form above (`in_every_form`).
+  C2-fix3 (`test_a_program_word_cut_by_the_window_is_cmd`): past 128 KiB, a program word (past
+  plain assignments) that runs to the end of the 4,096-character window it is named from is
+  `cmd <unparsed>`, also one that ends on the window's last character; one followed by a blank
+  or `;` inside the window keeps its name (`cat`; `xx…/a/tok.abc z` with its blank at 4,096).
   `test_the_sites_are_the_websites_the_cleaner_kept` (`clean_shell`): the sites are the kept
   websites in order, never a file, program, option or `.`, and none for an unread command.
   (`test_store.py`) `test_a_step_hosts_only_the_websites_the_cleaner_kept`: `cat .env`,
