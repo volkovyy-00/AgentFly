@@ -553,15 +553,21 @@ def distinct_candidates(parsed: Parsed) -> tuple[str, ...]:
 # ---------------------------------------------------------------- clauses
 
 
+# The agent's tools whose `preToolUse` is a `write` (case-folded): Write, and Delete (Cursor
+# 3.27.22 sends a Delete as `preToolUse` only, with its `tool_input.file_path`; owner 2026-11-16).
+WRITE_TOOLS: frozenset[str] = frozenset({"write", "delete"})
+
+
 def event_of(action: Mapping[str, Any]) -> str | None:
-    """The rules' name for what an action is: `read`, `shell`, `write`, else None. A search that
-    returns lines is a `read` (`is_search`); one that returns names or counts only is no event."""
+    """The rules' name for what an action is: `read`, `shell`, `write`, else None. A Write or a
+    Delete (`WRITE_TOOLS`) is a `write`. A search that returns lines is a `read` (`is_search`);
+    one that returns names or counts only is no event."""
     event: Any = action.get("hook_event_name")
     if event == "beforeReadFile":
         return "read"
     if event == "beforeShellExecution":
         return "shell"
-    if event == "preToolUse" and str(action.get("tool_name", "")).casefold() == "write":
+    if event == "preToolUse" and str(action.get("tool_name", "")).casefold() in WRITE_TOOLS:
         return "write"
     if is_search(action) and _returns_lines(action):
         return "read"
@@ -569,7 +575,7 @@ def event_of(action: Mapping[str, Any]) -> str | None:
 
 
 def _action_path(action: Mapping[str, Any]) -> str:
-    """The `file_path` a read names, or a tool's (the Write tool, a search) in its input."""
+    """The `file_path` a read names, or a tool's (Write, Delete, a search) in its input."""
     tool: bool = action.get("hook_event_name") == "preToolUse"
     source: Mapping[str, Any] = _tool_input(action) if tool else action
     value: Any = source.get("file_path")
@@ -577,9 +583,10 @@ def _action_path(action: Mapping[str, Any]) -> str:
 
 
 def _outside_workspace(action: Mapping[str, Any], home: str) -> bool:
-    """`path_scope = "outside_workspace"`: the file a read or write names, or the folder or file a
-    search names (none: outside), is under none of the event's `workspace_roots` (`Walker`). The
-    hook's walker answers, or one of its own when no meter runs (a test, `rules test`)."""
+    """`path_scope = "outside_workspace"`: the file a read or write (a Write or a Delete) names, or
+    the folder or file a search names (none: outside), is under none of the event's
+    `workspace_roots` (`Walker`). The hook's walker answers, or one of its own when no meter runs
+    (a test, `rules test`)."""
     path: str = _action_path(action)
     meter: Meter | None = _METER.get()
     walker: Walker = meter.disk if meter is not None else Walker()
@@ -2316,6 +2323,7 @@ SHIPPED_DEFAULTS: tuple[str, ...] = (
     "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
     "6cd80b9824295273e33c2dd9a0d4aac82c6ddf2c90b1e894977b942132178c82",  # R1G, a search is a read
     "fe87aa40b73a59c97b4bc9b9922a71cd85f84f7a245d62b8cf8495d21cf1a6bf",  # V5c, header: new fields
+    "40d4acec695eeba659bb48e0fb9056b0f77be3fc1a54201fddaddeb9ac21a071",  # P2, a Delete is a write
 )
 
 
