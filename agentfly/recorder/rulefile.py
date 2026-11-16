@@ -542,15 +542,36 @@ def shell_readings(command: str) -> tuple[tuple[str, Parsed], ...]:
     text has a line break for each NUL, and its parse is that of the NUL-as-space text, marked
     `unparsed`, with a plain word scan of the line-break text added (a NUL breaks a word inside
     quotes too, and a `#` after it starts no comment). The raw text is never parsed, so no parsed
-    word holds a NUL. Each reading stays inside `normalize`'s cap."""
+    word holds a raw NUL. One from an escape (`$'.env\\x00x'`) is cut there too, as `execve`
+    cuts the argument: a reading whose parse holds one is also read with each word cut at its
+    first NUL (same text). Each reading stays inside `normalize`'s cap."""
+    readings: tuple[tuple[str, Parsed], ...]
     if NUL not in command:
-        return ((command, normalize(command)),)
-    removed: str = command.replace(NUL, "")
-    broken: str = command.replace(NUL, "\n")
-    parsed: Parsed = normalize(command.replace(NUL, " "))
-    if not parsed.unparsed:
-        parsed = replace(parsed, unparsed=True, loose=loose_commands(broken))
-    return ((removed, normalize(removed)), (broken, parsed))
+        readings = ((command, normalize(command)),)
+    else:
+        removed: str = command.replace(NUL, "")
+        broken: str = command.replace(NUL, "\n")
+        parsed: Parsed = normalize(command.replace(NUL, " "))
+        if not parsed.unparsed:
+            parsed = replace(parsed, unparsed=True, loose=loose_commands(broken))
+        readings = ((removed, normalize(removed)), (broken, parsed))
+    if "$'" not in command:  # only an ANSI-C string decodes to a NUL
+        return readings
+    cut: tuple[tuple[str, Parsed], ...] = tuple(
+        (text, cut_parse) for text, parsed in readings if (cut_parse := _cut_at_nul(parsed))
+    )
+    return readings + cut
+
+
+def _cut_at_nul(parsed: Parsed) -> Parsed | None:
+    """`parsed` with each word cut at its first NUL, or None when no word holds one."""
+    groups: tuple[tuple[tuple[str, ...], ...], ...] = (parsed.commands, parsed.loose)
+    if not any(NUL in word for group in groups for argv in group for word in argv):
+        return None
+    commands, loose = (
+        tuple(tuple(word.split(NUL, 1)[0] for word in argv) for argv in group) for group in groups
+    )
+    return replace(parsed, commands=commands, loose=loose)
 
 
 # ---------------------------------------------------------------- clauses

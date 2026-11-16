@@ -229,19 +229,12 @@ def _is_local_host(host: str) -> bool:
 
 # The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` (SPEC section 5, "Not
 # blocked"; P2), standard library only. A test keeps the two equal word for word. The guard takes
-# no curl data-file exception: every `@` word is a URL here (D4, at least as strict as R1).
+# no curl data-file exception: every `@` word is a URL here (D4).
 _SUB_PREFIX: str = "@sub:"  # `normalize.SUB_PREFIX`, `SUB_EMPTY`: a substitution's output
 _SUB_EMPTY: str = "@sub@"
 _SCHEME: str = r"[A-Za-z][A-Za-z0-9+.-]*://"
 _HOST_END: str = r"[/?#]"
-
-
-def _unsub(word: str) -> str:
-    starts: list[int] = [at for at in (word.find(_SUB_PREFIX), word.find(_SUB_EMPTY)) if at >= 0]
-    if not starts:
-        return word
-    start: int = min(starts)
-    return word[:start] + "$" + word[word.rfind("@") + 1 :]
+_GLOB: str = r"[{},]"
 
 
 def _option_value(word: str) -> str | None:
@@ -271,18 +264,23 @@ def _cut(text: str) -> int:
     return end.start() if end else len(text)
 
 
-def _regions(text: str) -> list[str]:
+def _regions(text: str, url: bool) -> list[str]:
     cut: int = _cut(text)
     head: str = text[:cut]
     regions: list[str] = [head[head.rfind("@") + 1 :]]
     if text.find("@", cut) >= 0:
         tail: str = text[text.rfind("@") + 1 :]
         regions.append(tail[: _cut(tail)])
+    colon: int = -1 if url else text.find(":")
+    if colon >= 0 and "/" not in text[:colon]:
+        before: str = text[:colon]
+        regions.append(before[before.rfind("@") + 1 :])
     return regions
 
 
 def _could_be_host(region: str) -> bool:
     shaped: bool = "." in region or ":" in region or region == "localhost"
+    shaped = shaped or "%2e" in region.casefold()
     return shaped and any(ch.isalnum() for ch in region)
 
 
@@ -312,24 +310,30 @@ def _port_cut(region: str) -> str:
 
 
 def _host(region: str, url: bool) -> str | None:
-    if "$" in region:
-        return region
     if not url and not _could_be_host(region):
         return None
     return _port_cut(region)
 
 
-def _word_hosts(word: str) -> tuple[str, ...]:
-    if "@" in word:
-        word = _unsub(word)
-    elif "." not in word and ":" not in word and "$" not in word and "localhost" not in word:
-        return ()
+def _hosts(word: str) -> list[str]:
     found: list[str] = []
     for text, url in _url_candidates(word):
-        for region in _regions(text):
+        for region in _regions(text, url):
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
+    return found
+
+
+def _word_hosts(word: str) -> tuple[str, ...]:
+    if "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word:
+        return ("$",)
+    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
+        return ()
+    found: list[str] = _hosts(word)
+    if "{" in word:
+        for piece in re.split(_GLOB, word):
+            found.extend(_hosts(piece))
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
@@ -337,11 +341,13 @@ def _sends_off(argv: list[str], text: str) -> bool:
     """A web tool's line sends off this computer: it holds `$`, a backtick, `<(` or `>(` (a host
     nobody can read; `words` turned them into spaces), a word names a host that is not local, or
     no word names a host. A word R1 may skip as a curl data file (`@f`, `name=@f`, `name=<f`)
-    names none here, so the guard denies whatever R1 calls outbound."""
+    names none here, so the guard denies whatever R1 calls outbound. The words are read as given
+    and with quotes removed: `words` splits `evil'.'com`, which the shell joins."""
     if any(mark in text for mark in ("$", "`", "<(", ">(")):
         return True
+    unquoted: list[str] = words(text.replace("'", "").replace('"', ""))
     named: bool = False
-    for word in dict.fromkeys(argv):  # each word read once (P1-fix1)
+    for word in dict.fromkeys(argv + unquoted):  # each word read once (P1-fix1)
         hosts: tuple[str, ...] = _word_hosts(word)
         if not all(map(_is_local_host, hosts)):
             return True

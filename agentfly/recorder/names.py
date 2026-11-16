@@ -39,18 +39,7 @@ def is_local_host(host: str) -> bool:
 
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _HOST_END = re.compile(r"[/?#]")
-
-
-def _unsub(word: str) -> str:
-    """Step 0: a substitution's output (`normalize` writes `$(…)`, backticks and `<(…)` as `@sub:…@`
-    or `@sub@`) becomes `$`, so its own `@` is no user info. The marker runs to the word's last `@`:
-    a program name that holds one (`$(./e@x)`) does not split it. A literal word that spells the
-    marker also becomes `$` (toward firing)."""
-    starts: list[int] = [at for at in (word.find(SUB_PREFIX), word.find(SUB_EMPTY)) if at >= 0]
-    if not starts:
-        return word
-    start: int = min(starts)
-    return word[:start] + "$" + word[word.rfind("@") + 1 :]
+_GLOB = re.compile(r"[{},]")
 
 
 def _option_value(word: str) -> str | None:
@@ -86,15 +75,21 @@ def _cut(text: str) -> int:
     return end.start() if end else len(text)
 
 
-def _regions(text: str) -> list[str]:
+def _regions(text: str, url: bool) -> list[str]:
     """Step 2: curl's host (before the cut, after the last `@` there) and, when an `@` also stands
-    at or past the cut, ssh's (after the last `@`, up to its own cut). Owner 2026-11-16."""
+    at or past the cut, ssh's (after the last `@`, up to its own cut; owner 2026-11-16). A word that
+    is no URL is also read as scp, rsync and wget read `[user@]host:path`: before its first `:`
+    when no `/` comes first, after the last `@` there (`evil.example:x@localhost`)."""
     cut: int = _cut(text)
     head: str = text[:cut]
     regions: list[str] = [head[head.rfind("@") + 1 :]]
     if text.find("@", cut) >= 0:
         tail: str = text[text.rfind("@") + 1 :]
         regions.append(tail[: _cut(tail)])
+    colon: int = -1 if url else text.find(":")
+    if colon >= 0 and "/" not in text[:colon]:
+        before: str = text[:colon]
+        regions.append(before[before.rfind("@") + 1 :])
     return regions
 
 
@@ -102,6 +97,7 @@ def _could_be_host(region: str) -> bool:
     """Step 3: a bare word names a host only if it could today: a dot, a colon or `localhost`, and
     a letter or a digit (`./`, `f` and `src` name none; `backup:` names `backup`)."""
     shaped: bool = "." in region or ":" in region or region == "localhost"
+    shaped = shaped or "%2e" in region.casefold()  # curl reads `evil%2Eexample` as `evil.example`
     return shaped and any(ch.isalnum() for ch in region)
 
 
@@ -132,27 +128,37 @@ def _port_cut(region: str) -> str:
 
 
 def _host(region: str, url: bool) -> str | None:
-    """Step 3 and 4: what a region names. One holding `$` is a host this computer is not (whole,
-    never port-cut); a URL's region is always a host; a bare one only if it could be."""
-    if "$" in region:
-        return region
+    """Step 3 and 4: what a region names. A URL's region is always a host; a bare one only if it
+    could be."""
     if not url and not _could_be_host(region):
         return None
     return _port_cut(region)
 
 
-def word_hosts(word: str) -> tuple[str, ...]:
-    """The hosts one word names, in order, each once. `$` marks a host nobody can read."""
-    if "@" in word:  # a substitution's marker holds one
-        word = _unsub(word)
-    elif "." not in word and ":" not in word and "$" not in word and "localhost" not in word:
-        return ()  # no part of it could be a host (`curl`, `-sS`, `src/`)
+def _hosts(word: str) -> list[str]:
+    """Steps 1 to 4 on one word."""
     found: list[str] = []
     for text, url in _url_candidates(word):
-        for region in _regions(text):
+        for region in _regions(text, url):
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
+    return found
+
+
+def word_hosts(word: str) -> tuple[str, ...]:
+    """The hosts one word names, in order, each once. A word holding `$` or a substitution's output
+    (`normalize` writes `$(…)`, backticks and `<(…)` as `@sub:…@` or `@sub@`) names one host nobody
+    can read, `$`: the shell may split it into more words (`localhost/$(echo a evil.example)`), and
+    quotes are not seen. A word with `{` is also read piece by piece (curl's globbing, `{a,b}`)."""
+    if "$" in word or SUB_PREFIX in word or SUB_EMPTY in word:
+        return ("$",)
+    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
+        return ()  # no part of it could be a host (`curl`, `-sS`, `src/`)
+    found: list[str] = _hosts(word)
+    if "{" in word:
+        for piece in _GLOB.split(word):
+            found.extend(_hosts(piece))
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 

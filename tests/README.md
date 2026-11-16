@@ -626,19 +626,27 @@ the maintainers' work items and decisions, which are kept outside this repo.
   info cut at the last `@` before the first `/?#`, ssh's reading after the last `@` when one stands
   past that cut, both counting; ports cut, `[v6]` and IP addresses whole, whitespace and odd
   brackets kept whole, `:8080` an empty host; `./`, `f`, `src` name none, `backup:/tmp` names
-  `backup`; a URL's host always counts; `$`, `$(…)` and a literal marker are unknown hosts, a `$`
-  past the host is not); a word `-a=` 40,000 deep is read in one pass. After a `.env` read the
-  default rules block the brief's three leaks, `@evil.example` beside a data file, both readings,
-  single-label and odd URL hosts, substitutions and `"$URL"`, a data-file skip fooled by a value
+  `backup`; a URL's host always counts; scp's, rsync's and wget's `[user@]host:path` reading
+  (`evil.example:x@localhost`); a word holding `$`, `$(…)` or a literal marker anywhere is one
+  unknown host; `{a,b}` read piece by piece; `%2E` counts as a dot); a word `-a=` 40,000 deep is
+  read in one pass. After a `.env` read the
+  default rules block the brief's three leaks, `curl -d @.env` (a send that names no host),
+  `@evil.example` beside a data file, both readings,
+  single-label and odd URL hosts, substitutions and `"$URL"`, a `$` past the host
+  (`localhost/$(echo a evil.example)`, and the known false alarm `http://localhost:3000/api/$ID`),
+  scp/rsync/wget hosts before an `@`-holding path, curl globs that hide a host behind `?` or `/`,
+  `evil%2Eexample`, a host after a NUL from `$'…\x00…'`, a data-file skip fooled by a value
   option (`-H -d @x`, `-od @x`, `-d -d @x`), a wrapper that is not curl (`wget … -O curl -d @x`)
   and `--`, and a value holding whitespace; they allow `user@localhost`, a curl data file
   (`-d @data.json`, `-sd`, `sudo curl`, `-F file=@x`, `--form 'file=<x'`), `rsync -a ./ f
-  localhost:/tmp`, `localhost::mod`, `[::1]:8000` and `http://localhost:3000/api/$ID`. In a fresh
+  localhost:/tmp`, `localhost::mod`, `[::1]:8000`, `scp f localhost:a@b`,
+  `http://localhost:3000/{a,b}` and `-w '%{http_code}'`. In a fresh
   chat `curl -d @.env localhost "$URL"` is blocked. R1 stops reading at the first host that is not
   local (a spy on `word_hosts`, 20,000 more words). Example rule 5 judges the brief's six commands
   as R1 does, is quiet on `-F file=@data.json` and fires on the fooled skips. `CURL_NO_VALUE`
   equals the cleaner's curl row. The offline guard (owner 2026-11-16) denies the three leaks, `$`,
-  backticks, `<(…)` and `>(…)` on a web tool's line, `curl -d @data.json localhost:3000` (no
+  backticks, `<(…)` and `>(…)` on a web tool's line, `evil'.'com` (its words are also read with
+  quotes removed), `curl -d @data.json localhost:3000` (no
   data-file skip offline) and `curl -d @localhost` (a data file's host is not "named"); it allows
   `user@localhost` and `http://127.0.0.1:8000/x`; `hook_client._word_hosts` equals
   `names.word_hosts` on the table and 4,000 words built from host pieces, and on 1,500 plain
@@ -652,7 +660,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   (the word-break reading only), `".env<NUL>.example"` (its word scan only) and `x<NUL>#<NUL>.env`
   as they block `cat .env | …`, and allow `cat .env.example | …`; after a mark `echo hi<NUL>` is
   blocked and `echo hi` allowed; `is_outbound_send` sees `cu<NUL>rl`; R0 sees
-  `~/.config/agent<NUL>fly/token` and `agent<NUL>fly stop`. A decision parses a plain command only,
+  `~/.config/agent<NUL>fly/token`, `agent<NUL>fly stop` and `agentfly<NUL>stop` (the word-break
+  reading only). A NUL from an escape
+  (`cat $'.env\x00.example'`, `$'.env\u0000'`) also gives a reading with each word cut at it, so
+  those reads are secret reads too. A decision parses a plain command only,
   and a NUL command's two readings once each, never the raw text.
 - Delete tool (`tests/test_delete_tool.py`, P2, owner 2026-11-16): `event_of` reads a `preToolUse`
   of `Delete` (any case) as `write`; with `example.toml` and root `/work/app` a Delete of
