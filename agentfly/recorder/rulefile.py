@@ -307,34 +307,11 @@ def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return {word.casefold(): index for index, word in enumerate(argv)}
 
 
-# curl reads `@name` as a file after these options: `curl -d @data.json` sends a file, it names no
-# host. After any other word an `@` word is a URL (`curl -s @evil.example`). A short option counts
-# when its letter ends the cluster (`-sd @f`); `--expand-<option>` (curl 8.3) is the same option.
-_AT_FILE_LONG: frozenset[str] = frozenset(
-    {"--data", "--data-ascii", "--data-binary", "--data-urlencode", "--json", "--header"}
-    | {"--url-query", "--variable"}
-)
-_AT_FILE_SHORT: str = "dH"
-
-
-def _reads_at_file(option: str) -> bool:
-    if option.startswith("--"):
-        name: str = option.casefold().removeprefix("--expand-")
-        return (name if name.startswith("--") else f"--{name}") in _AT_FILE_LONG
-    return option.startswith("-") and len(option) > 1 and option[-1] in _AT_FILE_SHORT
-
-
 @lru_cache(maxsize=64)
 def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """The case-folded host names a command names. In a curl command, an `@` word right after an
-    option that reads a file (`_reads_at_file`) is that file, not a host."""
-    curl: bool = "curl" in _first_positions(argv)
-    kept: list[str] = [
-        word
-        for index, word in enumerate(argv)
-        if not (curl and word.startswith("@") and index and _reads_at_file(argv[index - 1]))
-    ]
-    return tuple(host.casefold() for host in hosts_in_command(kept))
+    """The case-folded host names a command names (`names.hosts_in_command`: in a curl command, an
+    `@` word right after an option that reads a file is that file, not a host)."""
+    return tuple(host.casefold() for host in hosts_in_command(argv))
 
 
 def _unlisted_host(argv: tuple[str, ...], listed: frozenset[str]) -> bool:

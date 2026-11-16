@@ -94,11 +94,12 @@ def _argv_is_outbound(argv: tuple[str, ...]) -> bool:
         return True
 
     if any(name in _HOSTED_OUTBOUND for name in base_names):
-        hosts: list[str] = hosts_in_command(argv)
-        if not hosts:
-            # Tool present but no host parsed — treat as outbound (safe for demo).
-            return True
-        return any(not is_local_host(h) for h in hosts)
+        named: bool = False  # a tool that names no host counts as sending off this computer
+        for host in hosts_in_command(argv):  # lazily: the first host that is not local decides
+            if not is_local_host(host):
+                return True
+            named = True
+        return not named
 
     return False
 
