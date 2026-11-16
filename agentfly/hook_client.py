@@ -233,6 +233,7 @@ def _is_local_host(host: str) -> bool:
 _SUB_PREFIX: str = "@sub:"  # `normalize.SUB_PREFIX`, `SUB_EMPTY`: a substitution's output
 _SUB_EMPTY: str = "@sub@"
 _SCHEME: str = r"[A-Za-z][A-Za-z0-9+.-]*://"
+_HOST_END: str = r"[/?#]"
 
 
 def _unsub(word: str) -> str:
@@ -260,14 +261,14 @@ def _url_candidates(word: str) -> list[tuple[str, bool]]:
         found.append((word[sep + 3 :], True))
     value: str | None = _option_value(word)
     if value is not None:
-        scheme: re.Match[str] | None = re.match(_SCHEME, value)
+        scheme: re.Match[str] | None = re.match(_SCHEME, value) if sep >= 0 else None
         found.append((value[scheme.end() :], True) if scheme else (value, False))
-    return list(dict.fromkeys(found))
+    return found
 
 
 def _cut(text: str) -> int:
-    found: list[int] = [at for at in (text.find("/"), text.find("?"), text.find("#")) if at >= 0]
-    return min(found) if found else len(text)
+    end: re.Match[str] | None = re.search(_HOST_END, text)
+    return end.start() if end else len(text)
 
 
 def _regions(text: str) -> list[str]:
@@ -305,7 +306,7 @@ def _port_cut(region: str) -> str:
             return region[1:close]
         return region
     colon: int = region.find(":")
-    if colon < 0 or _is_ip(region):
+    if colon < 0 or (region.count(":", colon + 1) and _is_ip(region)):  # IPv6 has 2 colons or more
         return region
     return region[:colon]
 
@@ -319,13 +320,17 @@ def _host(region: str, url: bool) -> str | None:
 
 
 def _word_hosts(word: str) -> tuple[str, ...]:
+    if "@" in word:
+        word = _unsub(word)
+    elif "." not in word and ":" not in word and "$" not in word and "localhost" not in word:
+        return ()
     found: list[str] = []
-    for text, url in _url_candidates(_unsub(word)):
+    for text, url in _url_candidates(word):
         for region in _regions(text):
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
-    return tuple(dict.fromkeys(found))
+    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
 def _sends_off(argv: list[str], text: str) -> bool:
@@ -337,10 +342,11 @@ def _sends_off(argv: list[str], text: str) -> bool:
         return True
     named: bool = False
     for word in dict.fromkeys(argv):  # each word read once (P1-fix1)
-        for host in _word_hosts(word):
-            if not _is_local_host(host):
-                return True
-            named = named or not (word.startswith("@") or "=@" in word or "=<" in word)
+        hosts: tuple[str, ...] = _word_hosts(word)
+        if not all(map(_is_local_host, hosts)):
+            return True
+        if hosts and not (word.startswith("@") or "=@" in word or "=<" in word):
+            named = True
     return not named
 
 

@@ -10,35 +10,15 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 
 from agentfly.recorder import rulefile
 from agentfly.recorder import rules as rules_mod
 from agentfly.recorder.normalize import Parsed, normalize
-from agentfly.recorder.rules import Session, decide, mark
+from tests.test_host_reading import after_env, fresh_chat, shell
 
-NUL = "\x00"
-
-
-def fresh() -> Session:
-    return Session(id="c", marked=False, start_time="", next_step=0)
-
-
-def shell(command: str) -> dict[str, Any]:
-    return {"hook_event_name": "beforeShellExecution", "conversation_id": "c", "command": command}
-
-
-def fresh_chat(command: str) -> tuple[str, str | None]:
-    action = shell(command)
-    return decide(action, mark(action, fresh()))
-
-
-def after_env(command: str) -> tuple[str, str | None]:
-    session = mark({"hook_event_name": "beforeReadFile", "file_path": "/w/.env"}, fresh())
-    action = shell(command)
-    return decide(action, mark(action, session))
+NUL = rulefile.NUL
 
 
 # ---------------------------------------------------------------- the readings
@@ -120,6 +100,7 @@ def count_parses(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return real(text)
 
     monkeypatch.setattr(rulefile, "normalize", spy)
+    # rules.py parses nothing itself now; should it import `normalize` again, this spies on it too
     monkeypatch.setattr(rules_mod, "normalize", spy, raising=False)
     return seen
 

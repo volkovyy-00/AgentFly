@@ -38,6 +38,7 @@ def is_local_host(host: str) -> bool:
 # equal word for word.
 
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+_HOST_END = re.compile(r"[/?#]")
 
 
 def _unsub(word: str) -> str:
@@ -66,22 +67,23 @@ def _option_value(word: str) -> str | None:
 
 def _url_candidates(word: str) -> list[tuple[str, bool]]:
     """Step 1: (a) the text after the word's first `://`, a URL (`-d@https://h`); (b) the value of
-    `_option_value`, a URL when it starts with a scheme (dropped). Each with whether it is a URL."""
+    `_option_value`, a URL when it starts with a scheme (dropped). Each with whether it is a URL;
+    the two may be the same text (`word_hosts` keeps each host once)."""
     found: list[tuple[str, bool]] = []
     sep: int = word.find("://")
     if sep >= 0:
         found.append((word[sep + 3 :], True))
     value: str | None = _option_value(word)
     if value is not None:
-        scheme: re.Match[str] | None = _SCHEME.match(value)
+        scheme: re.Match[str] | None = _SCHEME.match(value) if sep >= 0 else None
         found.append((value[scheme.end() :], True) if scheme else (value, False))
-    return list(dict.fromkeys(found))
+    return found
 
 
 def _cut(text: str) -> int:
     """Where the host part of a URL ends: its first `/`, `?` or `#`."""
-    found: list[int] = [at for at in (text.find("/"), text.find("?"), text.find("#")) if at >= 0]
-    return min(found) if found else len(text)
+    end: re.Match[str] | None = _HOST_END.search(text)
+    return end.start() if end else len(text)
 
 
 def _regions(text: str) -> list[str]:
@@ -124,7 +126,7 @@ def _port_cut(region: str) -> str:
             return region[1:close]
         return region
     colon: int = region.find(":")
-    if colon < 0 or _is_ip(region):
+    if colon < 0 or (region.count(":", colon + 1) and _is_ip(region)):  # IPv6 has 2 colons or more
         return region
     return region[:colon]
 
@@ -141,13 +143,17 @@ def _host(region: str, url: bool) -> str | None:
 
 def word_hosts(word: str) -> tuple[str, ...]:
     """The hosts one word names, in order, each once. `$` marks a host nobody can read."""
+    if "@" in word:  # a substitution's marker holds one
+        word = _unsub(word)
+    elif "." not in word and ":" not in word and "$" not in word and "localhost" not in word:
+        return ()  # no part of it could be a host (`curl`, `-sS`, `src/`)
     found: list[str] = []
-    for text, url in _url_candidates(_unsub(word)):
+    for text, url in _url_candidates(word):
         for region in _regions(text):
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
-    return tuple(dict.fromkeys(found))
+    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
 # ---------------------------------------------------------------- the hosts a command names
@@ -207,19 +213,13 @@ def _cluster_value_letter(option: str) -> str | None:
     return None
 
 
-def reads_at_file(option: str) -> bool:
-    """Does curl read the next word, when it starts with `@`, as a file (`-d @data.json`)?"""
+def _curl_option_in(option: str, long: frozenset[str], short: str) -> bool:
+    """Is this curl option one of these (a long name, or a cluster whose value letter is listed)?
+    `-d @data.json` and `-F file=@data.json` name a file: `_AT_FILE_*` and `_FORM_*`."""
     if option.startswith("--"):
-        return _long_name(option) in _AT_FILE_LONG
+        return _long_name(option) in long
     letter: str | None = _cluster_value_letter(option) if option.startswith("-") else None
-    return letter is not None and letter in _AT_FILE_SHORT
-
-
-def _reads_form(option: str) -> bool:
-    """Is this curl's `-F` / `--form` / `--form-string`, whose next word may name a file?"""
-    if option.startswith("--"):
-        return _long_name(option) in _FORM_LONG
-    return option.startswith("-") and _cluster_value_letter(option) == _FORM_SHORT
+    return letter is not None and letter in short
 
 
 def _takes_next_word(option: str) -> bool:
@@ -236,9 +236,9 @@ def _maybe_data_file(argv: Sequence[str], at: int) -> bool:
         return False
     word: str = argv[at]
     option: str = argv[at - 1]
-    if word.startswith("@") and reads_at_file(option):
+    if word.startswith("@") and _curl_option_in(option, _AT_FILE_LONG, _AT_FILE_SHORT):
         return True
-    return ("=@" in word or "=<" in word) and _reads_form(option)
+    return ("=@" in word or "=<" in word) and _curl_option_in(option, _FORM_LONG, _FORM_SHORT)
 
 
 def _plain_curl(argv: Sequence[str]) -> tuple[int, int]:

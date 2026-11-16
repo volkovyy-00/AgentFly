@@ -323,24 +323,24 @@ def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule
     is judged on each of its readings (`rulefile.shell_readings`: a NUL hides nothing)."""
     cmd: str | None = _shell_command(action)
     if cmd is None:
-        return _r0_hit(action, None, None)
-    return any(_r0_hit(action, text, parsed) for text, parsed in rulefile.shell_readings(cmd))
+        return _r0_hit(action, None)
+    return any(_r0_hit(action, reading) for reading in rulefile.shell_readings(cmd))
 
 
-def _r0_hit(action: Action, cmd: str | None, parsed: Parsed | None) -> bool:
-    """R0 on one reading: `cmd` is the reading's text (None for no shell command), `parsed` its
-    parse."""
+def _r0_hit(action: Action, reading: tuple[str, Parsed] | None) -> bool:
+    """R0 on one reading of a shell command (its text and parse), or on an action with none."""
     texts: list[str] = list(_action_paths(action))
-    if cmd is not None:
-        texts.append(cmd)
+    if reading is not None:
+        texts.append(reading[0])
         cwd: Any = action.get("cwd")
         if isinstance(cwd, str):
             texts.append(cwd)
     haystack: str = "\n".join(form for text in texts for form in _path_forms(text))
     if any(path in haystack for path in _R0_PATHS):
         return True
-    if cmd is None or parsed is None:
+    if reading is None:
         return False
+    cmd, parsed = reading
     # Word by word too: `~/.config/"agentfly"`, `$'..'`, `a/../.config/agentfly`.
     words: list[str] = [w for argv in parsed.all_commands() for w in argv]
     word_forms: str = "\n".join(form for w in words for form in _path_forms(w))
