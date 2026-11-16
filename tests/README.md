@@ -627,14 +627,17 @@ the maintainers' work items and decisions, which are kept outside this repo.
   past that cut, both counting; ports cut, `[v6]` and IP addresses whole, whitespace and odd
   brackets kept whole, `:8080` an empty host; `./`, `f`, `src` name none, `backup:/tmp` names
   `backup`; a URL's host always counts; scp's, rsync's and wget's `[user@]host:path` reading
-  (`evil.example:x@localhost`); a word holding `$`, `$(…)` or a literal marker anywhere is one
-  unknown host; `{a,b}` read piece by piece; `%2E` counts as a dot); a word `-a=` 40,000 deep is
+  (`evil.example:x@localhost`, `backup:x@…`, `[v6]:x@…`; a leading `:` or `[a]x:` is a local
+  path); a word holding `$`, `$(…)` or a literal marker anywhere is one unknown host; `{a,b}`
+  read piece by piece, a piece adding no local host; `%2E` counts as a dot); a word `-a=` 40,000 deep is
   read in one pass. After a `.env` read the
   default rules block the brief's three leaks, `curl -d @.env` (a send that names no host),
   `@evil.example` beside a data file, both readings,
   single-label and odd URL hosts, substitutions and `"$URL"`, a `$` past the host
   (`localhost/$(echo a evil.example)`, and the known false alarm `http://localhost:3000/api/$ID`),
-  scp/rsync/wget hosts before an `@`-holding path, curl globs that hide a host behind `?` or `/`,
+  scp/rsync/wget hosts before an `@`-holding path (dotted, single-label, a number, `[v6]`; and
+  the known false alarm `curl user:pass@localhost:3000`), curl globs that hide a host behind `?`
+  or `/` and `134744072/{localhost}`, a data file holding a substitution or `"$F"`,
   `evil%2Eexample`, a host after a NUL from `$'…\x00…'`, a data-file skip fooled by a value
   option (`-H -d @x`, `-od @x`, `-d -d @x`), a wrapper that is not curl (`wget … -O curl -d @x`)
   and `--`, and a value holding whitespace; they allow `user@localhost`, a curl data file
