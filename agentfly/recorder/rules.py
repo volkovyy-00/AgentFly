@@ -20,7 +20,7 @@ from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT, rulefile
 from agentfly.recorder.names import hosts_in_command, is_local_host
-from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter, normalize
+from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter
 from agentfly.recorder.rulefile import RuleFile, RuleSpec
 
 Action = dict[str, Any]
@@ -113,11 +113,12 @@ def parsed_is_outbound(parsed: Parsed) -> bool:
 
 
 def is_outbound_send(action: Action) -> bool:
-    """True if a shell command looks like sending data off-box (after normalisation)."""
+    """True if a shell command looks like sending data off-box (after normalisation), on either
+    reading of a command that holds a NUL (`rulefile.shell_readings`)."""
     cmd: str | None = _shell_command(action)
     if cmd is None or not cmd.strip():
         return False
-    return parsed_is_outbound(normalize(cmd))
+    return any(parsed_is_outbound(parsed) for _, parsed in rulefile.shell_readings(cmd))
 
 
 # ---------------------------------------------------------------- R0: protect AgentFly itself
@@ -318,9 +319,18 @@ def _action_paths(action: Action) -> list[str]:
 
 
 def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule gets the session
-    """AgentFly's own files and process: always, marked or not (SPEC section 5)."""
-    texts: list[str] = list(_action_paths(action))
+    """AgentFly's own files and process: always, marked or not (SPEC section 5). A shell command
+    is judged on each of its readings (`rulefile.shell_readings`: a NUL hides nothing)."""
     cmd: str | None = _shell_command(action)
+    if cmd is None:
+        return _r0_hit(action, None, None)
+    return any(_r0_hit(action, text, parsed) for text, parsed in rulefile.shell_readings(cmd))
+
+
+def _r0_hit(action: Action, cmd: str | None, parsed: Parsed | None) -> bool:
+    """R0 on one reading: `cmd` is the reading's text (None for no shell command), `parsed` its
+    parse."""
+    texts: list[str] = list(_action_paths(action))
     if cmd is not None:
         texts.append(cmd)
         cwd: Any = action.get("cwd")
@@ -329,9 +339,8 @@ def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule
     haystack: str = "\n".join(form for text in texts for form in _path_forms(text))
     if any(path in haystack for path in _R0_PATHS):
         return True
-    if cmd is None:
+    if cmd is None or parsed is None:
         return False
-    parsed: Parsed = normalize(cmd)
     # Word by word too: `~/.config/"agentfly"`, `$'..'`, `a/../.config/agentfly`.
     words: list[str] = [w for argv in parsed.all_commands() for w in argv]
     word_forms: str = "\n".join(form for w in words for form in _path_forms(w))

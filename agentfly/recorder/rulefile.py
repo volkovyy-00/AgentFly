@@ -42,6 +42,7 @@ from agentfly.recorder.normalize import (
     Parsed,
     base_name,
     holds_substitution,
+    loose_commands,
     normalize,
     programs,
 )
@@ -525,6 +526,31 @@ def distinct_candidates(parsed: Parsed) -> tuple[str, ...]:
             for candidate in _candidates(word)
         )
     )
+
+
+# ---------------------------------------------------------------- shell readings (P2)
+
+NUL: str = "\x00"
+
+
+@lru_cache(maxsize=4)  # mark, R0 and every clause read the same command in one hook
+def shell_readings(command: str) -> tuple[tuple[str, Parsed], ...]:
+    """The readings of a shell command, each its text and its parse; a rule fires if it fires on
+    either. A command with no NUL is read once, as before. How Cursor hands a NUL to the shell is
+    not observed (a shell may drop it; `execve` ends the argument there), so a command with one is
+    read with every NUL removed (as bash does), and with every NUL as a word break: that reading's
+    text has a line break for each NUL, and its parse is that of the NUL-as-space text, marked
+    `unparsed`, with a plain word scan of the line-break text added (a NUL breaks a word inside
+    quotes too, and a `#` after it starts no comment). The raw text is never parsed, so no parsed
+    word holds a NUL. Each reading stays inside `normalize`'s cap."""
+    if NUL not in command:
+        return ((command, normalize(command)),)
+    removed: str = command.replace(NUL, "")
+    broken: str = command.replace(NUL, "\n")
+    parsed: Parsed = normalize(command.replace(NUL, " "))
+    if not parsed.unparsed:
+        parsed = replace(parsed, unparsed=True, loose=loose_commands(broken))
+    return ((removed, normalize(removed)), (broken, parsed))
 
 
 # ---------------------------------------------------------------- clauses
@@ -1547,7 +1573,10 @@ class Clause:
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
-        parsed: Parsed = normalize(command)
+        return any(self._shell_hit(parsed, classes) for _, parsed in shell_readings(command))
+
+    def _shell_hit(self, parsed: Parsed, classes: Mapping[str, CommandClass]) -> bool:
+        """The clause holds on one reading of a shell command (`shell_readings`)."""
         return (
             (not self.path or self._words_hit(parsed))
             and (not self.command or self._command_hit(parsed))
