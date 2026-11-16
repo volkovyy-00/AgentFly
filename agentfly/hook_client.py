@@ -264,18 +264,27 @@ def _cut(text: str) -> int:
     return end.start() if end else len(text)
 
 
-def _regions(text: str, url: bool) -> list[str]:
+def _regions(text: str) -> list[str]:
     cut: int = _cut(text)
     head: str = text[:cut]
     regions: list[str] = [head[head.rfind("@") + 1 :]]
     if text.find("@", cut) >= 0:
         tail: str = text[text.rfind("@") + 1 :]
         regions.append(tail[: _cut(tail)])
-    colon: int = -1 if url else text.find(":")
-    if colon >= 0 and "/" not in text[:colon]:
-        before: str = text[:colon]
-        regions.append(before[before.rfind("@") + 1 :])
     return regions
+
+
+def _scp_region(text: str) -> str | None:
+    colon: int = text.find(":")
+    if colon <= 0 or "/" in text[:colon]:
+        return None
+    opener: int = text.rfind("[", 0, colon)
+    if opener == 0 or (opener > 0 and text[opener - 1] == "@"):
+        colon = text.find("]:", opener) + 1
+        if colon <= 0 or "/" in text[:colon]:
+            return None
+    before: str = text[:colon]
+    return before[before.rfind("@") + 1 :] or None
 
 
 def _could_be_host(region: str) -> bool:
@@ -318,10 +327,13 @@ def _host(region: str, url: bool) -> str | None:
 def _hosts(word: str) -> list[str]:
     found: list[str] = []
     for text, url in _url_candidates(word):
-        for region in _regions(text, url):
+        for region in _regions(text):
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
+        scp: str | None = None if url else _scp_region(text)
+        if scp is not None:
+            found.append(_port_cut(scp))
     return found
 
 
@@ -333,7 +345,7 @@ def _word_hosts(word: str) -> tuple[str, ...]:
     found: list[str] = _hosts(word)
     if "{" in word:
         for piece in re.split(_GLOB, word):
-            found.extend(_hosts(piece))
+            found.extend(host for host in _hosts(piece) if not _is_local_host(host))
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
