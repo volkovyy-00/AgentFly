@@ -227,14 +227,14 @@ def _is_local_host(host: str) -> bool:
     return bool(addr.is_loopback or addr.is_private)
 
 
-# The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` and `glob_hosts` (SPEC
-# section 5, "Not blocked"; P2), standard library only. A test keeps them equal word for word. The
-# guard takes no curl data-file exception: every `@` word is a URL here (D4).
+# The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` (SPEC section 5, "Not
+# blocked"; P2), standard library only. A test keeps the two equal word for word. The guard takes
+# no curl data-file exception: every `@` word is a URL here (D4). A curl glob's pieces are the
+# guard's own words (`_sends_off`).
 _SUB_PREFIX: str = "@sub:"  # `normalize.SUB_PREFIX`, `SUB_EMPTY`: a substitution's output
 _SUB_EMPTY: str = "@sub@"
 _SCHEME: str = r"[A-Za-z][A-Za-z0-9+.-]*://"
 _HOST_END: str = r"[/?#]"
-_GLOB: str = r"[{},]"
 
 
 def _option_value(word: str) -> str | None:
@@ -341,27 +341,12 @@ def _hosts(word: str) -> list[str]:
     return found
 
 
-def _unknown(word: str) -> bool:
-    return "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word
-
-
-def _may_name(word: str) -> bool:
-    return "." in word or ":" in word or "%" in word or "localhost" in word
-
-
 def _word_hosts(word: str) -> tuple[str, ...]:
-    if _unknown(word):
+    if "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word:
         return ("$",)
-    if not _may_name(word):
+    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
         return ()
     found: list[str] = _hosts(word)
-    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
-
-
-def _glob_hosts(word: str) -> tuple[str, ...]:
-    if "{" not in word or _unknown(word) or not _may_name(word):
-        return ()
-    found: list[str] = [host for piece in re.split(_GLOB, word) for host in _hosts(piece)]
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
@@ -375,8 +360,9 @@ def _sends_off(argv: list[str], text: str) -> bool:
     no word names a host. A word R1 may skip as a curl data file (`@f`, `name=@f`, `name=<f`)
     names none here, so the guard denies whatever R1 calls outbound. The words are read as given
     and with quotes removed (`words` splits `evil'.'com`, which the shell joins), each also whole,
-    unsplit at `{`, `}` and `,` (P2-fix1). Only a whole word names a host, and a curl glob piece's
-    host (`_glob_hosts`) only denies: `134744072/{localhost}` names no `localhost`, as for R1."""
+    unsplit at `{`, `}` and `,` (P2-fix1). `words` breaks where curl's glob does, so its words are
+    the pieces `names.glob_hosts` reads: only a whole word names a host, and a piece's host only
+    denies (`134744072/{localhost}` names no `localhost`, as for R1)."""
     if any(mark in text for mark in ("$", "`", "<(", ">(")):
         return True
     unquoted_text: str = text.replace("'", "").replace('"', "")
@@ -386,7 +372,7 @@ def _sends_off(argv: list[str], text: str) -> bool:
     named: bool = False
     for word in dict.fromkeys([*whole, *argv, *words(unquoted_text)]):  # each read once (P1-fix1)
         hosts: tuple[str, ...] = _word_hosts(word)
-        if not all(map(_is_local_host, hosts + _glob_hosts(word))):
+        if not all(map(_is_local_host, hosts)):
             return True
         if hosts and word in whole and not (word.startswith("@") or "=@" in word or "=<" in word):
             named = True

@@ -198,7 +198,7 @@ def glob_hosts(word: str) -> tuple[str, ...]:
     one not in its list (P2-fix1)."""
     if "{" not in word or _unknown(word) or not _may_name(word):
         return ()
-    found: list[str] = [host for piece in _GLOB.split(word) for host in _hosts(piece)]
+    found: list[str] = [host for piece in _GLOB.split(word) for host in word_hosts(piece)]
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 

@@ -662,9 +662,10 @@ the maintainers' work items and decisions, which are kept outside this repo.
   `[…]` destinations, and `134744072/{localhost}`, `a{localhost}` and `{localhost}` (P2-fix1: its
   words are also read whole, unsplit at `{},`, and a glob piece's local host is not "named"); it
   allows `user@localhost`, `http://127.0.0.1:8000/x`, `[::1]:/tmp`, `u@[::1]:x@localhost`,
-  `http://localhost:3000/{a,b}` and `'{@127.0.0.1/,10.0.0.5}'`; `hook_client._word_hosts` and
-  `_glob_hosts` equal `names.word_hosts` and `glob_hosts` on both tables, 4,000 words built from
-  host pieces and 4,000 more with `{ } , [ ]` pieces (P2-fix1); on 1,500 plain curl/ssh/scp
+  `http://localhost:3000/{a,b}` and `'{@127.0.0.1/,10.0.0.5}'`; `hook_client._word_hosts` equals
+  `names.word_hosts` on both tables, 4,000 words built from host pieces and 4,000 more with
+  `{ } , [ ]` pieces, and on those words the guard's own split words name exactly the hosts
+  `names.glob_hosts` gives (the guard reads no glob of its own, P2-fix1); on 1,500 plain curl/ssh/scp
   commands of those pieces and `-d -H -od -o -s -F --` the guard denies whatever R1 calls
   outbound, and so it does on 1,500 more built with glob and bracket pieces, bare and with each
   word quoted (P2-fix1). `@wallclock`: the deep word is judged by R1 and the guard in under 0.25 s (best

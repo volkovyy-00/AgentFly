@@ -467,12 +467,23 @@ def token_words(count: int, seed: int, tokens: tuple[str, ...] = TOKENS) -> list
     return [token_word(rng, tokens) for _ in range(count)]
 
 
-def test_the_guard_reads_each_word_as_the_recorder_does() -> None:
+def host_corpus() -> list[str]:
     corpus = [word for word, _ in WORD_HOSTS + GLOB_HOSTS] + ["-a=" * 5_000 + "x.com"]
-    corpus += token_words(4_000, 20261116) + token_words(4_000, 20261117, GLOB_TOKENS)
-    for word in corpus:
+    return corpus + token_words(4_000, 20261116) + token_words(4_000, 20261117, GLOB_TOKENS)
+
+
+def test_the_guard_reads_each_word_as_the_recorder_does() -> None:
+    for word in host_corpus():
         assert guard._word_hosts(word) == names.word_hosts(word), word  # pyright: ignore[reportPrivateUsage]
-        assert guard._glob_hosts(word) == names.glob_hosts(word), word  # pyright: ignore[reportPrivateUsage]
+
+
+def test_the_guards_words_are_a_curl_globs_pieces() -> None:
+    # P2-fix1: the guard reads no glob of its own: its words break at `{`, `}` and `,`, so the hosts
+    # they name are the pieces' hosts `glob_hosts` gives (a word with `$` is denied whole)
+    for word in host_corpus():
+        if "{" in word and "$" not in word:
+            split = (host for piece in guard.words(word) for host in guard._word_hosts(piece))  # pyright: ignore[reportPrivateUsage]
+            assert tuple(dict.fromkeys(split)) == names.glob_hosts(word), word
 
 
 OPTIONS: tuple[str, ...] = ("-d", "-H", "-od", "-o", "-s", "-F", "--")
