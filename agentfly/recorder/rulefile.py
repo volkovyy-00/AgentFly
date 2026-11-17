@@ -42,6 +42,7 @@ from agentfly.recorder.normalize import (
     Parsed,
     base_name,
     holds_substitution,
+    loose_commands,
     normalize,
     programs,
 )
@@ -307,44 +308,23 @@ def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
     return {word.casefold(): index for index, word in enumerate(argv)}
 
 
-# curl reads `@name` as a file after these options: `curl -d @data.json` sends a file, it names no
-# host. After any other word an `@` word is a URL (`curl -s @evil.example`). A short option counts
-# when its letter ends the cluster (`-sd @f`); `--expand-<option>` (curl 8.3) is the same option.
-_AT_FILE_LONG: frozenset[str] = frozenset(
-    {"--data", "--data-ascii", "--data-binary", "--data-urlencode", "--json", "--header"}
-    | {"--url-query", "--variable"}
-)
-_AT_FILE_SHORT: str = "dH"
-
-
-def _reads_at_file(option: str) -> bool:
-    if option.startswith("--"):
-        name: str = option.casefold().removeprefix("--expand-")
-        return (name if name.startswith("--") else f"--{name}") in _AT_FILE_LONG
-    return option.startswith("-") and len(option) > 1 and option[-1] in _AT_FILE_SHORT
-
-
 @lru_cache(maxsize=64)
-def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """The case-folded host names a command names. In a curl command, an `@` word right after an
-    option that reads a file (`_reads_at_file`) is that file, not a host."""
-    curl: bool = "curl" in _first_positions(argv)
-    kept: list[str] = [
-        word
-        for index, word in enumerate(argv)
-        if not (curl and word.startswith("@") and index and _reads_at_file(argv[index - 1]))
-    ]
-    return tuple(host.casefold() for host in hosts_in_command(kept))
+def _hosts_of(argv: tuple[str, ...]) -> tuple[tuple[str, bool], ...]:
+    """The case-folded host names a command names, each with whether only a curl glob piece names
+    it (`names.hosts_in_command`: in a curl command, an `@` word right after an option that reads
+    a file is that file, not a host)."""
+    return tuple((host.casefold(), piece) for host, piece in hosts_in_command(argv))
 
 
 def _unlisted_host(argv: tuple[str, ...], listed: frozenset[str]) -> bool:
     """Does this simple command send to a host that is not listed? One that names no host, or
     holds a variable or a substitution (`"$URL"`, `$(cat url)`) where a host may be, counts as
-    yes (toward firing, owner 2026-10-23)."""
-    hosts: tuple[str, ...] = _hosts_of(argv)
-    if not hosts or any("$" in w or holds_substitution(w) for w in argv):
+    yes (toward firing, owner 2026-10-23). A curl glob piece's host counts when it is not listed,
+    but is no host the command names (`134744072/{localhost}` names none; P2-fix1)."""
+    hosts: tuple[tuple[str, bool], ...] = _hosts_of(argv)
+    if all(piece for _, piece in hosts) or any("$" in w or holds_substitution(w) for w in argv):
         return True
-    return any(host not in listed for host in hosts)
+    return any(host not in listed for host, _ in hosts)
 
 
 @lru_cache(maxsize=_WORD_MEMO)
@@ -550,18 +530,70 @@ def distinct_candidates(parsed: Parsed) -> tuple[str, ...]:
     )
 
 
+# ---------------------------------------------------------------- shell readings (P2)
+
+NUL: str = "\x00"
+
+
+@lru_cache(maxsize=4)  # mark, R0 and every clause read the same command in one hook
+def shell_readings(command: str) -> tuple[tuple[str, Parsed], ...]:
+    """The readings of a shell command, each its text and its parse; a rule fires if it fires on
+    either. A command with no NUL is read once, as before. How Cursor hands a NUL to the shell is
+    not observed (a shell may drop it; `execve` ends the argument there), so a command with one is
+    read with every NUL removed (as bash does), and with every NUL as a word break: that reading's
+    text has a line break for each NUL, and its parse is that of the NUL-as-space text, marked
+    `unparsed`, with a plain word scan of the line-break text added (a NUL breaks a word inside
+    quotes too, and a `#` after it starts no comment). The raw text is never parsed, so no parsed
+    word holds a raw NUL. One from an escape (`$'.env\\x00x'`) is cut there too, as `execve`
+    cuts the argument: a reading whose parse holds one is also read with each word cut at its
+    first NUL (same text). Each reading stays inside `normalize`'s cap."""
+    readings: tuple[tuple[str, Parsed], ...]
+    if NUL not in command:
+        readings = ((command, normalize(command)),)
+    else:
+        removed: str = command.replace(NUL, "")
+        broken: str = command.replace(NUL, "\n")
+        parsed: Parsed = normalize(command.replace(NUL, " "))
+        if not parsed.unparsed:
+            parsed = replace(parsed, unparsed=True, loose=loose_commands(broken))
+        readings = ((removed, normalize(removed)), (broken, parsed))
+    if "$'" not in command:  # only an ANSI-C string decodes to a NUL
+        return readings
+    cut: tuple[tuple[str, Parsed], ...] = tuple(
+        (text, cut_parse) for text, parsed in readings if (cut_parse := _cut_at_nul(parsed))
+    )
+    return readings + cut
+
+
+def _cut_at_nul(parsed: Parsed) -> Parsed | None:
+    """`parsed` with each word cut at its first NUL, or None when no word holds one."""
+    groups: tuple[tuple[tuple[str, ...], ...], ...] = (parsed.commands, parsed.loose)
+    if not any(NUL in word for group in groups for argv in group for word in argv):
+        return None
+    commands, loose = (
+        tuple(tuple(word.split(NUL, 1)[0] for word in argv) for argv in group) for group in groups
+    )
+    return replace(parsed, commands=commands, loose=loose)
+
+
 # ---------------------------------------------------------------- clauses
 
 
+# The agent's tools whose `preToolUse` is a `write` (case-folded): Write, and Delete (Cursor
+# 3.27.22 sends a Delete as `preToolUse` only, with its `tool_input.file_path`; owner 2026-11-16).
+WRITE_TOOLS: frozenset[str] = frozenset({"write", "delete"})
+
+
 def event_of(action: Mapping[str, Any]) -> str | None:
-    """The rules' name for what an action is: `read`, `shell`, `write`, else None. A search that
-    returns lines is a `read` (`is_search`); one that returns names or counts only is no event."""
+    """The rules' name for what an action is: `read`, `shell`, `write`, else None. A Write or a
+    Delete (`WRITE_TOOLS`) is a `write`. A search that returns lines is a `read` (`is_search`);
+    one that returns names or counts only is no event."""
     event: Any = action.get("hook_event_name")
     if event == "beforeReadFile":
         return "read"
     if event == "beforeShellExecution":
         return "shell"
-    if event == "preToolUse" and str(action.get("tool_name", "")).casefold() == "write":
+    if event == "preToolUse" and str(action.get("tool_name", "")).casefold() in WRITE_TOOLS:
         return "write"
     if is_search(action) and _returns_lines(action):
         return "read"
@@ -569,7 +601,7 @@ def event_of(action: Mapping[str, Any]) -> str | None:
 
 
 def _action_path(action: Mapping[str, Any]) -> str:
-    """The `file_path` a read names, or a tool's (the Write tool, a search) in its input."""
+    """The `file_path` a read names, or a tool's (Write, Delete, a search) in its input."""
     tool: bool = action.get("hook_event_name") == "preToolUse"
     source: Mapping[str, Any] = _tool_input(action) if tool else action
     value: Any = source.get("file_path")
@@ -577,9 +609,10 @@ def _action_path(action: Mapping[str, Any]) -> str:
 
 
 def _outside_workspace(action: Mapping[str, Any], home: str) -> bool:
-    """`path_scope = "outside_workspace"`: the file a read or write names, or the folder or file a
-    search names (none: outside), is under none of the event's `workspace_roots` (`Walker`). The
-    hook's walker answers, or one of its own when no meter runs (a test, `rules test`)."""
+    """`path_scope = "outside_workspace"`: the file a read or write (a Write or a Delete) names, or
+    the folder or file a search names (none: outside), is under none of the event's
+    `workspace_roots` (`Walker`). The hook's walker answers, or one of its own when no meter runs
+    (a test, `rules test`)."""
     path: str = _action_path(action)
     meter: Meter | None = _METER.get()
     walker: Walker = meter.disk if meter is not None else Walker()
@@ -1543,7 +1576,7 @@ class Clause:
         return any(
             host not in self.host_not_in
             for argv in parsed.all_commands()
-            for host in _hosts_of(argv)
+            for host, _ in _hosts_of(argv)
         )
 
     def matches(self, action: Mapping[str, Any], classes: Mapping[str, CommandClass]) -> bool:
@@ -1563,7 +1596,10 @@ class Clause:
         command: str = str(action.get("command", ""))
         if not command.strip():
             return False
-        parsed: Parsed = normalize(command)
+        return any(self._shell_hit(parsed, classes) for _, parsed in shell_readings(command))
+
+    def _shell_hit(self, parsed: Parsed, classes: Mapping[str, CommandClass]) -> bool:
+        """The clause holds on one reading of a shell command (`shell_readings`)."""
         return (
             (not self.path or self._words_hit(parsed))
             and (not self.command or self._command_hit(parsed))
@@ -2316,6 +2352,7 @@ SHIPPED_DEFAULTS: tuple[str, ...] = (
     "680680ea54608082a0fbcdaa713ed5a00c51424c20038f961dc08bf0f76968e8",  # V5b, review fixes
     "6cd80b9824295273e33c2dd9a0d4aac82c6ddf2c90b1e894977b942132178c82",  # R1G, a search is a read
     "fe87aa40b73a59c97b4bc9b9922a71cd85f84f7a245d62b8cf8495d21cf1a6bf",  # V5c, header: new fields
+    "40d4acec695eeba659bb48e0fb9056b0f77be3fc1a54201fddaddeb9ac21a071",  # P2, a Delete is a write
 )
 
 

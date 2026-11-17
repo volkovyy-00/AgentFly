@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentfly.recorder.names import host_of, is_local_host, is_sensitive, words
+from agentfly.recorder.names import is_local_host, is_sensitive, word_hosts, words
 from agentfly.recorder.rules import Action, Session, decide, mark
 from agentfly.recorder.sessions import SessionStore
 from tests.cases import BRACE_OUTBOUND, MARKED_ALLOWED, NAMED_OUTBOUND, RECORDER_ONLY, wrapped
@@ -95,8 +95,8 @@ def test_is_not_local_host(host: str) -> None:
     assert is_local_host(host) is False
 
 
-def test_host_of_strips_userinfo_and_path() -> None:
-    assert host_of("https://u:p@x.com/a?t=1") == "x.com"
+def test_word_hosts_strips_userinfo_and_path() -> None:
+    assert word_hosts("https://u:p@x.com/a?t=1") == ("x.com",)
 
 
 def test_words_splits_pipeline() -> None:

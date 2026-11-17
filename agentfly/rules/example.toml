@@ -203,8 +203,9 @@ path = "workflows"
   roots = ["/work/app"]
   expect = "allow"
 
-# 8. Block any file write or edit outside the folders open in the workspace (links followed; a
-#    write that names no folder of the workspace counts as outside).
+# 8. Block a file write or delete (the agent's Write and Delete tools) outside the folders open in
+#    the workspace (links followed; a write that names no folder of the workspace counts as
+#    outside).
 [[rule]]
 id = "s08-write-outside-workspace"
 kind = "match"

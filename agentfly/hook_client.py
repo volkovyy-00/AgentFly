@@ -208,11 +208,11 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
 _SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'{},\\", " "))
 
 
-def words(text: str) -> list[str]:
+def words(text: str, separators: dict[int, str] = _SEPARATORS) -> list[str]:
     """Words of a shell command or of raw hook text. Never raises, and is fast on big input."""
     for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
         text = text.replace(escape, " ")
-    return text.translate(_SEPARATORS).split()
+    return text.translate(separators).split()
 
 
 def _is_local_host(host: str) -> bool:
@@ -227,30 +227,156 @@ def _is_local_host(host: str) -> bool:
     return bool(addr.is_loopback or addr.is_private)
 
 
-def _host_of_token(token: str) -> str | None:
-    from urllib.parse import urlparse
+# The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` (SPEC section 5, "Not
+# blocked"; P2), standard library only. A test keeps the two equal word for word. The guard takes
+# no curl data-file exception: every `@` word is a URL here (D4). A curl glob's pieces are the
+# guard's own words (`_sends_off`).
+_SUB_PREFIX: str = "@sub:"  # `normalize.SUB_PREFIX`, `SUB_EMPTY`: a substitution's output
+_SUB_EMPTY: str = "@sub@"
+_SCHEME: str = r"[A-Za-z][A-Za-z0-9+.-]*://"
+_HOST_END: str = r"[/?#]"
 
-    if "://" in token:  # also `--url=https://host` and `-d@https://host`
-        try:
-            return urlparse("//" + token.split("://", 1)[1]).hostname
-        except ValueError:
+
+def _option_value(word: str) -> str | None:
+    at: int = 0  # one pass by index: `-a=-a=…` thousands deep is no recursion
+    while word.startswith("-", at):
+        equals: int = word.find("=", at)
+        if equals < 0:
             return None
-    if token.startswith("-") and "=" in token:  # `--url=host`
-        return _host_of_token(token.split("=", 1)[1])
-    if ":" in token and not token.startswith("-"):
-        left: str = token.split(":", 1)[0]
-        if "@" in left:
-            left = left.rsplit("@", 1)[-1]
-        if left and not left.isdigit() and "/" not in left:
-            return left
-    if token.startswith("-") or "/" in token or "=" in token:
+        at = equals + 1
+    return word[at:]
+
+
+def _url_candidates(word: str) -> list[tuple[str, bool]]:
+    found: list[tuple[str, bool]] = []
+    sep: int = word.find("://")
+    if sep >= 0:
+        found.append((word[sep + 3 :], True))
+    value: str | None = _option_value(word)
+    if value is not None:
+        scheme: re.Match[str] | None = re.match(_SCHEME, value) if sep >= 0 else None
+        found.append((value[scheme.end() :], True) if scheme else (value, False))
+    return found
+
+
+def _cut(text: str) -> int:
+    end: re.Match[str] | None = re.search(_HOST_END, text)
+    return end.start() if end else len(text)
+
+
+def _regions(text: str) -> list[str]:
+    cut: int = _cut(text)
+    head: str = text[:cut]
+    regions: list[str] = [head[head.rfind("@") + 1 :]]
+    if text.find("@", cut) >= 0:
+        tail: str = text[text.rfind("@") + 1 :]
+        regions.append(tail[: _cut(tail)])
+    return regions
+
+
+def _after_at(text: str) -> str:
+    return text[text.rfind("@") + 1 :]
+
+
+def _scp_regions(text: str) -> list[str]:
+    colon: int = text.find(":")
+    if colon <= 0 or "/" in text[:colon]:
+        return []
+    found: list[str] = []
+    opener: int = text.rfind("[", 0, colon)
+    if opener == 0 or (opener > 0 and text[opener - 1] == "@"):  # OpenSSH's colon is past `[…]`
+        close: int = text.find("]:", opener) + 1
+        if close > 0 and "/" not in text[:close]:
+            found.append(_after_at(text[:close]))
+    found.append(_after_at(text[:colon]))  # openrsync's and wget's is the first (P2-fix1)
+    return [region for region in found if region not in ("", "[")]
+
+
+def _could_be_host(region: str) -> bool:
+    shaped: bool = "." in region or ":" in region or region == "localhost"
+    shaped = shaped or "%2e" in region.casefold()
+    return shaped and any(ch.isalnum() for ch in region)
+
+
+def _is_ip(text: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _port_cut(region: str) -> str:
+    if any(ch.isspace() for ch in region):
+        return region
+    if "[" in region or "]" in region:
+        close: int = region.find("]")
+        shaped: bool = region.startswith("[") and region.count("[") == region.count("]") == 1
+        if shaped and (close == len(region) - 1 or region[close + 1] == ":"):
+            return region[1:close]
+        return region
+    colon: int = region.find(":")
+    if colon < 0 or (region.count(":", colon + 1) and _is_ip(region)):  # IPv6 has 2 colons or more
+        return region
+    return region[:colon]
+
+
+def _host(region: str, url: bool) -> str | None:
+    if not url and not _could_be_host(region):
         return None
-    if "." in token or token == "localhost" or ":" in token:
-        if token.replace(".", "").isdigit():
-            return token
-        if any(c.isalpha() for c in token) or ":" in token:
-            return token
-    return None
+    return _port_cut(region)
+
+
+def _hosts(word: str) -> list[str]:
+    found: list[str] = []
+    for text, url in _url_candidates(word):
+        for region in _regions(text):
+            host: str | None = _host(region, url)
+            if host is not None:
+                found.append(host)
+        if not url:
+            found.extend(_port_cut(region) for region in _scp_regions(text))
+    return found
+
+
+def _word_hosts(word: str) -> tuple[str, ...]:
+    if "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word:
+        return ("$",)
+    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
+        return ()
+    found: list[str] = _hosts(word)
+    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
+
+
+# `_SEPARATORS` but `{`, `}` and `,`: a curl glob stays one word, read as R1 reads it (P2-fix1).
+_WORD_SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'\\", " "))
+
+
+def _sends_off(argv: list[str], text: str) -> bool:
+    """A web tool's line sends off this computer: it holds `$`, a backtick, `<(` or `>(` (a host
+    nobody can read; `words` turned them into spaces), a word names a host that is not local, or
+    no word names a host. A word R1 may skip as a curl data file (`@f`, `name=@f`, `name=<f`)
+    names none here, so the guard denies whatever R1 calls outbound. The words are read as given
+    and with quotes removed (`words` splits `evil'.'com`, which the shell joins), each also whole,
+    unsplit at `{`, `}` and `,` (P2-fix1). `words` breaks where curl's glob does, so its words are
+    the pieces `names.glob_hosts` reads: only a whole word names a host, and a piece's host only
+    denies (`134744072/{localhost}` names no `localhost`, as for R1)."""
+    if any(mark in text for mark in ("$", "`", "<(", ">(")):
+        return True
+    unquoted_text: str = text.replace("'", "").replace('"', "")
+    whole: dict[str, None] = dict.fromkeys(
+        words(text, _WORD_SEPARATORS) + words(unquoted_text, _WORD_SEPARATORS)
+    )
+    named: bool = False
+    for word in dict.fromkeys([*whole, *argv, *words(unquoted_text)]):  # each read once (P1-fix1)
+        hosts: tuple[str, ...] = _word_hosts(word)
+        if not all(map(_is_local_host, hosts)):
+            return True
+        if hosts and word in whole and not (word.startswith("@") or "=@" in word or "=<" in word):
+            named = True
+    return not named
 
 
 def _interpreter(name: str) -> str | None:
@@ -447,7 +573,7 @@ def _inline_code(argv: list[str], names: list[str]) -> bool:
 
 
 def _outbound_words(argv: list[str], text: str) -> bool:
-    """`text` is the case-folded command, for the `http` test."""
+    """`text` is the case-folded command, for the `http` test and `_sends_off`."""
     lower: list[str] = [a.lower() for a in argv]
     names: list[str] = [a.split("/")[-1].lower() for a in argv]
     distinct: dict[str, None] = dict.fromkeys(names)  # each name and word read once (P1-fix1)
@@ -456,8 +582,7 @@ def _outbound_words(argv: list[str], text: str) -> bool:
     if _inline_code(argv, names) or (any(map(_interpreter, distinct)) and "http" in text):
         return True
     if not _HOSTED_OUTBOUND.isdisjoint(distinct):
-        hosts = [h for h in map(_host_of_token, dict.fromkeys(argv)) if h]
-        return not hosts or any(not _is_local_host(h) for h in hosts)
+        return _sends_off(argv, text)
     return False
 
 
