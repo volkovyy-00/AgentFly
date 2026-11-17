@@ -208,11 +208,11 @@ def sanitize(payload: dict[str, Any], event: str) -> dict[str, Any]:
 _SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'{},\\", " "))
 
 
-def words(text: str) -> list[str]:
+def words(text: str, separators: dict[int, str] = _SEPARATORS) -> list[str]:
     """Words of a shell command or of raw hook text. Never raises, and is fast on big input."""
     for escape in ("\\n", "\\r", "\\t"):  # `\n` written out inside JSON text
         text = text.replace(escape, " ")
-    return text.translate(_SEPARATORS).split()
+    return text.translate(separators).split()
 
 
 def _is_local_host(host: str) -> bool:
@@ -227,9 +227,9 @@ def _is_local_host(host: str) -> bool:
     return bool(addr.is_loopback or addr.is_private)
 
 
-# The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` (SPEC section 5, "Not
-# blocked"; P2), standard library only. A test keeps the two equal word for word. The guard takes
-# no curl data-file exception: every `@` word is a URL here (D4).
+# The hosts one word names: a copy of `agentfly.recorder.names.word_hosts` and `glob_hosts` (SPEC
+# section 5, "Not blocked"; P2), standard library only. A test keeps them equal word for word. The
+# guard takes no curl data-file exception: every `@` word is a URL here (D4).
 _SUB_PREFIX: str = "@sub:"  # `normalize.SUB_PREFIX`, `SUB_EMPTY`: a substitution's output
 _SUB_EMPTY: str = "@sub@"
 _SCHEME: str = r"[A-Za-z][A-Za-z0-9+.-]*://"
@@ -274,17 +274,22 @@ def _regions(text: str) -> list[str]:
     return regions
 
 
-def _scp_region(text: str) -> str | None:
+def _after_at(text: str) -> str:
+    return text[text.rfind("@") + 1 :]
+
+
+def _scp_regions(text: str) -> list[str]:
     colon: int = text.find(":")
     if colon <= 0 or "/" in text[:colon]:
-        return None
+        return []
+    found: list[str] = []
     opener: int = text.rfind("[", 0, colon)
-    if opener == 0 or (opener > 0 and text[opener - 1] == "@"):
-        colon = text.find("]:", opener) + 1
-        if colon <= 0 or "/" in text[:colon]:
-            return None
-    before: str = text[:colon]
-    return before[before.rfind("@") + 1 :] or None
+    if opener == 0 or (opener > 0 and text[opener - 1] == "@"):  # OpenSSH's colon is past `[…]`
+        close: int = text.find("]:", opener) + 1
+        if close > 0 and "/" not in text[:close]:
+            found.append(_after_at(text[:close]))
+    found.append(_after_at(text[:colon]))  # openrsync's and wget's is the first (P2-fix1)
+    return [region for region in found if region not in ("", "[")]
 
 
 def _could_be_host(region: str) -> bool:
@@ -331,22 +336,37 @@ def _hosts(word: str) -> list[str]:
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
-        scp: str | None = None if url else _scp_region(text)
-        if scp is not None:
-            found.append(_port_cut(scp))
+        if not url:
+            found.extend(_port_cut(region) for region in _scp_regions(text))
     return found
 
 
+def _unknown(word: str) -> bool:
+    return "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word
+
+
+def _may_name(word: str) -> bool:
+    return "." in word or ":" in word or "%" in word or "localhost" in word
+
+
 def _word_hosts(word: str) -> tuple[str, ...]:
-    if "$" in word or _SUB_PREFIX in word or _SUB_EMPTY in word:
+    if _unknown(word):
         return ("$",)
-    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
+    if not _may_name(word):
         return ()
     found: list[str] = _hosts(word)
-    if "{" in word:
-        for piece in re.split(_GLOB, word):
-            found.extend(host for host in _hosts(piece) if not _is_local_host(host))
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
+
+
+def _glob_hosts(word: str) -> tuple[str, ...]:
+    if "{" not in word or _unknown(word) or not _may_name(word):
+        return ()
+    found: list[str] = [host for piece in re.split(_GLOB, word) for host in _hosts(piece)]
+    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
+
+
+# `_SEPARATORS` but `{`, `}` and `,`: a curl glob stays one word, read as R1 reads it (P2-fix1).
+_WORD_SEPARATORS = str.maketrans(dict.fromkeys(";|&()`$\n\r\t\"'\\", " "))
 
 
 def _sends_off(argv: list[str], text: str) -> bool:
@@ -354,16 +374,21 @@ def _sends_off(argv: list[str], text: str) -> bool:
     nobody can read; `words` turned them into spaces), a word names a host that is not local, or
     no word names a host. A word R1 may skip as a curl data file (`@f`, `name=@f`, `name=<f`)
     names none here, so the guard denies whatever R1 calls outbound. The words are read as given
-    and with quotes removed: `words` splits `evil'.'com`, which the shell joins."""
+    and with quotes removed (`words` splits `evil'.'com`, which the shell joins), each also whole,
+    unsplit at `{`, `}` and `,` (P2-fix1). Only a whole word names a host, and a curl glob piece's
+    host (`_glob_hosts`) only denies: `134744072/{localhost}` names no `localhost`, as for R1."""
     if any(mark in text for mark in ("$", "`", "<(", ">(")):
         return True
-    unquoted: list[str] = words(text.replace("'", "").replace('"', ""))
+    unquoted_text: str = text.replace("'", "").replace('"', "")
+    whole: dict[str, None] = dict.fromkeys(
+        words(text, _WORD_SEPARATORS) + words(unquoted_text, _WORD_SEPARATORS)
+    )
     named: bool = False
-    for word in dict.fromkeys(argv + unquoted):  # each word read once (P1-fix1)
+    for word in dict.fromkeys([*whole, *argv, *words(unquoted_text)]):  # each read once (P1-fix1)
         hosts: tuple[str, ...] = _word_hosts(word)
-        if not all(map(_is_local_host, hosts)):
+        if not all(map(_is_local_host, hosts + _glob_hosts(word))):
             return True
-        if hosts and not (word.startswith("@") or "=@" in word or "=<" in word):
+        if hosts and word in whole and not (word.startswith("@") or "=@" in word or "=<" in word):
             named = True
     return not named
 

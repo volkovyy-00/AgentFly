@@ -413,7 +413,7 @@ def test_the_memos_answer_as_the_code_they_replaced_did() -> None:
     assert rulefile._candidates("x=") == ("x=", "")
     assert rulefile._folded_name("/A/B/Key.PEM") == "key.pem"
     assert rulefile._folded_name("dir/") == "dir"
-    assert rulefile._hosts_of(("curl", "https://Example.COM/x")) == ("example.com",)
+    assert rulefile._hosts_of(("curl", "https://Example.COM/x")) == (("example.com", False),)
 
 
 # ---------------------------------------------------------------- the count, and the wait

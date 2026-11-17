@@ -87,20 +87,28 @@ def _regions(text: str) -> list[str]:
     return regions
 
 
-def _scp_region(text: str) -> str | None:
-    """Step 2, scp's, rsync's and wget's host in `[user@]host:path`, as OpenSSH's `colon()` reads
-    it: before the first `:` outside a leading `[…]` (`[v6]:p`, `user@[v6]:p`), when no `/` comes
-    first and the word does not start with `:`; after the last `@` there. None for a local path."""
+def _after_at(text: str) -> str:
+    return text[text.rfind("@") + 1 :]
+
+
+def _scp_regions(text: str) -> list[str]:
+    """Step 2, scp's, rsync's and wget's host in `[user@]host:path`: before the first `:`, when no
+    `/` comes first and the word does not start with `:`; after the last `@` there. When a `[`
+    starts the word or follows an `@` before that `:`, also as OpenSSH's `colon()` reads it, past
+    the `[…]` (`[v6]:p`, `user@[v6]:p`): macOS rsync (openrsync) and wget have no such rule, so
+    both count (P2-fix1). The first reading's `[` alone is the start of the `[v6]` the second reads
+    (`[::1]:p`) and names none, nor does an empty host. None for a local path."""
     colon: int = text.find(":")
     if colon <= 0 or "/" in text[:colon]:
-        return None
+        return []
+    found: list[str] = []
     opener: int = text.rfind("[", 0, colon)
     if opener == 0 or (opener > 0 and text[opener - 1] == "@"):
-        colon = text.find("]:", opener) + 1
-        if colon <= 0 or "/" in text[:colon]:
-            return None
-    before: str = text[:colon]
-    return before[before.rfind("@") + 1 :] or None
+        close: int = text.find("]:", opener) + 1
+        if close > 0 and "/" not in text[:close]:
+            found.append(_after_at(text[:close]))
+    found.append(_after_at(text[:colon]))
+    return [region for region in found if region not in ("", "[")]
 
 
 def _could_be_host(region: str) -> bool:
@@ -153,9 +161,8 @@ def _hosts(word: str) -> list[str]:
             host: str | None = _host(region, url)
             if host is not None:
                 found.append(host)
-        scp: str | None = None if url else _scp_region(text)
-        if scp is not None:
-            found.append(_port_cut(scp))
+        if not url:
+            found.extend(_port_cut(region) for region in _scp_regions(text))
     return found
 
 
@@ -165,20 +172,33 @@ def _unknown(word: str) -> bool:
     return "$" in word or SUB_PREFIX in word or SUB_EMPTY in word
 
 
+def _may_name(word: str) -> bool:
+    """Could any part of the word be a host? Not `curl`, `-sS`, `src/`."""
+    return "." in word or ":" in word or "%" in word or "localhost" in word
+
+
 def word_hosts(word: str) -> tuple[str, ...]:
     """The hosts one word names, in order, each once. A word holding a variable or a substitution
     (`_unknown`) names one host nobody can read, `$`: the shell may split it into more words
-    (`localhost/$(echo a evil.example)`), and quotes are not seen. A word with `{` is also read
-    piece by piece (curl's globbing, `{a,b}`); a piece adds only a host that is not local, since
-    curl joins it to the text around it (`134744072/{localhost}` names no `localhost`)."""
+    (`localhost/$(echo a evil.example)`), and quotes are not seen. A curl glob's pieces are
+    `glob_hosts`."""
     if _unknown(word):
         return ("$",)
-    if "." not in word and ":" not in word and "%" not in word and "localhost" not in word:
-        return ()  # no part of it could be a host (`curl`, `-sS`, `src/`)
+    if not _may_name(word):
+        return ()
     found: list[str] = _hosts(word)
-    if "{" in word:
-        for piece in _GLOB.split(word):
-            found.extend(host for host in _hosts(piece) if not is_local_host(host))
+    return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
+
+
+def glob_hosts(word: str) -> tuple[str, ...]:
+    """The hosts a word's curl glob pieces name (`{a,b}` is two URLs), each piece read as a word,
+    in order, each once; none without a `{`. curl joins a piece to the text around it, so a piece's
+    host is judged by the caller as any other host but never counts as one the command names
+    (`134744072/{localhost}` names no `localhost`): R1 counts one that is not local, `host_not_in`
+    one not in its list (P2-fix1)."""
+    if "{" not in word or _unknown(word) or not _may_name(word):
+        return ()
+    found: list[str] = [host for piece in _GLOB.split(word) for host in _hosts(piece)]
     return tuple(dict.fromkeys(found)) if len(found) > 1 else tuple(found)
 
 
@@ -291,11 +311,12 @@ def _is_data_file(argv: Sequence[str], at: int, curl: int, dashes: int) -> bool:
     return option_is_option and 0 <= curl < at - 1 and dashes > at
 
 
-def hosts_in_command(argv: Sequence[str]) -> Iterator[str]:
+def hosts_in_command(argv: Sequence[str]) -> Iterator[tuple[str, bool]]:
     """The hosts a simple command names, word by word and lazily (R1 stops at the first that is not
-    this computer). A curl data file (`curl -d @data.json`, `-F file=@data.json`) names none,
-    unless it holds a variable or a substitution (`-d @$(echo f evil.example)`: the shell may
-    split it)."""
+    this computer), each with whether only a curl glob piece names it (`glob_hosts`: judged, but
+    never a host the command names). A curl data file (`curl -d @data.json`, `-F file=@data.json`)
+    names none, unless it holds a variable or a substitution (`-d @$(echo f evil.example)`: the
+    shell may split it)."""
     curl: int | None = None  # worked out once, and only when some word may be a data file
     dashes: int = 0
     for at, word in enumerate(argv):
@@ -304,7 +325,10 @@ def hosts_in_command(argv: Sequence[str]) -> Iterator[str]:
                 curl, dashes = _plain_curl(argv)
             if _is_data_file(argv, at, curl, dashes):
                 continue
-        yield from word_hosts(word)
+        for host in word_hosts(word):
+            yield host, False
+        for host in glob_hosts(word):
+            yield host, True
 
 
 def words(cmd: str) -> list[str]:

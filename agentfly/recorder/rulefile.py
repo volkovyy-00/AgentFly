@@ -309,20 +309,22 @@ def _last_positions(argv: tuple[str, ...]) -> dict[str, int]:
 
 
 @lru_cache(maxsize=64)
-def _hosts_of(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """The case-folded host names a command names (`names.hosts_in_command`: in a curl command, an
-    `@` word right after an option that reads a file is that file, not a host)."""
-    return tuple(host.casefold() for host in hosts_in_command(argv))
+def _hosts_of(argv: tuple[str, ...]) -> tuple[tuple[str, bool], ...]:
+    """The case-folded host names a command names, each with whether only a curl glob piece names
+    it (`names.hosts_in_command`: in a curl command, an `@` word right after an option that reads
+    a file is that file, not a host)."""
+    return tuple((host.casefold(), piece) for host, piece in hosts_in_command(argv))
 
 
 def _unlisted_host(argv: tuple[str, ...], listed: frozenset[str]) -> bool:
     """Does this simple command send to a host that is not listed? One that names no host, or
     holds a variable or a substitution (`"$URL"`, `$(cat url)`) where a host may be, counts as
-    yes (toward firing, owner 2026-10-23)."""
-    hosts: tuple[str, ...] = _hosts_of(argv)
-    if not hosts or any("$" in w or holds_substitution(w) for w in argv):
+    yes (toward firing, owner 2026-10-23). A curl glob piece's host counts when it is not listed,
+    but is no host the command names (`134744072/{localhost}` names none; P2-fix1)."""
+    hosts: tuple[tuple[str, bool], ...] = _hosts_of(argv)
+    if all(piece for _, piece in hosts) or any("$" in w or holds_substitution(w) for w in argv):
         return True
-    return any(host not in listed for host in hosts)
+    return any(host not in listed for host, _ in hosts)
 
 
 @lru_cache(maxsize=_WORD_MEMO)
@@ -1574,7 +1576,7 @@ class Clause:
         return any(
             host not in self.host_not_in
             for argv in parsed.all_commands()
-            for host in _hosts_of(argv)
+            for host, _ in _hosts_of(argv)
         )
 
     def matches(self, action: Mapping[str, Any], classes: Mapping[str, CommandClass]) -> bool:

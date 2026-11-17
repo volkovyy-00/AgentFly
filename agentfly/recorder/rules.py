@@ -95,10 +95,10 @@ def _argv_is_outbound(argv: tuple[str, ...]) -> bool:
 
     if any(name in _HOSTED_OUTBOUND for name in base_names):
         named: bool = False  # a tool that names no host counts as sending off this computer
-        for host in hosts_in_command(argv):  # lazily: the first host that is not local decides
+        for host, piece in hosts_in_command(argv):  # lazily: the first not local decides
             if not is_local_host(host):
                 return True
-            named = True
+            named = named or not piece  # a curl glob piece's local host is none it names
         return not named
 
     return False
