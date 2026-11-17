@@ -20,7 +20,7 @@ from typing import Any
 
 from agentfly.recorder import DEFAULT_PORT, rulefile
 from agentfly.recorder.names import hosts_in_command, is_local_host
-from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter, normalize
+from agentfly.recorder.normalize import SUB_PREFIX, Parsed, base_name, interpreter
 from agentfly.recorder.rulefile import RuleFile, RuleSpec
 
 Action = dict[str, Any]
@@ -94,11 +94,12 @@ def _argv_is_outbound(argv: tuple[str, ...]) -> bool:
         return True
 
     if any(name in _HOSTED_OUTBOUND for name in base_names):
-        hosts: list[str] = hosts_in_command(argv)
-        if not hosts:
-            # Tool present but no host parsed — treat as outbound (safe for demo).
-            return True
-        return any(not is_local_host(h) for h in hosts)
+        named: bool = False  # a tool that names no host counts as sending off this computer
+        for host, piece in hosts_in_command(argv):  # lazily: the first not local decides
+            if not is_local_host(host):
+                return True
+            named = named or not piece  # a curl glob piece's local host is none it names
+        return not named
 
     return False
 
@@ -112,11 +113,12 @@ def parsed_is_outbound(parsed: Parsed) -> bool:
 
 
 def is_outbound_send(action: Action) -> bool:
-    """True if a shell command looks like sending data off-box (after normalisation)."""
+    """True if a shell command looks like sending data off-box (after normalisation), on either
+    reading of a command that holds a NUL (`rulefile.shell_readings`)."""
     cmd: str | None = _shell_command(action)
     if cmd is None or not cmd.strip():
         return False
-    return parsed_is_outbound(normalize(cmd))
+    return any(parsed_is_outbound(parsed) for _, parsed in rulefile.shell_readings(cmd))
 
 
 # ---------------------------------------------------------------- R0: protect AgentFly itself
@@ -317,20 +319,28 @@ def _action_paths(action: Action) -> list[str]:
 
 
 def check_r0(action: Action, session: Session) -> bool:  # noqa: ARG001 - a rule gets the session
-    """AgentFly's own files and process: always, marked or not (SPEC section 5)."""
-    texts: list[str] = list(_action_paths(action))
+    """AgentFly's own files and process: always, marked or not (SPEC section 5). A shell command
+    is judged on each of its readings (`rulefile.shell_readings`: a NUL hides nothing)."""
     cmd: str | None = _shell_command(action)
-    if cmd is not None:
-        texts.append(cmd)
+    if cmd is None:
+        return _r0_hit(action, None)
+    return any(_r0_hit(action, reading) for reading in rulefile.shell_readings(cmd))
+
+
+def _r0_hit(action: Action, reading: tuple[str, Parsed] | None) -> bool:
+    """R0 on one reading of a shell command (its text and parse), or on an action with none."""
+    texts: list[str] = list(_action_paths(action))
+    if reading is not None:
+        texts.append(reading[0])
         cwd: Any = action.get("cwd")
         if isinstance(cwd, str):
             texts.append(cwd)
     haystack: str = "\n".join(form for text in texts for form in _path_forms(text))
     if any(path in haystack for path in _R0_PATHS):
         return True
-    if cmd is None:
+    if reading is None:
         return False
-    parsed: Parsed = normalize(cmd)
+    cmd, parsed = reading
     # Word by word too: `~/.config/"agentfly"`, `$'..'`, `a/../.config/agentfly`.
     words: list[str] = [w for argv in parsed.all_commands() for w in argv]
     word_forms: str = "\n".join(form for w in words for form in _path_forms(w))

@@ -266,6 +266,11 @@ version in its heading before you rely on it. Add what you learn here.
 - `postToolUse` for Grep carries no result: its `tool_output` is `{"pattern":…,"success":true}` for
   every `output_mode`, no file names.
 
+**3.27.22** (owner, 2026-11-16; P2)
+- The Delete tool fires `preToolUse` only (no `afterFileEdit`, no `beforeReadFile`), with
+  `tool_name` "Delete", `tool_input` `{"file_path": <absolute path>}` and a `tool_use_id` like
+  other tools. The hook client forwards that path; the rules read a Delete as a `write` (SPEC §5).
+
 ---
 
 ## Permission responses

@@ -19,7 +19,7 @@
 # rule that comes first in this file.
 #
 # Conditions (all that are present must hold):
-#   event        read, write, shell (a list). `write` is the agent's Write tool only; other
+#   event        read, write, shell (a list). `write` is the agent's Write and Delete tools; other
 #                edit tools are not seen yet. `read` is the file-read tool, and also a text search
 #                (Cursor's Grep) that returns lines: it reads the file it names and every name its
 #                glob can match. A search that returns names or counts only is not an event, and
