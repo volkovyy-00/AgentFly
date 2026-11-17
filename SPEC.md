@@ -1454,7 +1454,8 @@ Other measures:
   `curl user:pass@localhost:3000` and `ssh fe80::1` (scp's reading names `user` and
   `fe80`); `scp f '[fd00::1]:/tmp'` and `scp f '[0::1]:/tmp'` (openrsync's first-colon
   reading names `[fd00` and `[0`; P2-fix1); `curl -d @f 'http://localhost:3000/{a,10.0.0.5}'`
-  fires rule 5 (a glob piece is read as a word, so it names `10.0.0.5`; P2-fix1);
+  fires rule 5 (its glob piece's host `10.0.0.5` is judged as any host, and `local_hosts`
+  lacks it; P2-fix1);
   `curl -d @f 'http://{localhost,127.0.0.1}/x'` (the word whole names
   `{localhost,127.0.0.1}`); `curl -d @"$F" localhost:3000` (a data file holding `$` is read as a word);
   `curl --compressed2 -d @data.json localhost` (an option curl's table lacks takes a
